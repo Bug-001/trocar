@@ -1,4 +1,4 @@
-// web/src/screens/replay/Cell.tsx — one block body in the new desk's window (spec 2.3 §两种模式, D70), drawn with cell.mjs's shared
+// web/src/screens/replay/Cell.tsx — one block body in the desk's window (spec 2.3 §两种模式, D70), drawn with cell.mjs's shared
 // parts: the controls are React, the Readable / Raw body is the exact markup cell.mjs produces (entryOf → kinds / jsonlay), set into a
 // leaf only this file touches, and only when (bid, mode, bytes) change — a slice the sentinel appended survives any re-render.
 // The cell never reads a body (2.3 §快速拖动: the window decides who asks): it draws what the body cache holds for its ref, else

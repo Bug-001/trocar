@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe } from '../harness.mjs'
-import { generate, lookOf, runSequence, regressions, findOne, keyOf, replayTodo, replayFailure, DEFAULT_SEEDS, DEFAULT_STEPS } from './runner.mjs'
+import { generate, lookOf, runSequence, regressions, findOne, keyOf, replayTodo, replayFailure, DEFAULT_SEEDS, DEFAULT_STEPS, SHRINK_MS } from './runner.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -39,7 +39,7 @@ for (const reg of saved) {
 }
 
 for (const seed of SEEDS) {
-  test(`seed ${seed}`, { skip }, async () => {
+  test(`seed ${seed}`, { skip, timeout: SHRINK_MS + 5 * 60_000 }, async () => { // the run, then a shrink of up to SHRINK_MS
     const steps = generate(seed, STEPS, null)
     const opts = { seed, big: BIG, ...lookOf(seed), chromium: gate.chromium, known }
     const r = await runSequence({ ...opts, steps })

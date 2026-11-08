@@ -1,6 +1,6 @@
 // web/src/screens/replay/window-model.mjs — the window's rules, framework-free (2.3 §读与画「长对话的窗口」 · 1.4 ①–⑨): the
-// playhead step's context window as keyed items in drawing order, drawn by both desks (legacy ctxwin.mjs maps them to units).
-// The proof rule (2.3 §保真标) and the reply rule (2.3 §这一步的回复) live here; blocks.mjs and rawpanel.mjs re-export them.
+// playhead step's context window as keyed items in drawing order, drawn by Window.tsx.
+// The proof rule (2.3 §保真标) and the reply rule (2.3 §这一步的回复) live here; blocks.mjs re-exports faithOf for the drawer.
 import { bodyCache, cellOf, isAddressed, bodyVersion, deskMode, modeOf, modeVersion, viewIn } from '../../../legacy/replay/cell.mjs'
 import { messageTurns, keyDiff, refPending, refRowOf, hasChangeLine, callFacts } from '../../../legacy/replay/analysis.mjs'
 import { turnAnchorKey, turnIsOpen } from '../../../legacy/replay/fold.mjs'
@@ -135,7 +135,7 @@ const MEMO = new WeakMap()
 const sigOf = (x) => (x instanceof Set ? [...x].join('\n') : x instanceof Map ? [...x].map(([k, v]) => k + '\t' + JSON.stringify(v)).join('\n') : null)
 
 /** The window of the playhead's step as keyed items, in 1.4's order ① fid · ② win · ③ sec / foldall / row / card with ④ chline
- * and its removed list before row `cacheBreak.idx` · ⑨ reply · ⑩⑪ Call details (s.rawPanelGone only: the legacy desk draws no such kind);
+ * and its removed list before row `cacheBreak.idx` · ⑨ reply · ⑩⑪ Call details;
  * ⑥–⑧ (unparsed · noreq · frames) stand in for ③④⑨, and ⑩⑪ follow ⑥ once the lane is held. The rows of
  * an open turn follow its turn item; a folded turn has its head only. Pure but for the desk's scratch it sets: s.curFlat,
  * s.curKeys, s.curReply (when the reply has parts), s.curRemoved.
@@ -147,7 +147,7 @@ export function windowItems(s) {
   const fid = facts.length ? [{ key: 'fid', type: 'fid', facts, tech }] : []
   if (!call.rec) return { state: 'noreq', items: [...fid, { key: 'noreq', type: 'noreq' }] }
   const st = s.desk ? stepOf(s.desk, call.rid) : null
-  if (call.unparsed) return { state: 'unparsed', items: [...fid, { key: 'unparsed', type: 'unparsed', errMsg: call.errMsg }, ...detailsOf(s, call, st)] }
+  if (call.unparsed) return { state: 'unparsed', items: [...fid, { key: 'unparsed', type: 'unparsed' }, ...detailsOf(s, call, st)] }
   if (!st || !st.held) return { state: 'frames', items: [...fid, { key: 'frames', type: 'frames', frames: framesOf(call) }] }
   const flat = st.flat
   const refFlat = s.desk ? refList(s).flat : null // its lane not held: no 「新」, no removed list
@@ -161,7 +161,7 @@ export function windowItems(s) {
   if (memo) MEMO.set(flat, { key: memo, out })
   return scratch(s, out)
 }
-const detailsOf = (s, call, st) => (s.rawPanelGone && st && st.held ? callDetailItems(call, st, s) : [])
+const detailsOf = (s, call, st) => (st && st.held ? callDetailItems(call, st, s) : [])
 function scratch(s, out) {
   s.curFlat = out.flat; s.curKeys = out.keys; s.curRemoved = out.removed
   if (out.reply) s.curReply = out.reply

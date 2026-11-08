@@ -1,4 +1,4 @@
-// web/src/screens/replay/Window.test.tsx — the new desk's context window (2.3 §读与画「长对话的窗口」 · §block 卡 · §这一步的回复, 1.4 ①–⑨ ·
+// web/src/screens/replay/Window.test.tsx — the desk's context window (2.3 §读与画「长对话的窗口」 · §block 卡 · §这一步的回复, 1.4 ①–⑨ ·
 // §打开一步时落在哪, 1.2 格的键, D75④⑤): what the virtual list draws from the window model, its keys, its pins and landing band, who
 // asks for bodies, the landing through the scroll position, reveal and the cell keys. Every expected value comes from windowItems or
 // the list. jsdom has no layout: #ctxwin gets a client box and a scrollTo that moves scrollTop (as LibraryScreen.test.tsx), and an
@@ -8,8 +8,8 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { Activity, useState } from 'react'
 import { buildLanes, anchorLane } from '../../../legacy/replay/lanes.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
-import { bodyCache, deskMode, loadBodies, overrideScope, setDeskMode, setMode } from '../../../legacy/replay/cell.mjs'
-import { paintWindow, wireWindow } from '../../../legacy/replay/replay.mjs'
+import { bodyCache, deskMode, loadBodies, overrideScope, setDeskMode } from '../../../legacy/replay/cell.mjs'
+import { SESSION_NOT_LISTED } from '../../../legacy/labels/shell.mjs'
 import { initKeys, setScreenKeys } from '../../../legacy/core/keys.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
@@ -130,11 +130,11 @@ test('1.4 #8: the items after the reply run reply, impact, details; a no-request
   const types = (s: B, ...of: string[]) => [...drawnRoots(mount(s).win)].filter((c) => of.includes(c))
   const d = deskN(rows.map(() => [sys()]), rows, { details: rows.map(() => detail) })
   const tail = ['cwreply', 'cwunparsed', 'cwnoreq', 'cwimpact', 'cwdetails']
-  expect(types(stateOf(d, 0, { rawPanelGone: true }), ...tail)).toEqual(['cwreply', 'cwimpact', 'cwdetails'])
-  expect(types(stateOf(d, 1, { rawPanelGone: true }), ...tail)).toEqual(['cwunparsed', 'cwimpact', 'cwdetails'])
-  expect(types(stateOf(d, 2, { rawPanelGone: true }), ...tail)).toEqual(['cwnoreq'])
+  expect(types(stateOf(d, 0), ...tail)).toEqual(['cwreply', 'cwimpact', 'cwdetails'])
+  expect(types(stateOf(d, 1), ...tail)).toEqual(['cwunparsed', 'cwimpact', 'cwdetails'])
+  expect(types(stateOf(d, 2), ...tail)).toEqual(['cwnoreq'])
   const frames = deskN([[sys()]], [{}], { held: false, details: [detail] })
-  expect(types(stateOf(frames, 0, { rawPanelGone: true }), ...tail)).toEqual([])
+  expect(types(stateOf(frames, 0), ...tail)).toEqual([])
 })
 
 test('D75④: a row inserted before keeps every unchanged row\'s DOM node (an index-keyed copy of the list does not)', () => {
@@ -213,27 +213,13 @@ test('2.3 #14: the desk default Readable makes every section header say Readable
   expect(claims()).toEqual(raw)
 })
 
-// the default build's window (replay.mjs wireWindow): the same 当场, heard from cell.mjs, for as long as the window is wired
-test('2.3 #14: the legacy window repaints the section headers when the desk default flips, not when one cell flips, and stops when unwired', () => {
-  const s = stateOf(deskN([[tool(), sys(), blk({ query: 'q' }), say()]]))
-  const el = document.createElement('div')
-  el.id = 'ctxwin'
-  const off = wireWindow(el, s)
-  paintWindow(el, s)
-  const claims = () => [...el.querySelectorAll('.cwsec .cwsecff')].map((h) => h.textContent)
-  const raw = claims()
-  expect(raw).toHaveLength(3)
-  expect(raw).not.toContain(C.READABLE_VIEW)
-  setDeskMode('read')
-  expect(claims()).toEqual(raw.map(() => C.READABLE_VIEW))
-  setDeskMode('raw')
-  expect(claims()).toEqual(raw)
-  const before = el.innerHTML
-  setMode('some bid', 'read')
-  expect(el.innerHTML).toBe(before)
-  off()
-  setDeskMode('read')
-  expect(el.innerHTML).toBe(before)
+// 1.2 §Edge cases: a session the server does not list is said in the window, with a real link back to the session list
+test('1.2 not listed: the window says the session is not listed and links back to #/sessions', () => {
+  const s = stateOf(deskN([[say()]]), 0, { win: { kind: 'notlisted' } })
+  const { win } = mount(s)
+  const el = win.querySelector('#notlisted')
+  expect(el?.textContent).toContain(SESSION_NOT_LISTED)
+  expect([...win.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toContain('#/sessions')
 })
 
 // D75④: a removed row is keyed by its block, so the same place on another step's list is another row: closed until the reader opens it
@@ -407,7 +393,7 @@ test('2.3 #38 · 1.2 §点击与选中文字②: an open row holds the controls 
 })
 
 // a redraw that puts the window back as it first opened is what a reader loses their place to
-test('2.3 #14: flipping one cell on the new desk leaves the window as the reader had it: its scroll, the focus, the other rows and what is open inside them', () => {
+test('2.3 #14: flipping one cell on the desk leaves the window as the reader had it: its scroll, the focus, the other rows and what is open inside them', () => {
   const tree = { top: { mid: { deep: { leaf: 'the words at the bottom' } } } }
   const s = stateOf(deskN([[sys(), blk({ query: 'q' }), say(), say(), say()]]))
   const rowOf = (bi: number) => itemsOf(s).find((it) => it.type === 'row' && it.bi === bi)!
@@ -493,7 +479,7 @@ test('2.3 #13: Assembled from the stream closes the reply once while an open row
 
 test('2.6 #17: an opened Call details row reads its bytes once into a Raw cell whose text minus .lay is the bytes, Copy bytes gives them all, v leaves that Raw-only cell Raw, and the open keys outlive the step', async () => {
   const ref = 's/m#R::2-7', bytes = '{"a":1,\n  "b":[2, "x\\ty"]}', detail = { respRefs: [], nonBlockKeys: [{ key: 'metadata', chars: bytes.length, ref }], extraMessages: [], wire: null }
-  const s = stateOf(deskN([[sys()], [sys()]], [{}, {}], { details: [detail, detail] }), 0, { rawPanelGone: true })
+  const s = stateOf(deskN([[sys()], [sys()]], [{}, {}], { details: [detail, detail] }), 0)
   s.ctx.api.get.mockImplementation(async () => ({ ok: true, status: 200, data: { blocks: [{ ref, bytes, fidelity: { verbatim: true } }] } }))
   const writes: string[] = []
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t: string) => { writes.push(t) } } })
@@ -587,6 +573,7 @@ test('2.3 #10: a step whose lane is not held is frames: aria-busy, no button, li
   expect(busy.getAttribute('aria-busy')).toBe('true')
   expect(busy.querySelectorAll('.cwframe[data-sec]').length).toBe(itemsOf(s).find((x) => x.type === 'frames')!.frames.length)
   expect(busy.querySelector('button, a, [tabindex]')).toBeNull()
+  expect(win.querySelector('[data-load-step]')).toBeNull() // 2.3 #24: no load control
 })
 
 test('2.3 #3: the cache mark iff the block declares one, the volatile mark iff it is volatile, never 「新」 on a volatile row', () => {
@@ -695,3 +682,71 @@ test('2.3 §kinds · D71①: a step reached before the markdown renderer keeps t
     expect(win.scrollTop).toBe(yOf(wrapOf(win, 'chline')!))
   } finally { setMarkdown(draw) }
 })
+
+test('1.4 #2: 全部展开 and 全部折叠 write every card anchor of the step into the fold memory, open and closed', () => {
+  const flat = [sys(), blk({ query: 'one', key: 'q1' }), say(), blk({ query: 'two', key: 'q2' }), say(), blk({ query: 'three', key: 'q3' }), say()]
+  const s = stateOf(deskN([flat]))
+  const { win } = mount(s)
+  const anchors = itemsOf(s).filter((x) => x.type === 'card').map((x) => x.anchor)
+  expect(anchors.length).toBe(3)
+  for (const [how, want] of [['open', true], ['close', false], ['open', true]] as const) {
+    s.persistFold.mockClear()
+    act(() => { fireEvent.click(win.querySelector(`.foldallbtn[data-foldall="${how}"]`)!) })
+    expect(anchors.map((a) => s.turnFold.get(a))).toEqual(anchors.map(() => want))
+    expect(s.persistFold).toHaveBeenCalled()
+    expect(itemsOf(s).filter((x) => x.type === 'card').map((x) => x.open)).toEqual(anchors.map(() => want))
+  }
+})
+
+test('2.3 #13: a reply row the reader flipped stays flipped on a repaint of its step, and the next step starts from the defaults', () => {
+  const s = stateOf(deskN([[sys(), blk({ query: 'q' })], [sys(), blk({ query: 'q' })]], undefined, { replies: [[rp('text'), rp('tool_use')], [rp('text'), rp('tool_use')]] }))
+  s.ctx.api.get.mockReturnValue(new Promise(() => {}))
+  const { win, paint } = mount(s)
+  const second = () => win.querySelectorAll<HTMLElement>('.cwreply .cblk[data-rp]')[1]
+  expect(second().classList.contains('collapsed')).toBe(false)
+  act(() => { fireEvent.click(second().querySelector('.cbtog')!) })
+  expect(second().classList.contains('collapsed')).toBe(true)
+  paint()
+  expect(second().classList.contains('collapsed')).toBe(true)
+  s.playhead = 1
+  paint({ kind: 'step', busy: false })
+  expect(second().classList.contains('collapsed')).toBe(false)
+})
+
+// what an item root says, without the ids a mount makes up (useId)
+const sigOf = (el: Element) => [el.className, ...[el, ...el.querySelectorAll('*')].map((e) => [...e.attributes].filter((a) => a.name.startsWith('data-') || a.name === 'class' || a.name === 'aria-expanded').map((a) => `${a.name}=${a.value}`).join(' ')), el.textContent].join('\n')
+function rng(seed: number) { let a = seed >>> 0 || 1; return () => ((a = Math.imul(a ^ (a >>> 13), 0x5bd1e995) + 0x9e3779b9 >>> 0) / 4294967296) }
+
+test('2.3 #22 · 1.4:114: across random steps the patched window equals a fresh mount of the step, and an item whose key stays keeps its element', async () => {
+  let kept = 0, compared = 0
+  for (const seed of [1, 2, 3, 4]) {
+    const desk = await deskFrom(world(seed).get(), 'S'), r = rng(seed)
+    for (const lane of buildLanes(desk)) {
+      const n = lane.calls.length, s = stateOf(desk, Math.floor(r() * n), { anchor: lane })
+      s.ctx.api.get.mockReturnValue(new Promise(() => {}))
+      const { win, paint } = mount(s)
+      for (let k = 0; k < 12; k++) {
+        const before = new Map([...win.querySelectorAll<HTMLElement>('.cwit')].map((w) => [w.dataset.key!, w.firstElementChild]))
+        // a neighbour most of the time (a scrub), a jump otherwise; the reader opens rows and pins a compare step now and then
+        s.playhead = r() < 0.7 ? Math.max(0, Math.min(n - 1, s.playhead + (r() < 0.5 ? -1 : 1))) : Math.floor(r() * n)
+        if (r() < 0.3 && s.curKeys && s.curKeys.length) s.openBlocks.add(s.curKeys[Math.floor(r() * s.curKeys.length)])
+        if (r() < 0.1) s.diffRef = r() < 0.5 ? null : Math.floor(r() * n)
+        const top = win.scrollTop
+        paint({ kind: 'step', busy: false })
+        // a landing that moved the box drew the new list at the old position first: what left that range was let go (the virtual
+        // list); with the box where it was, the step is one commit and every key drawn on both sides is the same element
+        if (win.scrollTop === top) for (const w of win.querySelectorAll<HTMLElement>('.cwit')) {
+          const was = before.get(w.dataset.key!)
+          if (was) { expect(w.firstElementChild, `seed ${seed} ${w.dataset.key}`).toBe(was); kept++ }
+        }
+        act(() => { win.scrollTo({ top: 0 }) }) // the fresh mount starts at the top
+        const fresh = render(<Window desk={reactView(s, () => {}, () => {})} />), fwin = fresh.container.querySelector('#ctxwin') as HTMLElement
+        expect(drawn(win), `seed ${seed} step ${s.playhead}`).toEqual(drawn(fwin))
+        for (const key of drawn(win)) { expect(sigOf(wrapOf(win, key)!.firstElementChild!), key).toBe(sigOf(wrapOf(fwin, key)!.firstElementChild!)); compared++ }
+        fresh.unmount()
+      }
+      cleanup()
+    }
+  }
+  expect(kept).toBeGreaterThan(0); expect(compared).toBeGreaterThan(0)
+}, 30_000)

@@ -1,9 +1,9 @@
-/* web/legacy/css/window.css — the new desk's context window (.desk.next #ctxwin, web/src/screens/replay/Window.tsx): one virtual list
+/* web/legacy/css/window.css — the desk's context window (.desk.next #ctxwin, web/src/screens/replay/Window.tsx): one virtual list
    (2.3 §读与画「长对话的窗口」). Every item sits in an absolute layer at the offset the list measured, so nothing in it is laid out
    off screen at a guessed size (content-visibility: visible). The item heights CSS fixes are custom properties here, read once by
    the window as its estimates: a closed row (--cblk-pitch, replay.css), a folded turn's head, a section header, a one-line item.
    The row head (1.4 ③, R2 decision 4): a reset button holding the chevron and the role, then the tag, the preview, the marks and
-   the character count, as in the prototype's row. The legacy desk never carries .next: its look does not change. */
+   the character count, as in the prototype's row. */
 .desk.next #ctxwin{padding-top:0;
   --cwturn-pitch:calc(var(--cwturn-ih) + 8px);
   --cwsec-pitch:calc(var(--lh) + 26px);

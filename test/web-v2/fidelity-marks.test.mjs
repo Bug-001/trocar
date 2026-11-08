@@ -2,25 +2,23 @@
 // 1.4 #4 #9 · 2.6 #3). A definition is the lane wire's own (3.5 §会话读): its fidelity in `ff: {faithfulness?, unaddressable?}`,
 // its bytes behind a `ref`, or `ref: null` with the reason and the body in `inline`; it enters the desk through applyLane
 // (desk-world.mjs deskOf), as every definition does. The axes are generated: each `ff` value with and without a ref in each
-// section, an opened body's outcomes, reply parts on and off their resp.raw span, each fact of the call fidelity row. Structure
-// by class and data attribute, words only as the labels module has them. The real face (real-face.mjs) for the demo sample, a
+// section, an opened body's outcomes, reply parts on and off their resp.raw span, each fact of the call fidelity row. The window
+// is read as its items (window-model.mjs windowItems), the ones Window.tsx draws (its DOM mapping: Window.test.tsx 2.3 #2); the
+// call drawer as detailHtml draws it. Words only as the labels module has them. The real face (real-face.mjs) for the demo sample, a
 // Codex WebSocket session missing a record, and a v0 envelope.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
-import { ctxWindowHtml } from '../../web/legacy/replay/ctxwin.mjs'
-import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
-import { rawPanelUnits } from '../../web/legacy/replay/rawpanel.mjs'
-import { serialize } from '../../web/legacy/core/units.mjs'
-import { bodyCache, showBody } from '../../web/legacy/replay/blocks.mjs'
-import { loadBodies, setDeskMode, setMode } from '../../web/legacy/replay/cell.mjs'
+import { windowItems } from '../../web/src/screens/replay/window-model.mjs'
+import { stepHeadModel } from '../../web/src/screens/replay/models.mjs'
+import { detailHtml } from '../../web/legacy/replay/detail.mjs'
+import { bodyCache } from '../../web/legacy/replay/blocks.mjs'
+import { loadBodies, setDeskMode } from '../../web/legacy/replay/cell.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
-import * as C from '../../web/legacy/labels/cells.mjs'
 import { esc } from '../../web/legacy/core/fmt.mjs'
-import { HALF } from '../../web/legacy/core/icons.mjs'
 import { deskOf, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -58,56 +56,43 @@ const stateOf = (desk, playhead = 0, extra = {}) => {
   return { desk, lanes, anchor: anchorLane(lanes), playhead, diffRef: null, navOpen: new Set(), openBlocks: new Set(), turnFold: OPEN_TURNS, turnLanded: new Set(), ctx: {},
     curFlat: [], viewPin: null, meta: {}, ...extra }
 }
+// the call drawer's body for the step at the playhead (2.6 §B: the reply with its one mark)
+const drawerOf = (s) => detailHtml(s, s.anchor, s.playhead).body
 const deskOfSteps = (steps, { rows = steps.map(() => ({})), replies, details } = {}) => deskOf([{ kind: 'main', rows, blocks: steps, replies, details }])
 
 const visible = (h) => h.replace(/<span class="sr-only">[^<]*<\/span>/g, '').replace(/<[^>]*>/g, ' ')
-const srOf = (h) => [...h.matchAll(/<span class="sr-only">([^<]*)<\/span>/g)].map((m) => m[1]).join(' ')
-const badgesOf = (head) => [...head.matchAll(/<span class="ffbadge[^"]*" data-ff="([^"]*)"/g)].map((m) => m[1])
-// the window's rows: {ff, head, body} by list position (request rows) or in order (reply rows); a row runs to the next row,
-// section header, turn or the reply
-function rowsOf(h, { reply = false } = {}) {
-  const re = reply ? /<div class="cblk[^"]*"[^>]*data-rp="[^"]*"[^>]*>/g : /<div class="cblk[^"]*"[^>]*data-bi="\d+"[^>]*>/g
-  const starts = [...h.matchAll(re)], out = []
-  starts.forEach((m, j) => {
-    let end = j + 1 < starts.length ? starts[j + 1].index : h.length
-    for (const stop of ['<div class="cwsec"', '<div class="cwturn', '<div class="cwreply"']) { const i = h.indexOf(stop, m.index + 1); if (i > 0 && i < end) end = i }
-    const row = h.slice(m.index, end), at = row.indexOf('<div class="cbh"'), close = row.indexOf('</div>', at)
-    out.push({ attrs: m[0], ff: /data-ff="([^"]*)"/.exec(m[0])[1], bi: Number((/data-bi="(\d+)"/.exec(m[0]) || [])[1]), head: row.slice(at, close), body: row.slice(close) })
-  })
-  return out
-}
-const headersOf = (h) => [...h.matchAll(/<div class="cwsec" id="sec-([^"]+)">([\s\S]*?)<\/div>/g)].map((m) => ({ sec: m[1], html: m[2], claims: /class="cwsecff v"/.test(m[2]) }))
 const count = (h, word) => h.split(word).length - 1
 // a word as the page carries it; a word the labels module lacks fails here, never matches vacuously
-const w = (x) => { assert.ok(typeof x === 'string' && x.length > 0, `a word the labels have: ${x}`); return esc(x) }
+const word = (x) => { assert.ok(typeof x === 'string' && x.length > 0, `a word the labels have: ${x}`); return x }
+const w = (x) => esc(word(x))
+// the window as the live desk draws it: windowItems(s), each item one element of Window.tsx (its DOM mapping: Window.test.tsx 2.3 #2)
+const itemsOf = (s) => windowItems(s).items
+// the request rows {ff, badge, sr, bi}; the reply rows in order (a reply row draws its badge unless it is proven, and the
+// proven word for a screen reader then)
+const rowsOf = (items) => items.filter((x) => x.type === 'row').map((x) => ({ ff: x.marks.ff, badge: x.marks.badge, sr: x.marks.sr, bi: x.bi }))
+const replyRowsOf = (items) => ((items.find((x) => x.type === 'reply') || {}).rows || []).map((r) => ({ ff: r.mark, badge: r.mark !== 'verbatim', sr: r.mark === 'verbatim' ? r.sr : null }))
+const headersOf = (items) => items.filter((x) => x.type === 'sec').map((x) => ({ sec: x.sec, claims: x.claim === 'verbatim', half: x.claim === 'half', est: x.est }))
+const winOf = (items) => items.find((x) => x.type === 'win') || null
 
 // one row's mark against the code it must carry: a proven row has no visible mark and tells a screen reader 逐字; any other row
-// has exactly one visible mark with its word (2.3 §保真标). Under the window line 不能回源 is not repeated, the screen-reader word is.
+// has its one visible mark (2.3 §保真标). Under the window line 不能回源 is not repeated, the screen-reader word is.
 function assertMark(row, code, why, { windowLine = false } = {}) {
   assert.equal(row.ff, code, `${why}: data-ff`)
   const quiet = code === 'verbatim' || (windowLine && code === 'unaddressable')
-  if (quiet) {
-    assert.deepEqual(badgesOf(row.head), [], `${why}: no visible mark`)
-    assert.ok(srOf(row.head).includes(w(W.FF_WORD[code])), `${why}: the screen-reader word`)
-  } else {
-    assert.deepEqual(badgesOf(row.head), [code], `${why}: one visible mark`)
-    assert.ok(visible(row.head).includes(w(W.FF_WORD[code])), `${why}: its word`)
-  }
-  if (code !== 'verbatim') assert.ok(!srOf(row.head).includes(w(W.FF_WORD.verbatim)), `${why}: never 逐字 to a screen reader`)
+  assert.equal(row.badge, !quiet, `${why}: a visible mark iff not proven`)
+  if (quiet) assert.equal(row.sr, code, `${why}: the screen-reader word`)
+  else assert.notEqual(row.sr, 'verbatim', `${why}: never 逐字 to a screen reader`)
 }
-// every section header against its blocks: 以下逐字 once iff each of its blocks is proven; under the window line just ◐
-function assertHeaders(h, flat, why, { windowLine = false } = {}) {
-  const hs = headersOf(h)
+// every section header against its blocks: 以下逐字 iff each of its blocks is proven; under the window line just ◐
+function assertHeaders(items, flat, why, { windowLine = false } = {}) {
+  const hs = headersOf(items)
   assert.ok(hs.length > 0, `${why}: section headers`)
   for (const hd of hs) {
     const blocks = flat.filter((b) => b.sec === hd.sec)
-    const claims = !windowLine && blocks.every((b) => want(b) === 'verbatim')
-    assert.equal(hd.claims, claims, `${why}: ${hd.sec} claims 以下逐字 iff every block is proven`)
-    assert.equal(count(visible(hd.html), w(W.SECTION_VERBATIM)), claims ? 1 : 0, `${why}: ${hd.sec} says it once or not at all`)
-    if (windowLine) assert.ok(hd.html.includes(HALF), `${why}: ${hd.sec} carries ◐`)
-    if (hd.sec === 'tools') assert.equal(hd.html.includes(w(W.SECTION_SIZE_EST_TIP)), blocks.some((b) => want(b) === 'metadata'), `${why}: an estimated size iff a definition is metadata only`)
+    assert.equal(hd.claims, !windowLine && blocks.every((b) => want(b) === 'verbatim'), `${why}: ${hd.sec} claims 以下逐字 iff every block is proven`)
+    assert.equal(hd.half, windowLine, `${why}: ${hd.sec} carries ◐ iff the window line`)
+    if (hd.sec === 'tools') assert.equal(hd.est, blocks.some((b) => want(b) === 'metadata'), `${why}: an estimated size iff a definition is metadata only`)
   }
-  assert.equal(count(visible(h), w(W.SECTION_VERBATIM)), hs.filter((x) => x.claims).length, `${why}: 以下逐字 only on a claiming header`)
 }
 
 // a `block` read double: each ref's item as the server sends it (3.5 §会话读 block), by `answer(ref)`
@@ -146,20 +131,11 @@ test('2.3 #2 · 1.4 #4: each ff value with and without a ref, in each section, g
     }
     for (let p = 0; p < steps.length; p++) {
       s.playhead = p
-      const h = ctxWindowHtml(s), flat = steps[p], rows = rowsOf(h), why = `${opened ? 'open' : 'closed'} step ${p} ${JSON.stringify(cases[p] ? { sec: cases[p].sec, ff: cases[p].ff, ref: !!cases[p].ref } : 'all proven')}`
-      assert.ok(!h.includes('<div class="cwwin"'), `${why}: some block has a ref, so no window line`)
+      const items = itemsOf(s), flat = steps[p], rows = rowsOf(items), why = `${opened ? 'open' : 'closed'} step ${p} ${JSON.stringify(cases[p] ? { sec: cases[p].sec, ff: cases[p].ff, ref: !!cases[p].ref } : 'all proven')}`
+      assert.equal(winOf(items), null, `${why}: some block has a ref, so no window line`)
       assert.equal(rows.length, flat.length, `${why}: every row drawn`)
       for (const r of rows) assertMark(r, want(flat[r.bi]), `${why} row ${r.bi}`)
-      assertHeaders(h, flat, why)
-      if (!opened) continue
-      for (const r of rows) {
-        const d = flat[r.bi]
-        if (d.ref) assert.ok(r.body.includes(esc(`BYTES of ${d.ref}`)), `${why} row ${r.bi}: the opened body is the bytes`)
-        else { // 2.3 §没有 def.ref: the body the definition brings, under the line saying it has no byte range of its own and why
-          assert.ok(visible(r.body).includes(w(C.noRange(d.unaddressable))), `${why} row ${r.bi}: the note of a block with no byte range`)
-          if (!(d.sec === 'tools' && want(d) === 'metadata')) assert.ok(r.body.includes(`BODY-${d.bid.slice(1)}-q`), `${why} row ${r.bi}: the inline body`)
-        }
-      }
+      assertHeaders(items, flat, why)
     }
   }
   bodyCache.clear()
@@ -173,69 +149,29 @@ test('2.3 #2 · 1.4 #4: an opened body that comes back unproven marks its row an
       const desk = deskOfSteps([flat], { rows: [o.row || {}] }), s = stateOf(desk)
       s.openBlocks.add(`${target.bid}#0`)
       await loadBodies(blockApi(o.item), [target.ref])
-      const h = ctxWindowHtml(s), why = `${name} in ${sec}`
-      for (const r of rowsOf(h)) assertMark(r, flat[r.bi] === target ? o.code : 'verbatim', `${why} row ${r.bi}`)
-      for (const hd of headersOf(h)) assert.equal(hd.claims, hd.sec !== sec || o.code === 'verbatim', `${why}: the ${hd.sec} header`)
-      assert.equal(h.includes(w(W.reqEncodingFact('gzip'))), !!o.row, `${why}: the call row says the decoding once, not the block`)
-      assert.ok(!h.includes(w(W.SECTION_SIZE_EST_TIP)), `${why}: an unproven body is no metadata-only size`)
+      const items = itemsOf(s), why = `${name} in ${sec}`
+      for (const r of rowsOf(items)) assertMark(r, flat[r.bi] === target ? o.code : 'verbatim', `${why} row ${r.bi}`)
+      for (const hd of headersOf(items)) assert.equal(hd.claims, hd.sec !== sec || o.code === 'verbatim', `${why}: the ${hd.sec} header`)
+      assert.equal(count(factsOf(items) || '', word(W.reqEncodingFact('gzip'))), o.row ? 1 : 0, `${why}: the call row says the decoding once, not the block`)
+      assert.ok(headersOf(items).every((hd) => !hd.est), `${why}: an unproven body is no metadata-only size`)
     }
   }
   bodyCache.clear()
 })
 
-// the DOM path (blocks.mjs showBody → noteBodyFidelity): at once, not at the next repaint (2.3 Risk). The elements are minimal fakes
-// of the parts showBody touches: the body, its row (head and its spans as markup) and the window holding the section header.
-test('2.3 #2: the withdrawal happens on the spot: the row gets its mark, the section header stops claiming 以下逐字', async () => {
-  for (const [name, o] of Object.entries(OUTCOMES)) {
-    bodyCache.clear()
-    const d = def('messages', undefined, true), b = { ...d, text_ref: d.ref }
-    const [got] = await loadBodies(blockApi(o.item), [b.ref])
-    const hd = { cls: new Set(['cwsecff', 'v']), textContent: W.SECTION_VERBATIM, title: '', set innerHTML(x) { this.textContent = x.replace(/<[^>]*>/g, '') }, classList: { remove(c) { hd.cls.delete(c) } } }
-    const root = { querySelector: (sel) => (sel.includes('sec-messages') && sel.includes('cwsecff') && hd.cls.has('v') ? hd : null) }
-    const head = { html: `<span class="cbrole">user</span><span class="sr-only">,${W.FF_WORD.verbatim}</span>`,
-      insertAdjacentHTML(_, x) { this.html += x },
-      querySelector(sel) { return /sr-only/.test(sel) && this.html.includes('sr-only') ? { remove: () => { this.html = this.html.replace(/<span class="sr-only">[^<]*<\/span>/, '') } } : null } }
-    const blk = { classList: {}, isConnected: true, dataset: { ff: 'verbatim', sec: 'messages' }, querySelector: (sel) => (/cbh/.test(sel) ? head : null), closest: (sel) => (sel === '#ctxwin' ? root : null) }
-    const bc = { innerHTML: '', dataset: {}, closest: (sel) => (sel === '.cblk' ? blk : null) }
-    showBody(bc, b, got)
-    const row = { attrs: `data-ff="${blk.dataset.ff}"`, ff: blk.dataset.ff, head: head.html }
-    assertMark(row, o.code, name)
-    assert.equal(hd.cls.has('v'), o.code === 'verbatim', `${name}: the header's claim`)
-    assert.equal(hd.textContent.includes(W.SECTION_VERBATIM), o.code === 'verbatim', `${name}: the header's words`)
-  }
-  bodyCache.clear()
-})
-
-test('2.3 #2: a new trace\'s tool definition is proven and opens on its full schema; an old trace\'s is metadata only', async () => {
+test('2.3 #2: a new trace\'s opened tool definition is proven; an old trace\'s is metadata only', async () => {
   bodyCache.clear()
   const schema = JSON.stringify({ name: 'Read', description: 'Read a file', input_schema: { type: 'object', properties: { file_path_q: { type: 'string' } }, required: ['file_path_q'] } })
   const fresh = def('tools', {}, true), oldRef = def('tools', { faithfulness: 'metadata' }, true), oldInline = def('tools', { faithfulness: 'metadata' }, false, { inline: {} })
   const flat = [fresh, oldRef, oldInline, def('system', undefined, true), def('messages', undefined, true)]
   const desk = deskOfSteps([flat]), s = stateOf(desk)
   for (const b of [fresh, oldRef, oldInline]) s.openBlocks.add(`${b.bid}#0`)
-  setMode(oldInline.bid, 'read')
   await loadBodies(blockApi((ref) => OK(ref, ref === fresh.ref ? schema : '{"name":"Read","input_schema_props":["file_path_q"],"description_chars":11}')), [fresh.ref, oldRef.ref])
-  const h = ctxWindowHtml(s), rows = rowsOf(h)
+  const items = itemsOf(s), rows = rowsOf(items) // the opened bodies: Cell.test.tsx 2.3 #1 (the bytes) · 2.3 #40 (metadata only)
   assertMark(rows[0], 'verbatim', 'new trace')
-  assert.ok(rows[0].body.includes(esc('"required"')) && rows[0].body.includes('file_path_q'), 'the opened row shows the full input_schema')
   for (const r of rows.slice(1, 3)) assertMark(r, 'metadata', `old trace row ${r.bi}`)
-  assert.ok(visible(rows[2].body).includes(w(W.SCHEMA_NOT_KEPT)) && rows[2].body.includes(esc(oldInline.name)), 'the old trace\'s body: the tool and the schema text not kept')
-  assert.ok(!headersOf(h).find((x) => x.sec === 'tools').claims, 'the tools section is not 逐字')
+  assert.ok(!headersOf(items).find((x) => x.sec === 'tools').claims, 'the tools section is not 逐字')
   bodyCache.clear()
-})
-
-test('2.3 #2: an opaque block opens on a placeholder, never on empty text, in the spec the wire brings and in the older one', () => {
-  const block = { type: 'thinking', thinking: '', signature: 'SIG-q' }
-  for (const r of [{ as: 'opaque', f: { body: ['block'] } }, { as: 'text' }]) {
-    const x = def('messages', { faithfulness: 'opaque' }, false, { r, role: 'assistant', kind: 'thinking', head: { role: 'assistant', tag: 'thinking', label: 'thinking' }, inline: { block } })
-    const flat = [def('system', undefined, true), x], s = stateOf(deskOfSteps([flat]))
-    s.openBlocks.add(`${x.bid}#0`)
-    setMode(x.bid, 'read')
-    const [row] = rowsOf(ctxWindowHtml(s)).filter((y) => flat[y.bi] === x)
-    assertMark(row, 'opaque', 'opaque')
-    const cell = /<div class="cellread [^"]*">([\s\S]*?)<\/div><\/div>/.exec(row.body)
-    assert.ok(cell && cell[1].replace(/<[^>]*>/g, '').trim().length > 0, `the Readable body is a placeholder, not blank: ${JSON.stringify(r)}`)
-  }
 })
 
 test('2.3 #9: no block with a ref draws the window line, ◐ on each header, 不能回源 not repeated; one ref draws none', () => {
@@ -243,19 +179,18 @@ test('2.3 #9: no block with a ref draws the window line, ◐ on each header, 不
   const none = Object.keys(SECS).flatMap((sec) => FFS.map((ff) => def(sec, ff, false))).map((d, i) => ({ ...d, unaddressable: WHYS[i % 2], ff: { ...d.ff, unaddressable: WHYS[i % 2] } }))
   const mixed = [def('tools', undefined, true), def('system', undefined, false), def('messages', undefined, false)]
   const desk = deskOfSteps([none, mixed])
-  const h = ctxWindowHtml(stateOf(desk, 0))
-  assert.ok(h.includes('<div class="cwwin"') && visible(h).includes(w(W.WINDOW_LINE)), 'the window line')
-  const line = visible(h.slice(h.indexOf('<div class="cwwin"'), h.indexOf('<div class="cwsec"')))
-  for (const x of WHYS) assert.equal(count(line, esc(x)), 1, `${x}: each reason once in the line's technical details`)
-  for (const r of rowsOf(h)) assertMark(r, want(none[r.bi]), `row ${r.bi}`, { windowLine: true })
-  assertHeaders(h, none, 'window line', { windowLine: true })
-  const m = ctxWindowHtml(stateOf(desk, 1))
-  assert.ok(!m.includes('<div class="cwwin"'), 'a step with one addressed block has no window line')
+  const items = itemsOf(stateOf(desk, 0)), line = winOf(items)
+  assert.ok(line, 'the window line')
+  for (const x of WHYS) assert.equal(line.reasons.filter((r) => r === x).length, 1, `${x}: each reason once in the line's technical details`)
+  for (const r of rowsOf(items)) assertMark(r, want(none[r.bi]), `row ${r.bi}`, { windowLine: true })
+  assertHeaders(items, none, 'window line', { windowLine: true })
+  const m = itemsOf(stateOf(desk, 1))
+  assert.equal(winOf(m), null, 'a step with one addressed block has no window line')
   for (const r of rowsOf(m)) assertMark(r, want(mixed[r.bi]), `mixed row ${r.bi}`)
 })
 
 // ── this step's reply (2.3 §这一步的回复 · 2.6 #3) ─────────────────────────────────────────────────────────────────────
-test('2.3 #2 · 2.6 #3: a reply part is proven only on its own span (resp.raw or resp.messages.<j>), else parsed; the panel\'s one mark never says 逐字 without the spans', () => {
+test('2.3 #2 · 2.6 #3: a reply part is proven only on its own span (resp.raw or resp.messages.<j>), else parsed; the drawer\'s one mark never says 逐字 without the spans', () => {
   const SPAN = /::resp\.(raw|messages\.\d+)::\d+-\d+$/
   const part = (where, ff) => {
     const k = n++, d = { bid: `P${k}`, kind: 'text', head: { role: 'assistant', tag: 'say', label: 'say' }, preview: `say ${k}`, chars: 4, bytes: 4, r: { as: 'text' }, ...(ff ? { ff } : null) }
@@ -278,15 +213,14 @@ test('2.3 #2 · 2.6 #3: a reply part is proven only on its own span (resp.raw or
   const s = stateOf(desk)
   steps.forEach(({ parts, row }, p) => {
     s.playhead = p
-    const h = ctxWindowHtml(s), rows = rowsOf(h.slice(h.indexOf('<div class="cwreply"')), { reply: true }), why = `reply ${p} ${JSON.stringify(row)}`
+    const rows = replyRowsOf(itemsOf(s)), why = `reply ${p} ${JSON.stringify(row)}`
     assert.equal(rows.length, parts.length, `${why}: a row per part`)
     rows.forEach((r, i) => { // a row's mark is its own part's; the reply-side fact is the call row's (2.3 §这一步的回复)
-      assert.equal(count(r.attrs, 'data-ff="'), 1, `${why} part ${i}: one fidelity value`)
       assertMark(r, expect(parts[i]), `${why} part ${i} ${JSON.stringify(parts[i].ff)} ${parts[i].ref}`)
     })
-    // the raw panel's one mark, by the proof rule over the parts: not stored whole → 回复没采全; a part off its span → 解析后的回复
+    // the call drawer's one mark (replyOf over the parts): not stored whole → 回复没采全; a part off its span → 解析后的回复
     // (never 逐字 without the spans); every part proven → none
-    const panel = serialize(rawPanelUnits(s)), marks = count(panel, 'class="rpmark"'), partial = Object.keys(row).length > 0
+    const panel = drawerOf(s), marks = count(panel, 'class="rpmark"'), partial = Object.keys(row).length > 0
     assert.ok(marks <= 1, `${why}: one mark at most`)
     if (partial) assert.ok(marks === 1 && visible(panel).includes(w(W.REPLY_PARTIAL)), `${why}: reply incomplete`)
     else if (!parts.every((d) => SPAN.test(d.ref || ''))) assert.ok(marks === 1 && visible(panel).includes(w(W.REPLY_PARSED)), `${why}: parsed`)
@@ -313,10 +247,11 @@ const FACTS = [
   { why: 'reqEncoding', row: { wire: { reqEncoding: 'gzip' } }, words: [W.reqEncodingFact('gzip')] },
 ]
 const ROUTING = { id: 'capture-routing', label: 'ROUTE-q' }
-const factsOf = (h) => { const m = /<div class="cwfline">[\s\S]*?<span class="cwffacts">([^<]*)<\/span>/.exec(h); return m ? m[1] : null }
-// the row with its technical details: up to the window's first section
-const lineOf = (h) => h.slice(h.indexOf('<div class="cwfline">'), h.indexOf('<div class="cwsec"'))
-const headLit = (s) => stepBarHtml(s).includes('class="sb-fid"')
+const fidOf = (items) => items.find((x) => x.type === 'fid') || null
+// the row's words as Window.tsx joins them; its technical details
+const factsOf = (items) => { const f = fidOf(items); return f ? f.facts.join(' · ') : null }
+const techOf = (items) => JSON.stringify((fidOf(items) || {}).tech ?? null)
+const headLit = (s) => !!stepHeadModel({ ...s, playRid: s.anchor.calls[s.playhead].rid }).half // the step head's ◐ (StepHead.tsx draws .sb-fid iff half)
 
 test('2.3 #8 · 1.4 #9: each call fidelity fact is said once in the row, with the step head\'s ◐; no fact (capture routing included), no row', () => {
   const cases = [...FACTS,
@@ -335,14 +270,14 @@ test('2.3 #8 · 1.4 #9: each call fidelity fact is said once in the row, with th
   const s = stateOf(desk)
   cases.forEach(({ why, words, tech = [], absent = [] }, p) => {
     s.playhead = p
-    const h = ctxWindowHtml(s), facts = factsOf(h)
+    const items = itemsOf(s), facts = factsOf(items)
     assert.equal(facts != null, !!words, `${why}: the row exists iff there is a fact`)
     assert.equal(headLit(s), !!words, `${why}: the step head's ◐ iff the row`)
     if (!words) return
-    assert.ok(h.indexOf('<div class="cwfline">') < h.indexOf('<div class="cwsec"'), `${why}: at the top of the window`)
-    for (const x of words) assert.equal(count(facts, w(x)), 1, `${why}: says ${JSON.stringify(x)} once`)
-    for (const x of absent) assert.ok(!facts.includes(w(x)), `${why}: not ${JSON.stringify(x)}`)
-    for (const t of tech) assert.ok(lineOf(h).includes(t) && !facts.includes(t), `${why}: ${t} in the technical details, not the row's words`)
+    assert.equal(items[0].type, 'fid', `${why}: at the top of the window`)
+    for (const x of words) assert.equal(count(facts, word(x)), 1, `${why}: says ${JSON.stringify(x)} once`)
+    for (const x of absent) assert.ok(!facts.includes(word(x)), `${why}: not ${JSON.stringify(x)}`)
+    for (const t of tech) assert.ok(techOf(items).includes(t) && !facts.includes(t), `${why}: ${t} in the technical details, not the row's words`)
   })
 })
 
@@ -361,10 +296,10 @@ test('2.3 #2 (real face): every section of every demo step is proven', async () 
     eachStep(desk, (s, call) => {
       const st = stepOf(desk, call.rid)
       if (!st.held) return
-      const h = ctxWindowHtml(s), why = `${call.rid}`
-      for (const r of rowsOf(h)) assertMark(r, 'verbatim', `${why} row ${r.bi}`)
-      assertHeaders(h, st.flat, why)
-      assert.ok(headersOf(h).every((x) => x.claims), `${why}: every section claims`)
+      const items = itemsOf(s), why = `${call.rid}`
+      for (const r of rowsOf(items)) assertMark(r, 'verbatim', `${why} row ${r.bi}`)
+      assertHeaders(items, st.flat, why)
+      assert.ok(headersOf(items).every((x) => x.claims), `${why}: every section claims`)
       steps++
     })
     assert.ok(steps > 0)
@@ -392,9 +327,9 @@ test('2.3 #8 · 1.4 #9 (real face): a Codex WebSocket call whose earlier record 
     eachStep(desk, (s, call) => {
       if (!(call.wire && call.wire.contextState === 'partial')) return
       partial++
-      const facts = factsOf(ctxWindowHtml(s)), why = call.rid
+      const facts = factsOf(itemsOf(s)), why = call.rid
       assert.ok(call.wire.contextMissing, `${why}: the server names the missing record`)
-      assert.ok(facts && facts.includes(w(W.CTX_FACT.partial)) && facts.includes(esc(call.wire.contextMissing)), `${why}: the row says it, with contextMissing`)
+      assert.ok(facts && facts.includes(word(W.CTX_FACT.partial)) && facts.includes(call.wire.contextMissing), `${why}: the row says it, with contextMissing`)
       assert.ok(headLit(s), `${why}: the step head's ◐`)
     })
     assert.ok(partial > 0, 'the call after the missing record is partial')
@@ -420,16 +355,15 @@ test('2.3 #9 (real face): a v0 envelope draws the window line, ◐ on each heade
     eachStep(desk, (s, call) => {
       const st = stepOf(desk, call.rid)
       if (!st.held || !st.flat.length) return
-      const h = ctxWindowHtml(s), why = call.rid
-      assert.ok(h.includes('<div class="cwwin"'), `${why}: the window line`)
-      for (const r of rowsOf(h)) assertMark(r, want(st.flat[r.bi]), `${why} row ${r.bi}`, { windowLine: true })
-      assertHeaders(h, st.flat, why, { windowLine: true })
-      for (const r of rowsOf(h.slice(h.indexOf('<div class="cwreply"')), { reply: true })) assert.notEqual(r.ff, 'verbatim', `${why}: a v0 reply is parsed`)
+      const items = itemsOf(s), why = call.rid
+      assert.ok(winOf(items), `${why}: the window line`)
+      for (const r of rowsOf(items)) assertMark(r, want(st.flat[r.bi]), `${why} row ${r.bi}`, { windowLine: true })
+      assertHeaders(items, st.flat, why, { windowLine: true })
+      for (const r of replyRowsOf(items)) assert.notEqual(r.ff, 'verbatim', `${why}: a v0 reply is parsed`)
       // 2.6 §A v0 记录: no request key to read back, and the reply's one mark says it was parsed
       assert.deepEqual(st.detail.nonBlockKeys, [], `${why}: no non-block keys`)
-      const panel = serialize(rawPanelUnits(s))
-      assert.ok(visible(panel).includes(w(W.NO_PARAMS)), `${why}: the panel says there are no request keys`)
-      if (st.reply.length) assert.ok(count(panel, 'class="rpmark"') === 1 && visible(panel).includes(w(W.REPLY_PARSED)), `${why}: the panel's reply is parsed`)
+      const panel = drawerOf(s)
+      if (st.reply.length) assert.ok(count(panel, 'class="rpmark"') === 1 && visible(panel).includes(w(W.REPLY_PARSED)), `${why}: the drawer's reply is parsed`)
       steps++
     })
     assert.ok(steps > 1, 'every step of the session')

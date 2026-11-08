@@ -1,4 +1,4 @@
-/* css/scope.css — the new desk's scope (1.3 §排布, Scope.tsx). Only under .desk.next: the legacy desk keeps replay.css alone. The rows,
+/* css/scope.css — the desk's scope (1.3 §排布, Scope.tsx), under .desk.next. The rows,
    bars, marks, chapter row and overview keep their replay.css rules (classes and ids are shared, so are the .ct-* colours and the
    .barlegend swatch); this file adds what the new layout has and the old did not: the legend on top, the cache trace as a line, the
    axis tag, the one cursor line and the gutter's shares. --gut stays declared once, in replay.css, for #saw and #rails together.

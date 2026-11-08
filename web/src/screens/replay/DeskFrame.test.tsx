@@ -1,4 +1,4 @@
-// web/src/screens/replay/DeskFrame.test.tsx — the new desk's frame (1.2 §回放台布局 #1, 1.4 #8): the main area holds its areas, the sidebar
+// web/src/screens/replay/DeskFrame.test.tsx — the desk's frame (1.2 §回放台布局 #1, 1.4 #8): the main area holds its areas, the sidebar
 // sits beside it, the middle column holds only the step head and the context window. The desk is a React view over a plain state with
 // no lane: the legacy renderers the wrappers call draw nothing without one.
 import { afterEach, beforeAll, expect, test, vi } from 'vitest'

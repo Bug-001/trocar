@@ -1,4 +1,4 @@
-// web/src/screens/replay/DeskHost.test.tsx — the new desk's host (decision 2: 1.2 §路由「离开再回来」, D71③, D75①) over the real
+// web/src/screens/replay/DeskHost.test.tsx — the desk's host (decision 2: 1.2 §路由「离开再回来」, D71③, D75①) over the real
 // board router and the real session cache, with a stub desk in place of openDesk (it attaches and detaches its view's root the way the
 // controller does, and records the routes it is handed): routes reach the desk inside the announcing call, the desk's root hangs in the
 // host only while it is read, an evicted desk's subtree is gone, and the controller is handed the frame once. And 1.2 #19 for the
@@ -29,7 +29,7 @@ function host({ maxSessions = 3 } = {}) {
   const router = (board = createBoardRouter(null)).legacy
   const desks: Stub[] = []
   const open: NonNullable<DeskProps['open']> = (_ctx, route0, makeView) => {
-    const s: DeskState = { project: route0.project, id: route0.id, view: { lo: 0, hi: 0 }, railsFolded: true, rpOpen: false }
+    const s: DeskState = { project: route0.project, id: route0.id, view: { lo: 0, hi: 0 }, rpOpen: false }
     const d = { id: route0.id, routes: [], framed: 0, elsAtAttach: undefined, disposed: 0 } as unknown as Stub
     d.view = makeView!(s, () => { d.framed++ }) as unknown as DeskView
     desks.push(d)

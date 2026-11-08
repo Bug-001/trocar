@@ -1,4 +1,4 @@
-// web/src/screens/replay/Window.tsx — the new desk's context window (2.3 §读与画「长对话的窗口」, 1.4 中栏): one virtual list (D75⑤) over the
+// web/src/screens/replay/Window.tsx — the desk's context window (2.3 §读与画「长对话的窗口」, 1.4 中栏): one virtual list (D75⑤) over the
 // window model's items (window-model.mjs windowItems), each keyed by the model's key (D75④), rows drawn with the decision-4 head and the
 // React cell (Cell.tsx). It owns #ctxwin and everything in it but each open cell's body leaf (R2 decision 13).
 //   · The DOM holds the items within one window height of the visible box, plus the pins (withPins): the change line, the reply, the
@@ -178,8 +178,7 @@ const Win = ({ it }: { it: Item }) => <div className="cwwin"><Half />{' ' + W.WI
 const FoldAll = ({ acts }: { acts: Acts }) => <div className="cwfoldall">
   <button type="button" className="foldallbtn" data-foldall="open" title={W.FOLD_ALL_OPEN_TIP} onClick={() => acts.foldAll(true)}>{W.FOLD_ALL_OPEN}</button>
   <button type="button" className="foldallbtn" data-foldall="close" title={W.FOLD_ALL_CLOSE_TIP} onClick={() => acts.foldAll(false)}>{W.FOLD_ALL_CLOSE}</button></div>
-const Unparsed = ({ it }: { it: Item }) => <div className="cwunparsed"><div className="cwuhd">{W.UNPARSED_TITLE}</div><div className="cwub">{W.UNPARSED_KEEP}</div>
-  {it.errMsg ? <Tech rows={[['errMsg', it.errMsg]]} /> : null}</div>
+const Unparsed = () => <div className="cwunparsed"><div className="cwuhd">{W.UNPARSED_TITLE}</div><div className="cwub">{W.UNPARSED_KEEP}</div></div>
 // ⑧ no text, no control: the frames of a step whose lane is not held (2.3 §车道未到手)
 const Frames = ({ it }: { it: Item }) => <div className="cwbusy" aria-busy="true">{it.frames.map((f: any) => <div key={f.sec} className="cwframe" data-sec={f.sec} style={{ '--fr': f.fr } as React.CSSProperties} />)}</div>
 const Busy = ({ n = 0 }: { n?: number }) => <div className="cwbusy" aria-busy="true" style={n > 0 ? { '--n': n } as React.CSSProperties : undefined} />
@@ -198,12 +197,12 @@ function ItemView({ it, acts, hl, bv }: { it: Item, acts: Acts, hl: boolean, bv:
     case 'win': return <Win it={it} />
     case 'foldall': return <FoldAll acts={acts} />
     case 'noreq': return <div className="cwnoreq">{W.NO_REQUEST}</div>
-    case 'unparsed': return <Unparsed it={it} />
+    case 'unparsed': return <Unparsed />
     case 'frames': return <Frames it={it} />
     default: return null
   }
 }
-// ── the actions (wireCtxWin's semantics): mutate the desk's state, then re-render ─────────────────────────────────────
+// ── the actions: a reader's open, fold or flip mutates the desk's state, then re-renders ─────────────────────────────────────
 function makeActs(s: DeskState, bump: () => void) {
   // the window asks for a body: once per ref in flight (cell.mjs joins a second ask); a retryable failure is kept in s.bodyFail, so
   // the poll asks again and the row says why (2.3 §读失败)

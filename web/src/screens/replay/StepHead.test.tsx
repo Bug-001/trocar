@@ -1,4 +1,4 @@
-// web/src/screens/replay/StepHead.test.tsx — the new desk's step head (2.2 §步头) over hand-made desks (desk-world.mjs deskOf): the
+// web/src/screens/replay/StepHead.test.tsx — the desk's step head (2.2 §步头) over hand-made desks (desk-world.mjs deskOf): the
 // step number reads N / M with the model's numbers and the model · time line beside it (not in it), the head is one row of the
 // table's parts with no popover row while closed and no prompt ordinal (2.2 #19), the three read-outs are keyboard popovers (2.2 #17),
 // 上下文 shows its calibre sentence when opened (2.2 #7), 对比 is a menu button whose choice renames it and × resets (2.2 #16), and the
@@ -141,4 +141,30 @@ test('1.2 #12: ←/→ on an open 对比 menu item and inside its step field are
   }
   expect(screen).not.toHaveBeenCalled()
   expect(s.setPlayhead).not.toHaveBeenCalled()
+})
+
+test('1.2 §会话头 · 2.2 §步头: at the first and the last step the head has one previous and one next control and one position element', () => {
+  for (const at of [0, ROWS.length - 1]) {
+    const { bar } = step({ at })
+    expect(bar().querySelectorAll(`button[aria-label="${W.STEP_PREV}"]`)).toHaveLength(1)
+    expect(bar().querySelectorAll(`button[aria-label="${W.STEP_NEXT}"]`)).toHaveLength(1)
+    expect(bar().querySelectorAll('.sb-no')).toHaveLength(1)
+    cleanup()
+  }
+})
+
+test('2.3 #10 #21 · 1.4 ⑧: held or not, the step head has no load control and nothing to press inside a busy frame, its layers open included', async () => {
+  for (const blocks of [BLOCKS, null]) {
+    const { bar } = step({ blocks })
+    expect(bar().querySelector('[data-load-step]')).toBeNull()
+    for (const label of [W.COMP_POPOVER_LABEL, W.CACHE_POPOVER_LABEL, W.COST_POPOVER_LABEL]) {
+      const b = readout(label)
+      act(() => b.focus())
+      await press(b, 'Enter')
+      for (const busy of document.querySelectorAll('[aria-busy="true"]')) expect(busy.querySelector('button, a, input, [role="button"], [tabindex]')).toBeNull()
+      expect(document.querySelector('[data-load-step]')).toBeNull()
+      await press(document.activeElement!, 'Escape')
+    }
+    cleanup()
+  }
 })

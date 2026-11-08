@@ -1,9 +1,9 @@
 // test/web-v2/desk-repaint.test.mjs — the replay desk repaints the playhead's panels only when what they draw changed (spec 1.4
 // D64: each panel has its own render signature, an unchanged one is not repainted), the URL's step is clamped and written back
-// (1.2 §路由), and an unknown session links back to the list.
+// (1.2 §路由).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { playheadSig, notListedHtml, stepParam } from '../../web/legacy/replay/replay.mjs'
+import { playheadSig, stepParam } from '../../web/legacy/replay/replay.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
 
@@ -51,10 +51,4 @@ test('1.2:91 · I-url-replay-4/-6: the step parameter clamps to 1..M and says wh
   // the lane's count not known yet: only the lower end clamps
   assert.deepEqual(stepParam('999', 0), { step: 999, rewrite: false })
   assert.deepEqual(stepParam('-3', 0), { step: 1, rewrite: true })
-})
-
-test('notListedHtml: a real link back to the session list', () => {
-  const tags = notListedHtml().match(/<a\b[^>]*>/g) || []
-  const hrefs = tags.map((t) => (t.match(/\shref\s*=\s*"([^"]*)"/) || [])[1])
-  assert.ok(hrefs.includes('#/sessions'), JSON.stringify(tags))
 })

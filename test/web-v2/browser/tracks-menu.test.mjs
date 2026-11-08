@@ -1,16 +1,15 @@
-// test/web-v2/browser/tracks-menu.test.mjs — the Tracks menu on the mounted new desk (2.1 #19, the Tracks half of 1.2 #8, 1.2 #26): a
+// test/web-v2/browser/tracks-menu.test.mjs — the Tracks menu on the mounted desk (2.1 #19, the Tracks half of 1.2 #8, 1.2 #26): a
 // generated session with two sub-agents and failed main-lane rows. The button lives between 600 and 900 px and adds no row to the
 // legend; the menu and the track gutter read one state; Next problem lands where `n` lands; the menu is a layer above the bottom panel
 // and leaves with the desk; its box is on screen, unclipped by the scope. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, DESK_NEXT } from './harness.mjs'
+import { probe, withBoard, serveWorld } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
-const nextOnly = skip || (DESK_NEXT ? false : "the new desk's Tracks menu (1.2 §窄屏)")
-const OPTS = { timeout: 120_000, skip: nextOnly }
+const OPTS = { timeout: 120_000, skip }
 const HASH = '#/replay/p/S'
 
 // the first world with the shape these cases are about: the sub group in the menu, and problems for the pager to walk

@@ -1,80 +1,19 @@
-// test/web-v2/session-head.test.mjs — the session head and the step navigation over the desk model: one previous / one next
-// control on the whole desk, the step position in one element, 1.2 #16's numbering (stepRef on rids), the head built only from
-// 1.2 §会话头's parts, the read-state line (pending), and the 会话保真行's facts. String level: the desk's skeleton +
-// sessionHeadHtml + stepBarHtml over generated desks (desk-world.mjs) and over the real face.
+// test/web-v2/session-head.test.mjs — the session head as data (web/src/screens/replay/models.mjs : sessionHeadModel): 1.2 #16's
+// numbering (stepRef on rids), the 会话保真行's facts and their technical details, the title, the chip, the info rows. The rendered
+// head is DeskHead.test.tsx's and the step head StepHead.test.tsx's.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { boardHome, serveBoard } from './real-face.mjs'
-import { world, deskFrom } from './desk-world.mjs'
-import { buildLanes, anchorLane, stepRef } from '../../web/legacy/replay/lanes.mjs'
-import { createDesk, applySession } from '../../web/legacy/replay/model.mjs'
-import { sessionHeadHtml, readStateHtml } from '../../web/legacy/replay/header.mjs'
-import { FOLD_STOPS } from '../../src/health/codes.mjs'
-import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
-import { SKELETON } from '../../web/legacy/replay/replay.mjs'
+import { world, deskFrom, deskOf } from './desk-world.mjs'
+import { buildLanes, stepRef } from '../../web/legacy/replay/lanes.mjs'
+import { sessionHeadModel } from '../../web/src/screens/replay/models.mjs'
+import { sessionTotals, priceMatch } from '../../web/legacy/core/metrics.mjs'
+import { L } from '../../web/legacy/core/labels.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 
 const SEEDS = [1, 7, 19, 42]
 const worldDesk = (seed) => { const w = world(seed); return deskFrom(w.get(), 'S').then((desk) => ({ w, desk })) }
-async function realDesk() {
-  const face = await serveBoard(boardHome())
-  try {
-    const get = (name, p) => face.get(name, p).then((r) => r.doc)
-    const id = (await get('sessions')).sessions[0].session_id
-    return await deskFrom(get, id)
-  } finally { await face.close() }
-}
-const deskHtml = (desk, playhead) => {
-  const lanes = buildLanes(desk), anchor = anchorLane(lanes)
-  const s = { desk, meta: desk.meta, lanes, anchor, playhead, pricing: null, pricingErr: null, diffRef: null }
-  return { anchor, h: SKELETON + sessionHeadHtml({ meta: desk.meta, lanes, follow: false, libraryHash: '#/sessions' }) + stepBarHtml(s) }
-}
-
-// the top-level elements of an HTML string: [{tag, cls}] (void elements close themselves)
-function topLevel(html) {
-  const out = []
-  let depth = 0
-  for (const m of html.matchAll(/<(\/?)([a-zA-Z][\w-]*)([^>]*?)(\/?)>/g)) {
-    const [, close, tag, attrs, self] = m
-    if (close) { depth--; continue }
-    if (depth === 0) out.push({ tag: tag.toLowerCase(), cls: ((attrs.match(/\bclass="([^"]*)"/) || [])[1] || '').split(/\s+/).filter(Boolean) })
-    if (!self && !/^(img|input|br|hr|meta|link|source|wbr)$/i.test(tag)) depth++
-  }
-  return out
-}
-
-function oneControlEach(desk) {
-  const { anchor } = deskHtml(desk, 0)
-  assert.ok(anchor && anchor.calls.length > 1, 'the session has steps to move between')
-  for (const playhead of [0, anchor.calls.length - 1]) {
-    const { h } = deskHtml(desk, playhead)
-    const count = (label) => (h.match(new RegExp(`aria-label="${label}"`, 'g')) || []).length
-    assert.equal(count(W.STEP_PREV), 1, 'one previous-step control')
-    assert.equal(count(W.STEP_NEXT), 1, 'one next-step control')
-    assert.equal((h.match(/class="sb-no"/g) || []).length, 1, 'the position is written in one element')
-  }
-}
-function headParts(desk) {
-  const head = sessionHeadHtml({ meta: desk.meta, lanes: buildLanes(desk), follow: false, libraryHash: '#/sessions' })
-  const parts = topLevel(head)
-  const ALLOWED = new Set(['sh-back', 'sh-name', 'sh-chip', 'sh-multi', 'sh-proj', 'spacer', 'sh-follow', 'sh-info'])
-  for (const p of parts) assert.ok(ALLOWED.has(p.cls[0]), `an element outside the head's table: <${p.tag} class="${p.cls.join(' ')}">`)
-  const kinds = parts.map((p) => p.cls[0])
-  for (const must of ['sh-back', 'sh-name', 'sh-chip', 'sh-follow', 'sh-info']) assert.equal(kinds.filter((k) => k === must).length, 1, `exactly one ${must}`)
-  assert.ok(kinds.indexOf('sh-back') < kinds.indexOf('sh-name') && kinds.indexOf('sh-name') < kinds.indexOf('sh-chip') && kinds.indexOf('sh-follow') < kinds.indexOf('sh-info'), 'in the table\'s order')
-}
-
-test('the desk draws exactly one previous-step and one next-step control, and the step position in one element', async () => {
-  for (const seed of SEEDS) oneControlEach((await worldDesk(seed)).desk)
-})
-test('the session head is built only from 1.2 §会话头 parts: back, title, agent chip (entry word inside), project, follow, ⓘ', async () => {
-  for (const seed of SEEDS) headParts((await worldDesk(seed)).desk)
-})
-test('on the real face: one control each, the head only from its parts', async () => {
-  const desk = await realDesk()
-  oneControlEach(desk); headParts(desk)
-})
+// the 会话保真行 of a desk answer: its facts and technical-detail pairs
+const factsOf = (d) => sessionHeadModel({ meta: { session_id: 'S' }, desk: d, lanes: [] }).facts
 
 // 1.2 #16: 「第 N 步」 names only a main-lane call (N = its place in the main lane's step order + 1, M = the header's count);
 // any other lane's call is that lane + its own k. Expected positions from the reference server's lanes, not the model's.
@@ -92,125 +31,6 @@ test('1.2 #16 numbering: stepRef on a main-lane rid is step n of M; on another l
   }
 })
 
-// 1.2 §会话头 读取状态: present iff the session answer carries `pending`; a quiet line, never a control
-test('the read-state line is present iff the answer is pending, and holds no button / link / focusable', () => {
-  const fx = JSON.parse(readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
-  const CONTROL = /<(button|a)\b|tabindex=|role="button"/
-  const desk = createDesk()
-  applySession(desk, fx.session_pending)
-  const first = readStateHtml(desk)
-  assert.match(first, /data-read-state/, 'first read, pending: the line')
-  assert.ok(!CONTROL.test(first))
-  applySession(desk, { ...fx.session_pending, mark: 'later', pending: { done: 5, total: 9 } })
-  const later = readStateHtml(desk)
-  assert.match(later, /data-read-state/, 'a later pending answer: the line')
-  assert.ok(!CONTROL.test(later))
-  applySession(desk, fx.session_full)
-  assert.equal(readStateHtml(desk), '', 'no pending: no line')
-  assert.equal(readStateHtml(createDesk()), '', 'nothing read: no line')
-})
-
-// 1.2 §读取状态 · 1.5 K-33: a version's re-read is no first read: its share is read / total, and it says the calls that wait for its end
-test('a re-read: the line is updating, the share comes from pending.read, and it carries pending.calls', () => {
-  const fx = JSON.parse(readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
-  for (const calls of [0, 1, 12]) {
-    const desk = createDesk()
-    applySession(desk, { ...fx.session_pending, pending: { done: 90, total: 100, seen: true, calls, read: 38 } })
-    const html = readStateHtml(desk)
-    assert.match(html, /data-read-state="updating"/, `${calls}`)
-    assert.ok(html.includes(W.updatingTo(38, calls)) && !html.includes(W.updatingTo(90, calls)), `${calls}: ${html}`)
-  }
-})
-
-// 1.5 catching-up: the count is pending.calls (telemetry rows are members, not calls); a head without it falls to total - done
-test('catching up counts pending.calls, not total - done; a head with no calls falls back', () => {
-  const fx = JSON.parse(readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
-  for (const [pending, n] of [[{ done: 5, total: 9, calls: 2 }, 2], [{ done: 5, total: 9, calls: 1 }, 1], [{ done: 5, total: 9 }, 4]]) {
-    const desk = createDesk()
-    applySession(desk, fx.session_full)
-    applySession(desk, { ...fx.session_full, pending })
-    const html = readStateHtml(desk)
-    assert.match(html, /data-read-state="catching-up"/, JSON.stringify(pending))
-    assert.ok(html.includes(W.catchingUp(n)), html)
-  }
-})
-
-test('1.2 §读取状态: a later read with no new call has no read-state line; a first read and a re-read still have theirs', () => {
-  const fx = JSON.parse(readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
-  const desk = createDesk()
-  applySession(desk, fx.session_full)
-  applySession(desk, { ...fx.session_full, pending: { done: 9, total: 9, calls: 0 } })
-  assert.equal(readStateHtml(desk), '')
-  applySession(desk, { ...fx.session_full, pending: { done: 9, total: 9, calls: 0, seen: true, read: 4 } })
-  assert.match(readStateHtml(desk), /data-read-state="updating"/)
-})
-
-// 1.5 K-31 · 3.5 #37: a head whose background fold stopped (pending.stopped) says reading stopped, its code in the technical details;
-// for every FOLD_STOPS code, at a first read and a later one
-test('a stopped fold: the read-state line is the stopped one, its code in the technical details; without the stop it is the reading line', () => {
-  const fx = JSON.parse(readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
-  for (const code of FOLD_STOPS) {
-    for (const answer of [fx.session_pending, { ...fx.session_pending, mark: 'later', pending: { done: 5, total: 9 } }]) {
-      const desk = createDesk()
-      applySession(desk, { ...answer, pending: { ...answer.pending, stopped: { code, reason: 'why it stopped' } } })
-      const html = readStateHtml(desk)
-      assert.match(html, /data-read-state="stopped"/, code)
-      const tech = html.slice(html.indexOf('class="tech"'))
-      assert.ok(html.includes('class="tech"') && tech.includes(code), `${code}: the code is in the technical details`)
-      assert.ok(!html.slice(0, html.indexOf('class="tech"')).includes(code), `${code}: the code is not in the visible line`)
-      applySession(desk, answer)
-      assert.match(readStateHtml(desk), /data-read-state="(reading|catching-up)"/, 'without the stop: reading or catching up')
-    }
-  }
-})
-
-// 1.5 K-29: after a failed read of a drawn session, one quiet stale line sits under the head with a Retry that reads at once
-// (s.poll — the reader's path, not the timer's); a good answer drops it
-import { renderSessionHead, wireSessionHead, staleLineHtml, fidelityFacts } from '../../web/legacy/replay/header.mjs'
-import { hidesReason, reasonsWith, visibleOf, outsideCollapsed } from './visible.mjs'
-test('K-29: a stale session draws a Retry outside the head that reads again; no stale state, no line', () => {
-  const meta = { session_id: 's1', harness: 'cc', project_slug: 'p', project_path: '/w/p' }
-  let handler = null, polls = 0
-  const el = { innerHTML: '', addEventListener: (t, f) => { if (t === 'click') handler = f }, removeEventListener() {} }
-  const s = { meta, lanes: [], follow: true, A: null, ctx: {}, staleErr: { r: { ok: false, status: 500, error: 'x' }, since: Date.now() - 5000 }, poll: () => { polls++ } }
-  renderSessionHead(el, s)
-  assert.match(el.innerHTML, /data-retry/)
-  assert.ok(!el.innerHTML.split('class="sesshead"')[1].split('</div>')[0].includes('data-retry'), 'not inside the session head itself')
-  wireSessionHead(el, s)
-  handler({ target: { closest: (sel) => (sel === '[data-retry]' ? {} : null) } })
-  assert.equal(polls, 1)
-  s.staleErr = null; renderSessionHead(el, s)
-  assert.ok(!/data-retry/.test(el.innerHTML))
-  assert.equal(staleLineHtml(null), '')
-})
-
-// 1.5 K-29: the stale line's visible words are the board's own (readFailure); the failed answer's reason (any status, a
-// native stack, markup) stays escaped in the collapsed technical details; Retry is there
-test('a stale line keeps every reason out of its visible text, escaped in collapsed details, with a Retry', () => {
-  let n = 0
-  for (const status of [0, 404, 500, undefined]) {
-    for (const reason of reasonsWith('TOKEN')) {
-      const t = `tok-${++n}-s9`, error = reason.replace('TOKEN', t)
-      const r = status === undefined ? { ok: false, error } : { ok: false, status, error }
-      const html = staleLineHtml({ since: new Date(Date.now() - 5000).toISOString(), r })
-      const where = `${status} · ${n}`
-      assert.ok(visibleOf(html).trim(), `${where}: a visible line`)
-      assert.ok(/<div class="disc-b"[^>]*\shidden>/.test(html), `${where}: details are collapsed`)
-      hidesReason(html, t, error.includes(t), where)
-      assert.match(outsideCollapsed(html), /data-retry/, `${where}: a Retry control`)
-    }
-  }
-})
-
-// while the desk is stale the follow chip says it is paused; its pressed state is the reader's choice and does not change
-test('a stale desk marks the follow chip paused, pressed state unchanged', () => {
-  const meta = { session_id: 's1', harness: 'cc' }
-  const chip = (html) => html.match(/<button[^>]*data-follow[^>]*>/)[0]
-  const on = chip(sessionHeadHtml({ meta, lanes: [], follow: true, stale: true }))
-  assert.match(on, /data-state="paused"/); assert.match(on, /aria-pressed="true"/)
-  assert.ok(!/data-state=/.test(chip(sessionHeadHtml({ meta, lanes: [], follow: true, stale: false }))))
-})
-
 // a slow read (an index-cold note) is not a loss — the 'files not read in full' fact counts only non-note errors;
 // every entry, notes included, still lands in the tech pairs
 test('only non-note read errors make the files fact; all of them reach the tech pairs', () => {
@@ -219,50 +39,29 @@ test('only non-note read errors make the files fact; all of them reach the tech 
       ...Array.from({ length: k1 }, (_, i) => ({ where: `f${i}.ndjson`, code: 'index-cold', level: 'note', reason: 'slow' })),
       ...Array.from({ length: k2 }, (_, i) => ({ where: `g${i}.ndjson`, reason: 'EIO' })),
     ]
-    const { facts, tech } = fidelityFacts({ errors })
-    const files = facts.filter((f) => f.html.includes('href="#/settings/storage"'))
-    assert.equal(files.length, k2 > 0 ? 1 : 0, `k1=${k1} k2=${k2}`)
+    const { items, tech } = factsOf({ errors })
+    assert.equal(items.filter((f) => f.kind === 'files').length, k2 > 0 ? 1 : 0, `k1=${k1} k2=${k2}`)
     assert.equal(tech.length, k1 + k2)
   }
 })
 
 // 1.5 K-20 / 1.2 §会话保真行: the fact is there iff `unknown.records > 0`; the reason and the endpoints only in 技术细节
-test('K-20: the unreadable-records fact appears iff unknown.records > 0; reason and endpoints only in the tech details', async () => {
-  const { fidelityLineHtml } = await import('../../web/legacy/replay/header.mjs')
+test('K-20: the unreadable-records fact appears iff unknown.records > 0; reason and endpoints only in the tech details', () => {
   const reason = 'REASON_' + Math.random().toString(36).slice(2), ep = 'EP_' + Math.random().toString(36).slice(2)
   for (const unknown of [null, undefined, { records: 0 }, { records: 0, reason, endpoints: [ep] }, { records: 1, reason, endpoints: [ep] }, { records: 37, reason, endpoints: [ep, ep + 'b'] }, { records: 2 }]) {
     const on = !!unknown && unknown.records > 0
-    assert.equal(fidelityFacts({ unknown }).facts.length, on ? 1 : 0, JSON.stringify(unknown))
-    const html = fidelityLineHtml({ unknown })
-    if (!on) { assert.equal(html, '', 'no fact: no row'); continue }
-    const tech = html.indexOf('class="disc"')
+    const { items, tech } = factsOf({ unknown })
+    assert.equal(items.length, on ? 1 : 0, JSON.stringify(unknown))
+    if (!on) { assert.equal(tech.length, 0, 'no fact: no tech pairs'); continue }
+    const words = JSON.stringify(items), pairs = JSON.stringify(tech)
     for (const t of [unknown.reason, ...(unknown.endpoints || [])].filter(Boolean)) {
-      assert.ok(tech > 0 && html.indexOf(t) > tech, `${t} only after the tech-details element`)
+      assert.ok(pairs.includes(t), `${t} in the tech details`)
+      assert.ok(!words.includes(t), `${t} not in the fact's words`)
     }
   }
 })
 
-// 2.3 归约前沿: the session-info popover's numbers walk every call, so they are drawn when it opens (`v2:popopen`, core/ui.mjs), from the
-// lanes held then — an answer that lands while it is shut does not pay for them
-test('the session-info popover is filled when it opens, from the lanes held then; the head drawn with an answer leaves it empty', async () => {
-  const w = world(3), desk = await deskFrom(w.get(), 'S')
-  const lanes = buildLanes(desk, { count: 0, series: [] })
-  const handlers = {}, body = { innerHTML: '' }
-  const el = { innerHTML: '', querySelector: (sel) => (sel === '.sipb' ? body : null), addEventListener: (t, f) => { handlers[t] = f }, removeEventListener() {} }
-  const s = { meta: desk.meta, lanes, desk, follow: true, ctx: {}, staleErr: null }
-  renderSessionHead(el, s)
-  assert.equal(s.totals, null) // nothing counted over the whole session until the popover opens
-  wireSessionHead(el, s)
-  handlers['v2:popopen']()
-  assert.ok(body.innerHTML.length > 0, 'the popover body is drawn on open')
-  assert.ok(s.totals && s.totals.cost, 'the totals are worked out on open')
-})
-
-// ── the new desk's session head as data (web/src/screens/replay/models.mjs : sessionHeadModel) ─────────────────────────
-import { sessionHeadModel } from '../../web/src/screens/replay/models.mjs'
-import { deskOf } from './desk-world.mjs'
-import { sessionTotals, priceMatch } from '../../web/legacy/core/metrics.mjs'
-import { L } from '../../web/legacy/core/labels.mjs'
+// ── the desk's session head as data (web/src/screens/replay/models.mjs : sessionHeadModel) ─────────────────────────
 
 const PRICES = { m: [3, 15, 3.75, 0.3] }
 const U = (read, create, fresh, out = 10) => ({ read, create, fresh, out })
@@ -272,12 +71,10 @@ const headState = (lanes, answer = {}, extra = {}) => {
   return { desk, meta: desk.meta, lanes: buildLanes(desk, desk.probes), pricing: PRICES, follow: false, ...extra }
 }
 const mainRows = () => [{ usage: U(0, 100, 10), cacheBreak: { firstCall: true } }, { usage: U(0, 120, 10), cacheBreak: { cause: 'content-changed' } }, { error: 'boom', usage: null }, { usage: U(100, 30, 5), cacheBreak: { cause: 'append' } }]
-test('1.2 #17 · title_source unread: the fixed word and its own tip on the desk head, in both copies; a title never reads it', () => {
+test('1.2 #17 · title_source unread: the fixed word and its own tip on the desk head; a title never reads it', () => {
   const unread = { session_id: 'S-1', title: null, title_source: 'unread' }
   const m = sessionHeadModel(headState([{ kind: 'main', rows: mainRows() }], { meta: unread }))
   assert.equal(m.title.text, null); assert.equal(m.title.fallback, W.PROMPT_UNREAD); assert.equal(m.title.sourceTip, W.PROMPT_UNREAD_TIP)
-  const html = sessionHeadHtml({ meta: unread, lanes: [], follow: false })
-  assert.ok(html.includes(W.PROMPT_UNREAD) && !html.includes(W.UNTITLED), html)
   const plain = sessionHeadModel(headState([{ kind: 'main', rows: mainRows() }], { meta: { session_id: 'S-1', title: null, title_source: null } }))
   assert.equal(plain.title.fallback, W.UNTITLED)
 })

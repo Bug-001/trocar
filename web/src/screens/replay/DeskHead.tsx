@@ -1,4 +1,4 @@
-// web/src/screens/replay/DeskHead.tsx — the session head (1.2 §会话头 · §会话保真行 · §信息弹出层) in the new desk: it renders
+// web/src/screens/replay/DeskHead.tsx — the session head (1.2 §会话头 · §会话保真行 · §信息弹出层) in the desk: it renders
 // sessionHeadModel (models.mjs), read on each `head` paint. One row (back · title · chip · project · start · entry · follow · ⓘ), then
 // the read-state line (words only, never a control), the fidelity row (only when a fact exists) and the not-refreshed line. The ⓘ's
 // rows are worked out when it opens (model.info(), 2.3 归约前沿). The head carries no statistic: every number is behind the ⓘ.

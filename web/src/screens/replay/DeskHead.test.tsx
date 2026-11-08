@@ -1,10 +1,15 @@
-// web/src/screens/replay/DeskHead.test.tsx — the new desk's session head (1.2 §会话头 · §会话保真行) rendered from a plain desk state:
+// web/src/screens/replay/DeskHead.test.tsx — the desk's session head (1.2 §会话头 · §会话保真行) rendered from a plain desk state:
 // the chip is one DOM shape for every registry harness (1.2 #2 / harness seam), the head is only the table's parts (1.2 #3), the
 // fidelity row exists iff a fact does (1.2 #14), 「several agents」 iff the multi-harness field has more than one (1.2 #15), the start
-// time iff the head has a first chapter (1.2 #17), and the read-state line carries no control (no-load-control).
-import { afterEach, expect, test } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+// time iff the head has a first chapter (1.2 #17), the read-state line exists iff the desk is pending or behind and carries no control
+// (no-load-control), a stopped fold keeps its code in the technical details (1.5 K-31), a stale desk offers Retry outside the head row
+// with every reason in collapsed details and marks follow paused (1.5 K-29), and the ⓘ's rows are drawn only when it opens (2.3 归约前沿).
+import { afterEach, expect, test, vi } from 'vitest'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { HARNESS_REGISTRY } from '../../../../src/off/harness-names.mjs'
+import { FOLD_STOPS } from '../../../../src/health/codes.mjs'
+import { reasonsWith } from '../../../../test/web-v2/visible.mjs'
+import * as W from '../../../legacy/labels/replay.mjs'
 import { DeskHead } from './DeskHead'
 import { reactView } from './view'
 import * as W from '../../../legacy/labels/replay.mjs'
@@ -141,4 +146,74 @@ test('1.2 不留空白屏: before the session answer the head holds the way back
   const el = render(<DeskHead desk={desk$} />).container.querySelector('#deskhead')!
   expect([...el.querySelectorAll('.sesshead > *')].map((c) => c.className)).toEqual(['sh-back'])
   expect(el.querySelector('.sh-back')!.getAttribute('href')).toBe('#/sessions')
+})
+
+test('1.2 §会话头 读取状态: the read-state line exists iff the desk is pending or behind; its state is the answer\'s', () => {
+  const cases: Array<[object, string | null]> = [
+    [{}, null], [{ pending: null }, null],
+    [{ pending: { done: 3, total: 10 }, firstPending: true }, 'reading'], [{ pending: { done: 3, total: 10 } }, 'catching-up'],
+    [{ behind: { n: 2, more: false } }, 'behind'], [{ pending: { done: 1, total: 2 }, behind: { n: 2 } }, 'catching-up'],
+  ]
+  for (const [d, state] of cases) {
+    const { el } = head({ desk: d })
+    expect(el.querySelector('.readstate')?.getAttribute('data-read-state') ?? null, JSON.stringify(d)).toBe(state)
+    cleanup()
+  }
+})
+
+test('1.5 K-31: a stopped fold\'s line is the stopped one; its code is in the technical details, not the visible line', () => {
+  for (const code of FOLD_STOPS) for (const firstPending of [true, false]) {
+    const { el } = head({ desk: { pending: { done: 2, total: 9, stopped: { code, reason: 'why-q' } }, firstPending } })
+    const line = el.querySelector('.readstate')!
+    expect(line.getAttribute('data-read-state')).toBe('stopped')
+    expect(line.textContent).not.toContain(code)
+    expect(el.querySelector('.disc .tech')!.textContent).toContain(code)
+    cleanup()
+  }
+})
+
+const STALE = (r: object) => ({ r, since: new Date(Date.now() - 5000).toISOString() })
+test('1.5 K-29: a stale desk draws a Retry outside the head row that reads again; no stale state, no line', () => {
+  const poll = vi.fn()
+  const { el } = head({ staleErr: STALE({ ok: false, status: 500, error: 'x' }), poll })
+  const retry = el.querySelector<HTMLElement>('.fidstale button')!
+  expect(retry).not.toBeNull()
+  expect(el.querySelector('.sesshead')!.contains(retry)).toBe(false)
+  fireEvent.click(retry)
+  expect(poll).toHaveBeenCalledTimes(1)
+  cleanup()
+  expect(head({ staleErr: null }).el.querySelector('.fidstale')).toBeNull()
+})
+
+test('1.5 K-29: the stale line keeps every reason out of its visible text, escaped in collapsed details', () => {
+  let n = 0
+  for (const status of [0, 404, 500, undefined]) for (const reason of reasonsWith('TOKEN')) {
+    const t = `tok-${++n}-s9`, error = reason.replace('TOKEN', t)
+    const { el } = head({ staleErr: STALE(status === undefined ? { ok: false, error } : { ok: false, status, error }) })
+    const line = el.querySelector('.fidstale')!, where = `${status} · ${n}`
+    expect(line.textContent!.trim().length, where).toBeGreaterThan(0)
+    expect(line.textContent, where).not.toContain(t)
+    const body = el.querySelector('.disc-b')!
+    expect(body.hasAttribute('hidden'), where).toBe(true)
+    if (error.includes(t)) expect(body.textContent, where).toContain(t) // kept as text: markup in the reason is not parsed
+    expect(el.querySelector('.disc-b b'), where).toBeNull()
+    cleanup()
+  }
+})
+
+test('1.5 K-29: a stale desk marks the follow chip paused; its pressed state stays the reader\'s', () => {
+  for (const follow of [true, false]) for (const stale of [true, false]) {
+    const { el } = head({ follow, staleErr: stale ? STALE({ ok: false, status: 500, error: 'x' }) : null })
+    const chip = el.querySelector('.sh-follow')!
+    expect(chip.getAttribute('data-state')).toBe(stale ? 'paused' : null)
+    expect(chip.getAttribute('aria-pressed')).toBe(String(follow))
+    cleanup()
+  }
+})
+
+test('2.3 归约前沿: the session-info rows are not in the DOM until the ⓘ opens; opening draws them', async () => {
+  const { el } = head({ desk: { truncated: { shown: 2, total: 9, file_mb: 1 } } })
+  expect(document.querySelector('.sipb')).toBeNull()
+  await act(async () => { fireEvent.click(el.querySelector<HTMLElement>(`.sh-info [aria-label="${W.SESSION_INFO_LABEL}"]`)!) })
+  expect(document.querySelectorAll('.sipb [data-row]').length).toBeGreaterThan(0)
 })

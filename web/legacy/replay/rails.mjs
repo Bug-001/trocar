@@ -85,11 +85,6 @@ function tcRailHtml(l, s) {
   return `<div class="rail k-token-count tkrow"><div class="tgut railname ${col ? 'col' : ''}" data-toggle="token-count" title="${esc(hint)}"><span class="tw">${discChev(!col)}</span> <span class="tn">${esc(TC_ROW(l.count || l.calls.length))}</span></div>${col ? '<div class="tlane"></div>' : body}</div>`
 }
 
-// < 900 px the subagent / 后台调用 / 全程 rows fold into one closed row (1.2 §窄屏); the fold state is a viewport fact,
-// not session data, so it is never reset with a session switch
-const narrowScreen = () => typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches
-const foldRowHtml = (folded) => `<div class="railunfold tkrow" data-railunfold="1" role="button" tabindex="0" aria-label="Overlay rows"><div class="tgut railname"><span class="tw">${discChev(!folded)}</span> <span class="tn">Overlay rows</span></div><div class="tlane"></div></div>`
-
 // the overlay lanes by the row they sit in
 function rowsOf(s) {
   const rl = s.lanes.filter((l) => l !== s.anchor)
@@ -121,8 +116,6 @@ export function flipRail(s, id) {
 }
 
 export function renderRails(el, s) {
-  const narrow = narrowScreen()
-  if (s.railsFolded) { el.innerHTML = foldRowHtml(true); return }
   const { subs, bgs, tcs } = rowsOf(s)
   subs.forEach((l) => { if (!s.subSeeded.has(l.id)) { s.subSeeded.add(l.id); s.collapsedRails.add(l.id) } }) // a fan-out never buries the main track
   let html = ''
@@ -141,7 +134,6 @@ export function renderRails(el, s) {
       (open ? `<div class="bgkids">${bgs.map((l) => railHtml(l, s)).join('')}</div>` : '')
   }
   for (const l of tcs) html += tcRailHtml(l, s)
-  if (narrow && !s.rawPanelGone) html = foldRowHtml(false) + html // the new desk's narrow rows live in the Tracks menu
   el.innerHTML = html || `<div class="railsonly">${esc(ONLY_MAIN)}</div>`
   if (s.selTick) { const t = el.querySelector(`[data-rid="${attrSel(s.selTick)}"]`); if (t) t.classList.add('sel') }
 }
@@ -172,12 +164,6 @@ export function wireRails(el, s) {
   const laneOf = (id) => s.lanes.find((l) => l.id === id)
   const fracOf = (body, e) => { const r = body.getBoundingClientRect(); return (e.clientX - r.left) / Math.max(1, r.width) }
   const onClick = (e) => {
-    const uf = e.target.closest('[data-railunfold]')
-    if (uf) {
-      s.railsFolded = !s.railsFolded
-      s.paintFrame() // the desk's view opens or folds the rows around the rails
-      renderRails(el, s); return
-    }
     const gt = e.target.closest('[data-grouptoggle]')
     if (gt) { flipRail(s, 'group:' + gt.dataset.grouptoggle); renderRails(el, s); return }
     const tg = e.target.closest('[data-toggle]')

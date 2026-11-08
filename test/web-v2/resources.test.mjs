@@ -1,7 +1,7 @@
 // test/web-v2/resources.test.mjs — the resource explorer's own suite (2.4): bad data degrades instead of throwing
 // (#10: unknown kinds land in 「其他资源」 with the kind on hover, undated rows carry no step), the six display groups
-// and the 「其他 N 项」 wrapper count their own entries (#1), the fidelity annotations of 只见到名字 (#3: no data-view,
-// 「推测」 on the group, the ⓘ text), an empty ledger with the compaction group still drawn (#7), and the < 1200 px fold
+// and the 「其他 N 项」 wrapper count their own entries, compactions leaving the group on the chapter axis (#1), the fidelity annotations of 只见到名字
+// (#3: no data-view, 「推测」 on the group, the ⓘ text), and the < 1200 px fold
 // line's N is the 读过的文件 group's own count — never a "0" standing in for absent records (1.2 §窄屏, invariant 4).
 // String level over desk-model states: the ledger is the anchor lane's `lane` answer as the desk holds it (desk-world.mjs).
 import test from 'node:test'
@@ -24,8 +24,8 @@ const stateOf = (lane, extra = {}) => {
   return { desk, lanes, anchor, anchorTs: anchor.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: anchor.calls.length }, playhead: 0, sawView: 'ctx', collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false, meta: { project_path: '/w/p' }, navOpen: new Set(ALL_OPEN), navSeenExpanded: false, ...extra }
 }
 // a group header's count, the way navGroup writes it: <span class="navlbl">label</span><span class="navct">N</span>
-// the new desk with the head's chapter axis on `axis` (the main lane's key R0-0 = the anchor here; another key = an off-axis anchor)
-const newDesk = (lane, axis = R(0)) => { const s = stateOf(lane, { rawPanelGone: true }); s.desk.head = { axis, chapters: [{ k: 0, s0: 0, s1: 6 }] }; return s }
+// the desk with the head's chapter axis on `axis` (the main lane's key R0-0 = the anchor here; another key = an off-axis anchor)
+const axisDesk = (lane, axis = R(0)) => { const s = stateOf(lane); s.desk.head = { axis, chapters: [{ k: 0, s0: 0, s1: 6 }] }; return s }
 const grpCount = (h, label) => { const m = h.match(new RegExp(`navlbl">${label}</span><span class="navct">(\\d+)</span>`)); return m ? +m[1] : null }
 
 test('#10 bad data degrades, never throws: unknown kinds land in 其他资源 with the kind on hover; undated rows carry no step', () => {
@@ -65,27 +65,7 @@ test('2.4 还在读: a lane answer with pending stands where the empty line woul
   assert.ok(!resourcesHtml(s).includes(W.FILES_UPDATING), 'the line stands in for an empty list only')
 })
 
-test('the < 1200 px fold line: N is the file group\'s own count; no ledger or nothing countable → no number', () => {
-  const barOf = (anchor) => {
-    const bar = { textContent: '' }
-    const el = { innerHTML: '' }
-    renderResources(el, stateOf(anchor, { root: { querySelector: (sel) => (sel === '#rpbar' ? bar : null) } }))
-    return { bar, h: el.innerHTML }
-  }
-  for (const a of [{}, { resources: [] }]) {
-    assert.ok(!/\d/.test(barOf(anchorOf(a)).bar.textContent), 'nothing countable: no number, never a 0 standing in')
-  }
-  const mixed = barOf(anchorOf({ resources: [
-    { kind: 'file', label: '/w/a.mjs', segments: [{ enter: R(0), evict: null }] },
-    { kind: 'file', label: '/w/b.mjs', segments: [{ enter: R(1), evict: R(2) }] },
-    { kind: 'file', label: '/w/c.mjs' },                                        // unusable segments: neither the group nor the bar counts it
-    { kind: 'capability', label: 'srv', segments: [{ enter: R(0), evict: null }] },
-  ] }))
-  assert.match(mixed.bar.textContent, /\b2\b/)
-  assert.equal(grpCount(mixed.h, W.RES_GRP.file), 2, 'the fold line and the group header count the same hasSeg-filtered set')
-})
-
-test('#1 the six groups count their own entries (one constructed lane)', () => {
+test('#1 the six groups count their own entries; on the chapter axis compactions leave the group (one constructed lane)', () => {
   const anchor = anchorOf({
     resources: [
       { kind: 'file', label: '/w/p/a.mjs', segments: [{ enter: R(0), evict: null }] },
@@ -106,17 +86,17 @@ test('#1 the six groups count their own entries (one constructed lane)', () => {
   assert.equal(grpCount(h, `${W.RES_GRP.seen} · ${W.GUESS}`), 3)
   assert.equal(grpCount(h, W.RES_GRP.cap), 2, 'skill + capability together')
   assert.equal(grpCount(h, W.RES_GRP.dl), 2, 'dir + link together')
-  assert.equal(grpCount(h, W.RES_GRP.comp), 2, 'compaction + summarize events')
   assert.equal(grpCount(h, W.RES_GRP.other), 1)
+  assert.equal(grpCount(h, W.RES_GRP.comp), 2, 'no chapter table: compaction + summarize events')
   assert.ok(h.includes(`navlbl">${W.OTHERS_ROW(3 + 2 + 2 + 2 + 1)}</span>`), 'N more sums the folded groups')
-  // the new desk on the chapter axis: the Overview's chapter heads carry the compaction, so only the summary stays and N drops one
-  const d = resourcesHtml(newDesk(anchor))
+  // on the chapter axis: the Overview's chapter heads carry the compaction, so only the summary stays and N drops one
+  const d = resourcesHtml(axisDesk(anchor))
   assert.equal(grpCount(d, W.RES_GRP.comp), 1, 'the summary stays: the Overview does not show it')
   assert.ok(d.includes(esc(W.summarizeRow('', kf(1200)))), 'the summary row')
   assert.ok(!d.includes(esc(W.compactRow('', '10', '—'))), 'no compaction row on the axis')
   assert.ok(d.includes(`navlbl">${W.OTHERS_ROW(3 + 2 + 2 + 1 + 1)}</span>`), 'N more leaves the compaction event out')
   // an anchor off the chapter axis has no chapter heads: its compaction numbers live only here
-  const off = resourcesHtml(newDesk(anchor, 'R9-0'))
+  const off = resourcesHtml(axisDesk(anchor, 'R9-0'))
   assert.equal(grpCount(off, W.RES_GRP.comp), 2, 'off the axis both rows stay')
   assert.ok(off.includes(esc(W.compactRow('', '10', '—'))), 'the compaction row with its numbers')
   for (const g of [W.RES_GRP.file, W.RES_GRP.load, W.RES_GRP.cap, W.RES_GRP.dl, W.RES_GRP.other]) assert.equal(grpCount(d, g), grpCount(h, g), g)
@@ -135,9 +115,9 @@ test('#7 the compaction group still draws with an empty ledger', () => {
   const empty = resourcesHtml(stateOf(anchorOf({ resources: [], events: comps })))
   assert.equal(grpCount(empty, W.RES_GRP.comp), 1, 'compaction events still draw with an empty ledger')
   assert.equal(grpCount(empty, W.RES_GRP.file), null, 'no empty groups are drawn')
-  const desk = resourcesHtml(newDesk(anchorOf({ resources: [], events: comps })))
-  assert.equal(grpCount(desk, W.RES_GRP.comp), null, 'the new desk on the chapter axis draws no compaction group')
-  assert.equal(grpCount(resourcesHtml(newDesk(anchorOf({ resources: [], events: comps }), 'R9-0')), W.RES_GRP.comp), 1, 'off the axis it does')
+  const desk = resourcesHtml(axisDesk(anchorOf({ resources: [], events: comps })))
+  assert.equal(grpCount(desk, W.RES_GRP.comp), null, 'on the chapter axis no compaction group is drawn')
+  assert.equal(grpCount(resourcesHtml(axisDesk(anchorOf({ resources: [], events: comps }), 'R9-0')), W.RES_GRP.comp), 1, 'off the axis it does')
   assert.ok(desk.includes(esc(W.NO_RESOURCES)), 'the empty ledger still says so')
 })
 
@@ -200,8 +180,8 @@ test('resource state on rids: pending / live / evicted at every playhead', () =>
 })
 
 // 2.4 #1, 2.4:67 · :148: 只见到名字 leaves out every opened file under either spelling; while the anchor lane's
-// `ledger_next` chain is unread, each count the ledger gives is an empty busy box (no digit, never a 0); the compaction
-// count (lane events) is exact once the lane is held; the chain read to its end → the counts are the ledger's.
+// `ledger_next` chain is unread, each count the ledger gives is an empty busy box (no digit, never a 0); the chain read to
+// its end → the counts are the ledger's.
 test('2.4 #1: seen minus opened files; ledger counts busy until the ledger chain is read, then the ledger\'s', () => {
   const key = R(0), cwd = '/w/p'
   const res = [
@@ -226,7 +206,6 @@ test('2.4 #1: seen minus opened files; ledger counts busy until the ledger chain
     assert.match(inner, /<span class="navct" aria-busy="true"><\/span>/, `${k}: the count is a busy box`)
     assert.ok(!/\d/.test(inner.replace(/<[^>]*>/g, '')), `${k}: no digit while not known`)
   }
-  assert.equal(grpCount(resourcesHtml(s), W.RES_GRP.comp), events.length, 'the compaction count is exact once the lane is held')
   applyLedger(s.desk, key, 'c1', { resources: res.slice(2), seen: seen.slice(3), ledger_next: null })
   const h = resourcesHtml(s)
   assert.ok(!/aria-busy/.test(h), 'the chain is read: nothing is busy')
@@ -242,12 +221,12 @@ test('2.4 #1: seen minus opened files; ledger counts busy until the ledger chain
 })
 
 // a click on a resource's name, through the panel's own listener; every hand the click can reach out with is a recorder
-function clickName(lane, { playhead = 0, step, resKey = 'file:a', rawPanelGone = true }) {
-  const s = stateOf(lane, { playhead, rawPanelGone }), got = { reveal: [], jumpTo: [], noBlock: 0, playhead: [], renderRaw: 0 }
-  Object.assign(s, { reveal: (x) => got.reveal.push(x), jumpTo: (t, j) => got.jumpTo.push([t, j]), noBlock: () => { got.noBlock++ }, setPlayhead: (t) => got.playhead.push(t), renderRaw: () => { got.renderRaw++ } })
+function clickName(lane, { playhead = 0, step, resKey = 'file:a' }) {
+  const s = stateOf(lane, { playhead }), got = { reveal: [], jumpTo: [], noBlock: 0, playhead: [] }
+  Object.assign(s, { reveal: (x) => got.reveal.push(x), jumpTo: (t, j) => got.jumpTo.push([t, j]), noBlock: () => { got.noBlock++ }, setPlayhead: (t) => got.playhead.push(t) })
   let onClick = null
   wireResources({ addEventListener: (_, f) => { onClick = f }, removeEventListener() {} }, s)
-  const name = { dataset: { view: resKey, viewstep: String(step), viewlabel: 'a' } }
+  const name = { dataset: { view: resKey, viewstep: String(step) } }
   onClick({ target: { closest: (q) => (q === '[data-view]' ? name : null) }, stopPropagation() {} })
   return { s, got }
 }
@@ -274,14 +253,6 @@ test('2.4 #4: a name is never a dead click: a target step with no list says so, 
   }
   const stale = clickName(laneOf([{ unparsed: true }, {}], [carrying(), []]), { playhead: 0, step: 1 })
   assert.deepEqual([stale.got.reveal, stale.got.jumpTo.length], [[], 1])
-})
-
-test('2.4: without the flag the name pins the resource as before', () => {
-  const { s, got } = clickName(laneOf([{}, {}], [[], carrying()]), { playhead: 0, step: 1, rawPanelGone: false })
-  assert.deepEqual(got.playhead, [1])
-  assert.equal(s.viewPin.resKey, 'file:a')
-  assert.equal(got.renderRaw, 1)
-  assert.deepEqual([got.reveal, got.jumpTo, got.noBlock], [[], [], 0])
 })
 
 test('2.4 #13: a resource with a runtime code sits in its own group, never in the files read, with its code\'s reason', () => {

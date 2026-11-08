@@ -19,7 +19,7 @@ import { writeSegment } from '../query/raw-home.mjs'
 const SEG = '20260719T090000Z'
 const stateOf = (desk, playhead = 0) => {
   const lanes = buildLanes(desk)
-  return { desk, lanes, anchor: anchorLane(lanes), playhead, rawPanelGone: true, diffRef: null, navOpen: new Set(), openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), ctx: {} }
+  return { desk, lanes, anchor: anchorLane(lanes), playhead, diffRef: null, navOpen: new Set(), openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), ctx: {} }
 }
 const blk = { sec: 'system', role: 'system', kind: 'text', head: { role: 'system', tag: 'text', label: 's' }, preview: 'p', chars: 5, bytes: 5, ref: 's/m#R::0-5' }
 const detailOf = (o = {}) => ({ norm: { stop_reason: null }, respRefs: [], nonBlockKeys: [], extraMessages: [], wire: null, ...o })
@@ -94,9 +94,4 @@ test('2.6 #4: each observer effect is a line of its own with no fold; none means
   assert.ok(!('open' in it), 'nothing folds it')
   for (const o of fx) assert.ok(itemOf(s, 'details').tech.some(([, v]) => String(v).includes(o.id) && String(v).includes(o.cause)), `${o.id}: id and cause are tech details`)
   assert.equal(itemOf(stateOf(deskWith()), 'impact'), undefined)
-})
-
-test('the legacy desk has no such items: its drawing table does not know them', () => {
-  const s = { ...stateOf(deskWith({}, detailOf({ wire: { observerEffect: [{ id: 'x', what: 'w' }] } }))), rawPanelGone: false }
-  assert.deepEqual(tail(s), ['reply'])
 })

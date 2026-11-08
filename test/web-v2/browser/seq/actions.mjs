@@ -13,7 +13,7 @@ import { FAULT_KINDS, killWorkerMidRead } from './faults.mjs'
 export const DENY = '[role=switch],[data-hctl],[data-keep],[data-lvl],[data-class],.v2-modal button,.v2-modal [role=button]'
 const FAULT_NAMES = ['d/head', 'd/pack', 'd/open', 'lane', 'block', 'sessions', 'status', 'overview', 'traffic', 'classes', 'pricing', 'segments', 'calls']
 const SCREENS = ['#/overview', '#/sessions', '#/capture', '#/capture/log', '#/traffic', '#/settings/storage', '#/settings/prices', '#/settings/appearance']
-const TOGGLES = { block: '#ctxwin .cblk[data-bi] > .cbh', reply: '#ctxwin .cblk[data-rp] > .cbh', turn: '#ctxwin .cwturnhd', rail: '#rails [data-toggle], #rails [data-railunfold]', tick: '#rails .tick[data-lane]', rpbar: '#rpbar', details: '#screen details > summary', row: '#screen [aria-expanded][aria-controls]' }
+const TOGGLES = { block: '#ctxwin .cblk[data-bi] > .cbh', reply: '#ctxwin .cblk[data-rp] > .cbh', turn: '#ctxwin .cwturnhd', rail: '#rails [data-toggle]', tick: '#rails .tick[data-lane]', rpbar: '#rpbar', details: '#screen details > summary', row: '#screen [aria-expanded][aria-controls]' }
 const NAV_KEYS = ['ArrowLeft', 'ArrowRight', 'Shift+ArrowLeft', 'Shift+ArrowRight', 'Home', 'End', 'step:prev', 'step:next']
 const MISC_KEYS = ['?', 'Escape', 'n', 'p']
 

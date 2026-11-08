@@ -1,5 +1,5 @@
-/* web/legacy/css/desk-frame.css — the new desk's frame (1.2 §回放台布局, DeskFrame.tsx, Sidebar.tsx). Only under .desk.next: the legacy desk
-   keeps replay.css alone. Tokens only. */
+/* web/legacy/css/desk-frame.css — the desk's frame (1.2 §回放台布局, DeskFrame.tsx, Sidebar.tsx), under .desk.next.
+   Tokens only. */
 .desk.next .deskpanes{flex:1;min-height:0;}
 .desk.next #midcol{height:100%;}
 /* the scope's own cell scrolls: #rails no longer scrolls apart, and the whole-session row stays at the cell's foot (1.3) */

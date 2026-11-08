@@ -1,7 +1,7 @@
 // replay/resources.mjs — the resource explorer on the right page (2.4): what entered the context across the WHOLE
 // session, and where each of it stands at the playhead (not yet · live · evicted) — one lifecycle sentence per row, in
 // words. Six groups keyed by the resource kind (a render-time projection, never a schema enum); the first two are open by
-// default, the rest live behind one 「其他 N 项」 row.
+// default, the rest live behind one 「其他 N 项」 row. On the chapter axis the compaction group leaves out the compactions the Overview's chapter heads carry (2.4).
 // The ledger is the anchor lane's `lane` answer (resources, seen, events; 3.5 §会话读) as the desk holds it: nothing is said
 // until that lane is held; an empty ledger has its own sentence (this agent may not provide one — never "no resources").
 // The key of a resource is the server's `resKey` / `key`, else kind::label. `el` is #resexp; `s` is the replay desk's state.
@@ -59,7 +59,7 @@ export function resourceUnits(s) {
   const withSeg = res.filter(hasSeg)
   const of = (k) => withSeg.filter((r) => r.kind === k)
   const guessed = new Set(events.filter((x) => x.type === 'compaction' && x.inferred).map((x) => x.rid)) // read per row: a row must not walk the events
-  const view = (r, enter) => `data-view="${esc(resKeyOf(r))}" data-viewstep="${enter}" data-viewlabel="${esc(r.label)}"`
+  const view = (r, enter) => `data-view="${esc(resKeyOf(r))}" data-viewstep="${enter}"`
   // the lifecycle sentence's state at the playhead + the enter/evict locals (N from the FIRST segment, M from the LAST)
   const life = (r) => {
     // bad data (2.4 验收 #10): segments missing or empty → degrade with a placeholder, never throw — no step numbers,
@@ -79,8 +79,7 @@ export function resourceUnits(s) {
   const out = []
   const rowsOf = (rs, row) => keyed(rs.map((r) => ({ key: resKeyOf(r), html: row(r) })))
   // the ledger statement sits at the TOP of the list (2.4 element table) and is about the LEDGER, not a fallback for
-  // "nothing rendered": an existing-but-empty ledger (or no key) with nothing tracked says so even while the compaction
-  // group draws below — compaction events are not resources (#7: 两种情况都照样画).
+  // "nothing rendered": an existing-but-empty ledger (or no key) with nothing tracked says so (#7)
   if ((done || pending) && !res.length && !seen.length) out.push(none())
 
   const fileRow = (r) => { const l = life(r)
@@ -117,8 +116,8 @@ export function resourceUnits(s) {
       ? W.compactRow(at(atStep), n.from != null ? String(n.from) : '—', n.to != null ? String(n.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
       : W.summarizeRow(at(atStep), e.out != null ? kf(e.out) : '—')
     return `<div class="navsub" data-navstep="${atStep}"><span class="nsl" title="${esc(word)}">${esc(word)}</span></div>` }
-  // the new desk (no raw panel) leaves out compactions on the chapter axis: the Overview's chapter heads carry them (2.4, 2.5)
-  const dropComp = s.rawPanelGone && onChapterAxis(s)
+  // on the chapter axis the Overview's chapter heads carry each compaction and its numbers, so the group leaves them out (2.4, 2.5)
+  const dropComp = onChapterAxis(s)
   const comps = events.filter((e) => e && ((e.type === 'compaction' && !dropComp) || e.type === 'summarize'))
   const others = res.filter((r) => !['file', 'scaffold', 'skill', 'capability', 'dir', 'link'].includes(r.kind))
   // others keeps EVERY unknown kind (even one without segments — 2.4 Edge cases: 不丢); an undated row shows no step
@@ -156,28 +155,11 @@ export const resourcesHtml = (s) => serialize(resourceUnits(s))
 export function renderResources(el, s) {
   if (!s.anchor || !s.anchor.calls.length) { patchInto(el, []); return }
   patchInto(el, [{ key: 'zone', html: `<div class="resz">${esc(W.RES_SECTION)}</div>` }, ...resourceUnits(s)])
-  // the < 1200 px fold line names what the right page holds (1.2 §窄屏): 「读过的文件 N · 原始数据」 and the disclosure chevron. N is the
-  // 读过的文件 group's own count — the same hasSeg-filtered set the group header counts, so the two cannot drift. No
-  // ledger (null / no key), or nothing the group would count → only 「原始数据」: never a "0" standing in for absent
-  // records (invariant 4) — an empty ledger says so in the page itself, the fold line has nothing to name.
-  const bar = s.root && s.root.querySelector && s.root.querySelector('#rpbar')
-  if (bar) {
-    const h = s.desk && s.desk.held.get(s.anchor.id)
-    const n = h && ledgerDone(s.desk, s.anchor.id) ? [...h.resources.values()].filter((r) => r && r.kind === 'file' && !r.runtime && hasSeg(r)).length : 0
-    bar.textContent = n > 0 ? `${W.RES_GRP.file} ${n} · ${W.RAW_WORD}` : W.RAW_WORD // the chevron is the bar's own ::after, a --glyph-disc mask that turns when open (replay.css)
-  }
 }
 
-// click a resource's name → show its content in the raw panel (loading the step where it is live); click the lifecycle
-// sentence → locate it. One click does one thing (the name's handler stops the walk).
-export function viewResource(s, step, resKey, label) {
-  if (step != null && step >= 0 && step !== s.playhead) s.setPlayhead(step, true) // clears the pin
-  s.viewPin = { resKey, label }
-  s.renderRaw()
-}
-// the desk with no raw panel (D80): the name reveals the block in the window. In the step at the playhead it does so on the spot, the
-// playhead staying, the content preferred over the call that asked for it; else it moves to the target step and lands there by
-// resKey. The list is the step's own: s.curFlat outlives a step that has none. A target step with no list says so (s.noBlock).
+// click a resource's name → reveal the block in the window; click the lifecycle sentence → locate it. One click does one
+// thing (the name's handler stops the walk). In the step at the playhead the name reveals on the spot, the playhead staying,
+// the content preferred over the call that asked for it; else it moves to the target step and lands there by resKey. The list is the step's own: s.curFlat outlives a step that has none. A target step with no list says so (s.noBlock).
 export function revealResource(s, step, resKey) {
   const cur = s.anchor && s.anchor.calls[s.playhead]
   const flat = (cur && cur.rec && !cur.unparsed && s.desk && stepOf(s.desk, cur.rid).flat) || []
@@ -193,7 +175,7 @@ export function wireResources(el, s) {
     const tg = e.target.closest('[data-navtoggle]')
     if (tg) { const k = tg.dataset.navtoggle; if (s.navOpen.has(k)) s.navOpen.delete(k); else s.navOpen.add(k); s.renderNav(); return }
     const v = e.target.closest('[data-view]')
-    if (v) { e.stopPropagation(); if (s.rawPanelGone) revealResource(s, +v.dataset.viewstep, v.dataset.view); else viewResource(s, +v.dataset.viewstep, v.dataset.view, v.dataset.viewlabel); return }
+    if (v) { e.stopPropagation(); revealResource(s, +v.dataset.viewstep, v.dataset.view); return }
     if (e.target.closest('[data-navmore]')) { s.navSeenExpanded = !s.navSeenExpanded; s.renderNav(); return }
     const st = e.target.closest('[data-navstep]')
     if (st) jumpToStepAndBlock(s, +st.dataset.navstep, st.dataset.navres || '')

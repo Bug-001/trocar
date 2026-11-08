@@ -20,7 +20,7 @@ export const LANE_KIND = Object.freeze({
   suggest: { word: 'Next-prompt suggestion', row: 'bg', bucket: 'bg', hint: 'The agent copies the whole session and asks the model what the next prompt might be; the reply is only a hint in the input box and does not enter the session' },
   websearch: { word: 'Web search', row: 'bg', bucket: 'bg', hint: 'A model call the search tool makes on its own' },
   webfetch: { word: 'Web page summary', row: 'bg', bucket: 'bg', hint: 'A small model answers from one fetched page' },
-  aux: { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'A background call the board cannot name' },
+  aux: { word: 'Unnamed background call', row: 'bg', bucket: 'bg', hint: 'A call outside the main thread whose agent doesn\'t say what it is' },
   probe: { word: 'warm-up request', row: 'bg', bucket: 'bg', hint: 'A warm-up request the agent marked itself: it writes the cache ahead of time; not a step of the main thread' },
   'token-count': { word: 'token count', row: 'tc', bucket: null, hint: 'Token count: generates no reply and is not billed' },
 })
@@ -111,8 +111,6 @@ export const CACHE_TITLE = 'Cache'
 export const CACHE_POPOVER_LABEL = 'Cache at this step'
 export const COMP_TITLE = 'Breakdown'
 export const COMP_POPOVER_LABEL = 'What this request is made of'
-export const COMP_BTN = 'Breakdown'
-export const COMP_BTN_NONE = 'Breakdown —'
 export const COST_TITLE = '≈ $'
 export const COST_POPOVER_LABEL = 'Estimated cost of this step'
 export const CMP_RESET = 'Back to the previous step'
@@ -132,7 +130,6 @@ export const FOLLOW = 'Follow latest'
 export const SESSION_INFO_LABEL = 'About this session'
 export const MULTIPLE_AGENTS = 'several agents'
 export const TITLE_FROM_WIRE = 'The title is taken from the captured requests'
-export const TITLE_UNTITLED_TIP = 'The captured requests of this session hold no main-conversation prompt'
 export const MULTIPLE_AGENTS_TIP = 'Records of several agents share this session id'
 export const PROJECT = 'project'
 export const GUESS = 'inferred'
@@ -180,25 +177,9 @@ export const FF_WORD = Object.freeze({
   truncated: 'truncated at the source', unaddressable: 'not addressable', unknown: 'fidelity unknown', notfetched: 'bytes could not be fetched',
   reserialized: 'reserialized, not the wire bytes', verbatim: 'verbatim', parsed: 'parsed reply', reading: 'reading view',
 })
-export const FF_TIP = Object.freeze({
-  metadata: 'Metadata only: the full JSON schema was not captured (an older capture); the model received the full schema',
-  opaque: 'Reasoning without plaintext: the wire carries a signature or ciphertext at most; there is no plaintext to restore',
-  summarized: 'A client summary replaced the original (for example in compaction); this is not the verbatim original',
-  omitted: 'The source omitted the content of this block',
-  truncated: 'The source itself was not captured in full (truncated at the capture limit); the full text is not on disk',
-  unaddressable: 'Not addressable: this block has no locatable byte span on the wire; its text came inline with the block',
-  unknown: 'Fidelity unknown: the server gave a fidelity value outside the known set; it is not treated as verbatim',
-  notfetched: 'Bytes could not be fetched: reading the source failed, the reason is in the body; opening it again retries',
-  reserialized: 'These bytes were reserialized on their way into the capture; they are not a verbatim record of the wire bytes',
-  verbatim: 'Verbatim: what is stored for this block is the wire bytes, unchanged',
-})
 // the body of a tool definition an older capture kept as metadata only (2.3 逐值 metadata)
 export const SCHEMA_NOT_KEPT = 'schema text not retained (length only)'
 export const NO_BODY = 'This block has no body and no source location'
-export const clipNote = (n) => `…(${n} characters in total; only the first 20000 are shown)`
-// the raw panel's reply / the drawer's reply: the display clip said once, in 2.6 §A's own words (the context window's
-// blocks keep clipNote above — 2.3 K-07 pins that wording for them)
-export const clipShownNote = (shown, total) => `Display truncated · first ${shown} of ${total} characters`
 
 // block-head words (2.3 §block 卡)
 export const CACHE_MARK = 'cache mark'
@@ -269,7 +250,6 @@ export const WORST_AT = (n) => `Most expensive at step ${n} ›`
 export const FAILED_LINE = (n) => `${count(n, 'failed call')} ›`
 export const COMPACTION_LINE = (n) => `${n} compactions`
 export const COUNTS_LINE = { sub: (n) => count(n, 'sub-agent'), bg: (n) => count(n, 'background call'), probe: (n) => count(n, 'token count') }
-export const START_LINE = 'Started'
 export const DURATION_WORD = 'Duration'
 export const SESSION_ID = 'Session id'
 export const COPY = 'Copy'
@@ -284,7 +264,6 @@ export const PROBLEM_NEXT = 'Next problem'
 // the chapter row (1.3 §章): the part of the session between two compactions, and the arrows across them
 export const CHAPTER_PREV = 'Previous compaction'
 export const CHAPTER_NEXT = 'Next compaction'
-export const chapterLabel = (k, n, a, b, inferred) => `Part ${k} of ${n} · ${a === b ? `step ${a}` : `steps ${a}–${b}`}${inferred ? ' (inferred)' : ''}`
 export const breakFlagTip = (n, costW, struct) => `Cache break at step ${n} · ${costW}` + (struct ? ` · ${L.STRUCT_EST}` : '')
 export const BREAK_COST_NONE = 'extra cost cannot be computed'
 export const failTip = (n, msg) => `Call failed at step ${n}${msg ? ` (${msg})` : ''}`
@@ -298,13 +277,17 @@ export const cacheCellPct = (p) => `cache ${p}%`
 export const cacheCellUnknown = (p) => `cache ${p}%?`
 export const CACHE_LEGEND = 'high = hit, middle = partial, low = none, dashed = no usage'
 export const CACHE_LEGEND_UNK = 'meaning not certain'
+// the cache legend's hover: what each cell style means
+export const CACHE_LEGEND_TIP = 'Each cell is drawn from the cache verdict: high = cache hit ≥70%, middle = partial ≥30%, low = cold or broken <30%; dashed = no usage; a separate style outside the four levels = what this provider\'s cache numbers mean is not certain; failed steps draw no level'
+// 1.3: the whole-session strip's row name
+export const OVERVIEW_ROW = 'Whole session'
 export const VIEW_CTX = 'Context size'
 export const VIEW_COST = 'Cost'
 export const COMP_LEGEND = 'colour = content type (estimated from content size)'
 export const COST_LEGEND = 'bar height = estimated cost of the step (usage × unit price) · hatched = cannot be computed'
 // a part by the compaction before it (k = its index); the strip's label says where the pointer is on it
 export const partWord = (k) => (k ? `Since compaction ${k}` : 'Before the first compaction')
-// the new desk's chapter row (1.3 §章): the part the bars show, its steps, and what of it the window shows when it is narrower
+// the desk's chapter row (1.3 §章): the part the bars show, its steps, and what of it the window shows when it is narrower
 const stepsAB = (a, b) => (a === b ? `step ${a}` : `steps ${a}–${b}`)
 export const partLabel = (k, a, b, shown, inferred) => `${partWord(k)}${inferred ? ' (inferred)' : ''} · ${stepsAB(a, b)}${shown ? ` · showing ${shown[0] === shown[1] ? shown[0] : `${shown[0]}–${shown[1]}`}` : ''}`
 export const compactionAt = (dir, k, n, at) => `${dir < 0 ? 'Previous' : 'Next'} compaction: compaction ${k} · step ${n}${at ? ` · ${at}` : ''}`
@@ -315,7 +298,6 @@ export const partCard = (steps, took, prompts) => `${count(steps, 'step')} · ${
 export const stripAt = (part, n) => (part ? `${part} · step ${n}` : `step ${n}`)
 export const STRIP_LABEL = 'Step being read, in the whole session (the arrow keys move it)'
 export const STRIP_TIP = 'The whole session: drag to show another stretch of steps, click to go to a step, drag the box\'s edges to zoom, double-click the box to widen it'
-export const showSteps = (a, b) => (a === b ? `Showing step ${a}` : `Showing steps ${a}–${b}`)
 export const noMainLane = (laneW) => `This session has no main thread; the timeline follows the ${laneW} calls`
 export const ONLY_MAIN = 'This session has only the main thread'
 export const peakCtx = (v) => `${v} tok` // kf() bakes the number; the peak is the main lane's real total_input
@@ -339,9 +321,7 @@ export const GRP_SYS = 'System prompt'
 export const GRP_ASK = 'Prompts'
 export const NO_TOOLS = 'No tool definitions in this step'
 export const NO_SYS = 'No system prompt in this step'
-export const NO_ASK = 'No recognisable prompt in the context of this step'
 export const MCP_WORD = 'MCP'
-export const askSince = (n) => `from step ${n}`
 export const QUERY_GUESS_TIP = 'Whether a person wrote this prompt is inferred'
 export const UNPARSED_LINE = 'The request body could not be parsed'
 
@@ -368,7 +348,6 @@ export const seenTip = (k, at) => `Seen ${k} times · first at ${at}`
 export const SEEN_GROUP_TIP = 'Names picked from tool results and text because they look like paths; some may be missed and some may be wrong. The agent never opened them, so there is no content here. At most 200 are listed'
 export const SHOW_ALL = (n) => `Show all ${n}`
 export const HIDE_ALL = 'Show fewer'
-export const NO_LEDGER = 'This agent\'s records have no resource information'
 export const NO_RESOURCES = 'No resource records (this agent may not provide them)'
 export const DIR_WORD = 'directory'
 export const LINK_WORD = 'link'
@@ -378,50 +357,36 @@ export const ONLY_CALLS = 'call seen only'
 export const ONLY_CALLS_TIP = 'The call was seen; the resident content is not in the captured context'
 export const viewNameTip = (name) => `View the content of ${name}`
 export const jumpStepTip = (at) => `Jump to ${at}`
-// the capability's two tiers, by 2.3's proof rule
-export const CAP_VERBATIM = 'Tool definitions were captured verbatim; expand the tool block in the context window to see the full schema'
+// a tool definition kept as metadata only, by 2.3's proof rule
 export const TOOL_METADATA_ONLY = 'Metadata only: the full JSON schema (parameter types / required / enums / nesting) and the description text were not captured. The model received the full schema; this is a capture boundary, not a display clip.'
-export const CAP_METADATA = 'Metadata only: name, parameter count, description length; not the verbatim schema'
-export const CAP_MIXED = 'These tool definitions are not all proven to match the wire; each tool block in the context window carries its own mark'
-export const capToolRow = (name, chars) => `${name} · ${chars} characters`
 // the pinned panel's honest fallbacks
 export const RES_NOT_FOUND = 'No single matching block in the context of this step: it may have been read earlier or already removed. Click the step number on this row to jump to the step that read it.'
 
 // ── the raw panel (2.6 §A) ───────────────────────────────────────────────────────────────────────────────────────────
 export const RAW_WORD = 'Raw'
-export const RAW_HEAD = (n) => `Raw · step ${n}`
 export const REPLY_WORD = 'Reply'
-export const THINKING_ROW = 'Thinking'
-export const toolCallRow = (name) => `Tool call ${name}`
 export const stopReasonRow = (v) => `Stop reason ${v}`
 export const REPLY_PARSED = FF_WORD.parsed
 export const REPLY_PARTIAL = 'reply incomplete'
 export const RAW_REPLY = 'Raw reply'
-export const rawReplyRow = (chars) => `Raw reply · ${chars} characters ›`
 export const rawReplyNth = (k) => `Raw reply ${k}`
 export const NO_RAW_REPLY = 'The raw reply has no bytes to read back'
-export const noBytesWhy = (why) => `no bytes to read back: ${why}`
 export const NO_BYTES = 'No bytes to read back'
 export const REQ_PARAMS = 'Request parameters'
 export const NO_PARAMS = 'This record has no request parameters to read back'
 export const UNPARSED_PARAMS = 'The request body could not be parsed, so no parameters can be listed'
-export const EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n} ›`
 export const TRANSPORT_HTTP = 'Transport HTTP'
 export const TRANSPORT_WS = 'Transport WebSocket'
 export const VENDOR_WORD = 'Vendor'
-export const BACK_TO_RAW = 'Back to raw'
 export const FAILED_NO_REPLY = 'This call failed; there is no reply'
 export const EMPTY_REPLY = 'The reply has no content'
 export const UNREAD_REPLY = 'No part of the reply could be read'
-export const TECH_DETAILS = 'Technical details'
 
 // ── the call drawer (2.6 §B) ────────────────────────────────────────────────────────────────────────────────────────
 export const DRAWER_CLOSE = 'Close'
 export const backToStep = (n) => `← Back to step ${n}`
 export const inputBlocks = (n) => `Input · ${n} blocks`
 export const NO_INPUT = 'This call has no input blocks'
-export const INPUT_NOT_PAGE = 'The input of this call is not on the current page'
-export const VERBATIM_FOLD = (n, unit) => `verbatim · ${n} ${unit} · open`
 export const foldAt = (word, n, unit) => `${word} · ${n} ${unit} · open`
 export const TC_INPUT = Object.freeze({
   full: 'The request body is not in the session; see each one on the traffic page under the "token-count" class (retention: full)',
@@ -433,7 +398,6 @@ export const OPAQUE_ROW = 'opaque — no plaintext on the wire'
 
 // ── the `?` key list (1.2 §键盘) ──────────────────────────────────────────────────────────────────────────────────────
 export const KEYS_TITLE = 'Keyboard'
-export const BRUSH_LABEL = 'Steps shown above (the arrow keys move the step)'
 export const KEY_LIST = Object.freeze([
   ['← / →', 'Previous / next step'],
   ['Shift + ← / →', 'Ten steps back / forward'],
@@ -445,10 +409,11 @@ export const KEY_LIST = Object.freeze([
   ['?', 'This list'],
 ])
 
-// ── the new desk's models (web/src/screens/replay/models.mjs): the words its session head, step head and scope read ──
-// 1.2 §会话头 开始时间: the word is START_LINE; the tip gives the full moment
+// ── the desk's models (web/src/screens/replay/models.mjs): the words its session head, step head and scope read ──
+// 1.2 §会话头 开始时间: the tip gives the full moment
 export const startTip = (stamp) => `First step at ${stamp}`
-export const TITLE_UNTITLED_NEXT_TIP = TITLE_UNTITLED_TIP
+// the desk's untitled head carries no start time beside 「Untitled」 (the start time has its own word), so its tip does not explain one
+export const TITLE_UNTITLED_NEXT_TIP = 'The captured requests of this session hold no prompt on the main thread'
 // 1.3 §提问刻度: the prompts row's name — K and P known · only P · only K · neither
 export const askRowName = (k, p) => (k != null && p != null ? `Prompt ${k} / ${p}` : p != null ? count(p, 'prompt') : k != null ? `Prompt ${k}` : 'Prompts')
 // 2.2 §步头: the upper word of the three read-out buttons (the cache one is CACHE_TITLE)
@@ -465,14 +430,9 @@ export const TOKENS_WORD = 'tokens'
 // 1.3 §主轨: a bar's hover, the axis captions, the peak's hover
 export const barTip = (main, n, what) => `${main ? 'Step' : 'Call'} ${n}${what ? ` · ${what}` : ''}`
 export const axisNo = (main, n) => `${main ? 'Step' : 'Call'} ${n}`
-export const CALL_FAILED_WORD = 'call failed'
 export const COMP_NOT_COMPUTED = 'The breakdown has not been computed yet'
 export const PEAK_CTX_TIP = 'The largest real input total of a main thread step (input + cache read + cache write)'
 export const SAMPLED_TIP = 'Sampled: one point per bucket, not one per step (the strip is a map, not verbatim data)'
-// the desk's boundaries (1.2 §回放台 B 布局)
-export const MAINDIV_TIP = 'Drag to resize the outline · double-click to reset'
-export const DIVIDER_TIP = 'Drag to resize the right page · double-click to reset'
-export const RPBAR_TIP = 'Expand the right page'
 // the desk's frame (1.2 §回放台布局): the two boundaries and the sidebar
 export const SIDE_SPLIT_TIP = 'Drag to resize the sidebar · double-click to reset'
 export const SCOPE_SPLIT_TIP = 'Drag to resize the tracks · double-click to reset'
