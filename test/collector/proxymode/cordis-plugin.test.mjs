@@ -105,3 +105,42 @@ test('CM12 root-add failure → never routes, even with the switch file present'
     } finally { p.restore() }
   }
 })
+
+// CM12 · P9: node:http and node:https (dsh's telemetry exporter, any node:https client) go to the door like undici, per connection. In a child
+// process (the plugin patches the http / https Agent prototypes of the process that loads it): a stand-in door records each CONNECT and refuses it
+test('CM12 node:http(s): with the switch present, a request on the default agent, on an agent of its own and on plain http CONNECTs to the door; absent, none does', async () => {
+  const { execFileSync } = await import('node:child_process')
+  const d = tmpDir()
+  const ca = path.join(d, 'root.pem'); fs.writeFileSync(ca, ROOT)
+  const sw = path.join(d, 'switch')
+  const plugin = path.join(d, 'plugin.mjs')
+  fs.writeFileSync(plugin, renderTemplate(fs.readFileSync(templateUrl('cordis-plugin'), 'utf8'), { CA_FILE: ca, SWITCH: sw, PROXY_ENV: dsh.proxy.env, NO_PROXY_ENV: ['NO_PROXY', 'no_proxy'] }))
+  const CHILD = `
+    import net from 'node:net'; import http from 'node:http'; import https from 'node:https'; import fs from 'node:fs'
+    const seen = [], direct = []
+    const door = net.createServer((c) => { let b = ''; c.on('data', (x) => { b += x; if (b.includes('\\r\\n\\r\\n')) { seen.push(b.split('\\r\\n\\r\\n')[0]); c.end('HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n') } }) })
+    const origin = net.createServer((c) => { direct.push(1); c.destroy() }) // the target itself: a connection here went Node's own way
+    await new Promise((r) => door.listen(0, '127.0.0.1', r)); await new Promise((r) => origin.listen(0, '127.0.0.1', r))
+    const [sw, plugin, on] = process.argv.slice(1)
+    if (on === 'on') fs.writeFileSync(sw, 'http://dsh%3Aplugin:tok@127.0.0.1:' + door.address().port + '\\n')
+    await import(plugin)
+    // a host that is this machine but not one the plugin's loopback test names, so nothing leaves the machine either way
+    const at = (s) => s + '://[::ffff:127.0.0.1]:' + origin.address().port + '/v1/traces'
+    const go = (mod, url, agent) => new Promise((r) => { const q = mod.get(url, { ...(agent !== undefined ? { agent } : {}), timeout: 2000 }, () => r('answered')); q.on('error', (e) => r(e.code || e.message)); q.on('timeout', () => { q.destroy(); r('timeout') }) })
+    const out = [await go(https, at('https')), await go(https, at('https'), new https.Agent({ keepAlive: true })), await go(http, at('http'), false)]
+    door.close(); origin.close()
+    console.log(JSON.stringify({ seen, direct: direct.length, out, port: origin.address ? undefined : undefined }))`
+  const run = (on) => JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', CHILD, sw, plugin, on], { encoding: 'utf8', timeout: 20000, env: { ...process.env, NODE_OPTIONS: '' } }))
+  const routed = run('on')
+  assert.equal(routed.seen.length, 3, JSON.stringify(routed))
+  for (const h of routed.seen) assert.match(h.split('\r\n')[0], /^CONNECT \[::ffff:[0-9a-f.:]+\]:\d+ HTTP\/1\.1$/, h)
+  assert.equal(routed.direct, 0, 'nothing went Node\'s own way')
+  for (const h of routed.seen) {
+    assert.match(h, /\r\nX-Trocar-Upstream: none(\r\n|$)/, 'node:http uses no proxy variable unless NODE_USE_ENV_PROXY=1')
+    assert.match(h, new RegExp(`\\r\\nProxy-Authorization: Basic ${Buffer.from('dsh:plugin:tok').toString('base64')}`), 'the door\'s credentials')
+  }
+  assert.equal(routed.out.filter((x) => x === 'answered').length, 0, 'the door refused: no request reached anything else')
+  fs.rmSync(sw)
+  const off = run('off')
+  assert.deepEqual([off.seen, off.direct], [[], 3], 'no switch file: Node\'s own connections, nothing to the door')
+})
