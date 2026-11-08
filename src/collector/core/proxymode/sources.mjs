@@ -50,6 +50,8 @@ const PARSE = {
 // `expand: 'env'` (descriptor data): the program reads `${NAME}` in the value from its environment (`ctx.env`), as Hermes reads config.yaml. A reference
 // to a name that is not set stays as written there, names no file, and the program falls back to its default trust: that value is not in effect here
 const REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
+/** Whether a value read under `expand: 'env'` names the environment (`${NAME}`): with that environment unread, its file is not known (D38). */
+export const namesEnv = (value) => typeof value === 'string' && /\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(value)
 const expanded = (value, env) => {
   if (typeof value !== 'string') return value
   let unset = false

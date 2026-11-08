@@ -272,6 +272,19 @@ test('P11 rule 4 · Hermes ssl_ca_cert ${VAR}: set → its file is judged; unset
   }
 })
 
+// D38: with the process environment unread, a value read under `expand: 'env'` that names a variable is not known — never read as unset, which would
+// decrypt an agent that may trust only a private file; a value that names no variable is judged as written
+test('P11 rule 4 · expand env with the process environment unread: ${VAR} forwards environ-unreadable uncached; a plain path is judged', () => {
+  for (const [ref, want] of [[true, ['environ-unreadable', true]], [false, ['replace-without-ca', false]]]) {
+    const c = userFileCase({ kind: 'key', semantics: 'replace', holds: 'lacks' })
+    c.d.proxyMode.userCertFiles[0].expand = 'env'
+    c.d.proxyMode.blockers = [] // nothing else in this world reads the process environment: the setting alone answers
+    if (ref) fs.writeFileSync(path.join(c.dir, 'cfg.yaml'), 'routes:\n  r0:\n    ca: ${CORP_CA}\n')
+    const got = ask({ ...c, facts: { ...c.facts, env: null } })
+    assert.deepEqual([got.decrypt, ...pick(got)], [false, ...want], JSON.stringify(got))
+  }
+})
+
 // One reading of a setting's value (4.11 P4 rule U, sources.mjs fileOf): a leading `~/` is the home, never a directory named `~` under the cwd.
 test('P11 rule 4 · a replacing setting written ~/…: the file under the home is read, whatever the process cwd', () => {
   for (const [holds, want] of [['block', null], ['lacks', 'replace-without-ca']]) {
