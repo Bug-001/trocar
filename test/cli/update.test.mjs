@@ -294,8 +294,8 @@ test('§5.5 step 2: a merge that changes the lockfile runs npm install without d
   assert.deepEqual(npm, [[s.root, 'install', '--omit=dev', '--no-audit', '--no-fund']])
 })
 
-test('§5.5 step 2: an npm install that fails says to run that same npm install in the checkout, then trocar update', async () => {
-  const s = sandbox()
+test('§5.5 step 2: an npm install that fails says to run that same npm install in the checkout, then trocar update, and names the harnesses left off', async () => {
+  const s = sandbox({ on: ['codex', 'opencode'] })
   s.ahead('package-lock.json')
   const exec = (file, args, opts) => (file === 'npm' ? { status: 1, stdout: '', stderr: 'npm broke' } : spawnSync(file, args, opts))
   const t = ctx(s, { deps: { exec } })
@@ -304,6 +304,8 @@ test('§5.5 step 2: an npm install that fails says to run that same npm install 
   assert.equal(error.code, 'npm-failed')
   for (const part of [s.root, 'npm install --omit=dev --no-audit --no-fund', 'trocar update']) assert.ok(error.message.includes(part), `${part} in: ${error.message}`)
   assert.ok(error.message.indexOf('npm install') < error.message.indexOf('trocar update'), 'npm first, then update')
+  for (const h of ['codex', 'opencode']) assert.ok(error.message.includes(h), `the harness left off is named: ${h}`)
+  assert.deepEqual(s.handover().on, ['codex', 'opencode'], 'the handover still lists them, so the next update switches them on')
 })
 
 test('V95: a merge that fails leaves the harnesses captured again, no handover file and HEAD where it was, exit 1', async () => {
