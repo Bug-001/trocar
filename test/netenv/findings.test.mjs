@@ -628,9 +628,12 @@ test('V49 a setting from a variable, on win32: the step sets or removes the user
   const dead = { ...deadFacts(SRC_ENV), platform: 'win32' }
   dead.harnesses['claude-code'].proxyPlaces = [{ kind: 'env', name: 'HTTPS_PROXY', scheme: 'http', host: '127.0.0.1', port: 7890 }]
   const removeStep = gui(findingsOf(dead), 'proxy-dead')
-  for (const t of [setStep, removeStep]) {
-    assert.doesNotMatch(t, /\b(export|unset) /)
-    assert.match(t, /\[Environment\]::SetEnvironmentVariable\('HTTPS_PROXY',.*,'User'\)/)
-  }
-  assert.match(removeStep, /SetEnvironmentVariable\('HTTPS_PROXY',\$null,'User'\)/, 'removing passes $null')
+  const cmds = (fs, code) => fs.find((f) => f.code === code).commands
+  const setCmds = cmds(findingsOf(loop), 'route-loop'), removeCmds = cmds(findingsOf(dead), 'proxy-dead')
+  for (const t of [setStep, removeStep]) assert.doesNotMatch(t, /\b(export|unset) /)
+  // the variable's command is a line of its own (not inside a sentence), and a line after it names the variable again: where a value that still wins is set
+  const own = (cs, re) => { const i = cs.findIndex((c) => c.shell !== 'gui' && re.test(c.run)); assert.ok(i > 0, cs.map((c) => c.run).join('\n')); assert.ok(cs.slice(i + 1).some((c) => c.shell === 'gui' && /\bHTTPS_PROXY\b/.test(c.run)), 'a line after it names the variable'); return cs[i].run }
+  assert.match(own(setCmds, /^setx HTTPS_PROXY \S/), /^setx HTTPS_PROXY \S+$|^setx HTTPS_PROXY ".*"$/, 'set: setx NAME value, one argument')
+  own(removeCmds, /^\[Environment\]::SetEnvironmentVariable\('HTTPS_PROXY',\$null,'User'\)$/)
+  for (const c of [...setCmds, ...removeCmds]) assert.ok(c.shell === 'gui' || c.run.length <= 72, `a command fits 80 columns at doctor's indent: ${c.run}`)
 })
