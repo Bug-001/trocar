@@ -63,7 +63,8 @@ const carriedForms = (pm, os, ctx) => pm.forms.filter((f) => f.os.includes(os) &
  * behind `status`'s `harnesses[h].setup` and `on`'s precondition ⑪ (D65④). Per present form of this OS whose carrier is not the root: its install items
  * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`; the root gone from the user's store (`root.state`
  * 'missing'; pending / declined are install's own to-do, not setup) → one `{ form: null, what: 'root-missing' }`. `manifest` null = nothing installed;
- * `{ error }` = it could not be read → `unknown`, and so is a file that cannot be read (D38): never `ready`. Reads only; no OS question of its own.
+ * `{ error }` = it could not be read → `unknown`, and so is a file that cannot be read (D38), with its errno as `code` and the file as `path`: never `ready`.
+ * Reads only; no OS question of its own.
  * `forms`: those form ids handed in by driver mode (4.6: one per harness); null → read from the descriptor's proxyMode.
  */
 export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs, forms = null }) {
@@ -78,7 +79,7 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs, 
     if (unread) throw new Error(`${unread.where}: ${unread.error}`)
     const lost = ids.length ? carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs) : null
     if (lost) for (const id of ids) missing.push({ form: id, what: lost })
-  } catch (e) { return unknown(String((e && e.message) || e)) }
+  } catch (e) { return { ...unknown(String((e && e.message) || e)), ...(e && e.code ? { code: e.code } : {}), ...(e && e.path ? { path: e.path } : {}) } } // the errno and the file, for words of the caller's
   if (root && root.state === 'missing') missing.push({ form: null, what: 'root-missing' })
   return missing.length ? { state: 'needed', missing } : { state: 'ready', missing: [] }
 }

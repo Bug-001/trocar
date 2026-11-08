@@ -23,6 +23,7 @@ import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
 import { loopbackWords } from '../../../cli/words.mjs'
 import { unseal, doorFp } from '../../../off/seal.mjs'
+import { errnoWords } from '../../../cli/words.mjs'
 
 export const LOOPBACK = LOOPBACK_HOSTS
 export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
@@ -287,7 +288,7 @@ export function writeRoutes(desc, ctx, doorOf) {
       const { left = [], ...res } = r
       return [{ route: id, ok: false, ...res }, ...left.map((l) => ({ route: id, ok: false, ...l }))]
     } catch (e) {
-      return [{ route: id, ok: false, code: (e && e.code) || 'entry-refused', reason: String((e && e.message) || e), ...(e && e.path ? { at: e.path } : {}) }]
+      return [{ route: id, ok: false, code: (e && e.code) || 'entry-refused', reason: e && e.syscall ? errnoWords(e, 'write') : String((e && e.message) || e), ...(e && e.path ? { at: e.path } : {}) }]
     }
   })
   // a route of the harness no planned form uses (no form present, or every one blocked) is not-routed too: what an earlier on wrote there goes (P5)
