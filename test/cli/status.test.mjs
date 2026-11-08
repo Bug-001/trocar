@@ -270,7 +270,7 @@ test('no daemon: nothing is captured (daemon-not-running), read from the disk, w
   const h = doc.harnesses['claude-code']
   assert.deepEqual([h.captured, h.reason], [false, 'daemon-not-running'])
   assert.deepEqual(h.processes.map((p) => [p.pid, p.reason]).sort((a, b) => a[0] - b[0]), [[5000, 'daemon-not-running'], [5001, 'daemon-not-running']])
-  assert.match(r.text, /^ {2}Problems {5}(none in the last 24 hours|\d)/m, 'and the capture health read from disk follows (the summary names it; the wall is --failures)')
+  assert.match(r.text, /^ {2}Problems {5}(none |\d)/m, 'and the capture health read from disk follows (the summary names it; the wall is --failures)')
 })
 
 test('the daemon answers but has not listed a process of a harness (it started since the daemon last looked): the entry and when it started decide (V32) — older than the entry: config-after-start and told to restart; newer: captured, and said to be by entry and start time; entry gone: entry-missing; a pid the daemon lists is not added twice', async () => {

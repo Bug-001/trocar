@@ -72,8 +72,8 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
   const home = tmpDir('trocar-cli-')
   const dir = path.join(home, '.trocar', 'collector')
   try {
+    markInstalled(home) // installed, then this install's daemon fails to start
     appendEvent(dir, { event: 'failure', where: 'start', code: 'EADDRINUSE', reason: 'the engine port is held by another process' })
-    markInstalled(home) // installed
     const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
     const status = { platform: 'linux', statusDeps: { procs: async () => [], exec: NO_EXEC } }
     let t = io(); assert.equal(await runCli(['status'], { env: {}, home, ...status, ...t }), 1)
@@ -93,7 +93,7 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
     t = io(); await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) }, ...status, ...t })
     assert.equal(t.e.length, 0, 'a stuck daemon')
     const health = { generated_at: 'T', summary: { state: 'ok', since: 'T0', read_errors: 1 }, collector: { installed: true, daemon: { state: 'running' }, conditions: [], failures: [], expected: { policy: 3 } }, raw: { problems: [] }, read: { errors: [{ file: '/f', error: 'EACCES' }], truncated: true } }
-    assert.match(formatStatus({ ...STATUS, health, events: { lost: 2 } }), /capture health: capturing since T0 - some files could not be read[^\n]*\nnot captured by design \(last 24 hours\): policy 3\ncould not read \/f: EACCES\n\(older records were left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
+    assert.match(formatStatus({ ...STATUS, health, events: { lost: 2 } }), /capture health: capturing since T0 - some files could not be read[^\n]*\nnot captured by design \(in the last 24 hours\): policy 3\ncould not read \/f: EACCES\n\(older records were left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
     assert.match(formatStatus({ ...STATUS, health: { error: 'capture health could not be read: /x/flows: EACCES' } }), /capture health could not be read: \/x\/flows: EACCES/)
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
