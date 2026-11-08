@@ -2,7 +2,7 @@
 // (entrypoint cli/desktop, window 24h/7d/all, sort calls): a harness-defined code never keys a word here — agent
 // names and icons come from core/chips.mjs (invariant 3). Nothing in this file is data.
 
-import { WINDOW_LABEL, UNTITLED, TITLE_PENDING, TITLE_PENDING_TIP } from './common.mjs'
+import { WINDOW_LABEL, UNTITLED, PROMPT_UNREAD, PROMPT_UNREAD_TIP } from './common.mjs'
 
 // ── the page head's scope control: the same words as the overview's ─────────────────────────────────────────────────
 export const WINDOWS = WINDOW_LABEL
@@ -39,11 +39,11 @@ export const COL_LAST = 'Last active'
 // ── day heads (only in the 最近 order; local dates): the two named days and the no-time group; other days are dates ─────
 export const GROUPS = Object.freeze({ today: 'Today', yesterday: 'Yesterday', none: 'No time' })
 
-// ── the title rule's three steps and their hover words (the session id rides along) ─────────────────────────────────
-export { UNTITLED, TITLE_PENDING }
-export const titlePending = (id) => `${TITLE_PENDING_TIP} · session ${id}`
+// ── the title rule's two steps and their hover words (the session id rides along) ─────────────────────────────────
+export { UNTITLED, PROMPT_UNREAD }
 export const titleFromWire = (id) => `The title is taken from the captured requests · session ${id}`
-export const titleNoKey = (id) => `The agent gave no title · session ${id}`
+export const titleUnread = (id) => `${PROMPT_UNREAD_TIP} · session ${id}`
+export const titleNoKey = (id) => `The captured requests hold no main-conversation prompt · session ${id}`
 
 // ── the second line's marks (only when true / > 0; their hover words) ────────────────────────────────────────────────
 export const ENTRY = Object.freeze({ cli: 'CLI', desktop: 'desktop' })
@@ -61,8 +61,6 @@ export const PROBE_ONLY = 'token counts only'
 export const PROBE_ONLY_TIP = 'This session has only token count requests (no reply, no charge) and no model calls'
 
 // ── the states that stand in for the table (words here; the matrix's order is 1.5's) ────────────────────────────────
-// no list yet and none stored: the worker is building it from the index (first run, or the index was rebuilt)
-export const LOADING = 'Reading the session list from the capture index. This usually takes a few seconds; on a large capture it can take a few minutes while the index is rebuilt.'
 export const NO_SESSIONS = 'No sessions yet'
 export const CAPTURING_HINT = 'Capture is on. Run an agent once and its session shows up here'
 export const AS_OF = 'as of'

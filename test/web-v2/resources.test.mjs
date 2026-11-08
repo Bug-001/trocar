@@ -6,7 +6,7 @@
 // String level over desk-model states: the ledger is the anchor lane's `lane` answer as the desk holds it (desk-world.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resourcesHtml, renderResources } from '../../web/legacy/replay/resources.mjs'
+import { resourcesHtml, resourceUnits, renderResources } from '../../web/legacy/replay/resources.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 import { relPath } from '../../web/legacy/replay/analysis.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
@@ -41,6 +41,25 @@ test('#10 bad data degrades, never throws: unknown kinds land in 其他资源 wi
   assert.ok(undated && !/data-navstep/.test(undated[0]), 'an undated row has no step to locate and no button claiming one')
   const dated = h.match(/<div class="navsub[^"]*"[^>]*title="weird3">[\s\S]*?<\/div>/)
   assert.ok(dated && /data-navstep="2"/.test(dated[0]), 'a dated unknown row locates its enter step')
+})
+
+test('2.4 还在读: a lane answer with pending stands where the empty line would: updating on a re-read, still reading on a first; held rows take no line', () => {
+  const pending = { done: 1, total: 4, calls: 0 }
+  const ledger = (o) => ({ base: null, resources: [], seen: [], events: [], ledger_next: null, ...o })
+  for (const [head, word] of [[{ ...pending, seen: true, read: 1 }, W.FILES_UPDATING], [pending, W.FILES_READING]]) {
+    const s = stateOf(anchorOf())
+    s.desk.pending = head
+    applyLedger(s.desk, s.anchor.id, null, ledger({ pending }))
+    const units = resourceUnits(s), html = resourcesHtml(s)
+    assert.ok(!units.some((u) => u.key === 'empty'), 'no empty line while pending')
+    assert.ok(html.includes(word) && !html.includes(W.NO_RESOURCES), html)
+    applyLedger(s.desk, s.anchor.id, null, ledger())
+    assert.ok(resourceUnits(s).some((u) => u.key === 'empty') && !resourcesHtml(s).includes(word), 'the answer without pending says the ledger is empty')
+  }
+  const s = stateOf(anchorOf())
+  s.desk.pending = { ...pending, seen: true, read: 1 }
+  applyLedger(s.desk, s.anchor.id, null, ledger({ pending, resources: [{ key: 'file:/a', kind: 'file', label: '/a', segments: [{ enter: R(0), evict: null }] }] }))
+  assert.ok(!resourcesHtml(s).includes(W.FILES_UPDATING), 'the line stands in for an empty list only')
 })
 
 test('the < 1200 px fold line: N is the file group\'s own count; no ledger or nothing countable → no number', () => {

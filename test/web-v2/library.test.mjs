@@ -4,20 +4,21 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { parseFilters, filtersToParams, applyFilters, listEntries, dayHead, captionFacts, capShotMaker, emptyBoardState, filteredAgentLine, flattenSessions, rowModel, sessionKey, titleText, titleTipOf } from '../../web/src/screens/library/model.mjs'
 import { loadSessions, freshSessions } from '../../web/legacy/library/logic.mjs'
+import { INTERVAL } from '../../web/legacy/core/poll.mjs'
 import { captureVerdict, capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
 import * as W from '../../web/legacy/labels/library.mjs'
 
 const NOW = new Date(2026, 9, 20, 12, 0, 0).getTime()
 const S = (o = {}) => ({ session_id: 'sess-1', project_slug: '_unresolved', project_path: null, harness: 'codex', harness_inferred: false, session_synthesized: false, title: null, title_source: null, entrypoint: null, calls: 3, probes: 0, logged: 0, has_subagent: false, last_ts: new Date(NOW - 60e3).toISOString(), ...o })
 
-test('(2) title rules: the hover follows title_source and carries the id, a pending title reads as not read yet; the title never carries the id', () => {
+test('(2) title rules: the hover follows title_source and carries the id, a null title is the untitled word; the title never carries the id', () => {
   const tips = new Set()
-  for (const [title, title_source, wantTip, wantText] of [['Fix the queue', 'wire', W.titleFromWire, 'Fix the queue'], [null, null, W.titleNoKey, W.UNTITLED], [null, 'pending', W.titlePending, W.TITLE_PENDING]]) {
+  for (const [title, title_source, wantTip, wantText] of [['Fix the queue', 'wire', W.titleFromWire, 'Fix the queue'], [null, 'unread', W.titleUnread, W.PROMPT_UNREAD], [null, null, W.titleNoKey, W.UNTITLED]]) {
     for (const harness_inferred of [false, true]) {
       const s = S({ title, title_source, harness_inferred }), tip = titleTipOf(s), why = JSON.stringify({ title_source, harness_inferred })
       assert.equal(tip, wantTip(s.session_id), why); assert.equal(titleText(s), wantText, why)
       assert.ok(tip.includes(s.session_id), why); assert.ok(!titleText(s).includes(s.session_id), why)
-      assert.deepEqual([rowModel(s, NOW).titleText, rowModel(s, NOW).titleTip], [titleText(s), tip], why)
+      assert.deepEqual([rowModel(s, NOW).titleText, rowModel(s, NOW).titleTip, rowModel(s, NOW).untitled], [titleText(s), tip, title == null], why)
       tips.add(tip)
     }
   }
@@ -151,6 +152,40 @@ test('(17) freshSessions: an answer that carries stored is read again 1.5 s late
   const gone = await freshSessions(api, { alive: () => false })
   assert.equal(reads, 1, 'no read after the screen is gone')
   assert.equal(gone.data.stored, old.stored.at)
+})
+
+test('(17) freshSessions reads nothing while the page is hidden, and reads again once it shows (1.7)', async () => {
+  const fresh = { sessions: [], errors: [], next: null }
+  const old = { ...fresh, stored: { at: new Date(NOW - 60e3).toISOString() } }
+  let reads = 0
+  const api = { get: async () => ({ ok: true, status: 200, data: ++reads === 1 ? old : fresh }) }
+  globalThis.document = { hidden: true }
+  try {
+    const read = freshSessions(api)
+    await new Promise((d) => setTimeout(d, INTERVAL.session * 2.5))
+    assert.equal(reads, 1, 'no read while hidden')
+    globalThis.document = { hidden: false }
+    assert.equal((await read).data.stored, null)
+    assert.equal(reads, 2)
+  } finally { delete globalThis.document }
+})
+
+test('(18) until a whole list came back every page asks for the long deadline, a failed read changes nothing, afterwards none does', async () => {
+  const { loadSessions: load, FIRST_LIST_DEADLINE_MS } = await import('../../web/legacy/library/logic.mjs?first-list') // `listed` is the module's: a fresh copy
+  const pages = [{ sessions: [S({ session_id: 'a' })], errors: [], next: '1' }, { sessions: [S({ session_id: 'b' })], errors: [], next: null }]
+  let asked = [], secondFails = true
+  const api = { get: async (name, { after }, opts) => {
+    asked.push(opts?.deadlineMs)
+    return after != null && secondFails ? { ok: false, status: 0, error: 'cut' } : { ok: true, status: 200, data: pages[after == null ? 0 : 1] }
+  } }
+  assert.equal((await load(api)).ok, false)
+  assert.deepEqual(asked, [FIRST_LIST_DEADLINE_MS, FIRST_LIST_DEADLINE_MS])
+  secondFails = false; asked = []
+  assert.equal((await load(api)).ok, true)
+  assert.deepEqual(asked, [FIRST_LIST_DEADLINE_MS, FIRST_LIST_DEADLINE_MS])
+  asked = []
+  await load(api)
+  assert.deepEqual(asked, [undefined, undefined])
 })
 
 test('(17) loadSessions: a list with a stored page carries the oldest stored at; a session on two pages is listed once', async () => {

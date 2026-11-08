@@ -86,6 +86,25 @@ test('1.5 K-29 read deadline: a read with no answer within READ_DEADLINE_MS fail
   } finally { mock.timers.reset() }
 })
 
+test('1.8 #18 a read with deadlineMs is still out at READ_DEADLINE_MS and fails with status 0 at deadlineMs', async () => {
+  const deadlineMs = READ_DEADLINE_MS * 5
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    await withFetch(hanging(), async (calls) => {
+      let out = true
+      const p = api.get('sessions', { harness: 'long-deadline-test' }, { deadlineMs }).finally(() => { out = false })
+      await Promise.resolve()
+      mock.timers.tick(deadlineMs - 1)
+      await new Promise((d) => setImmediate(d))
+      assert.equal(out, true); assert.equal(calls[0].init.signal.aborted, false)
+      mock.timers.tick(1)
+      const r = await p
+      assert.equal(r.ok, false); assert.equal(r.status, 0)
+      assert.equal(calls[0].init.signal.aborted, true)
+    })
+  } finally { mock.timers.reset() }
+})
+
 test('1.2 #22 a cancelled read fails with status 0 and holds no ETag for its URL', async () => {
   const params = { harness: 'abort-test' }
   await withFetch(hanging(), async () => {

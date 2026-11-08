@@ -25,7 +25,7 @@ import { runQuery } from '../../src/query/named/index.mjs' // first: the named q
 import { PLAN_PER_MEMBER } from '../../src/query/named/session.mjs'
 import { FOLD_STOPS } from '../../src/health/codes.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
-import { whileMoving, reporting } from '../helpers/bounded.mjs'
+import { drain, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { readerBudget } from './past-room.mjs'
@@ -36,6 +36,12 @@ const HEAP_MB = 64
 const small = (h, ...argv) => fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, ...heapFlags(HEAP_MB)], env: workerEnv() })
 
 const headOf = (home, id) => readHead(home, id)
+const saysTheTitle = (head, listed) => {
+  assert.equal(head.tier, 0, 'a head from the index')
+  assert.equal(typeof listed.title, 'string')
+  assert.equal(head.meta.title, listed.title)
+  assert.equal(head.meta.title_source, listed.title_source)
+}
 // The worker runs niced (worker.mjs lowerPriority): a wait on it lasts while it reports and fails after a stall with none.
 async function until(home, id, r, ok, what) {
   let h = null
@@ -85,8 +91,41 @@ test('3.5 #37: the first background slice that does not throw clears pending.sto
   await assert.rejects(extendSession({ home, fs: failing, writer: true }, s.id, 10))
   const stoppedAt = headOf(home, s.id)
   assert.equal(stoppedAt && stoppedAt.pending && stoppedAt.pending.stopped && stoppedAt.pending.stopped.code, 'fold-failed', 'the slice that threw wrote the stop')
+  assert.equal(stoppedAt.pending.calls, 120, 'no answer file reaches a call yet')
   assert.equal(await extendSession({ home, fs, writer: true }, s.id, 10), true, 'the next slice leaves members past the frontier')
   const h = headOf(home, s.id)
   assert.ok(h.pending && h.pending.done < h.pending.total, 'members are left past the frontier')
   assert.equal(h.pending.stopped, undefined, 'the stop is gone from the head')
+  assert.equal(h.pending.calls, 120)
+  saysTheTitle(stoppedAt, (await runQuery('sessions', {}, { home })).sessions[0])
+})
+
+test('3.5 `seen`: a stop on a whole answer keeps saying so, and what clears it is a catch-up, no first read', async () => {
+  const { extendSession } = await import('../../src/query/named/session.mjs')
+  const home = path.join(tmpDir('trocar-foldstop-seen-'), '.trocar'), segment = '20261020T164737Z', ctx = { home, fs, writer: true }
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home, segment, growth: 2_000, subEvery: 3, compactAt: 20_000 })
+  s.append(30)
+  await drain(() => extendSession(ctx, s.id, 1_000))
+  assert.equal(headOf(home, s.id).pending, null)
+  s.append(120)
+  let fail = true
+  const failing = { ...fs, openSync: (f, ...a) => { if (fail && String(f).includes(`${path.sep}ctx${path.sep}`)) { fail = false; throw new Error('injected: the projection could not be read') } return fs.openSync(f, ...a) } }
+  await assert.rejects(extendSession({ home, fs: failing, writer: true }, s.id, 10))
+  const stopped = headOf(home, s.id).pending
+  assert.deepEqual([stopped.stopped?.code, stopped.seen], ['fold-failed', true])
+  assert.equal(await extendSession(ctx, s.id, 10), true)
+  const { pending } = headOf(home, s.id)
+  assert.deepEqual([pending.stopped, pending.seen, 'read' in pending], [undefined, true, false])
+})
+
+// A slice that leaves members past the frontier with no head on disk starts the head from the index (3.5 §会话读「`session --head`」 tier 0).
+test('3.5 §会话读 `session --head`: the first head of a fold still behind says the title sessions says', async () => {
+  const { extendSession } = await import('../../src/query/named/session.mjs')
+  const home = path.join(tmpDir('trocar-foldstop-behind-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home, id: 'behind-0-4a1b-9c2d-000000000001', growth: 2_000, subEvery: 3 })
+  s.append(120)
+  assert.equal(await extendSession({ home, fs, writer: true }, s.id, 1), true, 'the slice leaves members past the frontier')
+  saysTheTitle(headOf(home, s.id), (await runQuery('sessions', {}, { home })).sessions[0])
 })

@@ -20,7 +20,7 @@ import { controlFor } from '../../../legacy/core/harness-switch.mjs'
 import { failureBrief, failureWord } from '../../../../src/cli/words.mjs'
 import * as W from '../../../legacy/labels/overview.mjs'
 import { redactUrlCredentials as hide } from '../../../legacy/core/sensitive.mjs'
-import { WINDOW_LABEL, UNTITLED, READ_FAIL, TITLE_PENDING, TITLE_PENDING_TIP } from '../../../legacy/labels/common.mjs'
+import { WINDOW_LABEL, UNTITLED, READ_FAIL, PROMPT_UNREAD, PROMPT_UNREAD_TIP } from '../../../legacy/labels/common.mjs'
 
 const DAY = 24 * 3600e3
 
@@ -330,11 +330,10 @@ export function recentCard(s, now) {
   return {
     kind: 'shown',
     rows: rows.map((r) => {
-      const probe = r.calls === 0 && r.probes > 0
-      const pending = r.title == null && r.titleSource === 'pending' // not known yet, not "untitled" (1.8 §标题规则)
+      const probe = r.calls === 0 && r.probes > 0, unread = r.title == null && r.titleSource === 'unread'
       return {
-        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? (pending ? TITLE_PENDING : UNTITLED), pending,
-        titleTip: [r.title != null ? TITLE_FROM_WIRE : pending ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · '),
+        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? (unread ? PROMPT_UNREAD : UNTITLED), untitled: r.title == null,
+        titleTip: [r.title != null ? TITLE_FROM_WIRE : unread ? PROMPT_UNREAD_TIP : null, r.id].filter(Boolean).join(' · '),
         calls: { text: probe ? W.PROBE_ONLY : W.CALLS_N(r.calls), tip: probe ? W.PROBE_ONLY_TIP : null }, when: when(r.last, now), href: r.href,
       }
     }),

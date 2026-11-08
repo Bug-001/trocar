@@ -44,10 +44,11 @@ function qs(params) {
 // | { cut:true } (the body never fully arrived: the connection broke after the head — a transient failure, 1.5 K-29)
 export const CUT_OFF = 'the answer did not arrive in full'
 const CUT = Object.freeze({ ok: false, status: 0, error: CUT_OFF })
-// K-29 (1.5): a read not fully answered (head and body) within the deadline is a failure like a cut answer; a read the caller
+// K-29 (1.5): a read not fully answered (head and body) within the deadline is a failure like a cut answer (a caller whose read can
+// rightly take longer passes deadlineMs, 1.8 §数据与刷新); a read the caller
 // cancels (a screen change, web/src/LegacyScreen.tsx) ends as ABORTED, which no screen shows or retries
 export const READ_DEADLINE_MS = 60_000
-export const TIMED_OUT = `no answer within ${READ_DEADLINE_MS / 1000} s`
+const timedOutAfter = (ms) => `no answer within ${ms / 1000} s`
 export const ABORTED = 'cancelled'
 async function readBody(r) {
   let b
@@ -81,7 +82,7 @@ export function early(path, params, opts) { earlyReads.set(path + qs(params), ge
 // `hold:false` keeps only the ETag of the URL, and a 304 answers {ok:true, status:304, data:null}: the caller has the document;
 // `cond:false` asks without If-None-Match (a caller that holds no document of that URL yet)
 const tipOf = (r) => { const t = r.headers.get('x-trocar-tip'); return t ? { tip: t } : {} }
-export async function get(path, params, { signal, hold = true, cond = true } = {}) {
+export async function get(path, params, { signal, hold = true, cond = true, deadlineMs = READ_DEADLINE_MS } = {}) {
   if (forbidden) return FORBIDDEN
   if (signal && signal.aborted) return { ok: false, status: 0, error: ABORTED }
   const url = path + qs(params)
@@ -97,10 +98,10 @@ export async function get(path, params, { signal, hold = true, cond = true } = {
   if (was) headers['if-none-match'] = was.etag
   const ac = new AbortController()
   let timedOut = false
-  const timer = setTimeout(() => { timedOut = true; ac.abort() }, READ_DEADLINE_MS)
+  const timer = setTimeout(() => { timedOut = true; ac.abort() }, deadlineMs)
   const cancel = () => ac.abort()
   if (signal) signal.addEventListener('abort', cancel, { once: true })
-  const ended = (fallback) => (timedOut ? { ok: false, status: 0, error: TIMED_OUT } : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
+  const ended = (fallback) => (timedOut ? { ok: false, status: 0, error: timedOutAfter(deadlineMs) } : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
   let r, b
   try {
     try { r = await fetch(url, { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
@@ -135,7 +136,7 @@ export async function getText(path, params, { range = null, tag = null, signal }
   const timer = setTimeout(() => { timedOut = true; ac.abort() }, READ_DEADLINE_MS)
   const cancel = () => ac.abort()
   if (signal) signal.addEventListener('abort', cancel, { once: true })
-  const ended = (fallback) => (timedOut ? { ok: false, status: 0, error: TIMED_OUT } : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
+  const ended = (fallback) => (timedOut ? { ok: false, status: 0, error: timedOutAfter(READ_DEADLINE_MS) } : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
   let r, text
   try {
     try { r = await fetch(path + qs(params), { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }

@@ -6,7 +6,7 @@ import path from 'node:path'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { createServer } from '../../src/server.mjs'
-import { createQueryService } from '../../src/query/service.mjs'
+import { createQueryRouter } from '../../src/query/router.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { depsFile } from '../helpers/board-world.mjs'
 import { workerForkIn } from '../helpers/worker-fork.mjs'
@@ -27,13 +27,20 @@ export function boardHome({ bytes = 0 } = {}) {
 }
 
 /** The face on an ephemeral port (`idleMs`: the query worker's idle exit, the service's default when absent). get(name, params) → {status, doc}; close() stops the server and the worker.
- *  workers() → the pids of the query workers it forked that are still alive; killWorker(sig) signals them, → how many. workerEnvs() → the
+ *  sweep(): what the daemon tells its worker at start (src/collector/daemon.mjs), and the fork of the first worker. workers(role) → the pids of the query workers it forked that are still alive, of that role when given ('light'); lightHeapPeakMb() → the light role's highest report (light-heap.mjs); killWorker(sig) signals them, → how many. workerEnvs() → the
  *  environment each worker it forked was started with: HOME / USERPROFILE are the temp userHome, never the operator's own. */
 export async function serveBoard({ userHome, home, idleMs }) {
   const env = { HOME: userHome, USERPROFILE: userHome }
   const deps = depsFile({ home: userHome, env }, process.platform)
+  fs.appendFileSync(deps, `import ${JSON.stringify(new URL('./light-heap.mjs', import.meta.url).href)}\n`)
   const kids = [], fork = workerForkIn(env)
-  const svc = createQueryService({ home, idleMs, fork: (h) => { const c = fork(h, deps); kids.push(c); return c } })
+  let heapPeak = null
+  const svc = createQueryRouter({ home, idleMs, fork: (h, _, role) => {
+    const c = Object.assign(fork(h, deps, role), { role })
+    c.on('message', (m) => { if (m && m.heapPeakMb > heapPeak) heapPeak = m.heapPeakMb })
+    kids.push(c)
+    return c
+  } })
   const alive = () => kids.filter((c) => c.exitCode === null && c.signalCode === null)
   const { server } = createServer({ home, token: TOKEN, query: svc, webDir: process.env.TROCAR_BOARD_DIR }) // --desk-next: the desk-next build (scripts/test-browser.mjs)
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
@@ -44,8 +51,8 @@ export async function serveBoard({ userHome, home, idleMs }) {
     try { doc = JSON.parse(r.body) } catch { /* not JSON: doc stays null */ }
     return { status: r.status, doc }
   }
-  const workers = () => alive().map((c) => c.pid)
+  const workers = (role) => alive().filter((c) => !role || c.role === role).map((c) => c.pid)
   const killWorker = (sig = 'SIGKILL') => alive().filter((c) => c.kill(sig)).length
   const workerEnvs = () => kids.map((c) => c.forkEnv)
-  return { port, base: `http://127.0.0.1:${port}`, token: TOKEN, get, workers, killWorker, workerEnvs, close: async () => { svc.stop(); server.close(); await once(server, 'close') } }
+  return { port, base: `http://127.0.0.1:${port}`, token: TOKEN, get, workers, lightHeapPeakMb: () => heapPeak, killWorker, workerEnvs, sweep: () => svc.sweep(), close: async () => { svc.stop(); server.close(); await once(server, 'close') } }
 }
