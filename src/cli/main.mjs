@@ -29,7 +29,7 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   /** One answer that is not an answer: a JSON document on stdout, or a line (and the usage line, when there is one) on stderr. */
   const refuse = (command, code, message, { usage = null, detail = null, exit = EXIT.usage } = {}) => {
     if (json) printJson(io, errorDoc(command, code, message, detail))
-    else { io.err(message); if (usage) for (const line of wrap(usage, WIDTH, '  ')) io.err(line) } // §1.1⑥: the usage line folds like help's, it does not pass 80 columns
+    else { io.err(message); if (usage) for (const line of usage.split('\n').flatMap((u) => wrap(u, WIDTH, '  '))) io.err(line) } // §1.1⑥: a message keeps its lines (a command stands whole on its own); each usage line stays its own
     return exit
   }
   const [first, ...rest] = argv[0] === '--json' ? [...argv.slice(1), '--json'] : argv // §2: `trocar --json status` is `trocar status --json`

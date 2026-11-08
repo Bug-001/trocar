@@ -68,14 +68,15 @@ function rowStatus(c, t) {
   return `restored${c.backup_dropped ? ' (its backup is no longer needed and was deleted)' : ''}`
 }
 
-// one changed file: `  <harness>  <path> <status>`, and the status on its own lines when that would run past 80 columns
-function rowLines(c, t, past, width) {
-  const label = String(c.harness || 'trocar').padEnd(width)
-  const where = t(c.path)
-  const status = past ? rowStatus(c, t) : c.backup ? `will be undone. A copy of the file as it is: ${t(c.backup)}` : 'will be undone'
-  const head = `  ${label}  ${where}`
+// one changed file, however many entries of it were undone: `  <harness>  <path> <status>`, each different status once, and the status on its own
+// lines when that would run past 80 columns. Its backup goes with its last entry, so "no longer needed" is the file's, not one entry's.
+const labelOf = (group) => [...new Set(group.map((c) => c.harness || 'trocar'))].join(', ')
+function rowLines(group, t, past, width) {
+  const dropped = group.some((c) => c.backup_dropped), backup = (group.find((c) => c.backup) || {}).backup
+  const status = past ? [...new Set(group.map((c) => rowStatus({ ...c, backup_dropped: dropped }, t)))].join('; ') : backup ? `will be undone. A copy of the file as it is: ${t(backup)}` : 'will be undone'
+  const head = `  ${labelOf(group).padEnd(width)}  ${t(group[0].path)}`
   const one = `${head}${/ /.test(status) ? ': ' : ' '}${status}`
-  return [...(one.length <= WIDTH ? [one] : [head, ...fit(`    ${status}`)]), ...priorLeftLines(c)]
+  return [...(one.length <= WIDTH ? [one] : [head, ...fit(`    ${status}`)]), ...group.flatMap(priorLeftLines)]
 }
 
 // a program still connected through trocar when the doors closed: the door it uses stays open, passing its traffic on and recording nothing (P12)
@@ -132,9 +133,11 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   const changed = r.changed || [], removed = r.removed || []
   if (changed.length) {
     lines.push('')
-    const width = Math.max(...changed.map((c) => String(c.harness || 'trocar').length))
-    // a file is said once, as a removed one is below: several entries of one file (json keys) that ended the same way are one row
-    for (const row of new Set(changed.map((c) => rowLines(c, t, past, width).join('\n')))) lines.push(...row.split('\n'))
+    // a file is said once, as a removed one is below: the entries of one file (json keys, a block two harnesses share) are one row
+    const files = new Map()
+    for (const c of changed) files.set(c.path, [...(files.get(c.path) || []), c])
+    const width = Math.max(...[...files.values()].map((g) => labelOf(g).length))
+    for (const group of files.values()) lines.push(...rowLines(group, t, past, width))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours would be changed.')
   // a file is said once: several entries of one file (json keys) are one removal
   for (const p of [...new Set(removed.map((x) => t(typeof x === 'string' ? x : x.path)))]) lines.push(...fit(`  ${past ? 'Deleted' : 'Will delete'}, trocar created it: ${p}`))
