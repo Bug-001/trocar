@@ -5,7 +5,7 @@
 // the bottom sheet. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
+import { probe, withBoard, shoot, layoutFaults, stepKey } from './harness.mjs'
 import { typeFaults } from './type-inventory.mjs'
 import { CACHE_POPOVER_LABEL } from '../../../web/legacy/labels/replay.mjs'
 import { CT_ORDER } from '../../../web/legacy/replay/analysis.mjs'
@@ -170,7 +170,7 @@ test('turning follow latest on from an earlier step lands the window on the newe
     await b.page.waitForFunction(() => !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cwreply'))
     await b.page.click('#ctxwin') // the keys go to the page, not to a control
     await b.page.keyboard.press('f')
-    await b.page.waitForFunction(() => /(\d+) \/ \1\b/.test(document.querySelector('#stepbar .sb-no').textContent))
+    await b.page.waitForFunction(() => { const x = window.__stepNo(); return !!x && x.n === x.m })
     const at = await b.page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => {
       const w = document.querySelector('#ctxwin'), r = document.querySelector('#ctxwin .cwreply').getBoundingClientRect(), wr = w.getBoundingClientRect()
       const sb = document.querySelector('#stepbar'), top = wr.top + (sb && w.contains(sb) ? sb.getBoundingClientRect().height : 0)
@@ -189,12 +189,12 @@ test('a reply row has the request row\'s head frame and opens by keyboard', { sk
   try {
     await openBusiest(b) // the last step; back to the latest one whose reply has parts (a demo step may carry only a stop reason)
     const head = '#ctxwin .cwreply .cblk > .cbh'
-    const no = () => b.page.$eval('#stepbar .sb-no', (e) => e.textContent)
+    const no = () => stepKey(b.page)
     while (!(await b.page.$(head))) {
       const was = await no()
-      assert.doesNotMatch(was, /^Step 1 \//, 'no step of the busiest session has a reply row')
+      assert.doesNotMatch(was, /^1\//, 'no step of the busiest session has a reply row')
       await b.page.click('#stepbar [data-step="prev"]')
-      await b.page.waitForFunction((w) => document.querySelector('#stepbar .sb-no').textContent !== w && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cwreply'), was)
+      await b.page.waitForFunction((w) => { const x = window.__stepNo(); return `${x.n}/${x.m}` !== w && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cwreply') }, was)
     }
     const frame = (sel, i) => b.page.$$eval(sel, (hs, i) => { const s = getComputedStyle(hs.at(i)); return [s.fontFamily, s.fontSize, s.paddingLeft, s.paddingRight] }, i)
     assert.deepEqual(await frame(head, 0), await frame('#ctxwin .cblk[data-bi] > .cbh', -1)) // the first reply row against the last request row

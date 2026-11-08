@@ -22,9 +22,9 @@ test('2.3 #31: a step adds, removes or changes at most 64 nodes in the resource 
     await serveWorld(page, w, { pack: 256 })
     const files = 2 * w.files(w.now, 256).head.packs.length // the whole history in hand before the steps are counted
     const drawn = (n) => page.waitForFunction((n) => {
-      const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
+      const x = window.__stepNo()
       const res = document.querySelector('#resexp')
-      return !!x && +x[1] === n && !document.querySelector('#ctxwin .cwload') && !!res && res.children.length > 1 && !res.querySelector('[aria-busy]')
+      return !!x && x.n === n && !document.querySelector('#ctxwin .cwload') && !!res && res.children.length > 1 && !res.querySelector('[aria-busy]')
     }, n, { timeout: 30000, polling: 'raf' }).then(() => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))))
     await page.evaluate((m) => { location.hash = `#/replay/p/S?step=${m}` }, mid)
     // the desk draws the explorer only while Resources is the sidebar's current tab (1.2 §回放台布局: 不是当前标签时不画)

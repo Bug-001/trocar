@@ -69,10 +69,10 @@ async function heapUsed(page) {
 // the replay desk as the reader sees it: the step counter's two numbers, the 跟随最新 chip and the window's request-row heads
 const viewOf = (page) => page.evaluate((sel) => {
   const no = document.querySelector('#stepbar .sb-no')
-  const m = no && /(\d+)\s*\/\s*(\d+)/.exec(no.textContent)
+  const m = no && window.__stepNo()
   return {
     hash: location.hash,
-    step: m ? +m[1] : null, of: m ? +m[2] : null, follow: document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true',
+    step: m ? m.n : null, of: m ? m.m : null, follow: document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true',
     heads: [...document.querySelectorAll('#ctxwin .cblk[data-bi]')].map((e) => `${e.dataset.bi}:${e.dataset.sec || ''}`),
     reply: !!document.querySelector('#ctxwin .cwreply'),
     // a load control (2.3 #10 · 1.2 读取状态): any [data-load-step]; on the desk, any control inside an aria-busy frame or the

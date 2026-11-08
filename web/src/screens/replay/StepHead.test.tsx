@@ -52,6 +52,30 @@ test('.sb-no reads N / M with the model\'s n and m; the model · time line is be
   }
 })
 
+// 1.2 §编号: during a first read the head is the frontier's snapshot, so the step head says how many of the session's calls are read, not
+// the snapshot's step count; a head without pending ends the first read and the step head reads N / M again
+test('1.2 §编号: during a first read .sb-no counts the calls read instead of / M; after it, N / M', () => {
+  const { s, view, bar, model } = step({ at: 1 })
+  s.desk.firstPending = true; s.desk.pending = { done: 1507, total: 1580 }; act(() => view.step())
+  let no = bar().querySelector('.sb-no')!, m = model()
+  expect(no.textContent).not.toMatch(/\/\s*\d/)
+  expect(no.textContent).toContain(W.callsRead(1507, 1580))
+  expect(no.getAttribute('title')).toBe(W.stepRead(m.n, 1507, 1580))
+  expect([no.getAttribute('data-n'), no.getAttribute('data-m')]).toEqual([String(m.n), String(m.m)])
+  s.desk.pending = null; s.desk.firstPending = false; act(() => view.step())
+  no = bar().querySelector('.sb-no')!; m = model()
+  expect(no.textContent).toMatch(new RegExp(`${m.n}\\s*/\\s*${m.m}`))
+  expect(no.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
+})
+
+// a catch-up (a head with pending after a head without it) is not a first read: N / M stays
+test('1.2 §编号: a catch-up after the first read keeps N / M', () => {
+  const { s, view, bar, model } = step({ at: 1 })
+  s.desk.firstPending = false; s.desk.pending = { done: 2, total: 9 }; act(() => view.step())
+  const m = model()
+  expect(bar().querySelector('.sb-no')!.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
+})
+
 // 2.2 §步头's parts: the arrows and the number (with model · time), ◐, 对比, the three read-outs
 const PARTS = new Set(['sb-nav', 'sb-fid', 'sb-cmp', 'sb-reads'])
 test('2.2 #19: one row of the table\'s parts; while closed no popover row is in the DOM; there is no prompt ordinal', () => {
