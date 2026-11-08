@@ -214,20 +214,19 @@ test('Linux install: the plan names every file of the standalone undo', async ()
 
 // 1.6 §1.1②: one fact once. A harness install skips is said under Skipped: in the plan, with its reason; the receipt does not say the same reason
 // again as a Note (a real Linux run listed codex and z-code both ways)
-test('Linux install: a skipped harness\'s reason is said once, not again as a note', async () => {
-  const home = tmpDir('trocar-skip-once-')
-  seedClaude(home)
+test('Linux install: a skipped harness\'s reason is said once, not again as a note; the documents keep each skip, the dry run\'s too', async () => {
   const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
-  const io = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], { ...onCtx(home, io, { harnesses: (await loadHarnesses()).filter((d) => d.trust) }), platform: 'linux' }), 0, io.text()) // the Linux descriptors: most have no home here
-  const text = io.text()
-  const skipped = (text.match(/^Skipped: (.*)$/m) || [])[1]
-  assert.ok(skipped, 'some harness is skipped in this world')
-  const notes = text.split('\n').filter((l) => l.startsWith('Note: '))
-  for (const n of notes) { const h = n.slice(6, n.indexOf(':', 6)); assert.ok(!skipped.includes(`${h} (`), `${h} is in Skipped: and in a Note: ${n}`) }
-  const js = fakeIo()
-  assert.equal(await runInstallCli(['--yes', '--json'], { ...onCtx(home, js, { harnesses: (await loadHarnesses()).filter((d) => d.trust) }), platform: 'linux' }), 0)
-  const doc = js.json()
-  assert.ok(doc.skipped.length && doc.skipped.every((x) => x.what && x.reason), 'the document keeps each skip with its reason, as skipped (C.1)')
+  const linux = (await loadHarnesses()).filter((d) => d.trust) // the Linux descriptors: most have no home here
+  const run = async (argv, home = tmpDir('trocar-skip-once-')) => { if (!fs.existsSync(path.join(home, '.claude'))) seedClaude(home); const io = fakeIo(); assert.equal(await runInstallCli(argv, { ...onCtx(home, io, { harnesses: linux }), platform: 'linux' }), 0, io.text()); return { io, home } }
+  const d = await run(['--dry-run', '--json']), dry = d.io.json()
+  assert.ok(dry.skipped.length && dry.skipped.every((x) => x.what && x.reason), 'the dry run\'s document keeps each skip with its reason (C.1)')
+  assert.deepEqual(validateReceipt(dry), [])
+  const doc = (await run(['--yes', '--json'])).io.json()
+  assert.deepEqual(doc.skipped.map((x) => x.what), dry.skipped.map((x) => x.what), 'the same skips as the plan')
   assert.deepEqual(validateReceipt(doc), [])
+  for (const s of doc.skipped) assert.ok(!(doc.notes || []).some((n) => String(n).startsWith(`${s.what}: `)), `${s.what}: skipped, and not again a note`)
+  // the text of an install in the dry run's home (a dry run changes nothing): each reason once, as printed (HOME as ~, folded lines joined)
+  const flat = (t) => t.split(d.home).join('~').replace(/\s+/g, ' ')
+  const text = flat((await run(['--yes'], d.home)).io.text())
+  for (const s of dry.skipped) assert.equal(text.split(flat(s.reason)).length - 1, 1, `${s.what}: its reason said once: ${s.reason}`)
 })
