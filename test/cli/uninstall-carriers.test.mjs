@@ -75,6 +75,8 @@ for (const os of ['darwin', 'win32']) {
     'nothing': { touch: () => {}, gone: true },
     'a comment of the user': { touch: (f) => fs.writeFileSync(f, `// mine\n${fs.readFileSync(f, 'utf8')}`), gone: false },
     'a key of the user': { touch: (f) => { const d = JSON.parse(fs.readFileSync(f, 'utf8')); d.theme = 'dark'; fs.writeFileSync(f, JSON.stringify(d)) }, gone: false },
+    'an empty object of the user': { touch: (f) => { const d = JSON.parse(fs.readFileSync(f, 'utf8')); d.mcpServers = {}; fs.writeFileSync(f, JSON.stringify(d)) }, gone: false },
+    'a key of the user hidden by a second one': { touch: (f) => fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('{', '{"mcpServers":{"mine":1},"mcpServers":{},')), gone: false },
   }
   if (os === 'darwin') for (const [what, { touch, gone }] of Object.entries(AFTER)) test(`${os}: install created a file, on wrote into it, then ${what}; the record deleted, uninstall → the file ${gone ? 'is gone' : 'stays'}`, async () => {
     const w = await world(os, { keepRecord: true })
