@@ -208,17 +208,21 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     return { manifest: m, fp256: rootDer ? rootIdOf(rootDer).fp256 : null, items, carriers, pending, problems, notes, exit: pending.length || problems.length || skipped ? 1 : 0 }
   }
 
+  // each → 'written' | 'intact' (the bytes it would write are already there: nothing written, D54); a carrier is placed when one of its parts was written
   function owned(file, role, harness, data, mode, { sources = null, extra = {} } = {}) {
     const j = judgeOwned({ manifest: m, file, planned: sha256(Buffer.from(data)), fs })
-    if (j.action === 'skip-intact') return said(role, 'intact', { path: file, harness })
+    if (j.action === 'skip-intact') { said(role, 'intact', { path: file, harness }); return 'intact' }
     writeOwnedFile({ dir, manifest: m, harness, role, phase: 'install', file, data, mode, sources, extra, now: now(), fs })
     said(role, 'written', { path: file, harness })
+    return 'written'
   }
 
   function jsonKey(desc, file, keys, value) {
     const e = applyJsonKey({ dir, manifest: m, harness: desc.name, phase: 'install', file, keys, value, home, now: now(), fs })
     said('config-key', e ? 'written' : 'intact', { path: file, keys, harness: desc.name })
+    return e ? 'written' : 'intact'
   }
+  function placedIf(...parts) { return { state: parts.includes('written') ? 'placed' : 'intact' } }
 
   // one carrier kind for one harness → { state, code?, why? }
   async function carrier(desc, c) {
@@ -234,10 +238,10 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
           const own = new Set(certBlocks(rootPem).map((x) => x.fp)) // a merged file may already hold trocar's block (rule U of another harness): not a user CA
           const b = composeBundle({ nodeRoots, userCerts: merged.flatMap((x) => x.certs).filter((p) => !certBlocks(p).some((x) => own.has(x.fp))), caPem: rootPem })
           // the files and fingerprints it merged, as the Linux bundles record them: a rebuild of a bundle gone while a process holds it reads them (4.6 撤销 第 2 步)
-          owned(bundle, 'bundle', desc.name, b.data, 0o644, { sources: [...new Set(merged.map((x) => x.file))], extra: { user_fps: b.user_fps, roots_fp: b.roots_fp } })
-          jsonKey(desc, file, c.keys, bundle)
-        } else jsonKey(desc, file, c.keys, ca.pem)
-        return { state: 'placed' }
+          return placedIf(owned(bundle, 'bundle', desc.name, b.data, 0o644, { sources: [...new Set(merged.map((x) => x.file))], extra: { user_fps: b.user_fps, roots_fp: b.roots_fp } }),
+            jsonKey(desc, file, c.keys, bundle))
+        }
+        return placedIf(jsonKey(desc, file, c.keys, ca.pem))
       }
       if (c.kind === 'wrapper') {
         if (!wrapperKit) return { state: 'skipped', code: NOT_USERS, why: `this build has no wrapper for ${os}` }
@@ -252,11 +256,11 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         const names = (desc.proxy && desc.proxy.env) || []
         const hook = renderHook(c.template, { CA_FILE: ca.pem, SWITCH: path.join(dir, 'switch', desc.name), PROXY_ENV: names, PROXY_NAMES: names, NO_PROXY_ENV: noProxyNames(desc) })
         const file = path.join(pdir, hook.name), text = hook.text
-        owned(file, 'plugin', desc.name, text, 0o644)
-        if (!c.loader) return { state: 'placed' }
+        const placed = owned(file, 'plugin', desc.name, text, 0o644)
+        if (!c.loader) return placedIf(placed)
         const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit: { format: 'yaml-list', line: `- ${c.loader.keys.at(-1)}: [{ name: ${JSON.stringify(file)} }] ${lineComment("loads trocar's CA trust plugin")}` }, home, now: now(), fs })
         said('plugin-loader', e ? 'written' : 'intact', { path: loader, harness: desc.name })
-        return { state: 'placed' }
+        return placedIf(placed, e ? 'written' : 'intact')
       }
       return { state: 'skipped', code: 'not-routed', why: `no carrier kind ${c.kind}` }
     } catch (e) { problems.push(`${desc.name}: ${errText(e)}`); return { state: 'skipped', code: e.code || 'install-error', why: errText(e) } }

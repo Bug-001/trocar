@@ -142,6 +142,10 @@ test('D54 · CM1: install; install changes no byte, makes no second key, raises 
   const calls = w.store.calls.length
   const r2 = await w.install({ wrapperKit: { renderWrapper } })
   assert.deepEqual(snapshot(w.home), snap, 'not one byte, mtime or inode changed')
+  // and the receipt says so: every carrier the first install placed is intact on the second, whatever its kind
+  const placed = r1.carriers.filter((c) => c.state === 'placed'), key = (c) => `${c.harness}|${c.form}|${c.carrier}`
+  assert.ok(new Set(placed.map((c) => c.carrier)).size > 2, JSON.stringify(r1.carriers))
+  assert.deepEqual(r2.carriers.filter((c) => placed.some((x) => key(x) === key(c))).map((c) => [key(c), c.state]), placed.map((c) => [key(c), 'intact']))
   assert.equal(w.custody.calls.filter((c) => c.verb === 'create').length, 1, 'one key')
   assert.deepEqual(w.store.calls.slice(calls), ['has'], 'read back by fingerprint, no add, no prompt')
   assert.equal(r2.fp256, r1.fp256)
