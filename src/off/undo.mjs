@@ -142,7 +142,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   // of its own: `off` keeps it while it drains (removing it would cut agents mid-connection; a later run takes it when the drain is over),
   // `uninstall` removes it, and a Windows that holds it (EBUSY / EPERM: it is running) is reported, not papered over (4.8 §4.2).
   const undoWinItem = (e) => {
-    if (FILE_ENTRY_KINDS.includes(e.kind)) return undoEntry(e, { fs })
+    if (FILE_ENTRY_KINDS.includes(e.kind)) return undoEntry(e, { fs, earlier: earlierOf(e) })
     if (e.kind === 'run-key') {
       const r = undoRunKey({ prior: e.prior ?? null, run: exec, env })
       // what the receipt row says it lost: a registry value is no file of lines (a Windows test machine: "trocar's lines removed" over a value set back)
@@ -182,6 +182,16 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const kept = [...manifest.entries, ...manifest.files].filter((x) => spared(x) && (x.harness == null ? ids == null : inScope(x.harness))).map(keyWhere)
   out.install_items = [...new Set(kept)] // what install wrote, for `--json` (附录 C.2): §3.4's sample receipt names no count of it, so the human text says nothing here
 
+  // the bytes the file had before trocar's earlier entries in it, walking back (the manifest is in write order) only while each entry was written onto exactly
+  // what the one before left (pre_sha256 = the earlier post_sha256): a user edit between two writes breaks the chain, so a backup holding it is never
+  // judged needless. A file put back to any of those bytes is already restored for this entry too (one file, several entries: VS Code's settings).
+  const fileOf = (x) => x.real_path || x.path
+  const earlierOf = (e) => {
+    const same = manifest.entries.filter((x) => FILE_ENTRY_KINDS.includes(x.kind) && fileOf(x) === fileOf(e))
+    const out = []
+    for (let i = same.indexOf(e); i > 0 && same[i - 1].post_sha256 != null && same[i - 1].post_sha256 === same[i].pre_sha256 && same[i - 1].existed_before; i--) out.push(same[i - 1].pre_sha256)
+    return out
+  }
   // install's Run-value fallback (4.8 §7) belongs to no harness: a whole-machine run takes it
   const entries = [...manifest.entries].reverse().filter((e) => (inScope(e.harness) || (e.harness == null && ids == null && e.kind === 'run-key')) && !spared(e) && (FILE_ENTRY_KINDS.includes(e.kind) || e.kind === 'run-key' || e.kind === 'scheduled-task' || (e.kind === 'forwarder-binary' && dropCa)))
   const config = (e) => !((e.kind === 'text' || e.kind === 'trust-entry') && e.format !== 'dotenv-block') // step 1; the rest are step 4's (json-key and proxy-entry are config, a text/trust block is config only as dotenv)
@@ -284,6 +294,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       for (const e of originals) {
         if (e.harness !== f.harness || leftEntries.includes(e) || !namesFile(e, f.path)) continue
         leftEntries.push(e)
+        if (e.backup && !fs.existsSync(e.backup)) delete e.backup // dropped in step 1 (the file was back at bytes trocar knew): the row names no backup that is gone
         if (!manifest.entries.includes(e)) manifest.entries.push(e)
         out.left.push(leftRow(e, `${e.path} still names ${f.path}, the bundle trocar made for ${f.harness}, though its entry was reported as undone; trocar did not take the bundle away under it: edit the file so it no longer names it`, 'left-text'))
       }
