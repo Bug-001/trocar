@@ -43,8 +43,8 @@ function addRoot() {
 // dsh's own undici, found from its entry script (npm lib/bin.js, the desktop core's index.js or cli.js).
 function hostUndici() {
   try { return createRequire(process.argv[1])('undici') } catch { /* look up the tree */ }
-  let d = path.dirname(fs.realpathSync(process.argv[1]))
-  for (let i = 0; i < 8; i++, d = path.dirname(d)) { const f = path.join(d, 'node_modules', 'undici', 'index.js'); if (fs.existsSync(f)) return createRequire(f)(f) }
+  let dir = path.dirname(fs.realpathSync(process.argv[1]))
+  for (let i = 0; i < 8; i++, dir = path.dirname(dir)) { const f = path.join(dir, 'node_modules', 'undici', 'index.js'); if (fs.existsSync(f)) return createRequire(f)(f) }
   throw new Error(`undici not found from ${process.argv[1]}`)
 }
 
@@ -107,6 +107,7 @@ function readDoor() { try { return fs.readFileSync(SWITCH, 'utf8').split(/\r?\n/
 function tunnel(door, host, port, upstream, timeout, done) {
   let d
   try { d = new URL(door) } catch (e) { done(e); return }
+  if (!loopback(d.hostname)) { done(new Error('the door is not on this machine')); return } // the door is trocar's loopback listener, never anything else
   const target = net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`
   const headers = { Host: target, 'X-Trocar-Upstream': upstream, ...(d.username ? { 'Proxy-Authorization': `Basic ${Buffer.from(`${decodeURIComponent(d.username)}:${decodeURIComponent(d.password)}`).toString('base64')}` } : {}) }
   let settled = false
@@ -160,10 +161,10 @@ if (rooted) try {
         if (!secure) { cb(null, sock); return }
         // TLS on the tunnel socket, with the caller's options (servername, ca, rejectUnauthorized); not Node's https connection, which would
         // tunnel again through a proxy the agent is configured with
-        let s
-        try { s = tls.connect({ ...o, socket: sock, servername: o.servername || (net.isIP(host) ? undefined : host) }) } catch (err) { cb(err); return }
-        s[ROUTE] = d
-        s.once('secureConnect', () => cb(null, s)); s.once('error', (err) => cb(err))
+        let secured
+        try { secured = tls.connect({ ...o, socket: sock, servername: o.servername || (net.isIP(host) ? undefined : host) }) } catch (err) { cb(err); return }
+        secured[ROUTE] = d
+        secured.once('secureConnect', () => cb(null, secured)); secured.once('error', (err) => cb(err))
       })
       return undefined
     }
