@@ -183,7 +183,7 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
 /** The proxy-mode half of status's facts on macOS / Windows (1.6 §9.7, 4.11 CM21): the model's per-form reader over this user's install manifest, the daemon's
  *  reply and `chainSp` (the arch's system proxy in the chain's shape) → { forms, forwarder } for gatherNetFacts. Read-only: the manifest is read, nothing written. */
 export async function modelNetForms({ os, home, env = process.env, status, settings = {}, harnesses, procs, systemProxy, chainSp, dirs, fs = nodeFs }) {
-  const [{ readManifest }, { modelFormFacts, netFormsOf, setupOf }, { collectorHome }] = await Promise.all([
+  const [{ readManifest }, { modelFormFacts, netFormsOf, setupOf, setupSteps }, { collectorHome }] = await Promise.all([
     import('../core/trust/journal.mjs'), import('../core/proxymode/status-facts.mjs'), import('../../paths.mjs')])
   let m = null, unread = null
   try { m = readManifest(collectorHome(path.join(home, '.trocar')), fs) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; unread = { error: String((e && e.message) || e) } } // unreadable: no installed harness to draw, setup unknown
@@ -191,8 +191,8 @@ export async function modelNetForms({ os, home, env = process.env, status, setti
   const root = status.cert && status.cert.root
   // 4.11 P4b: each harness's setup, the one judgement `on`'s precondition ⑪ makes too (with status's root); the forms' certificate codes read it as before
   const setup = Object.fromEntries(harnesses.filter((d) => d.proxyMode).map((d) => [d.name, setupOf(d, { os, manifest: unread || m, ctx, root, fs })]))
-  const DRIFT = { 'carrier-absent': 'entry-missing', 'carrier-overwritten': 'entry-changed', 'bundle-lacks-ca': 'bundle-lacks-ca' }
-  const drift = (h) => { const s = setup[h]; if (!s || s.state === 'ready') return null; const x = s.missing.find((y) => y.form); return s.state === 'unknown' ? { reason: null, command: 'trocar install' } : x ? { reason: DRIFT[x.what], command: 'trocar install' } : null }
+  const DRIFT = { 'carrier-absent': 'entry-missing', 'carrier-overwritten': 'entry-changed', 'bundle-lacks-ca': 'bundle-lacks-ca', 'marked-without-record': 'marked-without-record' }
+  const drift = (h) => { const s = setup[h]; if (!s || s.state === 'ready') return null; const x = s.missing.find((y) => y.form); return s.state === 'unknown' ? { reason: null, command: 'trocar install' } : x ? { reason: DRIFT[x.what], command: setupSteps(x.what)[0] } : null }
   const model = await modelFormFacts({ harnesses, os, manifest: m, reply: status.daemon && status.daemon.reply, root, rootFp256: status.cert && status.cert.fp256, systemProxy: chainSp, ctx, fs, drift })
   return { ...netFormsOf({ model, status, procs, systemProxy, settings }), setup }
 }

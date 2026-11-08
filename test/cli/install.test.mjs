@@ -17,9 +17,15 @@ import { CUSTODY_FAILED, custodyPreflight } from '../../src/collector/model-inst
 import { backendsFor } from '../../src/collector/arch/model-backends.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
-import { onCtx, snapshot } from './fixtures/on-ctx.mjs'
+import { onCtx, snapshot, recordingExec } from './fixtures/on-ctx.mjs'
+import { runUninstall } from '../../src/cli/uninstall.mjs'
+import { readManifest } from '../../src/off/manifest.mjs'
+import { setupOf } from '../../src/collector/core/proxymode/status-facts.mjs'
+import { findingFor } from '../../src/netenv/findings.mjs'
 import { BLOCK_OPEN, BLOCK_END } from '../../src/off/text-edit.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
+import { runOff } from '../../src/off/orchestrate.mjs'
+import { startControlServer } from '../../src/collector/core/control.mjs'
 import { formatRefusal, markedRefusal } from '../../src/cli/receipt.mjs'
 
 function fakeIo({ tty = false } = {}) {
@@ -529,6 +535,26 @@ for (const os of ['darwin', 'win32']) {
   })
 }
 
+// 4.11 P4b: install.skipped is rewritten only for the harnesses a run judged the carriers of (an install that stops before them keeps it), and a skip
+// counts only while its file still holds the marked text no record lists
+for (const os of ['darwin', 'win32']) {
+  test(`4.11 P4b · ${os}: a skip survives an install that stops before the carriers, and stops counting once the marked text is gone`, async () => {
+    const w = await modelWorld({ os, commands: ['dsh'] })
+    const patch = path.join(w.home, '.dsh', 'cordis.patch.yml')
+    fs.mkdirSync(path.dirname(patch), { recursive: true }); fs.writeFileSync(patch, `${BLOCK_OPEN}\n- insert: []\n${BLOCK_END}\n`)
+    assert.equal((await w.install()).exit, 1)
+    const dsh = w.harnesses.find((d) => d.name === 'deepseek-dsh')
+    const what = () => [...new Set(setupOf(dsh, { os, manifest: readManifest(w.dir), ctx: w.ctx }).missing.map((x) => x.what))]
+    assert.deepEqual(what(), ['marked-without-record'])
+    w.custody.switches.failed = true // the key custody fails: install stops before any carrier
+    assert.equal((await w.install()).exit, 1)
+    assert.deepEqual(what(), ['marked-without-record'], 'the stopped install kept the skip')
+    w.custody.switches.failed = false
+    fs.writeFileSync(patch, '- insert: []\n') // the user took trocar's text out
+    assert.ok(!what().includes('marked-without-record'), JSON.stringify(what()))
+  })
+}
+
 // 1.6 §3.2 (macOS / Windows), through the CLI: the record is gone and the root with it, while the user's files still hold trocar's marked text (rule U's
 // block in the certificate file NODE_EXTRA_CA_CERTS names, dsh's loader row). Install skips each such carrier and installs the rest, and the receipt
 // is the refusal's: `error.code` marked-without-record, `error.command` the uninstall that takes the text out by its marks, every such file in
@@ -556,6 +582,48 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(await runInstallCli(['--yes'], { io: text, env: w.env, home: w.home, platform: os, deps }), 1)
     const lines = text.text().split('\n').map((l) => l.trim())
     for (const f of marked) assert.ok(lines.includes(path.join('~', path.relative(w.home, f))), `${f} prints whole on a line of its own:\n${text.text()}`)
+    // 4.11 P4b: status and on judge a skipped harness by install's own skip, whose fix is uninstall (install again repeats the skip); the rest read ready
+    const setup = (h) => setupOf(w.harnesses.find((d) => d.name === h), { os, manifest: readManifest(w.dir), ctx: w.ctx })
+    const skipped = [...new Set(doc.carriers.filter((c) => c.code === 'marked-without-record').map((c) => c.harness))]
+    const placed = [...new Set(doc.carriers.filter((c) => c.carrier !== 'root' && c.state && c.state !== 'skipped').map((c) => c.harness))].filter((h) => !doc.carriers.some((c) => c.harness === h && c.state === 'skipped'))
+    assert.ok(skipped.includes('claude-code') && placed.length, JSON.stringify(doc.carriers))
+    for (const h of skipped) {
+      const s = setup(h)
+      assert.deepEqual([s.state, [...new Set(s.missing.map((x) => x.what))]], ['needed', ['marked-without-record']], `${h}: ${JSON.stringify(s)}`)
+    }
+    for (const h of placed) assert.equal(setup(h).state, 'ready', h)
+    // 1.6 §3.3 / 附录 B: on and status give the finding's steps for a skipped harness; run in order, they end with it turned on
+    const steps = findingFor('marked-without-record', { platform: os }).commands.map((c) => c.run)
+    const sock = path.join(w.home, 'c.sock'), token = 'k'.repeat(32)
+    fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+    const server = await startControlServer({ socketPath: sock, token, routes: {
+      'GET /status': async () => ({ doors: {} }), 'GET /holders': async () => ({ count: 0, holders: [] }), 'POST /off': async () => ({ actual: 'off', confirmed: true }),
+      'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+    } })
+    const unit = { path: '/nowhere/unit', text: () => '', registered: () => ({ state: 'present' }), enable: () => {}, start: () => {}, startNow: () => {} }
+    const reader = { ready: Promise.resolve({ ready: true, via: 'daemon' }), close: async () => {}, self: () => null, call: async () => ({ procs: [] }) }
+    const exec = recordingExec().run
+    const onDeps = { getuid: () => 501, exec, backends: { dirs: w.ctx.dirs, rootStore: w.store }, harnesses: w.harnesses, which: w.ctx.which, daemonReader: reader, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+    const on = async (argv) => { const io = fakeIo(); const exit = await runOnCli([...argv, '--yes', '--json'], { io, env: w.env, home: w.home, platform: os, deps: onDeps }); return { exit, doc: io.json() } }
+    const uninstall = () => runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec, custody: w.custody, rootStore: w.store, harnesses: w.harnesses, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
+    const live = os === 'darwin' // the stand-in daemon listens on a unix socket; Windows names a pipe, which cannot be served here: on names only what it refuses
+    try {
+      const first = await on(live ? [] : skipped)
+      assert.deepEqual([first.exit, first.doc.error && first.doc.error.code], [1, 'setup-needed'], JSON.stringify(first.doc))
+      assert.deepEqual(first.doc.refused.map((x) => [x.harness, x.commands]).sort(), skipped.map((h) => [h, steps]).sort(), JSON.stringify(first.doc.refused))
+      const { modelNetForms } = await import('../../src/collector/arch/model-backends.mjs')
+      const net = await modelNetForms({ os, home: w.home, env: w.env, status: { cert: { root: { state: 'trusted' } }, daemon: { reply: null } }, harnesses: w.harnesses, procs: [], systemProxy: null, chainSp: null, dirs: w.ctx.dirs })
+      for (const h of skipped) assert.ok(net.forms[h].some((f) => f.certificate.code === 'marked-without-record' && f.certificate.command === steps[0]), `${h}: ${JSON.stringify(net.forms[h].map((f) => f.certificate))}`)
+      if (live) assert.equal((await uninstall()).exit, 1, 'uninstall refuses while the nameless on keeps the others on: off comes first')
+      for (const run of steps) {
+        if (run === 'trocar off') { if (live) { const o = await runOff({ home: w.home, env: w.env, deps: { platform: os, exec, procs: async () => [], sleep: async () => {}, getuid: () => 501 } }); assert.equal(o.exit, 0, JSON.stringify(o.receipt.problems)) } }
+        else if (run === 'trocar uninstall') { const u = await uninstall(); assert.equal(u.exit, 0, JSON.stringify(u.receipt.problems)) }
+        else if (run === 'trocar install') assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0, run)
+        else assert.fail(`a step this test does not know: ${run}`)
+      }
+      for (const h of [...skipped, ...placed]) assert.equal(setup(h).state, 'ready', h)
+      if (live) { fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token })) /* uninstall took the daemon's file with the rest */; const last = await on(skipped); assert.deepEqual([last.exit, last.doc.refused, last.doc.harnesses.sort()], [0, [], [...skipped].sort()], JSON.stringify(last.doc)) }
+    } finally { await server.close() }
   })
 }
 

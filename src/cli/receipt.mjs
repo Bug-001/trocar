@@ -182,12 +182,13 @@ export function changeLines(r, { past = true, home = null } = {}) {
 
 // 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1); both modes' `on` say it this way
 // a refusal's two commands, each whole on a line of its own (§1.1⑥)
-export const refusedLines = (r, { past = true } = {}) => [`${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}. Run, in order:`, commandLine(r.command), commandLine(`trocar on ${r.harness}`)]
+export const refusedLines = (r, { past = true } = {}) => [`${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}. Run, in order:`, ...(r.commands || [r.command]).map(commandLine), commandLine(`trocar on ${r.harness}`)]
 /** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
 export const setupBlocked = (r) => (r.refused || []).filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
 /** A run whose only shortfall is the harnesses refused for setup: the others were turned on (exit 1 all the same). */
 export const onlyRefused = (r) => !!r.error && r.error.code === 'setup-needed' && !(r.problems || []).length && !!(r.harnesses || []).length
-export const setupError = (b) => ({ code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run trocar install, then trocar on again` })
+// the steps: the longest list of a refused harness (install is every list's last step); a refusal with one `command` (driver mode) is that one
+export const setupError = (b, r = null) => { const steps = ((r && r.refused) || []).filter((x) => x.reason === 'setup-needed').map((x) => x.commands || [x.command]).reduce((a, c) => (c.length > a.length ? c : a), ['trocar install']); return { code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run ${[...steps, 'trocar on'].join(', then ')} again` } }
 
 /** The receipt of `trocar on` as text (the verdict first, then every file it changed). `tense`: 'past' | 'future' (the dry run). `fresh` = the set of
  *  harnesses THIS run newly wired (their one-time notes print; the rest live in `doctor` and `--json`); null prints every note. */

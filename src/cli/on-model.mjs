@@ -97,7 +97,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     ...pairs([...plan.planned.map((p) => { const [h, v] = planLine(p, home); return [h, isNew(p) ? `${v} (new since you last said yes)` : v] }), [own.what, own.detail]], { home })], { home }).join('\n'))
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
-  if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup) }), EXIT.incomplete) // nothing to turn on: no daemon started
+  if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup, plan) }), EXIT.incomplete) // nothing to turn on: no daemon started
   if (fresh.length && !flags.has('--yes')) {
     if (json || !isInteractive(io)) { if (json) printJson(io, { ...receiptOf({ ...plan, exit: 2 }), ok: false, planned, needs_yes: true, notes: [NEEDS_YES] }); else io.err(NEEDS_YES); return EXIT.usage }
     if (!(await ask({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
@@ -132,7 +132,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     const b = setupBlocked(r)
     // an on that an off stopped: its code is the receipt's error, and the harnesses it wrote before are undone by `trocar off` (附录 C.1)
     const offErr = r.error && r.error.code === STOPPED_BY_OFF ? { error: r.error, ...((r.turnedOn || []).length ? { undo: UNDO_LINE.on } : {}) } : {}
-    return done(receiptOf(r, { planned, daemon: { state: up.state, started: up.started }, ...offErr, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? (r.turnedOn || []) : [])
+    return done(receiptOf(r, { planned, daemon: { state: up.state, started: up.started }, ...offErr, ...(b.length ? { blocked: b, error: setupError(b, r), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? (r.turnedOn || []) : [])
   } catch (e) { // a throw under the lock is a failed run too: its result line names what turned on before the throw (turnOnModel attaches it; none when it is not known), then the error goes on
     put({ event: 'install-note', where: 'install', kind: 'result', outcome: 'failed', harnesses: Array.isArray(e && e.turnedOn) ? e.turnedOn : [], refused: [], reason: `on did not finish: ${errText(e)}` })
     throw e

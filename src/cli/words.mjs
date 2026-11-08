@@ -237,7 +237,7 @@ const HARNESS_OWN = new Set(['settings-ignored-managed-by-host', 'settings-ignor
 
 /** `trocar on`'s note for a harness whose paused hosts it made trocar try again (POST /on's `retried`, 4.11 §1 on/off, D54②). */
 // 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON); `on` says it in both modes (4.11 P4b, 4.6)
-export const SETUP_WHY = Object.freeze({ 'carrier-absent': 'trocar has not set up its certificate for it (installed after trocar, or what trocar placed is gone)', 'carrier-overwritten': 'its own update overwrote what trocar placed for its certificate', 'bundle-lacks-ca': 'its certificate bundle lacks a CA you added after install', 'root-missing': "trocar's root certificate is no longer trusted" })
+export const SETUP_WHY = Object.freeze({ 'carrier-absent': 'trocar has not set up its certificate for it (installed after trocar, or what trocar placed is gone)', 'carrier-overwritten': 'its own update overwrote what trocar placed for its certificate', 'bundle-lacks-ca': 'its certificate bundle lacks a CA you added after install', 'marked-without-record': "a file trocar sets up for its certificate still holds trocar's text from an earlier install whose record is gone, so install skipped it", 'root-missing': "trocar's root certificate is no longer trusted" })
 export const retriedNote = (h, hosts) => `trocar decrypts ${hosts.join(', ')} again from ${h}'s next connection; that traffic had been passed on unread after a TLS failure`
 
 /** The reason an agent is not captured (RFC 1.6 §3.5 NOTE column, D38): the one catalog, a clause for every code of
@@ -286,6 +286,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'cert-tier-unreachable': [`this form of ${h} has no way to reach a certificate`],
     'not-verified': [`this form of ${h} is not verified yet, so trocar passes its traffic on without reading it`],
     'not-users-file': [`${h} points at a certificate file that is not yours`],
+    'marked-without-record': [`a file trocar sets up for ${h}'s certificate still holds trocar's text from an earlier install whose record is gone, so install skipped it`], // its steps: the finding's (1.6 附录 B)
     'not-trocars-file': [`trocar cannot tell the file where it puts its own for ${h} is its own`],
     'shim-not-on-path': [`${h} did not start through the program trocar installed`],
     'form-unsupported': [`this form of ${h} cannot be captured with the proxy it is set to use`],
