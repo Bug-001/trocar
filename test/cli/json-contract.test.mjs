@@ -105,6 +105,8 @@ test('V74: every failed receipt carries an error whatever it says; one that wait
     assert.equal(printed(newReceipt(name)).error, undefined, name)
   }
   assert.equal(printed({ schema: SCHEMA_VERSION, command: 'status', ok: false, health: 'failing' }).error, undefined)
+  // status and doctor carry the receipt keys too (the shape `trocar status --json` prints); their ok: false is a verdict (C.3 / C.4), never "did not finish"
+  for (const name of ['status', 'doctor']) assert.equal(printed({ ...newReceipt(name), ok: false }).error, undefined, name)
 })
 
 test('V120: a command that says something on stderr and prints its document leaves that one document and nothing else', async () => {
