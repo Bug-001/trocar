@@ -16,7 +16,7 @@ import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
 import { standaloneFiles, switchFileIn } from '../off/paths.mjs'
-import { missingDirs } from '../off/fsutil.mjs'
+import { missingDirs, editTarget, writeDurable } from '../off/fsutil.mjs'
 import { resolveLoc, readSrc, holds, formsHere, fileOf, inTrocar } from './core/proxymode/sources.mjs'
 import { noProxyNames } from './core/proxymode/entries.mjs'
 import { placeWrapper, managedTree, targetOf } from './core/proxymode/hooks/wrapper.mjs'
@@ -336,8 +336,12 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       // and its record with it; the block for this root is then placed as new (a fresh installed_at)
       const older = m.entries.find((e) => e.kind === 'text' && e.format === 'pem-block' && e.harness === desc.name && e.path === file && !holdsRoot(e, rootBody))
       if (older) {
-        const out = removeTrocarText(fs.readFileSync(file, 'latin1'), older.ops)
-        if (out.found) fs.writeFileSync(file, out.text, 'latin1')
+        const target = editTarget(file, fs), before = fs.readFileSync(target)
+        const out = removeTrocarText(before.toString('latin1'), older.ops)
+        if (out.found) { // 1.6 R2: a copy of the bytes first, then the file through its link, never torn
+          writeBackup({ home, file, data: before, now: now(), fs })
+          writeDurable(target, Buffer.from(out.text, 'latin1'), fs.statSync(target).mode & 0o7777, fs)
+        }
         m.entries.splice(m.entries.indexOf(older), 1); save()
       }
       // two harnesses whose settings name one file (Claude Code and Kimi Code both read NODE_EXTRA_CA_CERTS; Codex and Hermes SSL_CERT_FILE) share
