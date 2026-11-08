@@ -21,6 +21,9 @@ const INSTALL = 'trocar install'
 const red = (v) => (typeof v === 'string' && v.trim() ? redactProxyUrl(v) : null)
 const latest = (items) => { const t = items.map((i) => Date.parse(i.installed_at)).filter(Number.isFinite); return t.length ? new Date(Math.max(...t)).toISOString() : null }
 /** Is one install item still on disk as trocar recorded it (a file trocar owns, or a key / block it placed in a file of yours)? Unreadable → false. */
+/** The door a record wrote, to be shown redacted: `door` while the record is clear; once sealed (only `door_sha256` kept), the first URL in a field trocar wrote
+ *  (`value`, `vars.<k>`, `line`), whose `***` in the password still redacts to `***@`. */
+export const writtenOf = (x) => x.door ?? ([x.value, ...Object.values(x.vars || {}), x.line].map((v) => typeof v === 'string' && /[a-z][a-z0-9+.-]*:\/\/[^\s"']+/i.exec(v)).find(Boolean) || [null])[0]
 export const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? judgeOwned({ manifest: m, file: e.path, fs }) : judgeEntry({ manifest: m, planned: e, fs })).action === 'skip-intact' } catch { return false } }
 
 /** The files a harness's `userCertFiles` keys name now, in the descriptor's order. */
@@ -124,7 +127,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       if (certificate.in_effect && uf && uf.state !== 'intact' && carrier !== 'root') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })
       const g = `${h}:${f.route}`, route = pm.routes[f.route] || {}
       const es = on.filter((i) => i.harness === h && i.route === f.route)
-      const main = es.find((i) => i.door) || es[0] || null
+      const main = es.find((i) => i.door_sha256 || i.door) || es[0] || null
       const priorItem = priorRecordOf(route, es)
       const priorRaw = priorItem ? priorItem.prior_value : null
       const intact = es.length > 0 && es.every((i) => intactOf(m, i, fs))
@@ -142,7 +145,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       const blocked = plan.notRouted.find((n) => n.form === f.id) || null
       forms.push({
         id: f.id, route: f.route, certificate,
-        proxy: { connected: intact && door_up, entry_intact: intact, door_up, upstream, written: main ? red(main.door ?? (typeof main.value === 'string' ? main.value : null)) : null, prior: red(priorRaw) },
+        proxy: { connected: intact && door_up, entry_intact: intact, door_up, upstream, written: main ? red(writtenOf(main)) : null, prior: red(priorRaw) },
         entry: main ? { where: main.keys ? `${main.path}#${main.keys.join('.')}` : main.path, kind: route.kind || main.kind, trocar: true, intact } : null,
         plan: blocked ? { reason: blocked.reason, at: blocked.at ?? null, code: blocked.code } : null,
         // the form's own way of being made to read its settings again, and the places it runs from: the doctor's restart steps come from the form the

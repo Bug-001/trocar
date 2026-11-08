@@ -9,6 +9,7 @@ import { removeTrocarText, trocarResidue, onlySkeleton } from './text-edit.mjs'
 import { sha256, readOrNull, writeDurable, removeEmptyDirs, sweepTemps } from './fsutil.mjs'
 import { decodeText, encodeText, WHY_TEXT } from './text-codec.mjs'
 import { hideUserinfo } from './userinfo.mjs'
+import { unseal } from './seal.mjs'
 
 // Remove a file trocar owns, then the directories its write created when they are empty. `changed`: the file was
 // not what trocar wrote (removed all the same: it is trocar's, the manifest lists it; the caller says so). `unlessChanged`: a file the agent itself
@@ -93,6 +94,7 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
   const read = decodeText(cur)
   if (!read.ok) return done('left-unreadable', { why: read.why, reason: `${file} can no longer be read as text trocar may write back: ${WHY_TEXT[read.why]} (${read.why}); trocar did not touch it, and its ${describeEntry(entry)} may still be in it` })
   const text = read.text
+  entry = unseal(entry, text) // a sealed record gets its door password back from the file (4.6「日志」)
   const asInstalled = entry.post_sha256 == null || sha256(cur) === entry.post_sha256 // intent-only: test by reversing
   const back = asInstalled ? reverseOps(text, entry.ops) : null
   // byte for byte: the text before is written in the form the file had before (`charset`, absent = utf8); an edited file keeps the form it has now

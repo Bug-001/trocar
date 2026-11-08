@@ -17,6 +17,8 @@ import { sha256 } from '../../src/off/fsutil.mjs'
 import { isPresent, resolveLoc } from '../../src/collector/core/proxymode/sources.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { modelFormFacts } from '../../src/collector/core/proxymode/status-facts.mjs'
+import { buildStandalone, checkStandalone } from '../../src/off/standalone.mjs'
+import { standalonePath } from '../../src/off/paths.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const TOKEN = 'k'.repeat(32)
@@ -32,13 +34,13 @@ async function installed({ kimiOnly = false } = {}) {
 }
 
 /** A real control server at the endpoint the resolver gives for this HOME: control.json names a socket in the tmp HOME, with a token. */
-async function daemon(w, { onPost = null } = {}) {
+async function daemon(w, { onPost = null, auth = false } = {}) {
   const sock = path.join(w.home, 'c.sock')
   fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token: TOKEN }))
   const asked = []
   const server = await startControlServer({ socketPath: sock, token: TOKEN, routes: {
     'GET /status': async () => ({ doors: {} }),
-    'POST /on': async ({ body }) => { asked.push(body); if (onPost) return onPost(body); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } },
+    'POST /on': async ({ body }) => { asked.push(body); if (onPost) return onPost(body); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, auth ? `http://${encodeURIComponent(g)}:${TOKEN}@127.0.0.1:${port}` : `http://127.0.0.1:${port}`])) } },
   } })
   return { asked, close: () => server.close() }
 }
@@ -132,6 +134,22 @@ test('e2e: a Kimi-only machine — install placed the wrapper; on asks the daemo
     assert.ok(m.liveness['kimi-code'].on_at, 'the on window opened')
     assert.deepEqual(m.files.filter((f) => f.phase === 'on').map((f) => f.role), ['switch'], 'on wrote the switch file only: no certificate')
   } finally { await d.close() }
+})
+
+// 1.6 §3.3: on writes the current undo copy before any entry (the copy must read the sealed records this on writes)
+test('1.6 §3.3: on replaces a stale trocar-off before it writes; a copy that cannot be written stops on (exit 1) with every file as it was', async () => {
+  const files = (home) => { const out = {}; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.lstatSync(p); if (st.isDirectory()) walk(p); else if (st.isFile()) out[p] = fs.readFileSync(p, 'base64') } }; walk(home); return out }
+  const w = await installed()
+  fs.writeFileSync(standalonePath(w.home), buildStandalone({ version: 25 }), { mode: 0o700 })
+  const d = await daemon(w, { auth: true })
+  try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
+  assert.equal(checkStandalone({ home: w.home, platform: 'darwin' }).ok, true)
+  const v = await installed()
+  fs.rmSync(standalonePath(v.home)); fs.mkdirSync(standalonePath(v.home)) // a directory where the copy goes: it cannot be written
+  const dv = await daemon(v, { auth: true })
+  const before = files(v.home)
+  try { assert.equal((await on(v)).exit, 1) } finally { await dv.close() }
+  assert.deepEqual(files(v.home), before, 'no agent file, no state.json, nothing else written')
 })
 
 // CM38 (4.11): a descriptor's notes reach on's result for the harness it turned on, through the real seam (plan → daemon → write → result; no OS
