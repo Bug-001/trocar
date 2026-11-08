@@ -158,7 +158,7 @@ const proxyMode = {
     form('hermes.desktop-prebuilt', [], { darwin: true, win32: { reason: 'not-measured' } }),
   ],
   routes: {
-    env: { kind: 'dotenv-block', file: HOME('.env'), proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'not-routed', takesEffect: 'takes effect once you restart Hermes; restart its gateway and dashboard too' },
+    env: { kind: 'dotenv-block', file: HOME('.env'), proxyKeys: proxy.env, noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'not-routed', takesEffect: 'takes effect once you restart Hermes; restart its gateway and dashboard too' },
   },
   certs: {},
   trusts: {},

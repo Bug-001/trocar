@@ -436,8 +436,9 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   [Install](#install)); a copy from npm or git adds nothing there. Each harness's carrier is in its
   descriptor (`proxyMode` in `src/collector/harness/<harness>.mjs`), one entry per form.
 - `on` asks the daemon to open the doors, then writes only proxy entries: a proxy key in the agent's own config
-  (Claude Code's `settings.json`, Codex's and Hermes's `.env`, Z-Code's CLI config, an OpenCode plugin, Kimi VS Code's
-  `http.proxy`, Claude Desktop's config library) or a switch file in `~/.trocar/collector/switch/` that Kimi's wrapper,
+  (Claude Code's `settings.json` and Codex's and Hermes's `.env` get every proxy variable the agent reads, `HTTPS_PROXY`,
+  `HTTP_PROXY` and for Codex and Hermes `ALL_PROXY`, in both spellings, so the programs they start reach the door too,
+  which captures an agent and only forwards anything else; Z-Code's CLI config, an OpenCode plugin, Kimi VS Code's `http.proxy`, Claude Desktop's config library) or a switch file in `~/.trocar/collector/switch/` that Kimi's wrapper,
   dsh's plugin and pi's extension read. The door connects onward through the proxy the agent would have used without trocar.
 - `off` removes those entries and switch files; your edits to unrelated keys during `on` stay, and a proxy key you
   changed yourself keeps your value. It kills and restarts nothing: a process started while capture was on keeps its

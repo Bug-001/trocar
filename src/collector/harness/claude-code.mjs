@@ -177,7 +177,8 @@ const proxyMode = {
       systemProxy: { http: true, ws: true } }, // the app (Electron) follows the OS proxy; the CLI forms do not (the harness's `proxy.systemProxy`)
   ],
   routes: {
-    settings: { kind: 'json-key', file: SETTINGS, format: 'json', proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy']], noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']], value: 'door-url', absent: 'create', takesEffect: 'takes effect the next time you start claude (it reads the proxy setting once, at start)' },
+    // every proxy variable it reads, in both spellings: the processes it starts inherit this env, and their plain http goes to the door too (4.8 §5.1)
+    settings: { kind: 'json-key', file: SETTINGS, format: 'json', proxyKeys: proxy.env.map((name) => ['env', name]), noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']], value: 'door-url', absent: 'create', takesEffect: 'takes effect the next time you start claude (it reads the proxy setting once, at start)' },
     library: { kind: 'json-key', select: { dir: perOs({ darwin: { base: 'appSupport', path: 'Claude-3p/configLibrary' }, win32: { base: 'localAppData', path: 'Claude-3p/configLibrary' } }), meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, format: 'json', proxyKeys: [['egressProxyPacUrl']], ownKeys: [['egressProxyUrl'], ['egressProxyPacUrl']], value: 'pac-url', auth: false, absent: 'create', takesEffect: 'takes effect the next time you start the Claude desktop app; no administrator needed' },
   },
   certs: {
