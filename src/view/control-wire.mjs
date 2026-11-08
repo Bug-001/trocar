@@ -18,9 +18,11 @@
 // resp.raw / raw_b64 / messages, a resp.body over BODY_SHOW_CHARS), `ctl` without req / resp, and `ctl.omitted` naming what was left behind (it is
 // intact in the source record). A small `resp.body` stays: the feature-flag ledger reads it over all of a class. 20,000 records of 3 KB bodies were
 // a 91 MiB answer for one class; at ~100k V8's string limit made it a 500 and the page an empty view.
+// WIRE BYTES: a decoded reply's compressed wire bytes (resp.wire_b64 and resp.partial.wire_b64, 4.1 保真边界 ②) are never shown and never sent,
+// in the detail form too; ctl.omitted names them whenever the record has them.
 // Envelope fields only — no provider knowledge, no host or endpoint literal (invariant 3). Pure over the record.
 import { captureLabelsOf, bodyRetentionOf, reqIncompleteOf, isLogOnly } from '../dissect/capture-labels.mjs';
-import { requestEncodingOf } from '../dissect/request-body.mjs';
+import { nonIdentityEncoding, requestEncodingOf } from '../dissect/request-body.mjs';
 import { headerOf } from '../dissect/harnesses.mjs';
 import { isSecretHeader } from '../capture/redact.mjs';
 
@@ -91,7 +93,10 @@ function respView(rec) {
   if (r.verbatim === false) return { kind: 'length-only', bytes: finite(r.raw_chars) ?? wire };
   // a body cut at the capture cap (resp.truncated + body_bytes): `bytes` is the whole reply on the wire, the text only its stored prefix
   const cut = (part, v) => (part.truncated === true ? { ...v, truncated: true, stored_bytes: finite(part.body_bytes) } : v);
-  const bodyOf = (part) => {
+  // a body shown decompressed says from what (2.6 text / sse): the same rule the writer keeps wire_b64 by; one that did not decode is `undecoded`
+  const enc = (part) => !part.encoding_error && nonIdentityEncoding((part.headers || r.headers || {})['content-encoding']);
+  const bodyOf = (part) => { const v = shown(part), e = enc(part); return e && v.kind !== 'empty' && v.kind !== 'none' && v.kind !== 'ws' ? { ...v, decoded_from: e } : v; };
+  const shown = (part) => {
     if (part.kind === 'ws' && Array.isArray(part.messages)) return textBody('ws', part.messages.map(messageText).join('\n'), wire ?? undefined);
     if (typeof part.raw === 'string') return cut(part, textBody(part.kind === 'sse' ? 'sse' : 'text', part.raw, wire ?? undefined));
     if (typeof part.raw_b64 === 'string') return part.encoding_error ? { kind: 'undecoded', encoding: part.encoding_error, bytes: wire ?? b64Bytes(part.raw_b64), ...base } : cut(part, { kind: 'binary', bytes: wire ?? b64Bytes(part.raw_b64), hex: hexOfB64(part.raw_b64) });
@@ -111,9 +116,11 @@ function respView(rec) {
 
 const jsonLen = (v) => { try { return JSON.stringify(v).length; } catch { return Infinity; } };
 // a response with the bodies left behind: raw / raw_b64 always (they are in ctl.resp when shown), body / messages when shown or too big or slim
+// wire_b64 (a decoded reply's compressed wire bytes, up to 64 MiB) is never shown: it is left behind in both forms and always named
 function slimResp(r, { detail, shown, omitted, prefix }) {
-  const { raw, raw_b64, ...out } = r;
+  const { raw, raw_b64, wire_b64, ...out } = r;
   if (!detail) { if (raw !== undefined) omitted.push(`${prefix}raw`); if (raw_b64 !== undefined) omitted.push(`${prefix}raw_b64`); }
+  if (wire_b64 !== undefined) omitted.push(`${prefix}wire_b64`);
   if (shown) { delete out.body; delete out.messages; } // shown in ctl.resp instead
   else if (!detail) {
     if (out.messages !== undefined) { delete out.messages; omitted.push(`${prefix}messages`); }
@@ -205,7 +212,10 @@ export function controlRecordWire(input, { detail = true, reveal = null } = {}) 
     if (r && typeof r === 'object') {
       const shown = detail && (ctl.resp.text !== undefined || ctl.resp.hex !== undefined || ctl.resp.kind === 'ws');
       const slim = slimResp(r, { detail, shown, omitted, prefix: 'resp.' });
-      if (slim.partial && typeof slim.partial === 'object') slim.partial = (({ raw: _a, raw_b64: _b, body: _c, messages: _d, ...p }) => p)(slim.partial);
+      if (slim.partial && typeof slim.partial === 'object') {
+        if (slim.partial.wire_b64 !== undefined) omitted.push('resp.partial.wire_b64');
+        slim.partial = (({ raw: _a, raw_b64: _b, wire_b64: _w, body: _c, messages: _d, ...p }) => p)(slim.partial);
+      }
       out[rec.resp ? 'resp' : 'response'] = slim;
     }
     if (omitted.length) ctl.omitted = omitted;
