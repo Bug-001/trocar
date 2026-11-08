@@ -144,7 +144,8 @@ test('D54 · CM1: install; install changes no byte, makes no second key, raises 
   assert.deepEqual(snapshot(w.home), snap, 'not one byte, mtime or inode changed')
   // and the receipt says so: every carrier the first install placed is intact on the second, whatever its kind
   const placed = r1.carriers.filter((c) => c.state === 'placed'), key = (c) => `${c.harness}|${c.form}|${c.carrier}`
-  assert.ok(new Set(placed.map((c) => c.carrier)).size > 2, JSON.stringify(r1.carriers))
+  assert.deepEqual(r1.carriers.filter((c) => c.state === 'intact').map(key), [], 'a fresh machine: nothing was there, so nothing is intact')
+  for (const kind of ['config-key', 'plugin', 'wrapper']) assert.ok(placed.some((c) => c.carrier === kind), `the first install placed a ${kind}: ${JSON.stringify(r1.carriers)}`)
   assert.deepEqual(r2.carriers.filter((c) => placed.some((x) => key(x) === key(c))).map((c) => [key(c), c.state]), placed.map((c) => [key(c), 'intact']))
   assert.equal(w.custody.calls.filter((c) => c.verb === 'create').length, 1, 'one key')
   assert.deepEqual(w.store.calls.slice(calls), ['has'], 'read back by fingerprint, no add, no prompt')
