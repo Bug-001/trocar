@@ -7,6 +7,7 @@ import { afterEach, beforeAll, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { deskOf } from '../../../../test/web-v2/desk-world.mjs'
 import { buildLanes, anchorLane } from '../../../legacy/replay/lanes.mjs'
+import { applyHead } from '../../../legacy/replay/packs.mjs'
 import { initKeys, isTyping, setScreenKeys } from '../../../legacy/core/keys.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { stepHeadModel } from './models.mjs'
@@ -68,12 +69,19 @@ test('1.2 §编号: during a first read .sb-no counts the calls read instead of 
   expect(no.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
 })
 
-// a version's re-read (pending.read; `seen` ends the first read, replay/model.mjs) is not a first read either: N / M stays
-test('1.2 §编号: a re-read after an update keeps N / M', () => {
+// a version's re-read is not a first read: the heads a desk is given (packs.mjs applyHead) carry pending through both, and the one
+// marked `seen` (3.5 §会话读 pending: the session was read whole before) ends the first read, so the step head reads N / M again
+test('1.2 §编号: a head whose pending is marked seen ends the first read; the step head reads N / M', () => {
   const { s, view, bar, model } = step({ at: 1 })
-  s.desk.firstPending = false; s.desk.pending = { done: 2, total: 9, seen: true, read: 2, calls: 0 }; act(() => view.step())
-  const m = model()
-  expect(bar().querySelector('.sb-no')!.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
+  const head = (pending: object) => ({ mark: s.desk.mark, lanes: [...s.desk.lanes.values()], packs: [], pending })
+  s.desk.firstPending = true
+  act(() => { applyHead(s.desk, head({ done: 1507, total: 1580 })); view.step() })
+  let no = bar().querySelector('.sb-no')!, m = model()
+  expect(no.getAttribute('title')).toBe(W.stepRead(m.n, 1507, 1580))
+  act(() => { applyHead(s.desk, head({ done: 2, total: 9, seen: true, read: 2, calls: 0 })); view.step() })
+  no = bar().querySelector('.sb-no')!; m = model()
+  expect(no.textContent).toMatch(new RegExp(`${m.n}\\s*/\\s*${m.m}`))
+  expect(no.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
 })
 
 // a catch-up (a head with pending after a head without it) is not a first read: N / M stays
