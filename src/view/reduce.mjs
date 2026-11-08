@@ -17,7 +17,7 @@ import { compareStep } from './step-order.mjs';
 import { FLAG, opensPart } from './head-cols.mjs';
 import { compactionVerdict, compactionBaseline } from '../identity/session-identity.mjs';
 import { boardDissectorOf as dOf } from '../dissect/registry.mjs';
-import { askOf, COMP_KEYS, sharedLines, taskOf, HEAD } from './blockmeta.mjs';
+import { askOf, COMP_KEYS, sharedLines, taskOf, HEAD, TASK_HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { materializeAttrs, cacheLabelsOf } from './extract.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
@@ -637,7 +637,8 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
         ...(meta.note ? { note: meta.note } : null), count, first: ridAt(d.first), last: ridAt(lastK), peakCtx: peak,
         spawnRid: sp ? ridAt(sp.k) : null, parent: sp ? keyOf(sp.S) : null, flagged, parts: chapters };
       // a streamed lane's first text, past the wrappers it opens with (askOf), as every wire's question is
-      if (meta.kind === 'subagent') h[HEAD] = { text: (firstS.stream ? askOf([F.firstText(firstS)]) : firstS.ask) || '', arg: sp && sp.arg };
+      // the sub-agent rule reads the first TASK_HEAD characters (4.4): a flat wire's text is its question, read ASK_HEAD deep
+      if (meta.kind === 'subagent') h[HEAD] = { text: ((firstS.stream ? askOf([F.firstText(firstS)]) : firstS.ask) || '').slice(0, TASK_HEAD), arg: sp && sp.arg };
       return h;
     };
     const ds = I.all ? [...F.dls.values()] : [...I.dirty];
