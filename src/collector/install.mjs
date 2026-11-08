@@ -180,10 +180,10 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     // installed — but only usable when its CA is (D-4): a CA that cannot be read or used is said, with how to start over
     const c = readCa({ dir: path.join(dir, 'ca'), fs })
     const st = c.error ? { ok: false, which: c.which, reason: c.error } : checkCa(c)
-    if (!st.ok) throw Object.assign(new Error(`the collector is installed, but its CA is unusable (${st.which}: ${st.reason}); run "trocar uninstall", then "trocar on"`), { code: 'ca-invalid' })
+    if (!st.ok) throw Object.assign(new Error(`the collector is installed, but its CA is unusable (${st.which}: ${st.reason}); run "trocar uninstall", then "trocar install", then "trocar on"`), { code: 'ca-invalid' })
   }
   if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle' || f.role === 'trust-file').map((f) => f.path).join(', ')}); run "trocar uninstall" again once they exit`)
-  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "trocar uninstall" again, then "trocar on"`)
+  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "trocar uninstall" again, then "trocar install", then "trocar on"`)
   // `judge(descs, prior)` → the names held back before anything of theirs is read for writing (on's 1.6 §3.3 ⑪): asked only of a complete install
   const asked = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
   const held = new Set(judge && installComplete(prior) ? judge(asked, prior) : [])
@@ -338,7 +338,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
   for (const r of unseen) { final.notes.push(r.reason); final.records.push(r) }
 
-  if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "trocar uninstall", then "trocar on"`)
+  if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "trocar uninstall", then "trocar install", then "trocar on"`)
   m.planned = final.paths
   // what `off` needs to judge, from this manifest alone, which live process may hold what trocar wrote for a harness (4.6 撤销顺序): written before any user
   // file changes. `identity` is the name list of now (presets + agents.json) united with the one already recorded: a name that has left the list since
