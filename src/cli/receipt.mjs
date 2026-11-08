@@ -182,7 +182,10 @@ export function changeLines(r, { past = true, home = null } = {}) {
 
 // 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1); both modes' `on` say it this way
 // a refusal's two commands, each whole on a line of its own (§1.1⑥)
-export const refusedLines = (r, { past = true } = {}) => [`${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}. Run, in order:`, ...(r.commands || [r.command]).map(commandLine), commandLine(`trocar on ${r.harness}`)]
+export const refusedLines = (r, { past = true } = {}) => {
+  const head = `${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}.`, commands = r.commands || (r.command ? [r.command] : [])
+  return commands.length ? [`${head} Run, in order:`, ...commands.map(commandLine), commandLine(`trocar on ${r.harness}`)] : [head] // no command (a form not on this machine): the reason is the line
+}
 /** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
 export const setupBlocked = (r) => (r.refused || []).filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
 /** A run whose only shortfall is the harnesses refused for setup: the others were turned on (exit 1 all the same). */

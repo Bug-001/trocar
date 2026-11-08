@@ -18,7 +18,7 @@ import { editTarget } from '../../../off/fsutil.mjs'
 import { BLOCK_OPEN } from '../../../off/text-edit.mjs'
 import { switchFileIn } from '../../../off/paths.mjs'
 import { parseDotenv } from '../config-read.mjs'
-import { resolveLoc, readSrc, holds, isPresent } from './sources.mjs'
+import { resolveLoc, readSrc, holds, formsHere } from './sources.mjs'
 import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
 import { loopbackWords } from '../../../cli/words.mjs'
@@ -265,7 +265,7 @@ export function blockerOf(desc, f, ctx) {
 
 export function planRoutes(desc, ctx) {
   const pm = desc.proxyMode, routes = new Map(), blocked = [], notes = []
-  for (const f of pm.forms.filter((x) => x.os.includes(ctx.os) && isPresent(x, ctx))) {
+  for (const f of formsHere(pm, ctx.os, ctx)) {
     const hit = blockerOf(desc, f, ctx)
     if (hit) { blocked.push({ form: f.id, code: 'not-routed', ...hit }); continue }
     if (!routes.has(f.route)) routes.set(f.route, { id: f.route, route: pm.routes[f.route], forms: [] })

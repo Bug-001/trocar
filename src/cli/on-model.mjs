@@ -25,6 +25,7 @@ const planLine = (p, home) => [p.harness, p.paths.length ? `${p.paths.map((x) =>
 const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
 // 1.6 §1.1: the headline of a run that did not finish names the harnesses that did not: refused, or a route of theirs not written
 const unfinished = (r) => [...new Set([...r.refused.map((x) => x.harness), ...(r.routes || []).filter((x) => !x.ok).map((x) => x.harness)])]
+const noFormError = (r) => { const x = r.refused.find((y) => y.reason === 'not-routed'); return x ? { code: 'not-routed', message: `${x.harness} was not turned on: ${x.why}` } : null }
 
 /** → the exit code. `source`: added to each flows/ record this run writes (the board's 'board'). `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
 export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, json, source }) {
@@ -40,7 +41,8 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const out = (receipt, exit) => {
     if (json) printJson(io, receipt)
     else io.out(fit([receipt.dry_run ? `trocar on would start capturing ${receipt.harnesses.join(', ') || 'no agent'}. Nothing was written.`
-      : exit === 0 ? `Capturing ${receipt.harnesses.join(', ') || 'no agent'}.${receipt.daemon && receipt.daemon.state === 'running' ? ' The collector is running.' : ''}`
+      : exit === 0 && !receipt.harnesses.length ? 'Nothing to capture: no agent trocar covers is set up on this machine.'
+      : exit === 0 ? `Capturing ${receipt.harnesses.join(', ')}.${receipt.daemon && receipt.daemon.state === 'running' ? ' The collector is running.' : ''}`
         : `trocar on did not finish${unfinished(receipt).length ? ` for ${unfinished(receipt).join(', ')}` : ''}. What stopped it is below.`,
       ...receipt.refused.flatMap(refusedLines),
       // §1.1: no two rows the same. One agent with several routes (Claude Code's settings and its config library) said "the setting is in place"
@@ -68,6 +70,8 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const plan = await turnOnModel({ ...args, dryRun: true })
   // a planned route whose entry hands the app a PAC (`value: 'pac-url'`): the one write the system proxy decides (4.11 §3 ③, the forms that follow it)
   const readsSystemProxy = (p) => { const d = args.harnesses.find((x) => x.name === p.harness); return d.proxyMode.routes[p.route].value === 'pac-url' }
+  // nothing to turn on and nothing to set up (4.11 CM43): nothing is written and no daemon started, so the login entry is not this run's question
+  if (!plan.code && !plan.on.length && !flags.has('--dry-run') && !setupBlocked(plan).length) { const error = noFormError(plan); return done(receiptOf(plan, { undo: null, ...(error ? { error } : {}) }), plan.exit) }
   const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
   // 附录 C.2: a `--dry-run` goes as expected even when the real run would stop before writing — it exits 0, and what would stop it is `blocked`
   // (a Windows test machine 2026-10-18: with nothing installed it exited 1 with a top-level `code` and no `planned`)
@@ -93,7 +97,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const isNew = (p) => seen.size > 0 && p.paths.some((x) => fresh.includes(x))
   // V85: trocar's own tree (the record, the desired state, ingress.json) is one more row; it is no setting of yours, so no yes is asked for it
   const own = ownTreeItem(home, os), planned = [...plan.planned, own]
-  say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
+  if (plan.on.length) say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
     ...pairs([...plan.planned.map((p) => { const [h, v] = planLine(p, home); return [h, isNew(p) ? `${v} (new since you last said yes)` : v] }), [own.what, own.detail]], { home })], { home }).join('\n'))
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)

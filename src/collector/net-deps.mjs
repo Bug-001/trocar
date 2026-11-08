@@ -37,6 +37,7 @@ export async function presentForms(o) {
   if ((await import('./model-install.mjs')).isModelOs(o.os)) return (await import('./arch/model-backends.mjs')).presentForms(o)
   return (await import('./driver-setup.mjs')).driverPresent(o)
 }
+export async function outOfScopeForms(o) { return (await import('./arch/model-backends.mjs')).outOfScopeForms(o) }
 export async function formPrograms(o) { return (await import('./arch/model-backends.mjs')).formPrograms(o) }
 
 /** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
