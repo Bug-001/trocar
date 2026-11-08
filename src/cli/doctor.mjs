@@ -4,9 +4,9 @@
 // install noted, the standalone undo copy, and the backups no manifest names. It never changes a thing of the user's and starts nothing: its OS queries are read-only (`ps`, the trust-store
 // lookup, the process table); the files it may write are `status`'s ~/.trocar/netenv.json (the topology) and, when a sealed capture file could only be read in part, one line in ~/.trocar/raw/journal.jsonl.
 //
-// Exit (R4): 1 — a capture file others can read (「采集文件可被他人读取」: the bytes hold live API keys) · 3 — it could not judge: no records examined, no file's permissions examined, a file whose permissions
-// could not be read, a capture file only partly read — never 0 (reading nothing and answering 「过」 is what this command once did, 0.1 §3) · 0 — the rest. The status block is a report and
-// does not change the exit (review B-7). Everything the world gives is a `deps` entry a test replaces (0.1 §3): `has(bin)` (dependency probe), `verify()` (the trust-store check), and the
+// Exit (R4): 1 — a problem: a capture file others can read (「采集文件可被他人读取」: the bytes hold live API keys), a capture failure `status` counts (D38) · 3 — it could not judge: no records examined, no file's permissions examined, a file whose permissions
+// could not be read, a capture file only partly read — never 0 (reading nothing and answering 「过」 is what this command once did, 0.1 §3) · 0 — the rest. The harness table of the status block is a report and
+// does not change the exit (review B-7); the capture failures it counts do (capture-failures). Everything the world gives is a `deps` entry a test replaces (0.1 §3): `has(bin)` (dependency probe), `verify()` (the trust-store check), and the
 // ones `runStatusCli` takes (`request`, `procs`, `lingerRead`, …). With none, `has` looks at PATH, `verify` asks the user trust store of THIS home, everything else is real.
 import nodeFs from 'node:fs'
 import { codeId } from '../version.mjs'
@@ -157,7 +157,7 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   // D38: the capture failures `status` counts, in its window, from the one health read both documents fold (`status.failures`): doctor never
   // says no problems while status lists some. One finding with status's count; the way out is status's own list.
   const fl = status.failures
-  if (fl && fl.problem > 0) extra.push({ code: 'capture-failures', class: 'problem', count: fl.problem, what: `trocar recorded ${fl.problem} capture failure${fl.problem === 1 ? '' : 's'} ${windowWords(fl, Date.now())}; what an agent sent then may not have been captured.`, why: 'Each failure is listed with its reason and its fix by trocar status --failures.', commands: [{ run: 'trocar status --failures', shell: 'sh' }], verify: 'trocar status --failures' })
+  if (fl && fl.problem > 0) extra.push({ code: 'capture-failures', class: 'problem', count: fl.problem, what: `trocar recorded ${fl.problem} capture failure${fl.problem === 1 ? '' : 's'} ${windowWords(fl, Date.now())}.`, why: 'Some of what the agents sent then was not captured, or did not get through.', commands: [{ run: 'trocar status --failures', shell: 'sh' }], verify: 'trocar status --failures' })
   let orphans = [], orphansError = null
   try { const m = readManifest(collectorDir(home), fs); orphans = m && m.unsupported ? null : orphanBackups({ home, manifest: m, fs }); if (orphans === null) orphansError = 'the install record is of a version this trocar does not read, so which backups it names cannot be said' } catch (e) { orphansError = `${manifestPath(collectorDir(home))}: ${errText(e)}` }
   if (orphans && orphans.length) extra.push({ code: 'backup-unclaimed', class: 'note', what: `${orphans.length} backup file(s) belong to no install record.`, why: 'An edit that was interrupted left them behind.', commands: [{ run: `Look at them, then remove them: ${orphans[0]}`, shell: 'sh' }], verify: 'trocar doctor' })

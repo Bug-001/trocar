@@ -18,7 +18,7 @@ import { codeId, codeIdOf, packageRoot, channelOf, packageName } from '../versio
 import { execTool, runAsync } from '../off/exec.mjs'
 import { collectorDir, stateFile, launcherPath } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
-import { readManifest } from '../off/manifest.mjs'
+import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { commandNamed, usageLine } from './commands.mjs'
 import { pairs as pairsAt, wrap } from './text.mjs'
@@ -189,6 +189,9 @@ async function update({ io, env, home, platform, deps, flags }) {
     const to = r.to = r.from
     const daemonOther = typeof running === 'string' && running !== to
     if (!daemonOther && (installed === undefined || installed === to)) {
+      // a script copy whose record says nothing is installed (an uninstall that kept the code for a machine-wide helper saves it with
+      // `install: null`): there is nothing installed to bring up to date, so this is a first install — install's own plan and question
+      if (channel === 'script' && installed === undefined && fs.existsSync(manifestPath(dir))) return (deps.install || runInstallCli)([...flags], { io, env, home, platform, deps })
       if (channel === 'script') return scripted()
       return no('npm-package', `this trocar was installed with npm. Get the newest with npm i -g ${packageName(root, { fs })}@latest, then run trocar update to restart the collector on it.`, EXIT.usage)
     }

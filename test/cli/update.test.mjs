@@ -653,3 +653,15 @@ test('CM43: a harness with no covered form left is not switched on again, and th
   assert.ok(JSON.parse(t.io.stdoutText ? t.io.stdoutText() : t.io.text()).notes.some((n) => n.includes('hermes')))
   assert.equal(s.handover(), null, 'the update is done')
 })
+
+test('a script copy on a machine whose last uninstall kept its record (install: null) has nothing installed to update: update hands to install, with its plan and question', async () => {
+  const s = sandbox({ on: [] })
+  const app = path.join(s.home, '.trocar', 'app'), root = path.join(app, '0.2.0')
+  fs.mkdirSync(root, { recursive: true })
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'trocar-cli', version: '0.2.0' }) + '\n')
+  const m = newManifest(); m.install = null; saveManifest(s.dir, m) // what uninstall saves when it leaves items behind
+  const t = ctx(s, { deps: { root }, daemonCode: () => null })
+  const exit = await runUpdateCli(['--dry-run'], t.c)
+  assert.equal(exit, EXIT.ok, t.io.text())
+  assert.deepEqual([t.calls.install, t.calls.off, t.calls.on, t.calls.child], [[['--dry-run']], [], [], []])
+})

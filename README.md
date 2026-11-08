@@ -86,7 +86,7 @@ and nodejs.org first and moves to npmmirror when that source fails or is too slo
 curl.exe -fsSLo "%TEMP%\trocar-install.ps1" https://github.com/Bug-001/trocar/releases/latest/download/install.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\trocar-install.ps1" & del "%TEMP%\trocar-install.ps1"
 ```
 
-If the one-line command prints nothing and a new terminal has no `trocar` command, the download failed: a pipe into
+If the one-line command prints nothing or only a curl or wget error, and a new terminal has no `trocar` command, the download failed: a pipe into
 `sh` that gets nothing still exits 0. Use the jsDelivr address above, or download the script first and run it as a file:
 
 ```sh
