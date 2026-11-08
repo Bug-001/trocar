@@ -727,7 +727,7 @@ test('one `status` asks the OS each question once: on Windows the whole process 
   assert.equal(calls.filter((c) => /Win32_Process \| ForEach-Object/.test(c)).length, 1, 'the process table: one question for the whole command')
   assert.equal(calls.filter((c) => /Win32_Process -Filter/.test(c)).length, 0, 'and not one identity question of its own: the table\'s answer carries the pid\'s creation time and the machine\'s boot time')
   assert.deepEqual([doc.daemon.running, doc.daemon.responding], [null, false], 'the identity the table gave matched the lock byte for byte: a daemon that holds the lock and does not answer (a mismatch would read as a stale lock, [false, null])')
-  assert.deepEqual(doc.errors.filter((e) => /read question/.test(e.reason)), [], 'and with no daemon answering, the read it could not answer is NOT an error of the user\'s machine: a control.json left behind by a stopped daemon is the normal no-daemon state')
+  assert.deepEqual(doc.errors.filter((e) => e.where === 'the process table'), [], 'and with no daemon answering, the read it could not answer is NOT an error of the user\'s machine: a control.json left behind by a stopped daemon is the normal no-daemon state')
   assert.equal(exit, EXIT.ok, io.stdoutText())
 })
 
@@ -774,9 +774,9 @@ test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no Power
   const cold = await once(false)
   assert.equal(cold.verbs[0], 'ps', 'the daemon was asked')
   assert.deepEqual(cold.shells.map((c) => (/ForEach-Object/.test(c) ? 'table' : 'identity')), ['table'], 'and when it cannot answer that read, the one local question is asked — once, and no identity question of its own')
-  const asked = cold.doc.errors.filter((e) => /did not answer the read question/.test(e.reason))
+  const asked = cold.doc.errors.filter((e) => e.where === 'the process table')
   assert.deepEqual(asked.map((e) => e.where), ['the process table'], 'the fallback is never silent (D38), under the closed-set name of the question (src/health/codes.mjs DOC_WHERE)')
-  assert.match(asked[0].reason, /ps: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
+  assert.match(asked[0].reason, /the process list: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
   const sameSide = (d) => [d.daemon, d.holders, d.harnesses]
   assert.deepEqual(sameSide(cold.doc), sameSide(hot.doc), 'and what the table decides — the daemon\'s verdict, the holders, the harnesses — is the same, whichever side answered')
 
