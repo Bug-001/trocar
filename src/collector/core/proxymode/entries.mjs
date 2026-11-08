@@ -204,6 +204,7 @@ export function routeEntry(kind) {
     write(ctx, door) {
       const old = recordsOf(ctx.manifest, ctx.harness, ctx.routeId)
       if (old.some((x) => doorFp(x) !== sha256(door))) undo(ctx, old)
+      const was = JSON.stringify(ctx.manifest) // what the disk holds now: a route that is already in place has nothing to record, and a save is two fsyncs (D62①)
       // all or nothing: a route refused partway (its last key or item, the select meta) takes back what this call already wrote, so no record without
       // a route tag is left for off to miss (invariant 5)
       const m = ctx.manifest, had = new Set([...m.entries, ...m.files])
@@ -212,7 +213,8 @@ export function routeEntry(kind) {
       try { res = w({ ...ctx, door }, door) } catch (e) { takeBack(); throw e }
       if (!res.ok) { takeBack(); return res }
       for (const x of res.records) if (x) x.route = ctx.routeId // the door is on the record already, sealed
-      saveManifest(ctx.dir, ctx.manifest, ctx.fs)
+      const clear = [...ctx.manifest.entries, ...(ctx.manifest.files || [])].some((x) => x.door) // a record an earlier version wrote: saving is what seals it (4.6「日志」)
+      if (clear || JSON.stringify(ctx.manifest) !== was) saveManifest(ctx.dir, ctx.manifest, ctx.fs)
       return { ok: true, records: recordsOf(ctx.manifest, ctx.harness, ctx.routeId) }
     },
     undo,

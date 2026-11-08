@@ -234,7 +234,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const { writeStandalone, standaloneDue } = await import('../off/standalone.mjs')
   const { formatPlan, changeLines } = await import('./receipt.mjs')
   const { OFF_VERSION } = await import('../off/manifest.mjs')
-  const parts = deps.parts || await (await import('../collector/daemon.mjs')).loadParts({ env, agentList: readAgentList({ home, fs }).entries })
+  const parts = deps.parts || await (await import('../collector/net-deps.mjs')).loadParts({ env, agentList: readAgentList({ home, fs }).entries })
   const inst = await import('../collector/install.mjs')
   // D61: the login entry is install's — written here and enabled with `--now` (not Set up's: `only` has none), so the daemon is up from install until uninstall
   const unit = only ? null : deps.unit !== undefined ? deps.unit : (!parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }))
@@ -247,7 +247,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   // trocar-off (R3) is install's: named in the plan and the dry run when this run would write it, i.e. when it is not already what src/off generates
   const stdPath = standalonePath(home)
   let due
-  try { due = standaloneDue({ home, version: OFF_VERSION, platform, fs }).map((d) => d.file) } catch { due = standaloneFiles(home, platform) } // a build that fails is said by the write below
+  try { due = standaloneDue({ home, version: OFF_VERSION, platform, fs }) } catch { due = standaloneFiles(home, platform) } // a copy that cannot be read is said by the write below
   const stdNew = due.length > 0
   const root = deps.root || packageRoot()
   const stale = unit ? await staleDaemon({ platform, home, env, fs, deps, root }) : null // 1.6 §3.2 step 5, as on macOS / Windows

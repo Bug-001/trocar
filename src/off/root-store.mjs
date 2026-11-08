@@ -20,7 +20,7 @@ import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
-import { certBlocks } from './pem.mjs'
+import { certBlocks, findCert } from './pem.mjs'
 
 /** The subject trocar's root carries, frozen (D27②): how every trocar root in a user's store is found again, so a second one is never trusted
  *  beside it (4.11 §3 ㉔). The custody makes the root with it (src/collector/model-install.mjs). */
@@ -63,7 +63,7 @@ export function rootStore({ platform, run = null, home, env = process.env, fs = 
       // (reading it as an error made `status` say the root is unknown and `doctor` 'could not judge')
       if (r.code === 44 || /could not be found/i.test(String(r.err || ''))) return { block: null }
       if (r.code !== 0) return { error: rsTool(r, 'security find-certificate') }
-      return { block: certBlocks(r.out).find((c) => c.fp === fp256) || null }
+      return { block: findCert(r.out, fp256) }
     }
     // does the user trust domain hold a setting for this SHA-1 that is not Deny (kSecTrustSettingsResult 3)? → true | false | { error }
     const trusted = (sha1) => {

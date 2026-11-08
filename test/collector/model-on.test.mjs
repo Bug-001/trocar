@@ -54,6 +54,19 @@ function outside(w) {
 const switches = (w) => { try { return fs.readdirSync(path.join(w.dir, 'switch')) } catch { return [] } }
 const on = (w, over = {}) => turnOnModel({ os: 'darwin', home: w.home, env: w.env, harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook, ...over })
 
+// D62①: a route already in place has nothing to record, so a second on leaves the manifest as it is (a save is two fsyncs)
+test('an on that finds every route in place does not save the install manifest', async () => {
+  const w = await modelWorld({ commands: ['codex', 'opencode'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const d = await daemon(w)
+  try {
+    assert.equal((await on(w)).exit, 0)
+    const file = path.join(w.dir, 'install-manifest.json'), before = fs.statSync(file)
+    assert.equal((await on(w)).exit, 0)
+    assert.equal(fs.statSync(file).ino, before.ino, 'the file was not replaced')
+  } finally { await d.close() }
+})
+
 // V85 (on): the files `on` writes outside ~/.trocar are the ones its plan names — a plug-in route's own file included
 test('V85: on writes outside ~/.trocar only the paths its plan names', async () => {
   const w = await modelWorld({ commands: ['codex', 'opencode'] })
