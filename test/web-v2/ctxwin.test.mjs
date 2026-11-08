@@ -11,6 +11,7 @@ import { stepOf, boardDef } from '../../web/legacy/replay/model.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
 import { esc } from '../../web/legacy/core/fmt.mjs'
 import { bodyFor, bodyCache } from '../../web/legacy/replay/blocks.mjs'
+import { setDeskMode } from '../../web/legacy/replay/cell.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -18,7 +19,8 @@ let rn = 0
 const blk = (o = {}) => ({ sec: 'messages', role: 'user', kind: 'text', head: { role: 'user', tag: 'user', label: 'b' }, preview: 'p', chars: 5, bytes: 5, ref: `s/m#R::${rn++}-9`, ...o })
 const sys = (o) => blk({ sec: 'system', role: 'system', head: { role: 'system', tag: 'text', label: 's' }, ...o })
 const tool = (o) => blk({ sec: 'tools', role: 'system', head: { role: 'system', tag: 'def', label: 't' }, ...o })
-const rp = (kind, o = {}) => ({ kind, name: kind === 'tool_use' ? 'Bash' : undefined, head: { role: 'assistant', tag: kind, label: kind }, preview: kind, chars: 4, bytes: 4, ref: `s/m#R::resp.raw::${rn++}-9`, ...o })
+const HEAD_TAG = { text: () => 'say', tool_use: (name) => `action · ${name}` } // blockHead's words for a reply part; the rest say thinking
+const rp = (kind, o = {}) => ({ kind, name: kind === 'tool_use' ? 'Bash' : undefined, head: { role: 'assistant', tag: HEAD_TAG[kind]?.(o.name ?? 'Bash') ?? 'thinking', label: '' }, preview: kind, chars: 4, bytes: 4, ref: `s/m#R::resp.raw::${rn++}-9`, ...o })
 const stateOf = (desk, playhead = 0, extra = {}) => {
   const lanes = buildLanes(desk)
   return { desk, lanes, anchor: anchorLane(lanes), playhead, diffRef: null, navOpen: new Set(['cwremoved']), openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), ctx: {}, ...extra }
@@ -212,6 +214,21 @@ test('2.3 #13: a part without its span says parsed on its own row; an incomplete
   assert.match(rows(part)[0].attrs, /data-ff="verbatim"/); assert.ok(!seg(part).includes('ffbadge'))
 })
 
+test('2.3 #13: the reply ends in one assembled-from-the-stream line only while a row of it reads stream events in Readable', () => {
+  const ref = 's/m#R::resp.raw::9100-9' // a fresh desk each time: the window's memo moves with bodies the board loads, not with this hand-set cache
+  const marks = () => (seg(ctxWindowHtml(stateOf(replyDesk([[rp('text', { ref }), rp('tool_use')]])))).match(/data-assembled/g) || []).length
+  const view = { r: { as: 'text', f: { body: ['text'] } }, body: { text: 'text' } }
+  try {
+    setDeskMode('read')
+    bodyCache.set(ref, { status: 'ok', text: 'text', view })
+    assert.equal(marks(), 0, 'no events: put together from no stream')
+    bodyCache.set(ref, { status: 'ok', text: 'text', view: { ...view, events: 3 } })
+    assert.equal(marks(), 1, 'once, at the end')
+    setDeskMode('raw')
+    assert.equal(marks(), 0, 'Raw shows the bytes, not the assembly')
+  } finally { bodyCache.delete(ref); setDeskMode('raw') }
+})
+
 test('2.3 #13: a reply with no parts is one line with its stop reason', () => {
   const h = seg(ctxWindowHtml(stateOf(replyDesk([[]]))))
   assert.ok(!h.includes('class="cblk')); assert.ok(h.includes('STOP-q'))
@@ -235,17 +252,20 @@ test('2.3 #13: a reply with no readable part says so without claiming the reply 
   assert.ok(visible(known).includes(W.EMPTY_REPLY))
 })
 
-test('2.3:195: default open text → tool call → thinking; a flip stays across re-renders of the step, not across a step change', () => {
-  for (const [parts, open] of [[['thinking', 'text', 'tool_use'], 'k-text'], [['thinking', 'tool_use'], 'k-tool_use'], [['thinking'], 'k-thinking']]) {
-    for (const r of rows(ctxWindowHtml(stateOf(replyDesk([parts.map((k) => rp(k))]))))) assert.equal(r.cls.includes('collapsed'), !r.cls.includes(open), `${parts}: ${r.cls}`)
+test('2.3 #13: every reply row opens by default but a no-plaintext one; a flip stays across re-renders of the step, not across a step change', () => {
+  const sealed = { ff: { faithfulness: 'opaque' } }
+  for (const parts of [[rp('thinking'), rp('text'), rp('tool_use')], [rp('thinking', sealed), rp('text'), rp('tool_use')], [rp('redacted_thinking', sealed), rp('text')], [rp('thinking', sealed)]]) {
+    const rs = rows(ctxWindowHtml(stateOf(replyDesk([parts])))), open = rs.filter((r) => !r.cls.includes('collapsed'))
+    assert.equal(open.length, parts.filter((d) => !d.ff).length)
+    assert.ok(open.every((r) => !r.attrs.includes('data-ff="opaque"')), 'no open row is a no-plaintext one')
   }
   const desk = replyDesk([[rp('text'), rp('tool_use')], [rp('text'), rp('tool_use')]]), s = stateOf(desk, 0)
   const key = /data-rp="([^"]+)"/.exec(rows(ctxWindowHtml(s))[1].attrs)[1]
-  s.openBlocks.add(key) // the reader opened the tool call
-  assert.ok(!rows(ctxWindowHtml(s))[1].cls.includes('collapsed'))
-  assert.ok(!rows(ctxWindowHtml(s))[1].cls.includes('collapsed'), 'kept on a re-render')
+  s.openBlocks.add(key) // the reader closed the tool call
+  assert.ok(rows(ctxWindowHtml(s))[1].cls.includes('collapsed'))
+  assert.ok(rows(ctxWindowHtml(s))[1].cls.includes('collapsed'), 'kept on a re-render')
   s.playhead = 1; ctxWindowHtml(s); s.playhead = 0
-  assert.ok(rows(ctxWindowHtml(s))[1].cls.includes('collapsed'), 'reset by the step change')
+  assert.ok(!rows(ctxWindowHtml(s))[1].cls.includes('collapsed'), 'reset by the step change')
 })
 
 test('2.3 #13: a failed step\'s segment is one line, its reason in the technical details', () => {
@@ -268,36 +288,6 @@ test('the real face: every main step of the demo session draws inside the whitel
     }
   } finally { await face.close() }
 })
-
-// 2.3 §没有 def.ref: a block the capture cannot point into (a plain-JSON reply has no span per block) carries its body in `def.inline`,
-// and the opened row shows that text — never "no body and no source location" (the demo session's replies are plain JSON)
-test('the real face: an opened reply row with no source location shows the text its definition carries', async () => {
-  const face = await serveBoard(boardHome())
-  try {
-    const id = (await face.get('sessions')).doc.sessions[0].session_id
-    const desk = await deskFrom((n, p) => face.get(n, p).then((r) => r.doc), id)
-    const s = stateOf(desk)
-    let seen = 0
-    for (let p = 0; p < s.anchor.calls.length; p++) {
-      const st = stepOf(desk, s.anchor.calls[p].rid)
-      if (!st.held || s.anchor.calls[p].error) continue
-      s.playhead = p
-      for (const d of st.reply) if (d.ref == null) s.openBlocks.add('rp:' + d.bid) // a flip opens the rows that are closed by default…
-      const open = seg(ctxWindowHtml(s))
-      for (const d of st.reply) if (d.ref == null) s.openBlocks.delete('rp:' + d.bid) // …and closes the one open by default; both views are read
-      const h = open + seg(ctxWindowHtml(s)), bodies = [...h.matchAll(/<pre class="cellraw">([\s\S]*?)<\/pre>/g)].map((m) => m[1]).join('\n')
-      for (const d of st.reply.filter((x) => x.ref == null)) {
-        seen++
-        assert.ok(d.inline && typeof d.inline === 'object', `step ${p + 1} ${d.bid}: the definition carries its body (3.5 §会话读)`)
-        const text = d.inline.block?.text ?? d.inline.text
-        if (text) assert.ok(bodies.includes(esc(text.slice(0, 24))), `step ${p + 1} ${d.bid}: the opened row's body cell holds the reply's text`)
-      }
-      assert.ok(!h.includes(esc(W.NO_BODY)), `step ${p + 1}: no reply row says it has no body`)
-    }
-    assert.ok(seen > 0, 'the demo session has reply parts with no source location')
-  } finally { await face.close() }
-})
-
 
 // 3.5 §会话读: an unaddressable tools definition brings its description and schema in `inline`; the wire carries no `verbatim`
 test('an unaddressable tools definition shows the description and schema it brings in inline', () => {

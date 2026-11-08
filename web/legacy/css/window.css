@@ -14,6 +14,7 @@
 .desk.next #ctxwin .cwreply{margin-top:0;padding-top:10px;}
 .desk.next #ctxwin .chline{margin-top:0;padding-top:10px;}
 .desk.next #ctxwin .cblk,.desk.next #ctxwin .cwturn{content-visibility:visible;}
+.desk.next #ctxwin .cblk{overflow:clip;} /* clip, not hidden: a hidden box would be the open head's sticky scroller */
 .desk.next #ctxwin .cwsec{box-sizing:border-box;height:var(--cwsec-pitch);margin:0;padding-top:10px;}
 .desk.next #ctxwin .cwfoldall{box-sizing:border-box;height:var(--cwline-pitch);margin:0;align-items:center;}
 .desk.next #ctxwin .cwturn{margin-bottom:6px;}
@@ -30,3 +31,15 @@
 .desk.next #ctxwin .cbh:hover{background:var(--hover);}
 .desk.next #ctxwin .cblabel{color:var(--ink-2);}
 .desk.next #ctxwin .cbchars{text-align:right;color:var(--ink-2);}
+/* an open head stays at the box's top while its block is read (inside its own .cblk, so it never covers the next row), and holds the cell's controls at the right: the buttons take one
+   line of the head; where a finger needs 44 px, at 600 px and narrower where they take a line of their own, or where the marks leave
+   them no room on the first line (the row clips what overflows it), the head grows */
+.desk.next #ctxwin .cblk:not(.collapsed) > .cbh{position:sticky;top:0;z-index:1;flex-wrap:wrap;height:auto;min-height:var(--cblk-ih);}
+.desk.next #ctxwin .cblk:not(.collapsed) > .cbh:hover{background:linear-gradient(var(--hover),var(--hover)),var(--sunk);}
+.desk.next #ctxwin .cbh > .cellbar{flex:0 1 auto;flex-wrap:nowrap;min-width:0;max-width:none;margin:0 0 0 auto;overflow:visible;white-space:nowrap;cursor:default;}
+.desk.next #ctxwin .cbh > .cbchars + .cellbar{margin-left:0;}
+.desk.next #ctxwin .cbh > .cellbar button{flex:none;min-height:var(--cbh-line);padding:0 var(--s2);}
+.desk.next #ctxwin .cbh > .cellbar .cellview{flex:none;}
+.desk.next #ctxwin .cbh > .cellbar .cellstate{overflow:hidden;text-overflow:ellipsis;}
+@media(pointer:coarse){.desk.next #ctxwin .cbh > .cellbar button{min-height:44px;}}
+@media(max-width:600px){.desk.next #ctxwin .cbh > .cellbar{order:2;}}

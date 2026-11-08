@@ -3,7 +3,7 @@
 // whose fetch failed is not "filled" — collapsing and reopening it asks again. No DOM: the elements are minimal fakes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { bodyCache, loadBody, fillBody, isRetryable, noteBodyFidelity } from '../../web/legacy/replay/blocks.mjs'
+import { blockGot, bodyCache, loadBody, fillBody, isRetryable, noteBodyFidelity } from '../../web/legacy/replay/blocks.mjs'
 import { toggleCtxBlock } from '../../web/legacy/replay/ctxwin.mjs'
 
 const REF = 'sess-a/main#rec1::0-40'
@@ -26,6 +26,15 @@ function fakeRow(bc) {
   return { dataset: { bi: '0' }, classList: { contains: (c) => cls.has(c), toggle: (c) => (cls.has(c) ? cls.delete(c) : cls.add(c)) }, querySelector: (sel) => (sel === '.cbc' ? bc : null) }
 }
 const fresh = () => bodyCache.clear()
+
+test('2.3 #21: the body cache is bounded by the views it holds as well as the bytes', () => {
+  bodyCache.clear()
+  const view = { r: { as: 'text', f: { body: ['text'] } }, body: { text: 'x'.repeat(9e6) } } // one fits the bound, two do not
+  bodyCache.set('A', blockGot({ ref: 'A', bytes: 'a', view }))
+  bodyCache.set('B', blockGot({ ref: 'B', bytes: 'b', view }))
+  assert.deepEqual([...bodyCache.keys()], ['B'])
+  bodyCache.clear()
+})
 
 test('loadBody: the bytes and a 404 are cached; a network failure, a 5xx and a refusal are not', async () => {
   fresh(); let api = fakeApi(OK)

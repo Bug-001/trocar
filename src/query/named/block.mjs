@@ -4,7 +4,9 @@
 // `<segment>:<line>` (D60) and, optionally, a field and a byte span inside it — the same text_ref the
 // session view mints (src/raw/refs.mjs, mintRawRef / composeTextRef). The fidelity of what comes back is NOT smoothed over
 // (invariant 4): it is classified by the resolver's own classifier, and the capture's own
-// incompleteness labels are carried through as they are.
+// incompleteness labels are carried through as they are. Beside the bytes, each block's view: what extraction parsed of it and how to
+// draw it, read from a stamped copy of the record — `raw` itself gives the bytes and their labels, which a stamped record no longer
+// could (normalizing a v0 record drops the field its fidelity is read from).
 import { parseRecordId } from '../../collector/core/record/segments.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { TEXT_REF_FIELD, fieldTextOf } from '../../dissect/record-fields.mjs';
@@ -12,7 +14,9 @@ import { normalizeRecord } from '../../raw/ingest.mjs';
 import { requestEncodingOf } from '../../dissect/request-body.mjs';
 import { reqIncompleteOf } from '../../dissect/capture-labels.mjs';
 import { classifyFidelity } from '../source.mjs';
-import { readRecord } from '../records.mjs';
+import { recordReader, stampRecord } from '../records.mjs';
+import { blockAt } from '../../view/extract.mjs';
+import { viewOf } from '../../view/render-kind.mjs';
 import { IndexPending } from '../index-build.mjs';
 import { QueryArgError } from './index.mjs';
 
@@ -29,18 +33,21 @@ export const lists = Object.freeze(['ref']);
 // What a reader must be told about bytes that are not the wire's own (src/query/source.mjs classifyFidelity).
 const NOTE = {
   decoded: 'the wire carried this body compressed; these are its exact decompressed bytes',
-  reserialized: 'the capture stored the request as parsed JSON: these bytes were re-serialized from it, not taken off the wire',
+  reserialized: 'the capture stored this as parsed JSON: these bytes were re-serialized from it, not taken off the wire',
 };
 
 export async function run({ home, fs, params: p, errors, progress = null, warmOnly = false }) {
   const refs = (Array.isArray(p.ref) ? p.ref : [p.ref]).filter((r) => r != null && r !== '').map(String);
   if (!refs.length) throw new QueryArgError('trocar query block: --ref is required (a block\'s ref, as `trocar query lane` gives it)');
-  const parsed = refs.map(parsed1);
-  const blocks = [];
-  for (const [i, ref] of refs.entries()) {
-    blocks.push(await one({ home, fs, errors, progress, warmOnly }, ref, parsed[i]));
-    if (progress) progress();
-  }
+  // a record with its parsed tables weighs several times its stored bytes: one record at a time, let go before the next (3.5 §会话读 `block`)
+  const byRecord = new Map();
+  refs.forEach((ref, i) => {
+    const item = { i, ref, ...parsed1(ref) };
+    if (!byRecord.has(item.recordId)) byRecord.set(item.recordId, []);
+    byRecord.get(item.recordId).push(item);
+  });
+  const blocks = new Array(refs.length), read = recordReader({ home, fs, progress, warmOnly });
+  for (const group of byRecord.values()) await readGroup({ read, errors, progress }, group, blocks);
   return { blocks };
 }
 
@@ -52,23 +59,55 @@ function parsed1(ref) {
   return { recordId, field, start, end, at };
 }
 
-// One ref's item; what it cannot read is `bytes: null` and an errors entry with a BLOCK_PROBLEMS code (3.5 §会话读 `block`).
-async function one({ home, fs, errors, progress, warmOnly }, ref, { recordId, field, start, end, at }) {
-  const miss = (code, reason) => { errors.push({ where: ref, code, reason }); return { ref, bytes: null, encoding: null, fidelity: null, truncated: null }; };
-  let raw;
-  try { raw = await readRecord({ home, fs, ...at, progress, warmOnly }); } catch (e) { if (e instanceof IndexPending) throw e; return miss('record-unreadable', `record ${recordId} could not be read back: ${String((e && e.message) || e)}`); }
-  if (!raw) return miss('record-missing', `no record ${recordId} in this home's raw segments`);
+// The items of one record's refs, into `blocks` at their places.
+async function readGroup({ read, errors, progress }, group, blocks) {
+  const { recordId, at } = group[0];
+  let raw = null, unread = null;
+  try {
+    raw = await read(at);
+    if (!raw) unread = ['record-missing', `no record ${recordId} in this home's raw segments`];
+  } catch (e) {
+    if (e instanceof IndexPending) throw e; // the light worker may not build this segment's index: the main role reads it
+    unread = ['record-unreadable', `record ${recordId} could not be read back: ${String((e && e.message) || e)}`];
+  }
+  let rec = null; // stamped on the first view asked for, inside viewAt's try: a record that will not stamp costs the views alone
+  const recOf = () => (rec ??= stampRecord(raw, { ...at, stream: raw._stream }));
+  for (const item of group) {
+    blocks[item.i] = unread ? miss(errors, item.ref, ...unread) : one(errors, raw, recOf, item);
+    if (progress) progress();
+  }
+}
 
-  // A field of a record is the stored decoded text itself (4.6 §记录), so it is verbatim as it stands.
+// What a ref cannot read is `bytes: null` and an errors entry with a BLOCK_PROBLEMS code (3.5 §会话读 `block`).
+function miss(errors, where, code, reason) {
+  errors.push({ where, code, reason });
+  return { ref: where, bytes: null, encoding: null, fidelity: null, truncated: null };
+}
+
+function one(errors, raw, recOf, { ref, recordId, field, start, end }) {
+  // A field of a record is the stored decoded text itself (4.6 §记录), so it is verbatim as it stands, unless the field says otherwise.
   const got = field ? fieldTextOf(raw, field) : { text: normalizeRecord(raw).req_body };
-  const fidelity = field ? 'verbatim' : classifyFidelity(raw);
-  const truncated = reqIncompleteOf(raw);
-  if (typeof got.text !== 'string') return { ...miss('field-missing', `record ${recordId} ${got.missing || 'carries no request body'}`), truncated };
+  const fidelity = !field ? classifyFidelity(raw) : got.reserialized ? 'reserialized' : 'verbatim';
+  if (typeof got.text !== 'string') return miss(errors, ref, 'field-missing', `record ${recordId} ${got.missing || 'carries no request body'}`);
   const bytes = start == null || end == null ? got.text : got.text.slice(start, end);
+  const view = viewAt(errors, recOf, ref);
   return {
     ref, bytes,
     encoding: requestEncodingOf(raw) || 'identity',
     fidelity: { verbatim: fidelity !== 'reserialized', ...(NOTE[fidelity] ? { note: NOTE[fidelity] } : {}) },
-    truncated,
+    truncated: reqIncompleteOf(raw),
+    ...(view ? { view } : {}),
   };
+}
+
+// The block's parsed view, or null when `ref` names no block or the block has nothing parsed to show; a parse that throws costs the
+// view alone, and says so as a note: the bytes above are as good as ever.
+function viewAt(errors, recOf, ref) {
+  try {
+    const flat = blockAt(recOf(), ref), view = flat && viewOf(flat);
+    return view && (flat.events ? { ...view, events: flat.events } : view);
+  } catch (e) {
+    errors.push({ where: ref, code: 'view-unreadable', reason: `this block's parsed view could not be built: ${String((e && e.message) || e)}`, level: 'note' });
+    return null;
+  }
 }

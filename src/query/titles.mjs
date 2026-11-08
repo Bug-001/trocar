@@ -21,7 +21,7 @@ import { projectOf, projectFields } from '../dissect/project.mjs';
 import { HARNESSES, hintsOf, bodyOf } from '../dissect/harnesses.mjs';
 import { reqIncompleteOf } from '../dissect/capture-labels.mjs';
 
-export const TITLE_V = 6;
+export const TITLE_V = 7;
 export const TITLE_BUDGET_MS = 100; // how long a `sessions` in the worker computes titles before it says ask again (3.5 §访问模式)
 /** Thrown by titleOf past its `deadline`: the answer is a `102`, what was computed stays in the table. */
 export class TitlesPending extends Error {}

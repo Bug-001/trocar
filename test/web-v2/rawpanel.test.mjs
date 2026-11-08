@@ -31,6 +31,13 @@ test('the reply passes its parts, the tool name and the stop reason through, eac
   assert.ok(!/class="rawpre"/.test(h), 'no stringified reply path')
 })
 
+test('a piece with no ref says its reason in words, not only in a title', () => {
+  const why = 'the capture kept no span for this piece'
+  const shown = (h) => h.replace(/<[^>]*>/g, ' ')
+  assert.ok(shown(draw({ detail: { respRefs: [{ ref: null, why }] } })).includes(esc(why)))
+  assert.ok(shown(draw({ detail: { nonBlockKeys: [{ key: 'k', ref: null, note: why }] } })).includes(esc(why)))
+})
+
 test('a thinking part renders as its own row with a cell', () => {
   const h = draw({ reply: [rp('thinking'), rp('text')] })
   assert.match(h, /class="rpk rpthink"[\s\S]*?data-rpb=/)

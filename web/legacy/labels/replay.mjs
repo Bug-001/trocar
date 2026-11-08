@@ -178,7 +178,7 @@ export const reqEncodingFact = (enc) => `The request body was compressed on the 
 export const FF_WORD = Object.freeze({
   metadata: 'metadata only', opaque: 'no plaintext', summarized: 'a client summary, not the original', omitted: 'omitted by the source',
   truncated: 'truncated at the source', unaddressable: 'not addressable', unknown: 'fidelity unknown', notfetched: 'bytes could not be fetched',
-  reserialized: 'reserialized, not the wire bytes', verbatim: 'verbatim', parsed: 'parsed reply',
+  reserialized: 'reserialized, not the wire bytes', verbatim: 'verbatim', parsed: 'parsed reply', reading: 'reading view',
 })
 export const FF_TIP = Object.freeze({
   metadata: 'Metadata only: the full JSON schema was not captured (an older capture); the model received the full schema',
@@ -192,7 +192,6 @@ export const FF_TIP = Object.freeze({
   reserialized: 'These bytes were reserialized on their way into the capture; they are not a verbatim record of the wire bytes',
   verbatim: 'Verbatim: what is stored for this block is the wire bytes, unchanged',
 })
-export const INLINE_NOTE = 'This text came inline with the block; it is not cut verbatim from the raw capture'
 // the body of a tool definition an older capture kept as metadata only (2.3 逐值 metadata)
 export const SCHEMA_NOT_KEPT = 'schema text not retained (length only)'
 export const NO_BODY = 'This block has no body and no source location'
@@ -401,6 +400,7 @@ export const RAW_REPLY = 'Raw reply'
 export const rawReplyRow = (chars) => `Raw reply · ${chars} characters ›`
 export const rawReplyNth = (k) => `Raw reply ${k}`
 export const NO_RAW_REPLY = 'The raw reply has no bytes to read back'
+export const noBytesWhy = (why) => `no bytes to read back: ${why}`
 export const NO_BYTES = 'No bytes to read back'
 export const REQ_PARAMS = 'Request parameters'
 export const NO_PARAMS = 'This record has no request parameters to read back'

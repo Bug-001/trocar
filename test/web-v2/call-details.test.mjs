@@ -8,6 +8,7 @@ import path from 'node:path'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { parseTextRef } from '../../src/raw/refs.mjs'
+import { fieldTextOf } from '../../src/dissect/record-fields.mjs'
 import { callDetailItems } from '../../web/src/screens/replay/call-details.mjs'
 import { windowItems } from '../../web/src/screens/replay/window-model.mjs'
 import { deskOf, deskFrom } from './desk-world.mjs'
@@ -52,7 +53,7 @@ test('2.6 #1: the rows are the detail\'s, every ref reads back the record\'s own
           if (!x.ref) continue
           const { field, start, end, recordId } = parseTextRef(x.ref)
           const rec = recs[Number(recordId.slice(recordId.lastIndexOf(':') + 1)) - 1]
-          const text = field == null ? rec.req_body : field.split('.').reduce((v, k) => v[k], rec)
+          const text = field == null ? rec.req_body : fieldTextOf(rec, field).text // a parsed JSON reply's text is written out (3.1)
           const [block] = (await face.get('block', { ref: x.ref })).doc.blocks
           assert.equal(block.bytes, text.slice(start, end), `${x.ref}: the bytes read back are the record's`)
           seen[name]++

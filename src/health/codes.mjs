@@ -17,7 +17,7 @@ export const SEGMENT_PROBLEMS = Object.freeze(['record-unparseable', 'record-unr
 /** The notes the context projection puts into a read's errors (src/query/projection.mjs; level 'note', RFC 4.3 §4): it was rebuilt, or could not be written. */
 export const PROJECTION_NOTES = Object.freeze(['projection-rebuilt', 'projection-write-failed'])
 /** The codes of an unreadable ref in a `block` read's errors (src/query/named/block.mjs; 3.5 §会话读, 1.6 C.5). */
-export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing'])
+export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing', 'view-unreadable'])
 
 /** The codes of a query the daemon ended before a worker answered it (src/query/service.mjs; 3.5 §行表先读, 1.6 C.5). */
 export const QUERY_WAIT_PROBLEMS = Object.freeze(['still-reading'])

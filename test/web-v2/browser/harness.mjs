@@ -42,7 +42,8 @@ export async function launchChrome(chromium) {
   const profile = path.join(tmp, 'profile')
   fs.mkdirSync(profile)
   fs.writeFileSync(path.join(profile, 'Local State'), JSON.stringify(LOCAL_STATE))
-  const browser = (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser()
+  // a `{ launch }` stand-in (the WebKit cases') has no Chrome profile to seed: it is launched as is
+  const browser = chromium.launchPersistentContext ? (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser() : await chromium.launch()
   const close = browser.close.bind(browser)
   browser.close = async (...a) => {
     try { return await close(...a) } finally {
@@ -188,7 +189,7 @@ export const windowGap = (page) => page.evaluate(gapInPage)
 /** ms from the input `act` makes (its first pointerdown / keydown, marked by a listener armed and awaited before it, so the input can
  *  never outrun it) until `cond` holds and that frame has painted: 'replay' (a session's window drawn), 'step' (the step head no longer
  *  reads `arg` and the window is drawn), 'n' (the step head's number, data-n, is no longer `arg` and the window is drawn), 'sel'
- *  (selector `arg` matches). 'step' and 'n' also wait for the visible box to be filled, in the same frame: no gap over one pitch
+ *  (selector `arg` matches), 'reply' (below). 'step', 'n' and 'reply' also wait for the visible box to be filled, in the same frame: no gap over one pitch
  *  (gapInPage; D64② a step counts once it is completely drawn). Rejects after 10 s. */
 export async function timed(page, cond, arg, act) {
   await page.evaluate(() => {
@@ -206,6 +207,9 @@ export async function timed(page, cond, arg, act) {
       step: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload') && filled(),
       n: () => !!q('#stepbar .sb-no') && +q('#stepbar .sb-no').dataset.n !== a && !q('#ctxwin .cwload') && filled(),
       sel: () => !!q(a),
+      // a step's reply wholly drawn: the step head moved (a[0], as 'step'), the visible box is filled, and a table of the reply holds a[1]
+      reply: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a[0] && !q('#ctxwin .cwload') && filled()
+        && [...document.querySelectorAll('#ctxwin .cwreply .md-table')].some((t) => t.textContent.includes(a[1])),
     }[cond]
     const t0 = performance.now()
     const tick = () => {
@@ -226,7 +230,7 @@ export async function timed(page, cond, arg, act) {
  *  the test's steps rather than the board's poll timer. `latency`: every answer waits that many ms first. → { left(), more(n) }: the
  *  members not reached yet; grant n more moves. */
 export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32, paced = false } = {}) {
-  const last = w.marks.length - 1
+  const last = w.marks.length - 1, webkit = page.context().browser()?.browserType().name() === 'webkit'
   let k = Math.min(from, last), at = null, f = null, granted = paced ? 0 : Infinity
   // every answer: `latency` ms, then the one fulfill of what `fn` makes of the request, returned to Playwright. Routes dropped while it
   // waited (stop's closeQuietly) leave Playwright to continue the request itself; the late fulfill then rejects ("Route is already
@@ -254,7 +258,8 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
     if (name === 'head') {
       if (at != null && granted > 0) { granted--; k = Math.min(last, k + grow) }
       const body = JSON.stringify(now().head), etag = `"${createHash('sha1').update(body).digest('hex').slice(0, 16)}"`
-      if (req.headers()['if-none-match'] === etag) return { status: 304, headers: { etag } }
+      // Playwright's WebKit refuses to fulfill any 3xx: there the board takes the whole answer, which it reads like any new head
+      if (req.headers()['if-none-match'] === etag && !webkit) return { status: 304, headers: { etag } }
       return { status: 200, contentType: 'application/json', headers: { etag }, body }
     }
     const pk = /^p(\d+)\.(main|rest)$/.exec(name), op = /^open\.(main|rest)$/.exec(name)
@@ -271,7 +276,7 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
   // 3.5 §会话读 `block`: one item per asked ref, its bytes made from the ref (the shape of session-read-contract.json `block_multi`)
   await answer('**/api/block?**', (req) => {
     const refs = new URL(req.url()).searchParams.getAll('ref')
-    return json({ schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
+    return json({ schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), view: blockView(ref, w.replyRefs.has(ref)), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
   })
   return { left: () => last - k, more: (n = 1) => { granted += n } }
 }
@@ -293,8 +298,21 @@ export const stampFetches = (page) => page.addInitScript(() => {
   }
 })
 
+/** `skip` (the suite's own reason, or false), else why WebKit cannot run: only an executable already installed, never downloaded. */
+export async function webkitGate(skip) {
+  if (skip) return skip
+  try {
+    const { webkit } = await import('playwright-core')
+    const exe = webkit.executablePath()
+    return exe && fs.existsSync(exe) ? false : 'the WebKit executable is not installed (not downloaded here)'
+  } catch (e) { return `WebKit unavailable: ${String(e?.message || e).split('\n')[0]}` }
+}
+
 /** The bytes serveWorld answers for a `block` ref. */
 export const blockBytes = (ref) => `body of ${ref}`
+/** The `view` serveWorld answers with them (3.5 §会话读 `block`): markdown holding those bytes, several top-level blocks for a reply. */
+const blockView = (ref, reply) => ({ r: { as: 'markdown', f: { body: ['text'] } },
+  body: { text: reply ? `## Result\n\n${blockBytes(ref)}\n\n- first\n- second\n\nThe last paragraph.\n` : blockBytes(ref) } })
 
 /** Nearest-rank p50 / p95 of a list of ms. */
 export function stats(samples) {

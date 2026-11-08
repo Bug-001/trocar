@@ -58,7 +58,7 @@ import { openDetail, closeDetail, wireDetail } from './detail.mjs'
 import { initLayout } from './layout.mjs'
 import { renderSessionHead, wireSessionHead, captureGap, behindOf } from './header.mjs'
 import { stepBarHtml, roughStepHtml, wireStepBar } from './stepbar.mjs'
-import { loadBodies, bodyCache, clearOverrides, deskMode, onModeChange, overrideScope, isRetryable } from './cell.mjs'
+import { loadBodies, bodyCache, clearOverrides, deskMode, drawAhead, idle as whenIdle, onModeChange, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP, UNPARSED_LINE, NO_REQUEST, RES_NOT_FOUND, moreLanes } from '../labels/replay.mjs'
 import { readFailure, toast } from '../core/ui.mjs'
@@ -649,19 +649,33 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const rows = [...st.reply, ...st.flat.filter((b, i) => s.openBlocks.has(keys[i]))]
     return [...new Set(rows.map((d) => d.ref).filter((r) => r && !bodyCache.has(r)))]
   }
-  // the reply parts' refs of the held steps up to NEAR on either side of `rid` on the anchor lane, not cached: read with the rest's
-  // own bodies so a step within reach draws its reply at once (2.3 §正文预取)
+  // the reply parts of the held steps up to NEAR on either side of `rid` on the anchor lane: their refs not cached are read with the
+  // rest's own bodies, and what came back is drawn ahead, one part per idle turn, so a step within reach draws its reply at once (2.3 §正文预取)
   const NEAR = 8
-  function nearRefs(rid) {
+  function nearParts(rid) {
     const calls = s.anchor ? s.anchor.calls : [], i = calls[s.playhead] && calls[s.playhead].rid === rid ? s.playhead : calls.findIndex((c) => c.rid === rid)
     if (i < 0) return []
     return calls.slice(Math.max(0, i - NEAR), i + NEAR + 1).flatMap((c) => {
       const st = deskStep(s.desk, c.rid)
-      return st.held ? st.reply.map((d) => d.ref).filter((r) => r && !bodyCache.has(r)) : []
+      return st.held ? st.reply : []
     })
   }
-  // what a resting playhead still lacks: its open bodies (a step's row and its step come in one file: there is no lane to read)
-  const need = (rid) => (s.desk.rows.has(rid) ? { lane: null, refs: [...new Set([...openRefs(rid), ...nearRefs(rid)])] } : null)
+  const nearRefs = (rid) => nearParts(rid).map((d) => d.ref).filter((r) => r && !bodyCache.has(r))
+  let ahead = []
+  const drawNext = () => { const d = ahead.shift(); if (d) { drawAhead({ ...d, text_ref: d.ref }); whenIdle(drawNext) } }
+  function drawNear(rid) {
+    const idling = ahead.length > 0
+    ahead = nearParts(rid)
+    if (!idling) whenIdle(drawNext)
+  }
+  // what a resting playhead still lacks: its open bodies first, alone, so this step's reply never waits for the ±NEAR read that comes
+  // after them (2.3 §正文预取); a body already asked for this target is not lacked again (a step's row and its step come in one file:
+  // there is no lane to read)
+  function need(rid, tried) {
+    if (!s.desk.rows.has(rid)) return null
+    const own = openRefs(rid).filter((r) => !tried.has(r))
+    return { lane: null, refs: own.length ? own : [...new Set(nearRefs(rid))] }
+  }
   let targeted = null
   function makeStepReads() {
     const key = sessionKey(), mine = () => !s.dead && key === sessionKey()
@@ -671,6 +685,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
         if (!mine()) return
         refs.forEach((ref, i) => { if (isRetryable(got[i])) s.bodyFail.set(ref, got[i]); else s.bodyFail.delete(ref) })
         bodiesIn(rid)
+        if (rid === s.playRid && s.anchor) drawNear(rid)
       },
     })
   }
@@ -943,16 +958,18 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const moved = placePlayhead(prevRow)
     arrived(s, s.playRid)
     if (s.playRid == null) { renderRough(); chainLedger(); fill(); return } // the rough page until the named step is here
-    // the followed step's open reply bodies in one read before it is drawn, so its newest reply shows with its bytes; the same
-    // read carries the ±NEAR prefetch (2.3 §正文预取), so the rest after it finds nothing left and a delta stays one `block` (4.4:52).
+    // the followed step's open reply bodies in one read before it is drawn, so its newest reply shows with its bytes; the same read
+    // carries the ±NEAR prefetch, so the rest after it finds nothing left and a delta stays one `block` (4.4 live-poll: 「每个增量最多一次」;
+    // 2.3 §读与画 takes the followed step out of the rest's own-then-near reads).
     // The wait is 车道未到手's BUSY_MS from the answer landing (2.3 快速拖动): past it the step is drawn and this read fills its rows.
-    if (s.follow && moved && !first && host) {
+    if (s.follow && moved && !first && host && !idle()) {
       const rid = s.playRid, refs = openRefs(rid)
       if (refs.length) {
         const got = loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(rid)], { signal })
         const late = await Promise.race([got.then(() => false), new Promise((r) => setTimeout(r, BUSY_MS - (nowMs() - at), true))])
-        if (late) got.then(() => { if (!s.dead && key === sessionKey()) bodiesIn(rid) }, () => {})
+        if (late) got.then(() => { if (!s.dead && key === sessionKey()) { bodiesIn(rid); drawNear(rid) } }, () => {})
         await pace.calm(); if (s.dead || key !== sessionKey()) return // a press during the wait is not redrawn away either
+        if (!late) drawNear(rid)
       }
     }
     // brush window: a new session starts on the whole of it when that fits the lane, else on the last steps that fit — or, when the
@@ -1022,7 +1039,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
   }
   // popovers and menus close themselves first and stop the key (core/keys.mjs); here: the call drawer, then the bottom row
   const onEscape = () => { if (E && E.detail.classList.contains('open')) closeDetail(E.detail, s); else if (s.rpOpen) onRp() }
-  const onVis = () => { if (!document.hidden) poll() } // back in view: read now, not a tick later
+  // a hidden page starts none of the step's reads (2.3 §正文预取); back in view: read now, not a tick later
+  const stepsByPage = () => (document.hidden ? steps.pause() : steps.resume())
+  const onVis = () => { stepsByPage(); if (!document.hidden) poll() }
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
   const refit = () => { if (alive() && fitView()) { view.saw(); drawRails(); view.overview() } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
@@ -1070,7 +1089,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     poller.start() // the desk keeps reading on the poller's one schedule; 「跟随最新」 only decides whether the playhead follows growth
     if (hasStep(route)) update(route)
     catchUp()
-    steps.resume(); chainLedger(); fill() // what a leave paused goes on (a desk that holds every pack reads nothing here)
+    stepsByPage(); chainLedger(); fill() // what a leave paused goes on (a desk that holds every pack reads nothing here)
     poll() // the first open, or one round: the head If-None-Match, a Range on each tail
   }
   // leave the page: the poll stops, every listener outside the root goes, the reads in flight finish into the desk's state (drawn on
