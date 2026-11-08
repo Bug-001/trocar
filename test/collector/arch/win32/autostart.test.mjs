@@ -1143,3 +1143,12 @@ test('W39 loadArch("win32") returns the Windows arch on any OS (imported and bui
   assert.equal(typeof A.osRoots, 'function', 'the Windows roots are read (4.8 §6.2)')
   assert.equal(typeof A.netFacts, 'function', 'the platform\'s part of the network facts (1.6 §9.7): gatherNetFacts reaches it as archFacts')
 })
+
+// 4.11 P4: the task under trocar's name is read back as its XML (what install backs up before it replaces an unrecorded one); none there → null
+test('4.11 P4 · registeredBytes: the task\'s XML when one is registered under trocar\'s name, null when none', () => {
+  const xml = '<?xml version="1.0"?><Task version="1.2"><Actions/></Task>'
+  const there = userUnit({ ...withHome(), run: fakeTools({ 'schtasks /Query': { status: 0, stdout: xml.split('').join('\u0000') } }) })
+  assert.equal(String(there.registeredBytes()), xml)
+  const none = userUnit({ ...withHome(), run: fakeTools({ 'schtasks /Query': { status: 1, stdout: '' } }) })
+  assert.equal(none.registeredBytes(), null)
+})

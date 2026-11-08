@@ -1,4 +1,4 @@
-// trocar plugin for DeepSeek dsh (spec 4.11 P9 `cordis-plugin`). Written once by `trocar install` and
+// trocar collector: plugin for DeepSeek dsh (spec 4.11 P9 `cordis-plugin`). Written once by `trocar install` and
 // loaded by one line of cordis.patch.yml; inert while the switch file is absent. What it does, and nothing else:
 //   trust — adds the trocar root to Node's default roots in this process (appended; nothing taken away). Not under --use-openssl-ca, not
 //           when tls.setDefaultCACertificates is missing, not when the root file is unreadable — and then it never routes either (§3 ⑦):

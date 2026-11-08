@@ -117,6 +117,31 @@ test('install: a daemon that does not answer stops the run before the login entr
   assert.deepEqual(validateReceipt(r), [])
 })
 
+// 4.11 P4: the LaunchAgent plist under trocar's label is trocar's by its place; one no record lists, holding someone else's bytes, is replaced —
+// the plan says so, and the bytes that were there are kept in the backup folder first, byte for byte
+test('4.11 P4 · darwin: a plist under trocar\'s label that no record lists is backed up byte for byte, then replaced, and the plan says it replaces it', async () => {
+  const old = Buffer.from('<?xml version="1.0"?>\n<plist><dict><key>Label</key><string>someone else</string></dict></plist>\n')
+  const plist = (w) => path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')
+  const setup = (w) => { fs.mkdirSync(path.dirname(plist(w)), { recursive: true }); fs.writeFileSync(plist(w), old) }
+  const backups = (w) => { const d = path.join(w.home, '.trocar', 'backup'); return fs.existsSync(d) ? fs.readdirSync(d).map((n) => fs.readFileSync(path.join(d, n))) : [] }
+  const dry = await cli(['--dry-run', '--json'], { setup })
+  const row = dry.io.json().planned.find((p) => p.what === 'autostart')
+  assert.ok(row && row.detail.includes(path.join('~', '.trocar', 'backup')), `the plan names where the old bytes go: ${JSON.stringify(row)}`)
+  assert.ok(fs.readFileSync(plist(dry.w)).equals(old), 'the dry run wrote nothing')
+  const { w, io, exit } = await cli(['--yes', '--json'], { setup })
+  assert.equal(exit, 0, io.text())
+  assert.ok(backups(w).some((b) => b.equals(old)), 'the old bytes are in the backup folder')
+  const now = fs.readFileSync(plist(w))
+  assert.ok(!now.equals(old) && now.includes('<string>com.trocar.collector</string>'), 'the plist is trocar\'s')
+  assert.ok(JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8')).files.some((f) => f.path === plist(w) && f.role === 'unit'), 'and the record lists it')
+  // the whole cycle: the replaced bytes were an older trocar's entry, so uninstall drops that backup with every other one (1.6 §3.6) and leaves no plist
+  const { runUninstall } = await import('../../src/cli/uninstall.mjs')
+  const { recordingExec } = await import('./fixtures/on-ctx.mjs')
+  const u = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: 'darwin', exec: recordingExec().run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
+  assert.equal(u.exit, 0, JSON.stringify(u.receipt))
+  assert.deepEqual([backups(w), fs.existsSync(plist(w))], [[], false], 'no backup and no plist at trocar\'s path after uninstall')
+})
+
 // the documented order — install, then on — through the CLI: install writes the root, its carriers and
 // the inert autostart unit; on enables the unit, which starts the REAL daemon (test/helpers/model-daemon.mjs), asks it for the doors and writes the entries.
 for (const platform of ['darwin', 'win32']) {
@@ -314,3 +339,17 @@ for (const platform of ['darwin', 'win32']) {
     for (const f of standaloneFiles(w.home, platform)) assert.ok(words.includes(tilde(f, w.home)), `${f} is named: ${words}`)
   })
 }
+
+// 4.11 P4 (Windows): the scheduled task under trocar's name is no file under HOME — the run asks the unit what is registered (registeredBytes) and
+// backs it up before it replaces it, so the plan asks the same seam and says where the old bytes go; with nothing registered it says no replacement
+test('4.11 P4 · win32: the plan asks what is registered under trocar\'s task name and says where its bytes go', async () => {
+  for (const registered of [Buffer.from('<Task>an older one</Task>'), null]) {
+    const w = await modelWorld({ os: 'win32', commands: ['codex'] })
+    const unit = { path: path.join(w.dir, 'task.xml'), text: () => '<Task>trocar</Task>', registeredBytes: () => registered }
+    const io = fakeIo()
+    const exit = await runInstallCli(['--dry-run', '--json'], { io, env: w.env, home: w.home, platform: 'win32', deps: { getuid: () => 501, unit, backends: { custody: w.custody, rootStore: w.store, installHelper: null, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } })
+    assert.equal(exit, 0, io.text())
+    const row = JSON.parse(io.text()).planned.find((p) => p.what === 'autostart')
+    assert.equal(row.detail.includes(path.win32.join('~', '.trocar', 'backup')) || row.detail.includes(path.join('~', '.trocar', 'backup')), registered !== null, JSON.stringify(row))
+  }
+})

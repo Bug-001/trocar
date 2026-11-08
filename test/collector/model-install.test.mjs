@@ -15,6 +15,7 @@ import { certBlocks } from '../../src/off/pem.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { recordingExec } from '../cli/fixtures/on-ctx.mjs'
+import { hookFile } from '../../src/collector/harness/templates/index.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const put = (f, data) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, data) }
@@ -352,4 +353,62 @@ test('1.6 §3.6: an uninstall that deletes a file trocar made for its key or lin
   assert.ok(yours.length > 0, JSON.stringify(receipt.removed))
   const rows = formatUninstallReceipt(receipt, { home: w.home, platform: 'darwin' }).split('\n')
   for (const p of yours) assert.ok(rows.some((l) => l.trim().startsWith(`${tilde(p, w.home)}: `)), `${p}: what was taken out is said: ${rows.join('\n')}`)
+})
+
+// 4.11 P4 「trocar 拥有的文件不写在别人的上面」: a file already at a plugin's path that the manifest does not list is written over only when it carries
+// trocar's sentinel; a file that is not trocar's, or cannot be read, is left byte for byte, unrecorded, its carrier skipped with the path and why (D38)
+for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earlier extension\n'], ['foreign', '// the user\'s own extension\n'], ['unreadable', 'x\n']]) {
+  test(`P4 · a loaderless plugin, ${at} at its path`, async () => {
+    const [eighth] = await loadHarnesses(new URL('./harness/fixtures/', import.meta.url))
+    const w = await modelWorld()
+    const file = path.join(w.home, '.eighth', 'extensions', 'trocar-pi-extension.js')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    if (seed != null) fs.writeFileSync(file, seed)
+    const sealed = { ...fs, readFileSync: (f, ...a) => { if (at === 'unreadable' && f === file) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
+    const r = await w.install({ harnesses: [eighth], ...(at === 'unreadable' ? { fs: sealed } : {}) })
+    const rec = readManifest(w.dir).files.filter((f) => f.path === file)
+    const row = r.carriers.find((c) => c.harness === 'eighth' && c.carrier === 'plugin')
+    if (at === 'foreign' || at === 'unreadable') {
+      assert.equal(fs.readFileSync(file, 'utf8'), seed, 'left byte for byte')
+      assert.deepEqual([rec, row.state, row.code, row.why.includes(file)], [[], 'skipped', 'not-trocars-file', true])
+      assert.equal(r.exit, 1)
+    } else {
+      assert.ok(fs.readFileSync(file, 'utf8').includes('trocar collector'))
+      assert.deepEqual([rec.length, row.state], [1, 'placed'])
+    }
+  })
+}
+
+// 4.11 P4 (macOS / Windows): the plug-in file install would place where a file that is not trocar's already is — the plan lists that carrier as skipped,
+// the run leaves the file byte for byte and unrecorded, its carrier row says not-trocars-file, and flows/ has the failure line (D38); exit 1
+for (const os of ['darwin', 'win32']) {
+  test(`4.11 P4 · ${os}: a plug-in file that is not trocar's is skipped in the plan and the run, and on record`, async () => {
+    const w = await modelWorld({ os, commands: ['dsh'] })
+    fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
+    const plan0 = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile })
+    const plugin = plan0.find((r) => r.carrier === 'plugin' && !r.loader)
+    assert.ok(plugin && plugin.paths[0], JSON.stringify(plan0))
+    const file = path.join(plugin.paths[0], hookFile('cordis-plugin'))
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '// the user\'s own plugin\n')
+    const rows = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile }).filter((r) => r.harness === plugin.harness && r.carrier === 'plugin')
+    assert.deepEqual([...new Set(rows.map((r) => JSON.stringify([r.state, r.code, r.paths[0]])))], [JSON.stringify(['skipped', 'not-trocars-file', file])], 'every form\'s row says the carrier is skipped, and where')
+    const r = await w.install({ wrapperKit: { renderWrapper } })
+    assert.equal(r.exit, 1)
+    assert.equal(fs.readFileSync(file, 'utf8'), '// the user\'s own plugin\n', 'left byte for byte')
+    assert.deepEqual(readManifest(w.dir).files.filter((f) => f.path === file), [])
+    assert.ok(r.carriers.some((c) => c.carrier === 'plugin' && c.state === 'skipped' && c.code === 'not-trocars-file' && c.path === file), JSON.stringify(r.carriers))
+    const flows = fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+    assert.ok(flows.some((e) => e.event === 'failure' && e.code === 'not-trocars-file' && e.path === file), 'on record (D38)')
+  })
+}
+
+// 4.11 P4: a login entry under trocar's name the record does not list is trocar's — install replaces it, and what was registered is backed up first
+test('4.11 P4 · an unrecorded registration under trocar\'s name is backed up, then replaced', async () => {
+  const w = await modelWorld({ os: 'win32' })
+  const old = Buffer.from('<Task>an older one</Task>')
+  const unit = { path: path.join(w.dir, 'task.xml'), text: () => '<Task>trocar</Task>', registeredBytes: () => old }
+  await w.install({ unit })
+  assert.equal(fs.readFileSync(unit.path, 'utf8'), '<Task>trocar</Task>')
+  const bk = path.join(w.home, '.trocar', 'backup')
+  assert.ok(fs.readdirSync(bk).some((n) => fs.readFileSync(path.join(bk, n)).equals(old)), 'the registered bytes are kept')
 })

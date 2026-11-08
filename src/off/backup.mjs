@@ -18,6 +18,10 @@ const NAME = /^[0-9a-f]{16}-\d{8}T\d{9}Z(?:-\d+)?$/
 /** The backup name of `file` at `now`: `<sha256(path)[0:16]>-<UTC, to the millisecond>`. */
 export const backupName = (file, now = new Date()) => `${pathHash(file)}-${now.toISOString().replace(/[-:.]/g, '')}`
 
+/** The plan's words for an autostart entry under trocar's name that install replaces (4.11 P4): its bytes, an older trocar's, are backed up and,
+ *  like every backup, dropped by uninstall (1.6 §3.6) — so the plan never reads as if they outlive it. `where`: the backup folder as printed. */
+export const replacedNote = (where) => `it replaces the one already there under trocar's name, whose bytes are kept in ${where} until trocar uninstall`
+
 /** Saves `data` (the bytes of `file` before the change) in ~/.trocar/backup/ and returns its path. Creates the directory 0700 (an existing
  *  one is tightened to it), writes the file exclusively and 0600, fsyncs it and the directory. A failure removes what it wrote and throws. */
 export function writeBackup({ home, file, data, now = new Date(), fs = nodeFs }) {
