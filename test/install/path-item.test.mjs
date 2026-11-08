@@ -155,10 +155,13 @@ test('D38: a PATH item record that cannot be read is said, never taken as no PAT
   assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(fakeIo())), 0)
   const rec = path.join(s.home, '.trocar', 'collector', 'path-item.json')
   fs.writeFileSync(rec, '{ not json')
+  const dry = fakeIo()
+  assert.equal(await runUninstallCli(['--dry-run', '--json'], s.ctx(dry, false)), 0, dry.text())
+  assert.deepEqual((JSON.parse(dry.text()).left || []).map((l) => l.path), [rec], 'the plan says it too')
   const io = fakeIo()
-  let exit = null, threw = null
-  try { exit = await runUninstallCli(['--yes', '--json'], s.ctx(io, false)) } catch (e) { threw = e }
-  assert.ok(threw || exit !== 0, `not a silent success: ${exit} ${io.text()}`)
+  assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(io, false)), 1, io.text())
+  const r = JSON.parse(io.text())
+  assert.deepEqual(r.left.map((l) => [l.path, l.shared ?? false]), [[rec, false]], 'the record is a left row that names it, not a crash')
   assert.ok(fs.readFileSync(s.rc, 'utf8').includes('.trocar/bin'), 'the PATH item is not quietly left behind as if gone')
 })
 
