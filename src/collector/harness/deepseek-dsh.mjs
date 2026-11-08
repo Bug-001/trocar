@@ -122,6 +122,8 @@ export default {
   layers,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']),
+  // `dsh` is also the name of other programs (Debian's distributed shell): one of those on PATH counts as dsh, and install writes dsh's idle carriers
+  present: [{ base: 'home', dir: '.dsh', env: 'DSH_HOME' }, { command: 'dsh' }],
   inject,
   trust: {
     // the marker first: when it is there, a failure names it, not a CA file the user exported for dsh

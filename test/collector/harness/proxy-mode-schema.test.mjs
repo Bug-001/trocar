@@ -61,6 +61,16 @@ test('every real descriptor carries proxyMode and loads; one without it is refus
   await assert.rejects(loadOne(bare), /harness eighth .*shape: no proxyMode/)
 })
 
+test('a descriptor with inject carries a non-empty top-level present of <loc> (no perOs) or { command } items (spec 4.11 校验)', async () => {
+  const bad = { absent: undefined, empty: [], perOs: [{ perOs: {} }], base: [{ base: 'nowhere' }], command: [{ command: '' }] }
+  for (const [axis, present] of Object.entries(bad)) {
+    const d = { ...eighth, inject() {} }
+    if (present !== undefined) d.present = present
+    await assert.rejects(loadOne(d), /harness eighth .*\b(present|shape): /, axis)
+  }
+  assert.equal((await loadOne({ ...eighth, inject() {}, present: [{ command: 'eighth' }, { base: 'home', path: '.eighth' }, { base: 'abs', path: '/eighth' }] })).length, 1)
+})
+
 for (const d of subjects) {
   test(`${d.name}: the descriptor as it is loads`, async () => { assert.equal((await loadOne({ ...d, proxyMode: structuredClone(d.proxyMode) })).length, 1) })
   for (const [rule, mutate] of Object.entries(MUTATIONS)) {

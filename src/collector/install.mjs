@@ -6,7 +6,7 @@
 // `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import { retriedNote, SETUP_WHY } from '../cli/words.mjs'
 import { UNDO_WORDS, setupBlocked, setupError } from '../cli/receipt.mjs'
-import { driverSetup, driverCtx } from './driver-setup.mjs'
+import { driverSetup, driverCtx, driverForms } from './driver-setup.mjs'
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -177,10 +177,13 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   // `judge(descs, prior)` → the names held back before anything of theirs is read for writing (on's 1.6 §3.3 ⑪): asked only of a complete install
   const asked = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
   const held = new Set(judge && installComplete(prior) ? judge(asked, prior) : [])
-  const descs = asked.filter((d) => !held.has(d.name))
+  const kept = asked.filter((d) => !held.has(d.name))
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
   const ctxFor = (d) => driverCtx({ os: osName, home, env, fs, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()) }) // the one inject ctx (status and on's setup judgement read the same)
+  // only a harness whose own footprint is here gets carriers, and only it joins install.harnesses (4.6 「这个 harness 装好了没有」); one already in the
+  // manifest stays a target below, its carriers kept until uninstall
+  const descs = kept.filter((d) => driverForms(d, ctxFor(d)).length)
   const R = roots || await bundleRoots(arch)
   const draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   const daemon = unit ? daemonEnv(env, dir) : null
@@ -216,11 +219,11 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   // who is on, and who has nothing to do here (no entry, no file, not installed before): said, with the descriptor's own reason
   const installed = new Set([...((prior && prior.entries) || []), ...((prior && prior.files) || [])].map((x) => x.harness).filter(Boolean))
   const withItems = new Set([...draft.entries, ...draft.files, ...draft.owned].map((x) => x.harness))
-  const targets = descs.map((d) => d.name).filter((n) => withItems.has(n) || installed.has(n))
+  const targets = kept.map((d) => d.name).filter((n) => withItems.has(n) || installed.has(n))
   const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
   const hint = new Set(certs ? [] : draft.entries.filter((e, i) => replaceable(entryJ[i])).map((e) => e.path))
   const skipped = [
-    ...descs.map((d) => d.name).filter((n) => !targets.includes(n)).map((n) => ({ what: n, reason: reasonOf(n) })),
+    ...kept.map((d) => d.name).filter((n) => !targets.includes(n)).map((n) => ({ what: n, reason: reasonOf(n) })),
     ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: hint.has(s.path) ? `${s.why}; run "trocar install" to place it again` : s.why })), // a certificate item install can place again (replaceable): on never does (D55⑥), so it names the fix
   ]
   // what is written, and what the user has not yet confirmed (1.6 §1.6: the paths beyond the manifest's `confirmed_paths`; an installed one counts as confirmed)

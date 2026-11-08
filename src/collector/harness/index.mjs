@@ -157,6 +157,14 @@ function proxyModeProblems(pm) {
   return bad
 }
 
+/** A descriptor with `inject` (driver mode) names its Linux footprint: a non-empty top-level `present` of `<loc>` (no perOs: one OS) or `{ command }` (spec 4.11 校验, 4.6). */
+function presentProblems(d) {
+  if (typeof d.inject !== 'function') return []
+  if (!Array.isArray(d.present) || !d.present.length) return ['present: no top-level present list: trocar could not tell whether the harness is installed on Linux']
+  return d.present.flatMap((p, k) => (obj(p) && 'command' in p ? (nonEmpty(p.command) ? [] : [`shape: present[${k}].command is empty`])
+    : obj(p) && PM.base.includes(p.base) && !('perOs' in p) ? [] : [`shape: present[${k}] is not a <loc> without perOs or { command }`]))
+}
+
 export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
   const dir = fileURLToPath(dirUrl)
   const names = fs.readdirSync(dir).filter((n) => n.endsWith('.mjs') && n !== 'index.mjs' && !n.startsWith('_')).sort()
@@ -166,6 +174,7 @@ export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
     const bad = proxyProblems(d && d.proxy)
     if (bad.length) throw new Error(`harness ${n}: its proxy export is wrong (RFC 4.11 §2.3, the proxy block): ${bad.join('; ')}`)
     const pmBad = d.proxyMode === undefined ? ['shape: no proxyMode (every harness says how proxy mode reaches it, spec 4.11 §2.4)'] : proxyModeProblems(d.proxyMode)
+    pmBad.push(...presentProblems(d))
     if (pmBad.length) throw new Error(`harness ${d.name || n} (${n}): its proxyMode is wrong (spec 4.11 §2.3): ${pmBad.join('; ')}`)
     out.push(d)
   }

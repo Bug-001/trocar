@@ -191,6 +191,7 @@ export default {
   bypass: (ctx) => [{ host: CDN_HOST, reason: 'not-via-trust-path' }, ...(ctx.argv.some((a) => /^(app|agent)-server$/.test(a)) ? [] : [{ host: originHost(ctx.env), reason: 'not-via-trust-path' }])],
   proxy,
   proxies: (ctx) => PROXY_SOURCES.filter(([k]) => (ctx.env.get(k) || '') !== '').map(([k, source]) => ({ url: ctx.env.get(k), source })),
+  present: [{ base: 'home', path: '.zcode' }, { base: 'abs', path: '/opt/ZCode/zcode' }],
   inject,
   trust: {
     chain: [

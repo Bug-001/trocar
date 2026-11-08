@@ -22,7 +22,9 @@ import { createServer } from '../../src/server.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { VERBS } from '../../src/control/board.mjs'
-import { driverSetup } from '../../src/collector/driver-setup.mjs'
+import { driverSetup, driverCtx } from '../../src/collector/driver-setup.mjs'
+import { planOn } from '../../src/collector/install.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { installedHome, ROOTS } from '../off/fixtures/off-ctx.mjs'
 import { setKey } from '../../src/off/json-text.mjs'
 import { removeTrocarText } from '../../src/off/text-edit.mjs'
@@ -234,37 +236,72 @@ test('Linux · 4.4 #13 · 4.6: Set up on a HOME without an install record is cer
 })
 
 // 4.11 P4b · 4.6 (V67 / V91): what the judge calls `needed` is what install places again. Axes: every harness with an install-phase config item ×
-// the item's file deleted / rewritten without trocar's text (its own update): a `needed` setup is `ready` after Set up, and `on <h>` turns it on.
+// the item's file deleted / rewritten without trocar's text (its own update): the harness is still there, so setup is `needed`; Set up either
+// places it again (→ `ready`, and `on <h>` turns it on) or, when its inject has nothing to place it from, refuses with setup-needed and changes
+// no byte — never "nothing to set up" (4.6 「这个 harness 装好了没有」).
 const DAMAGE = {
   deleted: (x) => fs.rmSync(x.path),
   overwritten: (x) => { const t = fs.readFileSync(x.path, 'utf8'); fs.writeFileSync(x.path, x.kind === 'json-key' ? setKey(t, x.keys, '/elsewhere/ca.pem').text : removeTrocarText(t, x.ops).text) },
 }
 for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (const [how, damage] of Object.entries(DAMAGE)) {
-  test(`Linux · V67 · V91: ${h}'s certificate item ${how} → setup needed; Set up places it again → ready, and on ${h} turns it on`, async () => {
+  test(`Linux · V67 · V91: ${h}'s certificate item ${how} → setup needed; Set up places it again (→ ready, on ${h} turns it on) or refuses with setup-needed, writing nothing`, async () => {
     const s = await installedHome({ names: [h] })
     const desc = s.descs[0], judged = () => driverSetup(desc, { os: 'linux', home: s.home, env: s.sh.env, manifest: s.manifest() })
     const items = s.manifest().entries.filter((e) => e.harness === h && e.phase === 'install')
     for (const x of items) damage(x)
     const left = () => items.map((x) => (fs.existsSync(x.path) ? fs.readFileSync(x.path, 'utf8') : null)) // what the user (or the harness's own update) left
     const userLeft = left()
-    const st = judged().state
-    if (st !== 'needed') assert.deepEqual([how, st], ['deleted', 'ready'], 'only a deleted file may take the form away (nothing then is needed)')
-    else {
-      const ctx = { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) }
-      const p = await VERBS.setup({ harness: h }, ctx)
+    assert.equal(judged().state, 'needed')
+    const ctx = { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps(s) }
+    const record = () => fs.readFileSync(manifestPath(s.dir), 'utf8')
+    const recorded = record()
+    // which way it must go, from the data: does the harness's inject still give items on the damaged HOME (4.6: none → refuse, never guess)
+    const given = desc.inject(driverCtx({ os: 'linux', home: s.home, env: s.sh.env })) || {}
+    const places = [...(given.entries || []), ...(given.owned || []), ...(given.files || [])].length > 0
+    const p = await VERBS.setup({ harness: h }, ctx)
+    assert.equal(p.doc.ok !== false, places, JSON.stringify(p.doc))
+    if (!places) {
+      assert.equal(p.doc.error.code, 'setup-needed', JSON.stringify(p.doc))
+      assert.deepEqual([left(), record()], [userLeft, recorded], 'a refused Set up writes nothing')
+      assert.equal(judged().state, 'needed')
+    } else {
       assert.equal(p.status, 409, JSON.stringify(p.doc))
       assert.ok(p.doc.plan.length > 0, JSON.stringify(p.doc))
       const r = await VERBS.setup({ harness: h, confirm: p.doc.plan_id }, ctx)
       assert.equal(r.status, 200, JSON.stringify(r.doc))
       assert.equal(r.doc.ok, true)
       assert.deepEqual([judged().state, judged().missing], ['ready', []])
+      const on = await s.on({ ids: [h] })
+      assert.equal(on.exit, 0, JSON.stringify(on.receipt))
+      assert.ok(on.receipt.harnesses.includes(h) && !on.receipt.refused.length)
     }
-    const on = await s.on({ ids: [h] })
-    assert.equal(on.exit, 0, JSON.stringify(on.receipt))
-    assert.ok(on.receipt.harnesses.includes(h) && !on.receipt.refused.length)
     const un = await s.uninstall({ yes: true })
     assert.equal(un.exit, 0, JSON.stringify(un.receipt && un.receipt.problems))
     assert.deepEqual(left(), userLeft, 'uninstall puts back what the user left, byte for byte (invariant 5)')
+  })
+}
+
+// 4.6 「这个 harness 装好了没有」: Set up has nothing to place — the agent is here but its inject gives no item (q5: never installed; lost: its carrier
+// gone too), or it is not here at all (absent) → setup-needed with install's reason, no byte written, install.code kept. Each harness gets a
+// footprint the test controls; STRIP takes away what its inject reads.
+const STRIP = { codex: '.codex', 'kimi-code': '.bashrc' }
+for (const h of Object.keys(STRIP)) for (const cell of ['q5', 'absent', 'lost']) {
+  test(`Linux · 4.6: Set up ${h} (${cell}) with nothing to place → setup-needed with install's reason, nothing written`, async () => {
+    const s = await installedHome({ names: cell === 'lost' ? ['claude-code', h] : ['claude-code'] })
+    const real = (await loadHarnesses()).find((d) => d.name === h)
+    const fp = { ...real, present: [{ base: 'home', dir: `.fp-${h}` }] }
+    const descs = [...s.descs.filter((d) => d.name !== h), fp]
+    if (cell !== 'absent') { fs.mkdirSync(path.join(s.home, `.fp-${h}`)); fs.rmSync(path.join(s.home, STRIP[h]), { recursive: true, force: true }) }
+    const plan = await planOn({ home: s.home, env: s.sh.env, osName: 'linux', harnesses: descs, roots: ROOTS })
+    const skip = plan.skipped.find((x) => x.what === h)
+    assert.equal(!!skip, cell !== 'lost', JSON.stringify(plan.skipped))
+    const home0 = outside(snapshot(s.home)), code0 = s.manifest().install.code
+    const r = await VERBS.setup({ harness: h, confirm: 'x' }, { home: path.join(s.home, '.trocar'), deps: linuxSetupDeps({ ...s, descs }) })
+    assert.equal(r.doc.ok, false, JSON.stringify(r.doc))
+    assert.equal(r.doc.error.code, 'setup-needed')
+    if (skip) assert.ok(skip.reason && r.doc.error.message.includes(skip.reason), JSON.stringify(r.doc.error))
+    assert.deepEqual(outside(snapshot(s.home)), home0)
+    assert.equal(s.manifest().install.code, code0)
   })
 }
 

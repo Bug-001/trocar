@@ -107,6 +107,7 @@ export default {
     ...(truthy(ctx.env.get('OPENCODE_EXPERIMENTAL_WEBSOCKETS')) ? ['api.openai.com', ...providerHosts(configDocs(ctx), 'openai')].map((host) => ({ host, reason: 'ws-path' })) : []),
   ],
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']),
+  present: [{ base: 'home', path: '.opencode/bin' }, { command: 'opencode' }, { base: 'home', dir: '.local/share', env: 'XDG_DATA_HOME', path: 'opencode' }, { base: 'home', dir: '.config', env: 'XDG_CONFIG_HOME', path: 'opencode' }],
   inject,
   trust: {
     // the marker first: when it is there, a failure names it, not a CA file the user exported for OpenCode

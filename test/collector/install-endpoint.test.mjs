@@ -13,6 +13,7 @@ import { turnOn, installCollector } from '../../src/collector/install.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { ROOTS } from '../cli/fixtures/on-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 
 // the descriptor with its per-OS arms attached (the raw linux base has no darwin arm, and the plan would find nothing to write)
 const cc = (await loadHarnesses()).find((d) => d.name === 'claude-code')
@@ -40,6 +41,7 @@ const fakeUnit = (home) => ({ path: path.join(home, 'trocar-collector.service'),
 const claudeHome = (root) => {
   const home = path.join(root, 'home'); fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
   fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: {} }, null, 2))
+  seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   return home
 }
 

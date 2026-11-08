@@ -10,6 +10,9 @@ import { validateReceipt } from '../../src/cli/schema.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { formatOnReceipt } from '../../src/cli/receipt.mjs'
 import { onCtx, fakeIo } from './fixtures/on-ctx.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
+import { resolveLoc } from '../../src/off/loc.mjs'
+import { collectorDir, USER_PATH_FILE } from '../../src/off/paths.mjs'
 
 const ZC = 'z-code', CC = 'claude-code'
 /** Claude Code installed and on; Z Code installed after trocar (present, never set up: carrier-absent). */
@@ -122,5 +125,40 @@ test('V91-O8 · trocar on --json (real and --dry-run): `planned` has no row for 
     assert.deepEqual(doc.refused.map((x) => x.harness), [ZC], argv.join(' '))
     assert.ok(!(doc.planned || []).some((p) => JSON.stringify(p).includes(zcPath)), `${argv.join(' ')}: ${JSON.stringify(doc.planned)}`)
     if (argv.includes(CC)) assert.match(formatOnReceipt(doc, { home: s.home }).split('\n')[0], new RegExp(CC))
+  }
+})
+
+const ALL = await loadHarnesses()
+const homePlaces = (d, home, env) => d.present.filter((p) => p && p.base === 'home').flatMap((p) => resolveLoc(p, { os: 'linux', home, env }))
+// a harness that is there by its footprint alone (4.6): what its inject reads is missing, so install placed nothing for it → carrier-absent
+const LATE = {
+  'kimi-code': { keep: ['.kimi-code', '.bashrc'], seed: (home) => fs.writeFileSync(path.join(home, '.bashrc'), "alias ll='ls -l'\n") },
+  codex: {
+    keep: ['bin', '.codex'], // .codex stays absent: codex is there by bin/codex on the recorded PATH alone
+    seed: (home) => { fs.mkdirSync(path.join(home, 'bin')); fs.writeFileSync(path.join(home, 'bin', 'codex'), '#!/bin/sh\n', { mode: 0o755 }) },
+    after: (home) => fs.writeFileSync(path.join(collectorDir(home), USER_PATH_FILE), JSON.stringify({ PATH: path.join(home, 'bin') })),
+  },
+}
+
+test('V91-O9 · 4.6 Q5: a harness present by its footprint with no carrier is refused alone by bare on (setup-needed, its files untouched) and blocked in --dry-run', async () => {
+  for (const [h, shape] of Object.entries(LATE)) {
+    const s = await installedHome({ names: [CC], seed: (home, sh) => {
+      for (const d of ALL) if (d.name !== CC && d.name !== h) for (const f of homePlaces(d, home, sh.env)) fs.rmSync(f, { recursive: true, force: true })
+      fs.rmSync(path.join(home, '.codex'), { recursive: true, force: true })
+      shape.seed(home)
+    } })
+    if (shape.after) shape.after(s.home)
+    const mine = () => shape.keep.map((rel) => under(s, rel))
+    const before = mine()
+    const dry = await s.on({ ids: null, harnesses: ALL, dryRun: true })
+    assert.equal(dry.exit, 0, h)
+    assert.ok(dry.receipt.blocked.map((b) => b.what).includes(h), h)
+    const r = await s.on({ ids: null, harnesses: ALL })
+    assert.equal(r.exit, 1, h)
+    assert.equal(r.receipt.error.code, 'setup-needed', h)
+    assert.deepEqual(r.receipt.refused.map((x) => [x.harness, x.reason]), [[h, 'setup-needed']], h)
+    assert.ok(r.receipt.harnesses.includes(CC), h)
+    assert.equal(s.state().harnesses[CC].desired, 'on', h)
+    assert.deepEqual(mine(), before, h)
   }
 })

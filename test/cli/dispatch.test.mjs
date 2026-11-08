@@ -13,6 +13,8 @@ import { COMMANDS, helpText, commandNamed, usageLine } from '../../src/cli/comma
 import { WIDTH } from '../../src/cli/text.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { presentEnvNames } from '../../src/off/user-path.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
@@ -190,6 +192,16 @@ test('the real bin: --version, help, help off, an unknown command and `daemon --
   const n = run('nope'); assert.equal(n.status, 2); assert.equal(n.stdout, ''); assert.match(n.stderr, /unknown command 'nope'/)
   const d = run('daemon', '--bogus'); assert.deepEqual([d.status, d.stdout], [2, '']); assert.match(d.stderr, /trocar daemon: unknown option '--bogus'/)
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written')
+})
+
+// 4.6 present: a command typed in a terminal records, with the PATH, the value of every variable that moves a footprint place (null when unset)
+test('4.6 present: install records the footprint variables of the terminal it ran in', async () => {
+  const names = presentEnvNames(await loadHarnesses())
+  const s = sandbox(), env = { ...s.ctx().env, [names[0]]: path.join(s.home, 'elsewhere') }
+  for (const k of names.slice(1)) delete env[k]
+  assert.equal((await s.run(['install', '--yes'], { env })).exit, 0)
+  const vars = JSON.parse(fs.readFileSync(path.join(s.dir, 'user-path.json'), 'utf8')).vars
+  assert.deepEqual(vars, Object.fromEntries(names.map((k, i) => [k, i === 0 ? env[k] : null])))
 })
 
 // 4.11 present / 1.6 V7: uninstall records no PATH — it deletes that file, so recording it first made a second uninstall report removing what it

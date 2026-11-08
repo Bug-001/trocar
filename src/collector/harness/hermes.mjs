@@ -196,6 +196,7 @@ export default {
   layers,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']),
+  present: [{ base: 'home', path: '.local/bin/hermes' }, { command: 'hermes' }, { base: 'home', dir: '.hermes', env: 'HERMES_HOME' }],
   inject,
   trust: {
     chain: [{ var: 'SSL_CERT_FILE', semantic: 'append' }], // main build on Linux
