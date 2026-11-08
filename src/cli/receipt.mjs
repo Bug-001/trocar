@@ -261,7 +261,7 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   // §3.6 / §1.1③: a refusal (error) and a left row with its own command already say the next step — a second one would only repeat it
   const ownStep = !!r.error || ((r.left || []).length > 0 && r.left.every((l) => l.command) && !(r.problems || []).length)
   if (!past) lines.push('Nothing was changed. Run it with --yes to do it.')
-  else if (r.ok === false && ownStep) { /* said above */ }
+  else if (ownStep) { /* said above: a refusal, or left rows that each carry their own next step (a shared one leaves ok true, §3.6) */ }
   else if (r.ok === false) lines.push('Fix what is above, then run: trocar uninstall')
   else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${and(keptWhat)}), delete ${and(r.kept.map((k) => asDir(t(k.path), platform)))} by hand.`)
   else if (!r.purge_data && keptWhat.length) lines.push(`To delete what was kept (${and(keptWhat)}), run:`, commandLine('trocar uninstall --purge-data'))

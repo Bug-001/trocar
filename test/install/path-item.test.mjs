@@ -12,10 +12,11 @@ import { readManifest } from '../../src/off/manifest.mjs'
 import { pathItemTarget, psScript, WIN_ELEMENT } from '../../src/off/path-item.mjs'
 import { appDir, launcherPath } from '../../src/off/paths.mjs'
 import { orphanBackups } from '../../src/off/backup.mjs'
-import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
+import { fakeIo, onCtx, seedClaude, snapshot, changedFiles } from '../cli/fixtures/on-ctx.mjs'
+import { setupHelperCommand } from '../../src/version.mjs'
+import { unitPath } from '../../src/collector/arch/linux/unit.mjs'
 import { COMMANDS } from '../../src/cli/commands.mjs'
 import { DEFAULT_REDIRECTOR_BIN } from '../../src/collector/arch/linux/redirector-client.mjs'
-import { flowEvents } from '../off/fixtures/off-ctx.mjs'
 
 test('V112: the start file is the one the (system, shell, ZDOTDIR) row names', () => {
   const h = '/h'
@@ -113,33 +114,39 @@ function scriptLinux({ helper = false } = {}) {
   const raw = path.join(home, '.trocar', 'raw', 'r.ndjson'); fs.mkdirSync(path.dirname(raw), { recursive: true }); fs.writeFileSync(raw, '{"keep":1}\n')
   const withHelper = { ...fs, existsSync: (p) => p === DEFAULT_REDIRECTOR_BIN || fs.existsSync(p) }
   const ctx = (io, h = helper) => { const c = onCtx(home, io); return { ...c, platform: 'linux', env: { ...c.env, SHELL: '/bin/bash' }, deps: { ...c.deps, root, ...(h ? { fs: withHelper } : {}) } } }
-  return { home, rc, raw, ctx }
+  return { home, rc, raw, ctx, root }
 }
 
-test('1.6 §3.6: a helper still installed keeps the code, the PATH item and every record, even with --purge-data; it is a left row in flows/; once it is gone the next run removes the rest', async () => {
+// 1.6 §3.6: the helper is machine-wide; a user's uninstall undoes everything of this user's and keeps only the code and the PATH item the removal line needs
+test('1.6 §3.6: a helper still installed: exit 0, one shared left row with the removal line; only the code and the PATH item stay; once it is gone the next run removes them', async () => {
   const s = scriptLinux({ helper: true })
+  const before = snapshot(s.home)
   assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
+  const item = readManifest(path.join(s.home, '.trocar', 'collector')).path_item
   const placed = fs.readFileSync(s.rc, 'utf8')
-  // plan = act: the dry run names the helper row and does not plan the code, the launcher or the PATH item away
+  // plan = act: the dry run names the shared row and does not plan the code, the launcher or the PATH item away
   const dry = fakeIo()
   assert.equal(await runUninstallCli(['--dry-run', '--json'], s.ctx(dry)), 0, dry.text())
   const plan = JSON.parse(dry.text())
-  assert.ok((plan.left || []).some((l) => l.path === DEFAULT_REDIRECTOR_BIN && typeof l.command === 'string'), JSON.stringify(plan.left))
+  assert.deepEqual((plan.left || []).map((l) => [l.shared, typeof l.command]), [[true, 'string']], JSON.stringify(plan.left))
   assert.deepEqual(plan.planned.filter((p) => [appDir(s.home), launcherPath(s.home, 'linux'), s.rc].includes(p.path)), [], 'the plan keeps what the run keeps')
   const io = fakeIo()
-  assert.equal(await runUninstallCli(['--purge-data', '--yes', '--json'], s.ctx(io)), 1, io.text())
+  assert.equal(await runUninstallCli(['--purge-data', '--yes', '--json'], s.ctx(io)), 0, io.text())
   const r = JSON.parse(io.text())
-  assert.equal(r.purge_data, false)
-  assert.ok(r.left.some((l) => l.path === DEFAULT_REDIRECTOR_BIN && typeof l.command === 'string'), 'the helper row, with its command')
-  assert.deepEqual(r.problems, [], 'a left row with its own command is the next step, not also a problem (1.6 §3.6)')
-  assert.deepEqual([fs.readFileSync(s.raw, 'utf8'), fs.readFileSync(s.rc, 'utf8'), fs.existsSync(appDir(s.home)), fs.existsSync(launcherPath(s.home, 'linux'))], ['{"keep":1}\n', placed, true, true], 'records, PATH item, code and launcher all stay')
-  const ev = flowEvents(path.join(s.home, '.trocar', 'collector')).filter((e) => e.event === 'uninstall-note' || e.where === 'uninstall')
-  assert.ok(ev.some((e) => e.event === 'failure' && e.code === 'entry-not-undone' && e.path === DEFAULT_REDIRECTOR_BIN), 'D38: the left row is in flows/')
-  assert.equal(ev.filter((e) => e.kind === 'result').at(-1).outcome, 'left')
+  assert.deepEqual([r.ok, r.purge_data, r.problems, r.left.map((l) => [l.shared, l.command])], [true, true, [], [[true, setupHelperCommand(['--remove'], { root: s.root })]]], io.text())
+  // of trocar's, exactly the code (unchanged), the PATH line and what takes it out again (its backup, its record) remain: no unit, no manifest, no state, no proxy entry
+  const rest = changedFiles(before, snapshot(s.home)).filter((f) => f !== '.bashrc' && f !== path.relative(s.home, s.raw))
+  assert.equal(fs.readFileSync(s.rc, 'utf8'), placed)
+  assert.ok(rest.length <= 2 && rest.every((f) => path.join(s.home, f) === item.backup || (() => { try { return JSON.stringify(JSON.parse(fs.readFileSync(path.join(s.home, f), 'utf8'))) === JSON.stringify(item) } catch { return false } })()), JSON.stringify(rest))
+  assert.deepEqual([fs.existsSync(appDir(s.home)), fs.existsSync(launcherPath(s.home, 'linux')), fs.existsSync(s.raw), fs.existsSync(unitPath(s.home))], [true, true, false, false])
 
   const again = fakeIo()
   assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(again, false)), 0, again.text())
-  assert.deepEqual([fs.readFileSync(s.rc, 'utf8'), fs.existsSync(appDir(s.home)), fs.readFileSync(s.raw, 'utf8')], ['alias ll="ls -l"\n', false, '{"keep":1}\n'], 'the second run takes out the PATH item and the code')
+  const r2 = JSON.parse(again.text())
+  // what the second, plain run kept is only its own record of what it did (kept, D38); the code, the PATH item and its record went
+  assert.deepEqual([fs.readFileSync(s.rc, 'utf8'), r2.left, changedFiles(before, snapshot(s.home)).filter((f) => !r2.kept.some((k) => path.join(s.home, f).startsWith(k.path + path.sep))).filter((f) => !before[f])],
+    ['alias ll="ls -l"\n', [], []], 'the second run takes out the PATH item and the code')
+  assert.deepEqual([fs.existsSync(appDir(s.home)), fs.existsSync(launcherPath(s.home, 'linux'))], [false, false])
 })
 
 test('D58: once a script uninstall removed trocar itself, its receipt names no trocar command; the kept records are named by path', async () => {
