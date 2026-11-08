@@ -409,6 +409,17 @@ test('V96: an install or on that fails in the finish has its own reason printed;
   }
 })
 
+// D38 · 1.6 §5.5: what install's receipt says is still the user's to do (its notes: a key helper kept that only a desktop Terminal can replace) is
+// said by the update that ran it too — an update is often the only install the user sees
+test('V96: the notes of the install a finish ran are printed by the update, once each', async () => {
+  const s = sandbox()
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  const note = `kept-${Math.random().toString(36).slice(2, 8)}: run trocar install from a Terminal in your desktop session`
+  const t = ctx(s, { deps: { install: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('install'), ok: true, problems: [], notes: [note] })); return EXIT.ok } } })
+  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  assert.equal(t.io.text().split(note).length - 1, 1, t.io.text())
+})
+
 // D38: the note names only harnesses, and one this code has no descriptor for would fail the whole `on` — dropped, and said
 test('V96: a handover file naming an agent this code does not know drops it with a note and switches the rest on', async () => {
   const s = sandbox()

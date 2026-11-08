@@ -20,6 +20,7 @@ import { BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
 import { onCtx, snapshot, recordingExec } from './fixtures/on-ctx.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
+import { codeId } from '../../src/version.mjs'
 import { setupOf } from '../../src/collector/core/proxymode/status-facts.mjs'
 import { findingFor } from '../../src/netenv/findings.mjs'
 import { BLOCK_OPEN, BLOCK_END } from '../../src/off/text-edit.mjs'
@@ -37,8 +38,8 @@ function fakeLaunchctl() {
   const calls = []
   return { calls, run: (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: '', stderr: '' } } }
 }
-async function cli(argv, { tty = false, over = {}, setup = null } = {}) {
-  const w = await modelWorld({ commands: ['codex'] })
+async function cli(argv, { tty = false, over = {}, setup = null, world = null } = {}) {
+  const w = world || await modelWorld({ commands: ['codex'] })
   if (setup) setup(w)
   const io = fakeIo({ tty })
   const launchctl = fakeLaunchctl()
@@ -371,6 +372,48 @@ for (const [why, status, asks] of [['refuses the drain', 409, ['install']], ['re
     assert.deepEqual(posted, asks, 'the exit requests the collector was sent')
   })
 }
+
+// 1.6 §3.2 step 5: a collector keeps the login entry it was started from. An install that changes that entry (here the NODE_EXTRA_CA_CERTS it
+// carries) replaces a running collector on this same code through the routine update uses, says so in the plan and the receipt; an install that
+// leaves the entry as it is leaves the collector (the same process: no exit request, no stop)
+test('install replaces a running collector on this code when it changes the login entry, and only then', async () => {
+  const stops = [], posted = []
+  let since = new Date(0).toISOString(), refuse = false // when the collector that answers started; a drain it refuses (the replacement does not get through)
+  const over = { daemonCode: async () => codeId(), daemonSince: async () => since, request: async ({ method, body }) => { if (method === 'POST') { posted.push(body); if (refuse) throw Object.assign(new Error('409: busy'), { status: 409 }); return { actual: 'off', confirmed: true } } return {} }, stopDaemon: async () => { stops.push('stop'); since = new Date().toISOString(); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } }, daemonState: async () => ({ state: 'running', socket: 'control.sock', lock: { pid: 4242 } }), drainMs: 0 }
+  const first = await cli(['--yes', '--json'], { over: { ...over, daemonCode: async () => null } }) // no collector yet: install writes the entry
+  assert.equal(first.exit, 0, first.io.text())
+  const w = first.w
+  since = new Date().toISOString() // the collector the entry started, after it was written
+  const same = await cli(['--yes', '--json'], { over, world: w })
+  assert.deepEqual([same.exit, stops, posted, same.io.json().daemon.replaced, same.io.json().planned.filter((p) => p.what === 'daemon')], [0, [], [], false, []], same.io.text())
+  w.env.NODE_EXTRA_CA_CERTS = path.join(w.home, 'corp', 'relay.pem') // the shell install runs in now carries a relay's CA: the entry carries it to the collector
+  const dry = await cli(['--dry-run', '--json'], { over, world: w })
+  assert.ok(dry.io.json().planned.some((p) => p.what === 'daemon'), `the plan names the replacement: ${JSON.stringify(dry.io.json().planned)}`)
+  const changed = await cli(['--yes', '--json'], { over, world: w })
+  const r = changed.io.json()
+  assert.deepEqual([changed.exit, r.ok, r.daemon.replaced, r.daemon.state, stops.length], [0, true, true, 'running', 1], JSON.stringify([r.problems, r.notes, r.daemon]))
+  // a replacement that does not get through leaves the collector on the old entry: the next install, which writes nothing, replaces it then
+  w.env.NODE_EXTRA_CA_CERTS = path.join(w.home, 'corp', 'other.pem')
+  refuse = true
+  const failed = await cli(['--yes', '--json'], { over, world: w })
+  assert.deepEqual([failed.exit, failed.io.json().daemon.replaced, stops.length], [1, false, 1], failed.io.text())
+  refuse = false
+  const again = await cli(['--yes', '--json'], { over, world: w })
+  assert.deepEqual([again.exit, again.io.json().daemon.replaced, stops.length], [0, true, 2], again.io.text())
+  const settled = await cli(['--yes', '--json'], { over, world: w })
+  assert.deepEqual([settled.io.json().daemon.replaced, stops.length], [false, 2], 'replaced once: the next install leaves it')
+})
+
+// an install that stops before it writes the login entry (no GUI session for the key) leaves a collector on this code as it is
+test('install that does not write the login entry does not replace the collector for it', async () => {
+  const stops = []
+  const over = { daemonCode: async () => codeId(), daemonSince: async () => new Date(Date.now() + 60e3).toISOString(), request: async ({ method }) => (method === 'POST' ? { actual: 'off', confirmed: true } : {}), stopDaemon: async () => { stops.push('stop'); return { stopped: true, pid: 4242 } }, drainMs: 0 }
+  const { w } = await cli(['--yes', '--json'], { over })
+  w.env.NODE_EXTRA_CA_CERTS = path.join(w.home, 'corp', 'relay.pem')
+  w.custody.exists = () => 'unavailable' // an ssh session: the key cannot be reached, so install stops before the entry
+  const { io } = await cli(['--yes', '--json'], { over, world: w })
+  assert.deepEqual([stops, io.json().daemon && io.json().daemon.replaced], [[], false], io.text())
+})
 
 // 1.6 §5.5 step 4: the update that runs install replaces the collector itself, right after it
 test('install under an update that replaces the collector next sends it no exit request and plans no replacement', async () => {

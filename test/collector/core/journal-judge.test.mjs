@@ -35,7 +35,7 @@ test('judgeEntry: not listed → write; intact → skip-intact and applying it a
     fs.writeFileSync(file, JSON.stringify({ env: { CA_FILE: '/the/users/own.pem' } }))
     const j = judgeEntry({ manifest: m, planned: planned(file) })
     assert.equal(j.action, 'skip-user-changed'); assert.match(j.why, /no longer holds what trocar wrote/)
-    assert.throws(() => applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), /trocar off.*trocar on/)
+    assert.throws(() => applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), /trocar install/, 'an install item: install is the way back (D55: off and on never write it)')
     assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).env.CA_FILE, '/the/users/own.pem', 'the user\'s value is left')
   } finally { b.done() }
 })
@@ -57,6 +57,8 @@ test('judgeEntry: an intent a crash left (no post_sha256) is resume when the fil
     assert.deepEqual([m.entries.length, fs.readFileSync(file).equals(written)], [1, true], 'resumed: written once, one entry')
     m.entries[0].post_sha256 = null; fs.writeFileSync(file, '{"something":"else"}')
     assert.equal(judgeEntry({ manifest: m, planned: planned(file) }).action, 'skip-user-changed')
+    // install cannot place this one again by itself (its undo is the only record of that write): the way out puts the file right first, then install
+    assert.throws(() => applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), (e) => /take trocar's text out of .*, then run "trocar install"/.test(e.message), 'the file first, then install')
   } finally { b.done() }
 })
 
