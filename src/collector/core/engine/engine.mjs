@@ -12,7 +12,10 @@
 // (harness WS terminal patterns, the process's own proxies), merged into the flow's meta. Core knows no
 // harness; it only reads that data.
 import net from 'node:net'
-import { handleFlow, writeRefusal } from './flow.mjs'
+import { handleFlow, writeRefusal, HOLD_CLOSE_MS } from './flow.mjs'
+
+// Is this pid still running? EPERM = it is (another user's): only ESRCH says it is gone. Same on every OS.
+export const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code !== 'ESRCH' } }
 import { createIngress } from './ingress.mjs'
 import { createNegativeCache } from './negcache.mjs'
 import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
@@ -23,7 +26,7 @@ import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 // rejection window (flow.mjs REJECT_WINDOW_MS, 10 s); slowEngineMs — past it from accepting a connection to our TLS server, a zero-data close before our
 // handshake completes is recorded as engine-slow and counts toward the entry without trust-rejected (flow.mjs SLOW_ENGINE_MS, 2 s); now — the negative cache's clock (negcache.mjs retry_at).
 // ingressToken: the install's ingress token (4.8 §3), required for listen({ingress}).
-export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, onHeld = () => {}, timing = {}, drainTimeoutMs, ingressToken = null }) {
+export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, onHeld = () => {}, timing = {}, drainTimeoutMs, ingressToken = null, alive = pidAlive }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
@@ -116,9 +119,22 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       return meta
     }
   }
+  // closes held until it is known whether their process exits (flow.mjs HOLD_CLOSE_MS): settle(gone); the engine stopping settles each as alive.
+  // `alive(pid)` → boolean or a promise of one: the daemon's own process table; the OS (kill 0) when none is given
+  const holds = new Set()
+  const HOLDS_MAX = 256 // more closes than this held at once: the next is judged at once, never queued without bound
+  function holdClose(pid, settle) {
+    if (holds.size >= HOLDS_MAX) return false
+    let done = false
+    const h = { settle: (gone) => { if (done) return; done = true; holds.delete(h); clearTimeout(h.timer); settle(gone) } }
+    // an unknown answer (a throw, anything but false) is alive; the hold stays in the set until settled, so a stop settles it even mid-question
+    h.timer = setTimeout(() => { Promise.resolve().then(() => alive(pid)).then((yes) => h.settle(yes === false), () => h.settle(false)) }, timing.holdCloseMs ?? HOLD_CLOSE_MS)
+    holds.add(h)
+    return true
+  }
   const flowCtx = (connect) => ({
     ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, retention, negCache, counters, failure,
-    connectUpstream: connect,
+    connectUpstream: connect, holdClose,
     newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
   })
   // The one flow starter both doors use. `connect(dst)` is how this flow reaches its upstream (the transparent door: the
@@ -246,6 +262,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // every connection still there — one in its lookup, one whose gate failed or threw — so none outlives the cut. Then wait for every cut flow's row and
   // envelopes, so what the stop writes after it (daemon-stop) comes after them; a flow that has still not ended `boundMs` later rejects close() with   // `stop-failed` (the stop records it and goes on: the stop is bounded, V99). closing / waiting: what the first ask found; cut: what the grace left.
   async function close({ graceMs = 2000, boundMs = 2000, who = null } = {}) { // who: the command stopping the daemon (update / uninstall), named in the cut rows
+    for (const h of [...holds]) h.settle(false) // never dropped by a stop: judged as any other close
     let open = servers.length
     const closing = Promise.all(servers.map((s) => new Promise((res) => s.close(() => { open--; res() }))))
     if (ingress) ingress.closeIdle() // handshakes and health tunnels are not flows: nothing of an agent's is lost, and they would hold close() for their idle timeout

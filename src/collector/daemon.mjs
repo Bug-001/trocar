@@ -33,7 +33,7 @@ import { loadCa, checkCa } from './core/tls/ca.mjs'
 import { createLeafIssuer } from './core/tls/leaf.mjs'
 import { bundleRoots, rootsLeftOut } from './core/tls/roots.mjs'
 import { createRecordStore } from './core/record/store.mjs'
-import { createEngine } from './core/engine/engine.mjs'
+import { createEngine, pidAlive } from './core/engine/engine.mjs'
 import { appendEvent, createFailureRecorder } from './core/events.mjs'
 import { createLoopWatch } from './core/loop-late.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
@@ -534,6 +534,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       retention, // sampled with it (D40)
       onFailure: (rec) => failure.event(rec), // the engine's and the WebSocket recorder's failures: flows/, folded
       onError: (e) => log('engine', e), // stderr only: every one of them is also a record through onFailure
+      alive: (pid) => pidAlive(pid) || tracker.metaFor(pid) != null, // a held close (4.6 §引擎 5): gone = the OS has no such pid and nor has the tracker
     })
     // The engine's door (4.8 §5.1): Linux listens transparently on the port the install recorded.
     const want = enginePort ?? manifest.engine_port ?? 0
@@ -840,6 +841,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     isRecording: (meta) => collector.isOn(meta && meta.agent), // the in-memory switch decryption uses too: no file read per request, no silent off on a read error (4.6 §开关)
     retention: classesHook({ home: path.dirname(P.dir), failure }), describe: wsTerminalHook(list), // D60③ and the WebSocket turn edge, as on Linux (engine-data.mjs)
     onFailure: (rec) => failure.event(rec), onHeld: (who) => collector.noteHeld(who), onError: (e) => log('engine', e),
+    alive: async (pid) => { if (pidAlive(pid)) return true; const t = await parts.procTable(); return !Array.isArray(t) || t.some((r) => r.pid === pid) }, // a held close (4.6 §引擎 5): gone = the OS has no such pid and nor has the process table
   })
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,

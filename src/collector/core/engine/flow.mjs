@@ -23,6 +23,10 @@ export const REJECT_WINDOW_MS = 10_000
 // destroys its socket before its Finished leaves), so it still counts toward the negative entry (D31 fail-open) but never writes
 // trust-rejected (D38) (RFC 4.6 §引擎 5). Tests shorten it through timing.slowEngineMs.
 export const SLOW_ENGINE_MS = 2_000
+// A zero-data close on a fast engine by a (pid, host) that has sent data on our leaf before is held this long before it is judged: a process
+// that exits closes its unused pooled sockets on the way out, and those are no answer about our leaf. Gone by then → nothing is counted;
+// still alive (or the engine stops first) → judged as any other close (RFC 4.6 §引擎 5). Tests shorten it through timing.holdCloseMs.
+export const HOLD_CLOSE_MS = 1_000
 // host of a CONNECT authority or a SOCKS target: "[::1]:443" → "::1", "a.test:443" → "a.test". An IPv6 literal is
 // written compressed whatever form the client sent ("[0:0:0:0:0:0:0:1]:443" → "::1"), as SOCKS5 targets are (RFC 4.6
 // §记录 代理前导): one spelling per host on the row and in the negative-cache key.
@@ -107,6 +111,7 @@ export function handleFlow(client, meta, ctx) {
 
   let activeTee = null
   let finished = false
+  let pending = null // a judgment waiting on whether its process exits (HOLD_CLOSE_MS): the row is written once it is settled
   let handedOff = false     // true once a routing decision hands the sockets to relay()
   let relaying = false      // relay() owns teardown (armPre's handlers on a decrypted pair go quiet)
   let tunnelAsked = false   // the client sent CONNECT inside a TLS connection we terminated (an https:// proxy)
@@ -190,6 +195,7 @@ export function handleFlow(client, meta, ctx) {
     // the flow ended) count on every path. A client that never closes its half gets written after 2 s.
     let written = false, cap = null
     const write = () => {
+      if (pending) return pending.then(write)
       if (written) return
       written = true
       if (cap) clearTimeout(cap)
@@ -540,6 +546,15 @@ export function handleFlow(client, meta, ctx) {
         // judged as a rejection, trusted before or not: another client of the same process may refuse our leaf there (§引擎 5)
         const alert = certAlert(e), gaveUp = !alert && slow && !secured
         if (gaveUp && ctx.negCache.trusts(key)) { notCaptured('client-closed-no-data', 'trusted-before'); if (!rec.error) rec.error = how; return }
+        // trusted before, engine fast: held until it is known whether the process is going (its unused sockets close as it exits)
+        if (!alert && !gaveUp && meta.pid != null && ctx.holdClose && ctx.negCache.trusts(key)) {
+          let held = false
+          const p = new Promise((settle) => { held = ctx.holdClose(meta.pid, (gone) => { pending = null; try { if (!gone) rejected(how, alert, gaveUp, e) } finally { settle() } }) !== false })
+          if (held) { pending = p; return }
+        }
+        rejected(how, alert, gaveUp, e)
+      }
+      const rejected = (how, alert, gaveUp, e) => {
         if (gaveUp) notCaptured('client-closed-no-data', 'engine-slow')
         else notCaptured('client-rejected-leaf', 'client-rejected-leaf')
         if (!rec.error) rec.error = how

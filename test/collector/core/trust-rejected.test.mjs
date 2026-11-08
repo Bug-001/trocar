@@ -91,7 +91,7 @@ test('4.6 R9: a client that refuses trocar\'s leaf → one critical trust-reject
 // counts the moment it is seen. Real engine, real TLS; the window is shortened through the engine's timing seam.
 const W = 300
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-async function windowRig() {
+async function windowRig({ alive, holdCloseMs } = {}) {
   const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
   const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); s.on('data', () => s.write('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok')) })
   await new Promise((r) => up.listen(0, '127.0.0.1', r))
@@ -99,7 +99,7 @@ async function windowRig() {
   const meta = { dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 7, agent: 'claude-code', decrypt: true, door: 'g', negKey: '7', exe: '/x/claude', argv: ['claude'], trust: TRUST }
   const fails = [], flows = []
   const engine = createEngine({ redirector: createStaticRedirector(meta), issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: upCa.certPem, systemCa: { certs: [], sources: ['test'], errors: [] },
-    store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure: (f) => fails.push(f), timing: { rejectWindowMs: W } })
+    store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure: (f) => fails.push(f), timing: { rejectWindowMs: W, ...(holdCloseMs ? { holdCloseMs } : {}) }, ...(alive ? { alive } : {}) })
   const { port } = await engine.listen({})
   const settled = (n) => new Promise((r) => { const t = setInterval(() => { if (flows.length >= n) { clearInterval(t); r() } }, 5) })
   const connect = (ca, maxVersion) => new Promise((resolve) => { const c = tls.connect({ port, host: '127.0.0.1', servername: 'h.test', ca, maxVersion }, () => resolve(c)); c.on('error', () => resolve(null)) })
@@ -160,4 +160,66 @@ test('4.6 §引擎 5: a connection still open when the window elapses counts as 
   await pending; await s.settled(3)
   assert.equal(s.flows[2].not_captured, undefined, 'the unused connection that closed after the window is no failure')
   await s.close()
+})
+
+// ── RFC 4.6 §引擎 5: a zero-data close by a (pid, host) that sent data on our leaf before, on a fast engine, waits HOLD_CLOSE_MS for whether
+// the process is going: an exiting process closes its unused pooled sockets, which says nothing about our leaf. (The client here refuses
+// the leaf the way Node does — handshake, check, destroy — so "alive" is the case that must still be judged.)
+const H = 150
+const tr = (s) => s.fails.filter((f) => f.code === 'trust-rejected')
+test('4.6 §引擎 5: refused, never trusted, then gone → still judged: negative and one critical trust-rejected', T, async () => {
+  const s = await windowRig({ alive: () => false, holdCloseMs: H })
+  await s.rejecting(); await s.settled(1); await s.rejecting(); await s.settled(2)
+  assert.equal(tr(s).length, 1)
+  assert.deepEqual(s.flows.map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
+  await s.close()
+})
+test('4.6 §引擎 5: trusted before, then its process is gone → the closes count for nothing: no strike, no negative, no critical, no not_captured', T, async () => {
+  const s = await windowRig({ alive: () => false, holdCloseMs: H })
+  const open = await s.used(); open.end(); await s.settled(1)
+  await s.rejecting(); await s.rejecting(); await s.settled(3)
+  assert.deepEqual(s.rejections(), [])
+  assert.deepEqual(s.engine.negatives(), [])
+  assert.deepEqual(s.flows.slice(1).map((f) => [f.decision, f.not_captured ?? null]), [['decrypt', null], ['decrypt', null]])
+  await s.close()
+})
+test('4.6 §引擎 5: trusted before, process still alive → judged as any close after the hold: negative and one critical trust-rejected', T, async () => {
+  const s = await windowRig({ alive: () => true, holdCloseMs: H })
+  const open = await s.used(); open.end(); await s.settled(1)
+  await s.rejecting(); await s.settled(2); await s.rejecting(); await s.settled(3)
+  assert.equal(tr(s).length, 1)
+  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
+  await s.close()
+})
+test('4.6 §引擎 5: the engine stopping during the hold judges the held closes as any other, never drops them', T, async () => {
+  const s = await windowRig({ alive: () => false, holdCloseMs: 60_000 })
+  const open = await s.used(); open.end(); await s.settled(1)
+  await s.rejecting(); await s.rejecting()
+  await new Promise((r) => setTimeout(r, 100))
+  assert.equal(s.flows.length, 1, 'held: the rows wait for the judgment')
+  await s.close()
+  assert.equal(tr(s).length, 1)
+  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
+})
+
+test('4.6 §引擎 5: an alive check that throws or answers anything but false is alive — the held closes are judged', T, async () => {
+  for (const alive of [() => { throw new Error('table unreadable') }, () => undefined, async () => null]) {
+    const s = await windowRig({ alive, holdCloseMs: H })
+    const open = await s.used(); open.end(); await s.settled(1)
+    await s.rejecting(); await s.settled(2); await s.rejecting(); await s.settled(3)
+    assert.equal(tr(s).length, 1)
+    await s.close()
+  }
+})
+test('4.6 §引擎 5: a stop while the alive check is still asking judges the held closes and writes their rows', T, async () => {
+  let ask = null
+  const s = await windowRig({ alive: () => new Promise((r) => { ask = r }), holdCloseMs: H }) // a process-table read that does not come back
+  const open = await s.used(); open.end(); await s.settled(1)
+  await s.rejecting(); await s.rejecting()
+  await new Promise((r) => setTimeout(r, H + 100))
+  assert.ok(ask, 'the hold is asking')
+  await s.close()
+  assert.equal(tr(s).length, 1)
+  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
+  ask(false) // the late answer changes nothing
 })
