@@ -1,5 +1,5 @@
 // test/query/read-beside-fold.test.mjs — 3.5 #62「一场正被读的会话不被后台折叠挤出」: two sessions that do not fit the budget together, one read
-// by requests, the other folded in background slices between them, as the worker's scheduler does, in a process of its own with a small heap
+// by requests, the other folded in background slices between them, as the worker's scheduler does, and the heap looked at for a waiting session as its timer does, in a process of its own with a small heap
 // (test/query/cut-fits.test.mjs). The reader's fold log is opened again only if its state went. The folded one has grown since its checkpoint,
 // so its first slice thaws it beside the reader's state: that thaw once took the process to V8's limit (SIGABRT, 2026-11-05).
 //   The axis: which session was folded last, and so which state is warm when the reading starts; and how the reading ends. The reader leaves,
@@ -18,7 +18,7 @@ const HEAP_MB = 192, SHARE = 0.275 // each a fold of more than half the budget (
 const SHAPE = { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12, names: 16_000 }
 const READ = `${TICK}
 const { runQuery } = await import(${at('../../src/query/named/index.mjs')}) // first: the registry imports session.mjs
-const { READING_MS, extendSession, heapHasRoom, saveIndexes, sealParts } = await import(${at('../../src/query/named/session.mjs')})
+const { READING_MS, extendSession, heapHasRoom, roomFor, saveIndexes, sealParts } = await import(${at('../../src/query/named/session.mjs')})
 const { sessionDir } = await import(${at('../../src/query/projection.mjs')})
 const { readHead } = await import(${at('../../src/query/ctx-files.mjs')})
 const { drain } = await import(${at('../helpers/bounded.mjs')})
@@ -35,9 +35,12 @@ for await (const _ of (await import('node:readline')).createInterface({ input: p
   const page = async () => { const d = await runQuery('session', { id: read }, ctx); tick(); return d }
   await page(); await page() // a cold state opens here: the count starts once it is warm
   opens = 0
-  let stopped = null, errors = []
+  let stopped = null, errors = [], looks = 0
   await drain(async () => {
     errors.push(...(await page()).errors.filter((e) => !e.level))
+    // the worker's look for a session that waits for room (src/query/worker.mjs roomLater) between two of the reader's polls
+    if (roomFor() === null) looks++
+    if (opens) return false // the reader's state went: said below, not waited out
     try { return await extendSession(ctx, folded, 50) } catch (e) { stopped = e.code; return false }
   }, 'beside the reader')
   const reopens = opens
@@ -51,7 +54,7 @@ for await (const _ of (await import('node:readline')).createInterface({ input: p
     errors.push(...(await page()).errors.filter((e) => !e.level))
   }
   const h = readHead(home, folded)
-  console.log(JSON.stringify({ reopens, errors, stopped, room, tier: h.tier, pending: h.pending ?? null, truncated: h.truncated ?? null }))
+  console.log(JSON.stringify({ reopens, looks, errors, stopped, room, tier: h.tier, pending: h.pending ?? null, truncated: h.truncated ?? null }))
   break
 }`
 
@@ -66,9 +69,10 @@ for (const [last, then] of [['read', 'left'], ['folded', 'opened']]) {
       await g.more() // past its checkpoint: its next slice thaws it
       r.send('')
       const end = await r.next()
+      assert.ok(end.looks > 0, 'the heap was asked for room while the reader polled')
       assert.equal(end.reopens, 0, 'the read session kept its state')
       assert.deepEqual(end.errors, [], 'every page answered whole')
-      assert.ok(end.stopped === null || end.stopped === 'heap-no-room', `the fold gave way, if at all, for lack of room: ${end.stopped}`)
+      assert.ok(end.stopped === null || end.stopped === 'heap-busy', `the fold gave way, if at all, to the reader's heap: ${end.stopped}`)
       if (then === 'left') assert.equal(end.room, true, 'at idle what the reader left is no lack of room')
       assert.deepEqual([end.tier, end.pending, end.truncated], [1, null, null], 'the fold ends whole')
     } finally {
