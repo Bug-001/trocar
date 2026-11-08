@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { isMain } from './is-main.mjs'
 
@@ -101,18 +101,74 @@ pre{margin:0;padding:${PAD}px;color:#d6dae3;background:#12141a;font:16px/${LH}px
 </style>${bar}<pre>${body}</pre>` }
 }
 
-async function playwright() {
+export async function playwright() {
   const pick = (m) => (m && (m.chromium || (m.default && m.default.chromium))) || null
   try { const m = await import('playwright'); if (pick(m)) return pick(m) } catch { /* not in the repo */ }
   if (!process.env.TROCAR_PLAYWRIGHT) return null
   try { return pick(await import(pathToFileURL(path.join(process.env.TROCAR_PLAYWRIGHT, 'playwright', 'index.js')).href)) } catch { return null }
 }
 
-const CHROMES = [
+export const CHROMES = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   '/usr/bin/google-chrome',
 ]
+
+// --window-size leaves the viewport an inset short of the window in headless Chrome 156, so the page is driven over the DevTools
+// pipe (fd 3 in, fd 4 out, NUL-delimited JSON) with an explicit viewport instead of --screenshot.
+function cdpShot(bin, tmp, url, w, h, out) {
+  const chrome = spawn(bin, ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--use-mock-keychain', '--remote-debugging-pipe', `--user-data-dir=${tmp}/p`],
+    { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] })
+  let id = 0, buf = '', err = '', onLoad
+  const waiting = new Map()
+  chrome.stderr.on('data', (d) => { err = (err + d).slice(-2000) })
+  chrome.stdio[3].on('error', () => {}) // a Chrome that died at start: its exit below says why, not an EPIPE
+  chrome.stdio[4].setEncoding('utf8') // a character split across two chunks stays whole
+  chrome.stdio[4].on('data', (d) => {
+    const parts = (buf + d).split('\0')
+    buf = parts.pop()
+    let msgs
+    try { msgs = parts.map((p) => JSON.parse(p)) } catch (e) { err += `\nunreadable DevTools message: ${e.message}`; chrome.kill(); return }
+    for (const m of msgs) {
+      if (m.method === 'Page.loadEventFired') onLoad?.()
+      const p = waiting.get(m.id)
+      if (p) { waiting.delete(m.id); m.error ? p.reject(new Error(`chrome: ${m.error.message}`)) : p.resolve(m.result) }
+    }
+  })
+  const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
+    waiting.set(++id, { resolve, reject })
+    chrome.stdio[3].write(JSON.stringify({ id, method, params, sessionId }) + '\0')
+  })
+  const run = async () => {
+    const { targetId } = await send('Target.createTarget', { url: 'about:blank' })
+    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true })
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: false }, sessionId)
+    await send('Page.enable', {}, sessionId)
+    const loaded = new Promise((r) => { onLoad = r })
+    await send('Page.navigate', { url }, sessionId)
+    await loaded
+    // the page this load was for, and how tall it really is: a line the row count missed (a tab, a glyph wider than the grid) is shown, not cut
+    const { result } = await send('Runtime.evaluate', { expression: 'JSON.stringify([location.href, document.documentElement.scrollHeight])', returnByValue: true }, sessionId)
+    const [href, tall] = JSON.parse(result.value)
+    if (href !== url) throw new Error(`chrome loaded ${href}, not the page to shoot`)
+    if (tall > h) await send('Emulation.setDeviceMetricsOverride', { width: w, height: tall, deviceScaleFactor: 2, mobile: false }, sessionId)
+    const { data } = await send('Page.captureScreenshot', { format: 'png' }, sessionId)
+    fs.writeFileSync(out, Buffer.from(data, 'base64'))
+  }
+  let timer
+  const died = new Promise((_, reject) => {
+    chrome.on('error', (e) => reject(new Error(`chrome did not start: ${e.message}`)))
+    chrome.on('exit', () => reject(new Error(`chrome exited before writing the png: ${err.trim().split('\n').pop()}`)))
+    timer = setTimeout(() => reject(new Error(`chrome did not answer in 30s; killed pid ${chrome.pid}`)), 30000)
+  })
+  return Promise.race([run(), died]).finally(() => {
+    clearTimeout(timer)
+    chrome.kill() // our own child, by its handle
+    const hard = setTimeout(() => chrome.kill('SIGKILL'), 5000) // one that ignores SIGTERM does not hold the script
+    hard.unref()
+    return new Promise((r) => (chrome.exitCode !== null || chrome.signalCode ? r() : chrome.once('exit', r))).finally(() => clearTimeout(hard))
+  })
+}
 
 async function shoot({ doc, w, h, out }) {
   fs.mkdirSync(path.dirname(out), { recursive: true })
@@ -121,6 +177,8 @@ async function shoot({ doc, w, h, out }) {
     const b = await chromium.launch()
     const page = await b.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: 2 })
     await page.setContent(doc)
+    const tall = await page.evaluate(() => document.documentElement.scrollHeight)
+    if (tall > h) await page.setViewportSize({ width: w, height: tall })
     await page.screenshot({ path: out })
     await b.close()
     return
@@ -131,10 +189,7 @@ async function shoot({ doc, w, h, out }) {
   try {
     const page = path.join(tmp, 'shot.html')
     fs.writeFileSync(page, doc)
-    const r = spawnSync(bin, ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=2',
-      `--window-size=${w},${h}`, `--screenshot=${out}`, '--virtual-time-budget=1000', `--user-data-dir=${tmp}/p`,
-      pathToFileURL(page).href], { encoding: 'utf8', timeout: 30000 }) // headless Chrome 154 on macOS 27 can stay up after writing the png
-    if (!fs.existsSync(out)) throw new Error(`chrome did not write the png: ${(r.stderr || r.error?.message || '').trim().split('\n').pop()}`)
+    await cdpShot(bin, tmp, pathToFileURL(page).href, w, h, out)
   } finally {
     // a Chrome that outlived the timeout can still be writing its profile: let Node retry ENOTEMPTY / EBUSY, then say what stayed
     try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) } catch (e) { process.stderr.write(`cli-shot: could not remove ${tmp} (${e.code ?? e.message}); remove it by hand\n`) }
