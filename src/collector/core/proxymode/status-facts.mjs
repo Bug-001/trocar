@@ -8,7 +8,8 @@ import path from 'node:path'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned, markedWithoutRecord, samePath } from '../trust/journal.mjs'
 import { isPresent, holds, presentPaths, userCertFilesOf, rootHeldIn, readSrc, inTrocar } from './sources.mjs'
-import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote } from './entries.mjs'
+import { judgedWith } from './verdict.mjs'
+import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote, blockerOf } from './entries.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
 import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
@@ -189,12 +190,15 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
         upstream = { url_redacted: red(u.url), source: u.source, ...(u.pac ? { pac: true } : {}) }
       }
       if (upstream.source === 'unknown') upstream.code = CODE.priorProxyUnknown
-      const blocked = plan.notRouted.find((n) => n.form === f.id) || null
+      // the door judges a process on a route against the verified forms of that route its program file may be (judgedWith), present or not, so a blocker
+      // on any of them splices them all: each form reads the first one, naming the form whose blocker it is when that is another (4.11 ⑩)
+      const mine = plan.notRouted.find((n) => n.form === f.id)
+      const blocked = mine || judgedWith(desc, os, f).filter((g) => g.id !== f.id).map((g) => { const b = blockerOf(desc, g, ctx); return b && { ...b, code: 'not-routed', via: g.id } }).find(Boolean) || null
       forms.push({
         id: f.id, route: f.route, certificate,
         proxy: { connected: intact && door_up, entry_intact: intact, door_up, upstream, written: main ? red(writtenOf(main)) : null, prior: red(priorRaw) },
         entry: main ? { where: main.keys ? `${main.path}#${main.keys.join('.')}` : main.path, kind: route.kind || main.kind, trocar: true, intact } : null,
-        plan: blocked ? { reason: blocked.reason, at: blocked.at ?? null, code: blocked.code } : null,
+        plan: blocked ? { reason: blocked.reason, at: blocked.at ?? null, code: blocked.code, ...(blocked.via ? { via: blocked.via } : {}) } : null,
         // the form's own way of being made to read its settings again, and the places it runs from: the doctor's restart steps come from the form the
         // process belongs to, never one fixed sentence (1.6 附录 B). No `restart` of its own: the harness's (`proxy.restart`), through the facts' behaviour.
         restart: f.restart || null, paths: presentPaths(f, ctx), follows: f.systemProxy || null, // the form's own OS-proxy behaviour (4.11 form `systemProxy`), else the harness's

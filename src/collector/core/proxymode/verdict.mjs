@@ -12,6 +12,7 @@ import path from 'node:path'
 import { readSrc, fileOf, rootHeldIn } from './sources.mjs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { HOOK_PID_ENV } from './chain.mjs'
+import { normalizeName } from '../../../off/identity.mjs'
 
 const fwd = (code, detail, extra) => ({ decrypt: false, code, detail, ...extra })
 // a verdict from evidence that could not be read (the process env or cwd, a file): `unread`, so the door judges again on a later connection (4.11 P11, D38)
@@ -73,12 +74,30 @@ function replaceVerdict(pm, ctx, facts, record) {
   return null
 }
 
-/** The forms a process of `desc` may be on `os` (on a door of route `routeId`, or any): of its forms here, the verified ones when any is — D51 names
- *  a harness, not a form, so an unmeasured sibling must not veto the verified ones. The door judges every one of them; `status` asks the same. */
-export function judgedForms(desc, os, routeId = null) {
+/** The forms a process of `desc` may be on `os` (on a door of route `routeId`, or any): of its forms here, the verified ones when any is — an
+ *  unmeasured sibling must not veto the verified ones —, of those the ones whose `exe` names the process's program file `exe` (a form with no
+ *  `exe` names any), and when a word of some form's `argv` is among the process's arguments `argv` (argv[1..]), only those forms and the ones
+ *  with no `argv` (no word present, or a command line not read: the step keeps all); none at the exe step → all of them, whatever the command
+ *  line says: forwarded rather than broken (4.11 P11). The door judges every one of them; `status` asks the same. */
+export function judgedForms(desc, os, routeId = null, exe = null, argv = null) {
   const all = desc.proxyMode.forms.filter((f) => f.os.includes(os) && (routeId == null || f.route === routeId))
-  const ok = all.filter((f) => f.verified && f.verified[os] === true)
-  return ok.length ? ok : all
+  const ok = all.filter((f) => f.verified && f.verified[os] === true), may = ok.length ? ok : all
+  const name = exe == null ? null : normalizeName(exe)
+  const byExe = name ? may.filter((f) => !f.exe || !f.exe[os] || f.exe[os].includes(name)) : may
+  if (!byExe.length) return may // a program file no form names: every form, whatever its command line says
+  if (!Array.isArray(argv)) return byExe
+  const words = new Set(argv.slice(1).map(String)), said = (f) => f.argv && f.argv[os]
+  const hit = byExe.filter((f) => said(f) && said(f).some((w) => words.has(w))) // a word is positive evidence only: its absence selects no other form
+  return hit.length ? byExe.filter((f) => !said(f) || hit.includes(f)) : byExe
+}
+
+/** The forms the door judges together with form `f` (its route; for each program file `f` names, with the words `f`'s command line has, the forms
+ *  judgedForms gives a process of it): what `status` reads for a form whose processes it has not seen (4.11 P11). */
+export function judgedWith(desc, os, f) {
+  const names = (f.exe && f.exe[os]) || [null], argv = f.argv && f.argv[os] ? [null, ...f.argv[os]] : null
+  const out = new Map()
+  for (const n of names) for (const g of judgedForms(desc, os, f.route, n, argv)) out.set(g.id, g)
+  return [...out.values()]
 }
 
 /** The carrier time of a form (rule 3): the latest install item of its harness, or the root in the user's store for a root-trust form; and rule U's

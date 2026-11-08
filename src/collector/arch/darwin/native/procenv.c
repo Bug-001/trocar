@@ -68,6 +68,8 @@ int main(int argc, char **argv) {
   int nargs;
   memcpy(&nargs, buf, sizeof(nargs));
   char *p = buf + sizeof(nargs), *end = buf + sz;
+  // shortcut: exec_path lives in the process's own argument area (a retitle does not touch it; a process that rewrote it would only be judged as
+  // another of its harness's forms, 4.9 §5.2); switch to proc_pidpath with the next rebuild made for another reason
   if (asked(":exe", argv + 2, argc - 2)) {                 // the exec'd path, resolved (a symlink, a bare word on PATH) → the file
     char real[PATH_MAX];
     record(":exe", realpath(p, real) ? real : p);

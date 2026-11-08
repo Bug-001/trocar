@@ -569,4 +569,5 @@ for (const platform of ['darwin', 'win32']) for (const reason of ['blocker', 'bl
   assert.equal(by('codex.cli').captured, true)
   const f = findingsOf(F).find((x) => x.code === 'not-routed')
   assert.ok(f && f.why.includes(at) && f.commands.some((c) => c.run.includes(at)), JSON.stringify(f))
+  assert.equal(/not known/.test(f.what), reason === 'blocker-unreadable', `a blocker not read is not known, never "do not go through": ${f.what}`)
 })

@@ -369,7 +369,7 @@ test('V10: status says unknown with the reason for connections the daemon did no
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === lock) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
   r = await runStatus(s, [], { request: down(), fs: broken })
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  assert.match(flat(r.text), new RegExp(`Daemon: unknown \\(${esc(lock)}: EACCES`))
+  assert.match(flat(r.text), new RegExp(`Daemon: unknown \\(${esc(lock.replace(s.home, '~'))}: EACCES`)) // HOME as ~ (1.6 §1.1⑤)
   assert.match(flat(r.text), /Connections unknown \(whether a daemon runs is not known/)
   assert.ok(!/Connections (0|none|no )/.test(flat(r.text))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
   // --json: the same, as data

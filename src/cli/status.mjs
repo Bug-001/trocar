@@ -32,14 +32,14 @@ import { removeTrocarText, SENTINEL } from '../off/text-edit.mjs'
 import { unseal } from '../off/seal.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs' // its own small file on purpose: through ./orchestrate.mjs this one function pulled the whole undo machinery into `status`'s module load (D62)
 
-import { judgeHarness, certOfForms } from '../netenv/verdict.mjs'
+import { judgeHarness, certOfForms, routeOfForms } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
 import { buildTopology } from '../netenv/topology.mjs'
 import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
-import { colors } from './text.mjs'
+import { colors, tildeText } from './text.mjs'
 import { squashed } from './words.mjs'
 import { routeReadsEnv } from '../off/loc.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
@@ -208,7 +208,8 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const forms = dsc ? judgedForms(dsc, platform) : []
     const present = forms.length ? (here ? here[id] || [] : null) : undefined // undefined: no form on this OS to be present (Linux; a harness with none here)
     if (present === null && hereError) why.push(hereError)
-    const formsOf = (p) => (present ? forms.filter((x) => present.includes(x.id) && holds(x, p)) : forms) // the forms a process can be on: those that are here and can hold it
+    // the forms a process can be on: those its program file and command line may be (the door's rule, judgedForms with its exe and argv), here, and able to hold it
+    const formsOf = (p) => { const may = new Set(judgedForms(dsc, platform, null, p.exe ?? null, p.argv ?? null).map((x) => x.id)); return (present ? forms.filter((x) => present.includes(x.id) && holds(x, p)) : forms).filter((x) => may.has(x.id)) }
     // the forms each process can be on, by the one predicate (formsOf): carried on its row, so the topology draws it on the same forms (status-facts netFormsOf)
     const onForms = (p) => (forms.length ? { forms: formsOf(p).map((x) => x.id) } : {})
     const startOf = (p) => {
@@ -248,8 +249,8 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const read = hd ? configuredHosts(hd, { home, os: platform, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p) }) : { hosts: [], errors: [] }
     const hosts = read.errors.length ? [] : read.hosts
     const localUpstream = isProxyMode(platform) && hosts.length > 0 && hosts.every(isLoopbackHost)
-    const judge = (cert = true) => {
-      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream })
+    const judge = (cert = true, blocked = {}) => {
+      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream, blocked })
       if (merged) j.rows = j.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
       return j
     }
@@ -289,8 +290,10 @@ function judgeCertificates(f) {
     const forms = f.facts && f.facts.harnesses && f.facts.harnesses[h.id] && f.facts.harnesses[h.id].forms
     if (!(forms && forms.length && h.judge)) continue
     const cert = certOfForms(forms)
-    h.judged = h.judge(cert)
+    h.judged = h.judge(cert, routeOfForms(forms)) // the route verdict too: a form a blocker keeps off the route is not captured (4.11 ⑩)
     // a certificate not known (D38) says what could not be read, once
+    // a blocker not read (4.11 ⑩) says which setting, once
+    if (h.judged.captured === null && Array.isArray(h.why)) for (const x of forms) { const w = x.route && x.route.reason === 'blocker-unreadable' && `could not read ${x.route.at}`; if (w && !h.why.includes(w)) h.why.push(w) }
     if (cert === null && Array.isArray(h.why)) for (const x of forms) { const u = x.certificate && x.certificate.in_effect === null && x.certificate.user_file, w = u && u.reason && `could not read ${u.reason}`; if (w && !h.why.includes(w)) h.why.push(w) }
   }
 }
@@ -379,7 +382,7 @@ async function gatherTopology(f, { home, env, platform, deps = {} }) {
     // command starts no PowerShell of its own for the process snapshot, the socket table and Internet Settings (4.8 §1; D62). Without a daemon
     // the platform's part starts and closes one itself, as it did.
     const warm = deps.daemonReader && f.daemon && f.daemon.state === 'running' ? deps.daemonReader : null
-    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(warm ? { helper: warm } : {}), ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
+    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, fs /* the platform's facts read the files status reads: one fs */, ...(warm ? { helper: warm } : {}), ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
     const topology = buildTopology(facts)
     // the codes `doctor` would give, on the topology of each harness (the board reads them there); the commands and the text are `doctor`'s
     let diagnosed = null
@@ -409,7 +412,7 @@ function formsOf(f) {
   const out = {}
   for (const [h, hf] of Object.entries((f.facts && f.facts.harnesses) || {})) {
     const l = (hf.forms || []).filter((x) => x.certificate && x.proxy)
-    if (l.length) out[h] = l.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy, ...(x.notes && x.notes.length ? { notes: x.notes } : {}) }))
+    if (l.length) out[h] = l.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy, ...(x.route ? { route: { reason: x.route.reason, at: x.route.at ?? null, ...(x.route.via ? { form: x.route.via } : {}) } } : {}), ...(x.notes && x.notes.length ? { notes: x.notes } : {}) }))
   }
   return Object.keys(out).length ? out : null
 }
@@ -591,14 +594,16 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   const c = colors(io) // zero ANSI bytes when stdout is not a TTY or NO_COLOR is set (src/cli/text.mjs)
   const now = (deps.ms || Date.now)()
   const detail = named.ids || []
+  // HOME paths as ~ in every string BEFORE the text is laid out, so a line wraps at the width it is printed with (1.6 §1.1⑤⑥); the JSON keeps them whole
+  const tildeAll = (x) => (typeof x === 'string' ? tildeText(x, home) : Array.isArray(x) ? x.map(tildeAll) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, tildeAll(v)])) : x)
   if (detail.length) {
-    const found = findingsFor(f, detail)
+    const found = tildeAll(findingsFor(f, detail)), shown = tildeAll(doc)
     detail.forEach((h, i) => {
       if (i) io.out('')
       const finding = found.find((x) => x.harness === h && x.class !== 'note') || null
-      for (const l of statusDetail(doc, h, { finding, now, colors: c })) io.out(l)
+      for (const l of statusDetail(shown, h, { finding, now, colors: c })) io.out(l)
     })
-  } else for (const l of statusSummary(doc, { now, colors: c })) io.out(l)
+  } else for (const l of statusSummary(tildeAll(doc), { now, colors: c })) io.out(l)
   if (failures) { io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now })) io.out(l) }
   return { exit, f }
 }
