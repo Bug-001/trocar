@@ -447,12 +447,12 @@ test('V49 route-loop names where the setting that loops lives; a harness with no
   assert.match(gui(findingsOf(f), 'route-loop'), /Put the line HTTPS_PROXY=.* in \/h\/\.codex\/\.env/)
   const g = loop(proxyOf('http://127.0.0.1:17992', [SRC_ENV]))
   g.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
-  assert.match(gui(findingsOf(g), 'route-loop'), /export HTTPS_PROXY=/)
+  assert.match(gui(findingsOf(g), 'route-loop'), /\bHTTPS_PROXY\b/)
   assert.doesNotMatch(gui(findingsOf(g), 'route-loop'), /\.codex\/\.env/)
   // a loop with no source of its own: the place comes from the behaviour — the first file it reads, else the variable it reads (not always HTTPS_PROXY)
   const nosrc = loop(proxyOf('http://127.0.0.1:17992', []))
   nosrc.harnesses.codex.behaviour = behaviourOf('codex', [], { measured: 'lab', env: ['ZCODE_HTTP_PROXY'] })
-  assert.match(gui(findingsOf(nosrc), 'route-loop'), /export ZCODE_HTTP_PROXY=/)
+  assert.match(gui(findingsOf(nosrc), 'route-loop'), /\bZCODE_HTTP_PROXY\b/)
   const nosrcFile = loop(proxyOf('http://127.0.0.1:17992', []))
   nosrcFile.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
   assert.match(gui(findingsOf(nosrcFile), 'route-loop'), /Put the line HTTPS_PROXY=.* in \/h\/\.codex\/\.env/)
@@ -620,4 +620,17 @@ test('V49 every Fix, on every platform: no `trocar off` step after `trocar on`, 
     hf: { forms: [], behaviour: {}, systemProxy: null } }
   const whys = [null, 'system-proxy-pac', 'system-proxy-unreadable', 'upstream-unparseable']
   for (const [code, entry] of Object.entries(FINDINGS_WIN32)) for (const why of whys) offOnOk({ commands: entry.commands({ ...ctx, code, fm: { id: 'codex.app', route: { reason: 'not-routed', why }, entryPlace: null } }) }, `win32 ${code} (${why})`)
+})
+
+test('V49 a setting from a variable, on win32: the step sets or removes the user\'s own variable in PowerShell (no export / unset, which PowerShell does not have)', () => {
+  const loop = pfacts('codex', form('codex.cli', { routeLoop: true, entry: null, setting: proxyOf('http://127.0.0.1:17992', [SRC_ENV]), procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992), {})
+  const setStep = gui(findingsOf(loop), 'route-loop') // pfacts is win32
+  const dead = { ...deadFacts(SRC_ENV), platform: 'win32' }
+  dead.harnesses['claude-code'].proxyPlaces = [{ kind: 'env', name: 'HTTPS_PROXY', scheme: 'http', host: '127.0.0.1', port: 7890 }]
+  const removeStep = gui(findingsOf(dead), 'proxy-dead')
+  for (const t of [setStep, removeStep]) {
+    assert.doesNotMatch(t, /\b(export|unset) /)
+    assert.match(t, /\[Environment\]::SetEnvironmentVariable\('HTTPS_PROXY',.*,'User'\)/)
+  }
+  assert.match(removeStep, /SetEnvironmentVariable\('HTTPS_PROXY',\$null,'User'\)/, 'removing passes $null')
 })
