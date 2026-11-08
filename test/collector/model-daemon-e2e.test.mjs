@@ -54,7 +54,7 @@ for (const platform of ['darwin', 'win32']) {
         const io = fakeIo()
         // the FIRST `on` here runs with no daemon yet (it starts it), so there is no warm helper to ask for the process table and the OS is asked:
         // injected, as every OS question in a test is (0.1 §3). The second `on` below, with the daemon still there, asks the daemon instead.
-        const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, exec: () => ({ status: 0, stdout: '', stderr: '' }), sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, exec: () => ({ status: 0, stdout: '', stderr: '' }), sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text() + (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : ''))
         assert.deepEqual([box.enabled, box.startedNow], [[], [true]], 'D61: `on` started the daemon through the OS mechanism once (startNow) and never touched the registration (no enable)')
         // 1.6 §1: the on run's receipt is in flows/ — its last install-note is the result line naming the harness it turned on
@@ -170,7 +170,7 @@ for (const platform of ['darwin', 'win32']) {
         let table = []
         const deps = { ...base, procs: async () => table }
         const io = fakeIo()
-        assert.equal(await runOnCli(['codex', '--yes'], { io, env: w.env, home: w.home, platform, deps: { ...base, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) } }), 0, io.text())
+        assert.equal(await runOnCli(['codex', '--yes'], { io, env: w.env, home: w.home, platform, deps: { ...base, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) } }), 0, io.text())
         const holder = { pid: 4711, ppid: 1, uid: 501, startedAt: Date.now() + 5, exe: '/usr/local/bin/codex', argv: ['codex'], argvSplit: true, cmdline: 'codex', env: () => null, envRead: false }
         await new Promise((res) => setTimeout(res, 10))
         table = [holder]; box.procs = table

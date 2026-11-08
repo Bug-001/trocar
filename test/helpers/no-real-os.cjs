@@ -14,6 +14,9 @@
 //   3. Every refusal is written to a ledger (`globalThis[Symbol.for('trocar.no-real-os')].refused`). A test process that ends with a
 //      refusal nobody acknowledged (`takeRefusals()` in test/helpers/no-real-os.mjs) exits 1 and names it: a caller that catches
 //      ESANDBOX as "the tool failed" no longer turns a path it never ran into a green test.
+//   4. `node:fs` is wrapped the same way: a write under the machine's own folders (ROOTS) or the real home is refused with ESANDBOX and goes in the same ledger, unless it is in the
+//      temp dir or the checkout. A test that makes an app "present" at its descriptor's absolute place wrote two empty files into /Applications on 2026-11-06, and every later
+//      run of the install tests on that machine saw them as installed apps.
 // Load it with `--require` like the other preloads; the test files' children inherit the variable (not the wrapper: a child that
 // must be guarded runs the same preload, or relies on layer 1). Guard: test/helpers/no-real-os.test.mjs, test/off/exec.test.mjs.
 'use strict'
@@ -22,6 +25,7 @@ const os = require('node:os')
 const path = require('node:path')
 const util = require('node:util')
 const cp = require('node:child_process')
+const { fileURLToPath } = require('node:url')
 const { syncBuiltinESMExports } = require('node:module')
 
 process.env.TROCAR_TEST_SANDBOX = '1'
@@ -116,12 +120,44 @@ function patch(name) {
 for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync']) patch(name)
 syncBuiltinESMExports() // an ESM `import { spawnSync } from 'node:child_process'` reads the patched functions
 
+const inside = (p, root) => p === root || p.startsWith(root + path.sep)
+const realOf = (p) => { try { return fs.realpathSync(p) } catch { return p } }
+const WIN_ROOTS = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.SystemRoot]
+const ROOTS = [...new Set([...(process.platform === 'win32' ? WIN_ROOTS : ['/Applications', '/Library', '/System', '/usr', '/etc', '/private/etc']), os.userInfo().homedir].filter(Boolean))]
+const FREE = [...new Set([os.tmpdir(), realOf(os.tmpdir()), process.cwd(), realOf(process.cwd()), path.resolve(__dirname, '..', '..')])] // __dirname: a checkout whose test/helpers is a link
+
+const pathOf = (p) => (typeof p === 'string' ? p : Buffer.isBuffer(p) ? p.toString() : p instanceof URL && p.protocol === 'file:' ? fileURLToPath(p) : null) // anything else (an fd) is not this guard's
+
+/** Throws ESANDBOX (and records it) when `p` is under ROOTS and not in FREE. shortcut: judged on the path as written, so a link in the temp dir that points out of it passes; upgrade if one ever does. */
+function guardWrite(name, p) {
+  const given = pathOf(p)
+  if (given === null) return
+  const at = path.resolve(given)
+  if (!ROOTS.some((r) => inside(at, r)) || FREE.some((r) => inside(at, r))) return
+  const message = `refusing ${name} of ${at} under npm test (0.1 §3): write in a tmpDir(), and give the code under test its roots`
+  refused.push({ tool: name, command: at, message })
+  throw Object.assign(new Error(message), { code: 'ESANDBOX' })
+}
+const opensForWrite = (flags) => (typeof flags === 'number' ? (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT)) !== 0 : typeof flags === 'string' && /[wa+]/.test(flags)) // no flags (fs.open(path, callback)): a read
+const WRITERS = { writeFile: [0], appendFile: [0], mkdir: [0], mkdtemp: [0], rm: [0], rmdir: [0], unlink: [0], truncate: [0], chown: [0], lchown: [0], chmod: [0], lchmod: [0], utimes: [0], lutimes: [0], rename: [0, 1], copyFile: [1], cp: [1], link: [1], symlink: [1], createWriteStream: [0], open: 'open' }
+function patchFs(obj, name, spec, wrap = (g, f) => function (...a) { g(a); return f.apply(this, a) }) {
+  const original = obj[name]
+  if (typeof original !== 'function') return
+  const judge = (a) => { if (spec === 'open') { if (opensForWrite(a[1])) guardWrite(name, a[0]) } else for (const i of spec) guardWrite(name, a[i]) }
+  obj[name] = Object.defineProperty(wrap(judge, original), 'name', { value: name })
+}
+const later = (g, f) => async function (...a) { g(a); return f.apply(this, a) }
+for (const [name, spec] of Object.entries(WRITERS)) {
+  patchFs(fs, name, spec); patchFs(fs, `${name}Sync`, spec); patchFs(fs.promises, name, spec, later)
+}
+syncBuiltinESMExports() // fs and fs/promises too
+
 process.on('exit', () => {
   if (!refused.length) return
   const lines = refused.map((r) => `  ${r.command || r.tool}`)
-  fs.writeSync(2, `\nno-real-os: ${refused.length} attempt${refused.length === 1 ? '' : 's'} to run a real OS tool ${refused.length === 1 ? 'was' : 'were'} refused in this process and never acknowledged:\n${lines.join('\n')}\n` +
+  fs.writeSync(2, `\nno-real-os: ${refused.length} attempt${refused.length === 1 ? '' : 's'} to run a real OS tool or write on the real machine ${refused.length === 1 ? 'was' : 'were'} refused in this process and never acknowledged:\n${lines.join('\n')}\n` +
     '  something ran a real tool, and whatever caught the ESANDBOX error went on as if the tool had failed; the path was not tested.\n' +
-    '  inject a runner (run) there, or put a stub on PATH inside the temp dir; a test that provokes the refusal on purpose calls takeRefusals() from test/helpers/no-real-os.mjs\n')
+    '  inject a runner (run) there, or put a stub on PATH inside the temp dir, or write in a tmpDir(); a test that provokes the refusal on purpose calls takeRefusals() from test/helpers/no-real-os.mjs\n')
   process.exitCode = 1
 })
 
