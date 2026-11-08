@@ -69,9 +69,11 @@ test('CM24 · daemon up: a holder the daemon names (GET /holders over its real e
     const before = tree(w.home)
     const { receipt, exit } = await uninstall(w, running)
     assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
-    assert.ok(receipt.problems.some((p) => p.includes('trocar off') && p.includes('trocar uninstall')), 'the refusal gives the steps: trocar off, then trocar uninstall (1.6 §9.6 collectors-online)')
+    // nothing is on, so off is no step: the holder is ended (quit it, then its pid by the OS's own command), then uninstall (1.6 附录 B collectors-online)
     const lines = formatUninstallReceipt(receipt, { home: w.home }).split('\n')
-    assert.deepEqual(lines.filter((l) => /^\s+trocar /.test(l)).map((l) => l.trim()), ['trocar off', 'trocar uninstall'], `1.6 §1.1⑥: each command whole on a line of its own: ${lines.join(' | ')}`)
+    const steps = lines.filter((l) => /^\s+(trocar|kill) /.test(l)).map((l) => l.trim())
+    assert.deepEqual(steps, ['kill 4242', 'trocar uninstall'], `1.6 §1.1⑥: each command whole on a line of its own: ${lines.join(' | ')}`)
+    assert.ok(lines.some((l) => /^Quit codex/.test(l)), `a step in an application is prose at the margin, not in the command column: ${lines.join(' | ')}`)
     assert.ok(!lines.some((l) => l.startsWith('Problem:') && /trocar (off|uninstall)/.test(l)), 'not inside a Problem line')
     assert.match(receipt.problems.join('\n'), /codex \(pid 4242\)/)
     assert.deepEqual(tree(w.home), before, 'not one file changed')
@@ -100,7 +102,7 @@ for (const table of [...Object.keys(TABLES), 'unreadable']) {
       if (!holds) { assert.notEqual(code, 'collectors-online', JSON.stringify(receipt.problems)); return }
       assert.deepEqual([exit, code], [1, 'collectors-online'])
       assert.match(receipt.problems.join('\n'), /codex \(pid 4242\)/)
-      assert.equal(receipt.problems.filter((p) => /trocar off/.test(p)).length, 1, `the next step is given once (1.6 §1.1③): ${JSON.stringify(receipt.problems)}`)
+      assert.equal(receipt.problems.filter((p) => /trocar uninstall/.test(p)).length, 1, `the next step is given once (1.6 §1.1③): ${JSON.stringify(receipt.problems)}`)
       if (table === 'unreadable') assert.match([...receipt.problems, ...receipt.notes].join('\n'), /the table broke/, 'the failed read is said with its reason (D38)')
     } finally { await server.close() }
   })

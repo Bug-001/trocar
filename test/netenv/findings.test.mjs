@@ -535,6 +535,18 @@ test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the ro
   for (const r of reasons) assert.deepEqual(validateFinding(nr(r, '/x')), [], r)
   const refused = findingFor('collectors-online', { platform: 'darwin', online: 'codex' })
   assert.deepEqual([refused.class, refused.commands.map((c) => c.run)], ['problem', ['trocar off', 'trocar uninstall']])
+  // a holder outlives off: each one gets a step that ends it, the OS's own command by its pid, and off comes only when a harness is on
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const held = findingFor('collectors-online', { platform, holders: [{ harness: 'opencode', pid: 45863 }, { harness: 'opencode', pid: 45847 }] })
+    const runs = held.commands.map((c) => c.run)
+    assert.equal(runs.at(-1), 'trocar uninstall', platform)
+    assert.ok(!runs.includes('trocar off'), `${platform}: nothing is on, so off is no step`)
+    for (const pid of [45863, 45847]) assert.ok(held.commands.some((c) => c.shell !== 'gui' && c.run.includes(String(pid))), `${platform}: an OS command ends pid ${pid}`)
+    assert.ok(held.commands.some((c) => c.shell === 'gui' && c.run.includes('opencode')), `${platform}: quitting the program comes first`)
+    assert.deepEqual(validateFinding(held), [], platform)
+    const both = findingFor('collectors-online', { platform, online: 'codex', holders: [{ harness: 'opencode', pid: 1 }] }).commands.map((c) => c.run)
+    assert.equal(both[0], 'trocar off', `${platform}: a harness on is turned off first`)
+  }
 })
 
 // §1.1⑥ applied to a step in an application (`shell: 'gui'`): it is prose, so it folds inside 80 columns, two deeper than its first line; only a
