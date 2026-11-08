@@ -8,7 +8,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { resourcesHtml, resourceUnits, renderResources, wireResources } from '../../web/legacy/replay/resources.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
-import { esc } from '../../web/legacy/core/fmt.mjs'
+import { esc, kf } from '../../web/legacy/core/fmt.mjs'
 import { relPath } from '../../web/legacy/replay/analysis.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
@@ -24,6 +24,8 @@ const stateOf = (lane, extra = {}) => {
   return { desk, lanes, anchor, anchorTs: anchor.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: anchor.calls.length }, playhead: 0, sawView: 'ctx', collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false, meta: { project_path: '/w/p' }, navOpen: new Set(ALL_OPEN), navSeenExpanded: false, ...extra }
 }
 // a group header's count, the way navGroup writes it: <span class="navlbl">label</span><span class="navct">N</span>
+// the new desk with the head's chapter axis on `axis` (the main lane's key R0-0 = the anchor here; another key = an off-axis anchor)
+const newDesk = (lane, axis = R(0)) => { const s = stateOf(lane, { rawPanelGone: true }); s.desk.head = { axis, chapters: [{ k: 0, s0: 0, s1: 6 }] }; return s }
 const grpCount = (h, label) => { const m = h.match(new RegExp(`navlbl">${label}</span><span class="navct">(\\d+)</span>`)); return m ? +m[1] : null }
 
 test('#10 bad data degrades, never throws: unknown kinds land in 其他资源 with the kind on hover; undated rows carry no step', () => {
@@ -106,6 +108,18 @@ test('#1 the six groups count their own entries (one constructed lane)', () => {
   assert.equal(grpCount(h, W.RES_GRP.dl), 2, 'dir + link together')
   assert.equal(grpCount(h, W.RES_GRP.comp), 2, 'compaction + summarize events')
   assert.equal(grpCount(h, W.RES_GRP.other), 1)
+  assert.ok(h.includes(`navlbl">${W.OTHERS_ROW(3 + 2 + 2 + 2 + 1)}</span>`), 'N more sums the folded groups')
+  // the new desk on the chapter axis: the Overview's chapter heads carry the compaction, so only the summary stays and N drops one
+  const d = resourcesHtml(newDesk(anchor))
+  assert.equal(grpCount(d, W.RES_GRP.comp), 1, 'the summary stays: the Overview does not show it')
+  assert.ok(d.includes(esc(W.summarizeRow('', kf(1200)))), 'the summary row')
+  assert.ok(!d.includes(esc(W.compactRow('', '10', '—'))), 'no compaction row on the axis')
+  assert.ok(d.includes(`navlbl">${W.OTHERS_ROW(3 + 2 + 2 + 1 + 1)}</span>`), 'N more leaves the compaction event out')
+  // an anchor off the chapter axis has no chapter heads: its compaction numbers live only here
+  const off = resourcesHtml(newDesk(anchor, 'R9-0'))
+  assert.equal(grpCount(off, W.RES_GRP.comp), 2, 'off the axis both rows stay')
+  assert.ok(off.includes(esc(W.compactRow('', '10', '—'))), 'the compaction row with its numbers')
+  for (const g of [W.RES_GRP.file, W.RES_GRP.load, W.RES_GRP.cap, W.RES_GRP.dl, W.RES_GRP.other]) assert.equal(grpCount(d, g), grpCount(h, g), g)
 })
 
 test('#3 a names-only chip never opens content and locates its first step', () => {
@@ -121,6 +135,10 @@ test('#7 the compaction group still draws with an empty ledger', () => {
   const empty = resourcesHtml(stateOf(anchorOf({ resources: [], events: comps })))
   assert.equal(grpCount(empty, W.RES_GRP.comp), 1, 'compaction events still draw with an empty ledger')
   assert.equal(grpCount(empty, W.RES_GRP.file), null, 'no empty groups are drawn')
+  const desk = resourcesHtml(newDesk(anchorOf({ resources: [], events: comps })))
+  assert.equal(grpCount(desk, W.RES_GRP.comp), null, 'the new desk on the chapter axis draws no compaction group')
+  assert.equal(grpCount(resourcesHtml(newDesk(anchorOf({ resources: [], events: comps }), 'R9-0')), W.RES_GRP.comp), 1, 'off the axis it does')
+  assert.ok(desk.includes(esc(W.NO_RESOURCES)), 'the empty ledger still says so')
 })
 
 test('2.4 压缩行: a marked compaction shows its landing\'s numbers, and the landing is no row of its own', () => {
