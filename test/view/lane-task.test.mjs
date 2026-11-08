@@ -8,7 +8,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, firstAskOf, rng } from '../query/big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { homeWith, query, sessionDoc } from '../helpers/session-doc.mjs'
-import { askOf, departer } from '../../src/view/blockmeta.mjs'
+import { askOf, departer, taskOf, TASK_MAX } from '../../src/view/blockmeta.mjs'
 
 for (const wire of ['http', 'chat', 'threads', 'ws']) {
   test(`${wire}: every lane's task is its first call's first prompt, and no label says "subagent:"`, async () => {
@@ -60,7 +60,7 @@ test('sub-agents whose first prompts share a long preamble are told apart by the
     rec(4, ask('## Your task: review the branch'), 'agent-c'), // the same prompt twice: still told apart from agent-a
   ]
   const { lanes } = await sessionDoc(recs, 'S')
-  const from = (line) => `${line}\nmore   text that follows`.replace(/\s+/g, ' ').trim().slice(0, 80) // that line on, squashed, ≤ 80
+  const from = (line) => taskOf(`${line}\nmore   text that follows`) // that line on, squashed, cut at the cap
   assert.deepEqual(lanes.map((l) => l.task), ['Run the plan', from('## Your task: implement   the retry queue in src/queue.mjs and its tests'),
     from('## Your task: review the branch'), from('## Your task: review the branch')])
 })
@@ -113,10 +113,10 @@ test('departer: after every add and remove each prompt departs where the brute-f
 })
 
 // The question past injected wrappers (4.4 #20), through the whole pipeline: the main lane's task, the session's title and the list's title
-// say the same. `want` is the fixture's text squashed and cut at 80: what a title is, never what the code printed.
+// say the same. `want` is the fixture's text squashed and cut at the cap (taskOf, whose cut has its own test above): which prompt it is comes from the fixture.
 const U = (...texts) => ({ role: 'user', content: texts.map((text) => ({ type: 'text', text })) })
 const A = { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }
-const squashed = (t) => t.replace(/\s+/g, ' ').trim().slice(0, 80)
+const squashed = (t) => taskOf(t)
 const BOOT = '<boot>a</boot>', LONG = `<boot>${'x '.repeat(9000)}</boot>\nFix it`
 const ASKS = [
   ['a wrapper before the question', [[U('<EXTREMELY_IMPORTANT>\nboot\n</EXTREMELY_IMPORTANT>\n\nFix the retry queue')]], 'Fix the retry queue'],
@@ -172,3 +172,18 @@ for (const text of ['<boot>a</boot>\nFix it', '<boot>a</boot>'])
     assert.deepEqual(Object.values(page.steps[0].attrs).map((a) => a.query).filter(Boolean), [squashed(text)])
     assert.equal(page.events.filter((e) => e.type === 'user').length, 1)
   })
+
+test('a task is cut at TASK_MAX code points and says so with …; never inside a surrogate pair; one that fits is the squashed text', () => {
+  const lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
+  assert.equal(taskOf('  fix   the\n\ttest  '), 'fix the test')
+  assert.equal(taskOf(''), null)
+  assert.equal(taskOf('   '), null)
+  for (const unit of ['a', '你', '😀', 'a😀']) for (const n of [TASK_MAX - 1, TASK_MAX, TASK_MAX + 1, 3 * TASK_MAX]) {
+    const text = unit.repeat(n), at = `${JSON.stringify(unit)} × ${n}`, whole = Array.from(text)
+    const t = taskOf(text), cps = Array.from(t)
+    assert.ok(!lone.test(t), `${at}: no half of a surrogate pair`)
+    assert.ok(cps.length <= TASK_MAX, `${at}: ${cps.length} code points`)
+    if (whole.length <= TASK_MAX) assert.equal(t, text, `${at}: fits, kept whole`)
+    else { assert.ok(t.endsWith('…'), `${at}: a cut says so`); assert.ok(text.startsWith(t.slice(0, -1)), `${at}: the cut is a prefix`) }
+  }
+})

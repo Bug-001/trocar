@@ -199,10 +199,16 @@ function queryOf(b, raw, max = PREVIEW_MAX) {
 }
 // How long a lane's task is (4.4 §看板 v2 需要的补充 `lanes[].task`; the session title is the main lane's), and how much of a lane's first
 // prompt is kept to tell sibling sub-agents apart (their prompts often share a long preamble: a workflow's own instructions).
-export const TASK_MAX = 80;
+export const TASK_MAX = 300;
 export const TASK_HEAD = 16384;
-/** taskOf(text) → the text squashed (whitespace runs → one space, trimmed), ≤ TASK_MAX characters, or null. */
-export const taskOf = (text) => (text ? shorten(text, TASK_MAX) || null : null);
+/** taskOf(text) → the text squashed (whitespace runs → one space, trimmed), at most TASK_MAX code points, a cut one ending in `…`
+ *  (never inside a surrogate pair: a cut that does not say so reads as the whole prompt, invariant 4), or null. */
+export const taskOf = (text) => {
+  const s = text ? shorten(text, 2 * TASK_MAX + 2) : ''; // enough UTF-16 units for TASK_MAX + 1 code points: past that, it was cut
+  if (!s) return null;
+  const cps = Array.from(s);
+  return cps.length <= TASK_MAX ? s : cps.slice(0, TASK_MAX - 1).join('').trimEnd() + '…';
+};
 /** firstHuman(flat) → the first human prompt of a context (blockQuery's rule: a user text block, <system-reminder> stripped, not empty),
  *  trimmed, its first TASK_HEAD characters, as a string of its own (a slice would keep the block's whole text alive) — or null. */
 export function firstHuman(flat) {
