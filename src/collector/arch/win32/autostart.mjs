@@ -34,7 +34,7 @@ export function nodePreflight({ versions = process.versions } = {}) {
 
 /**
  * R7 on Windows (4.8 §7, W25): trocar never runs with an elevated token or as SYSTEM. → `null` (go on) or `{ code: 'elevated-token', reason, token }`, which `on` and `daemon` turn into the refusal and the `start` failure record.
- * One criterion for on, daemon, off and uninstall: `whoami /groups` by SID (src/off/win32.mjs elevationByWhoami, with D53③'s unsplit-token exception). It used to be a
+ * One criterion for on, daemon, off and uninstall: `whoami /user /groups` by SID (src/off/win32.mjs elevationByWhoami, with D53③'s unsplit-token exception). It used to be a
  * helper started for this one question, whose C# compile made it the costliest step of `on` (a Windows test machine 2026-10-17: 1.2 s of on's 5.8 s, and the daemon's own 0.6 s before it
  * answers). A token that cannot be read is not a refusal: `onUnknown(reason)` says why (R11). `run`: execTool's injected runner.
  */
