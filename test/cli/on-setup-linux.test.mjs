@@ -95,6 +95,9 @@ test('V91-O6 · a refused harness whose own file cannot be read for writing (not
   assert.ok(r.receipt.harnesses.includes(CC))
   assert.equal(s.state().harnesses[CC].desired, 'on')
   assert.deepEqual(under(s, '.zcode'), before)
+  // 附录 C.1: the error is the file's, naming the harness; install is no way out of a file trocar cannot write
+  assert.equal(r.receipt.error.code, 'unreadable')
+  assert.match(r.receipt.error.message, new RegExp(ZC))
 })
 
 test('V91-O7 · on z-code alone, refused → nothing written for it, yet the run leaves its result line (1.6 §1) and its receipt names the log', async () => {

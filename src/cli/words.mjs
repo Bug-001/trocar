@@ -90,7 +90,7 @@ export const FAILURE_WORDS = Object.freeze({
   'unpaired-response': 'a response arrived with no request to pair it with',
   'prior-proxy-unknown': 'the proxy in use before trocar could not be told',
   'pac-peer-refused': "a program not shown to be yours asked for trocar's proxy settings file (PAC) and was refused",
-  'pac-address-stale': "your program asked for trocar's proxy settings file (PAC) at an address from before this install's key and was refused; run: trocar on",
+  'pac-address-stale': "your program asked for trocar's proxy settings file (PAC) at an address from before this install's key and was refused",
   'pac-owner-unread': "trocar's proxy settings file (PAC) could not tell whose program asked, so it answered without routing through trocar",
   'client-left-held': 'a program gave up on a connection while trocar was slow to judge it',
   'client-left-queued': 'a program dropped a connection before trocar picked it up',

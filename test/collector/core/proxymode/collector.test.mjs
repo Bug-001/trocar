@@ -11,7 +11,7 @@ import path from 'node:path'
 import { createModelCollector } from '../../../../src/collector/core/proxymode/collector.mjs'
 import { HOLDER_POLL_MS } from '../../../../src/collector/core/proxymode/holders.mjs'
 import { verdictOf, judgedForms } from '../../../../src/collector/core/proxymode/verdict.mjs'
-import { pacPath } from '../../../../src/collector/core/proxymode/entries.mjs'
+import { pacPath, pacAddress } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { upstreamFor, MAX_DEPTH } from '../../../../src/collector/core/proxymode/chain.mjs'
 import { translateBypass } from '../../../../src/collector/arch/darwin/upstream.mjs'
 import { certPem } from '../../../../src/collector/core/tls/cert.mjs'
@@ -446,6 +446,24 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
 
 // P10 at the door: the PAC says `PROXY <door>; DIRECT` for a bypass-list host and `PROXY <door>; <own leg>` for the rest, so the door must dial exactly
 // that own leg. The door group's descriptor chain is the CLI form's (it may not follow the system proxy, and it reads the process env): wrong for a PAC.
+
+// P10: the way out of a stale PAC address is read off the record of the entry. Its tag is the address on writes now: on already rewrote it, and the
+// program still holds the address it read at start (the Claude desktop app reads it once), so restarting it is the way out, not trocar on (which ran).
+// Its tag is another address: the entry still holds trocar's old one, and trocar on <harness> rewrites it.
+test('P10 · pac-address-stale names the way out the entry needs: restart the program when on already wrote the new address, else trocar on <harness>', async () => {
+  const routeId = pacG.split(':')[1], door = 'http://127.0.0.1:18103'
+  for (const [tag, way, not] of [[pacAddress(TOKEN, door), /restart/i, /trocar on\b/], [`${door}/trocar.pac`, new RegExp(`trocar on ${pacDesc.name}\\b`), /restart/i]]) {
+    const m = manifestOf(pacDesc.name)
+    m.entries.push({ phase: 'on', harness: pacDesc.name, route: routeId, kind: 'json-key', path: '/lib', keys: [['egressProxyPacUrl']], value: tag, door_sha256: crypto.createHash('sha256').update(tag).digest('hex'), installed_at: iso(INSTALLED) })
+    const { c, records } = await rig({ desc: pacDesc, w: { pid: 77, facts: { uid: 501, startedAt: INSTALLED + 1 }, manifest: m } })
+    await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18103 } })
+    assert.equal(await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' }), null, 'refused all the same')
+    const r = records.filter((x) => x.code === 'pac-address-stale')
+    assert.equal(r.length, 1)
+    assert.match(r[0].reason, way); assert.doesNotMatch(r[0].reason, not)
+    c.close()
+  }
+})
 test('CM19 / P10 · the PAC door dials the own leg its PAC names: a bypass-list host direct, any other the fixed system proxy, whatever the process env holds', async () => {
   const sp = { url: 'http://sys.corp:8080', bypass: [{ kind: 'domain-suffix', value: 'corp.example' }] }
   const env = Object.fromEntries(pacDesc.proxy.env.map((n) => [n, 'http://env.corp:1']))
