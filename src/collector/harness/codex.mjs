@@ -91,7 +91,7 @@ const ENV_FILE = ROUTE_PLACES.codex.file // where `on` writes the proxy block, t
 const proxyMode = {
   forms: [
     { id: 'codex.cli', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },
-    { id: 'codex.cli-standalone', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },
+    { id: 'codex.cli-standalone', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: { reason: 'not-measured' } } },
     { id: 'codex.vscode', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: editorExtension(EXTENSION, ['desktop']), verified: { darwin: true, win32: true },
       // the extension starts (and ends) its own `codex … app-server`: the user cannot quit it, and killing it is the editor's business — a window reload is
       // what makes it start one that reads .env again (mac machine 2026-10-19: the CLI's kill step was printed for these processes)
