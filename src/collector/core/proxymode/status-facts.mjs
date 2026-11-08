@@ -122,8 +122,10 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       const priorItem = es.find((i) => typeof i.prior_value === 'string') ?? null
       const priorRaw = priorItem ? priorItem.prior_value : null
       // trocar's stale PAC address (P10) is still trocar's value, but not one that connects: the app's fetch of it is refused, so the entry is not intact
-      const stale = es.some((i) => pacStale(i, route, token)) ? CODE.pacAddressStale : null
-      const intact = es.length > 0 && !stale && es.every((i) => intactOf(m, i, fs))
+      // stale only while every record still holds what trocar wrote (one the user changed makes it the user's change, as status says)
+      const held = es.length > 0 && es.every((i) => intactOf(m, i, fs))
+      const stale = held && es.some((i) => pacStale(i, route, token)) ? CODE.pacAddressStale : null
+      const intact = held && !stale
       const door_up = doors[g] != null
       const ans = (answers[g] || []).at(-1)
       let upstream
