@@ -12,7 +12,7 @@ import { sessionMetaOfFacts } from '../view/board.mjs';
 import { listOf } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
 import { HEAD_FILES } from './ctx-key.mjs';
-import { lru, sessionDir } from './projection.mjs';
+import { lru, posCmp, sessionDir } from './projection.mjs';
 import { isModelCall, sessionFactsOf } from './rows.mjs';
 import { laneOf, placeIn, recOf, FLAG } from './session-doc.mjs';
 import { DEF_BYTES, laneStepper, weigh } from './named/lane.mjs';
@@ -489,7 +489,12 @@ function* sealing(s, { home, fs, ax, memo, uses }, n, spans, kept, k) {
 function* appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
   const { cols, log } = s.V, ax = W.ax, add = { main: [], rest: [] }, partOf = (key) => (key === ax ? 'main' : 'rest');
   const steppers = new Map(), defs = lru(DEF_BYTES), push = (part, ...os) => { add[part].push(Buffer.concat(os.map(lineBytes))); };
-  for (const h of d.lanes) push(partOf(h.lane), { l: h });
+  // the log gives what changed in its order of change, which follows how the fold was sliced: each kind of line goes in an order of
+  // its own instead, lane headers by first step (V.lanes; a reader adds a lane it has not seen in the order its header comes), the
+  // failed members and the rids no longer a call by record id (3.5 §会话读 --tail)
+  const firstAt = (h) => (isRow(cols, h.first) ? cols.ts[cols.slotOf(h.first)] : null); // a lane's key is its first rid: no two tie
+  const lanes = [...d.lanes].sort((a, b) => compareStep(firstAt(a), a.first, firstAt(b), b.first));
+  for (const h of lanes) push(partOf(h.lane), { l: h });
   const calls = [...d.opens].filter((rid) => isRow(cols, rid)).sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
   for (const rid of calls) {
     const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, W.memo, defs)).get(key), i = placeIn(cols, S.L, rid);
@@ -504,8 +509,8 @@ function* appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
     const r = s.plan.members[q], rid = String(r.id);
     if (s.cut(r)) push(isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV ? 'main' : 'rest', { r: recOf(r) });
   }
-  for (const f of d.fails) push('rest', { x: { where: f.id, code: f.code, reason: f.reason } });
-  for (const [rid, part] of d.gone) push(part, { g: rid });
+  for (const f of [...d.fails].sort((a, b) => posCmp(a.id, b.id))) push('rest', { x: { where: f.id, code: f.code, reason: f.reason } });
+  for (const [rid, part] of [...d.gone].sort((a, b) => posCmp(a[0], b[0]))) push(part, { g: rid });
   for (const part of PARTS) {
     const file = fileOf(part);
     let size = -1;

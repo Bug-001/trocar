@@ -295,3 +295,25 @@ test('3.5 §内存有界: on many lanes that share blocks, the writer reads a st
   const blocks = files.reduce((n, f) => { const b = fs.readFileSync(path.join(sessionDir(home, id), f)); return n + blocksOf((f.endsWith('.gz') ? gunzipSync(b) : b).toString('utf8')) }, 0)
   assert.ok(reads <= blocks, `${reads} reads of stored definitions, past the ${blocks} blocks the ${files.length} files' steps hold`)
 })
+
+test('3.5 §会话读 --tail: an append lists the lane headers it carries in the lanes\' order, as a fresh tail does: the same input gives the same tail bytes, however the fold was sliced', async () => {
+  const shape = { growth: 120, compactAt: 1_000_000, subEvery: 2, subLanes: 12, subLen: 6 }
+  const tails = async (slice) => {
+    const h = homeWith(120, shape)
+    cut(h.ctx, await folded(h.ctx, h.id)) // the first write: the tails, fresh
+    const before = fs.statSync(tailFile(h.home, h.id, 'rest')).size
+    const ino = Object.fromEntries(['main', 'rest'].map((p) => [p, fs.statSync(tailFile(h.home, h.id, p)).ino]))
+    h.a.append(60) // new subagent lanes come, and the old ones move
+    await drain(() => extendSession(h.ctx, h.id, slice))
+    const s = await folded(h.ctx, h.id)
+    cut(h.ctx, s)
+    for (const p of ['main', 'rest']) assert.equal(fs.statSync(tailFile(h.home, h.id, p)).ino, ino[p], `${p}: appended to, not written afresh`)
+    const t = textsOf(h, (n) => n.startsWith('open.'))
+    const appended = fs.readFileSync(tailFile(h.home, h.id, 'rest')).subarray(before).toString('utf8').split('\n').filter((l) => l.startsWith('{"l":')).map((l) => JSON.parse(l).l.lane)
+    return { t, appended, order: s.V.lanes.map((x) => x.lane) }
+  }
+  const whole = await tails(Infinity), sliced = await tails(1)
+  assert.ok(whole.appended.length > 12, `lane headers appended: ${whole.appended.length}`)
+  assert.deepEqual(whole.appended, whole.order.filter((k) => whole.appended.includes(k)), 'in the order of the session\'s lanes')
+  assert.deepEqual(sliced.t, whole.t)
+})
