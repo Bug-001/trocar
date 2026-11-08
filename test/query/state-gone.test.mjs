@@ -11,7 +11,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { drain } from '../helpers/bounded.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
-import { extendSession, files, heapHasRoom, sessionState } from '../../src/query/named/session.mjs'
+import { extendSession, files, heapHasRoom, sessionState, SPINE_PER_ROW, costOf } from '../../src/query/named/session.mjs'
 import { readHead, writeInFlight } from '../../src/query/ctx-files.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
 import { titlesFile } from '../../src/query/titles.mjs'
@@ -102,9 +102,16 @@ test('a state let go in its own slice says neither more nor the end: nothing is 
   assert.deepEqual([readHead(s.home, s.id).tier, readHead(s.home, s.id).pending], [1, null])
 })
 
-// past the whole budget: the ledger lets every entry go, the state too whatever its measured cost (a state measured as 0 frees no room,
-// so room for just the budget can leave it)
-for (const [name, letGo] of [['the ledger making room', () => hold(heapBudget() + 1)()], ['yieldCaches', yieldCaches]]) {
+// room for the whole budget: the ledger lets every entry go, the state too, because no kept state weighs nothing
+test('a kept state weighs what it measured, and at least its rows, within the budget', () => {
+  const rows = 300, floor = rows * SPINE_PER_ROW
+  for (const held of [-5000, 0, 1, floor - 1]) assert.equal(costOf({ n: rows, meter: { held } }), floor, `measured ${held}`)
+  assert.equal(costOf({ n: rows, meter: { held: floor + 1 } }), floor + 1)
+  assert.ok(costOf({ n: 0, meter: { held: 0 } }) > 0, 'a state with no rows yet')
+  assert.equal(costOf({ n: 1e12, meter: { held: 0 } }), heapBudget(), 'an estimate never past the budget')
+})
+
+for (const [name, letGo] of [['the ledger making room', () => hold(heapBudget())()], ['yieldCaches', yieldCaches]]) {
   test(`a write in flight let go by ${name}: the files end as those of a home never let go`, async () => {
     const id = nextId(), cut = homeWith(300, id), kept = homeWith(903, id)
     const { log, st } = await inWrite(cut)
