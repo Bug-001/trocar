@@ -839,13 +839,15 @@ test('uninstall step 5: a Claude Code from before install is reported too — it
   } finally { b.done() }
 })
 
+// the way to start over is followed in order: uninstall, then install (on never installs the certificates, D55), then on
+const startsOver = (msg) => { const at = ['uninstall', 'install', 'on'].map((v) => msg.indexOf(`"trocar ${v}"`)); return at.every((x, i) => x >= 0 && (i === 0 || x > at[i - 1])) }
 // D-4: "already installed" only with a usable CA.
 test('install: installed but with an unusable CA is not "already installed" — it says what is wrong and how to fix it (D-4)', async () => {
   const b = box()
   try {
     await installCollector(base(b))
     fs.writeFileSync(path.join(b.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem'), 'not a certificate')
-    await assert.rejects(installCollector(base(b)), /installed, but its CA is unusable \(cert: .*run "trocar uninstall", then "trocar on"$/)
+    await assert.rejects(installCollector(base(b)), (e) => /installed, but its CA is unusable/.test(e.message) && startsOver(e.message))
   } finally { b.done() }
 })
 
@@ -863,7 +865,7 @@ test('uninstall that cannot undo an entry keeps the manifest with only what is l
     assert.deepEqual([m.install, m.entries.map((e) => [e.path, e.keys.join('.')]), m.files, m.uninstall_left.map((l) => l.result), typeof m.uninstalled_at],
       [null, [[settingsOf(b), 'env.NODE_EXTRA_CA_CERTS']], [], ['left-link'], 'string'], 'the manifest stays, listing only what is left')
     assert.deepEqual([fs.existsSync(path.join(b.dir, 'ca', 'trocar-ca.pem')), fs.existsSync(path.join(b.dir, 'ca', 'ca.key'))], [false, false], 'the CA files go all the same (an append-semantics agent only warns about a missing file)')
-    await assert.rejects(installCollector(base(b)), /an earlier uninstall could not undo 1 item\(s\) \(.*settings\.json\); fix them, run "trocar uninstall" again, then "trocar on"$/)
+    await assert.rejects(installCollector(base(b)), (e) => /an earlier uninstall could not undo 1 item\(s\) \(.*settings\.json\)/.test(e.message) && startsOver(e.message))
     fs.rmSync(settingsOf(b)); fs.writeFileSync(settingsOf(b), installed) // the user puts a regular file back
     const again = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
     assert.deepEqual([again.left, again.entries.map((e) => e.result)], [[], ['restored']])

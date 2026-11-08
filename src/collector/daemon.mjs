@@ -578,12 +578,17 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       onError: (e) => log('engine', e), // stderr only: every one of them is also a record through onFailure
       alive: (pid) => pidAlive(pid) || tracker.metaFor(pid) != null, // a held close (4.6 §引擎 5): gone = the OS has no such pid and nor has the tracker
     })
+    // the harnesses `on` with no names means, and a version 1 state.json is carried to (1.6 §1.5, V28): the installed ones — the table's harnesses the
+    // install manifest names, because trocar wrote an entry or a file for them (4.11 §3 ㉓: an id outside the table is never reached). One it never
+    // installed is no capture target: not judged, no agent-untrusted
+    const installed = () => { const named = new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness)); return harnessList.map((d) => d.name).filter((id) => named.has(id)) }
     // The engine's door (4.8 §5.1): Linux listens transparently on the port the install recorded.
     const want = enginePort ?? manifest.engine_port ?? 0
+    const wereOn = () => Object.entries(readState(P.state, () => {}, { installed: installed() }).harnesses).filter(([, h]) => h.desired === 'on').map(([id]) => id)
     const first = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
       // G3: the port is squatted (chosen at install). Nothing is steered
       // (the helper is not spawned yet), so the agents' connections stay direct; say so, and how to get a new port.
-      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "trocar uninstall" and "trocar on" to pick a new one`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
+      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or start over to get a new one: run "trocar off", then "trocar uninstall", then "trocar install", then ${wereOn().length ? `"trocar on ${wereOn().join(' ')}"` : '"trocar on <harness>" for each harness to capture'}`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
       throw e
     })
     const port = first.port
@@ -620,10 +625,6 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (candidates.length) failure('tracker', Object.assign(new Error(`${reason}; its command line fits ${candidates.join(' and ')}`), { code: 'exe-unreadable' }), { pid, errno: code || null, candidates })
     })
 
-    // the harnesses `on` with no names means, and a version 1 state.json is carried to (1.6 §1.5, V28): the installed ones — the table's harnesses the
-    // install manifest names, because trocar wrote an entry or a file for them (4.11 §3 ㉓: an id outside the table is never reached). One it never
-    // installed is no capture target: not judged, no agent-untrusted
-    const installed = () => { const named = new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness)); return harnessList.map((d) => d.name).filter((id) => named.has(id)) }
     // a manifest the CLI wrote since (and that this build reads, and that is complete) replaces the one read at start; one that cannot be read leaves the old one, and says so
     const reloadManifest = () => {
       try { const fresh = readManifest(P.dir); if (fresh && !fresh.unsupported && daemonMayStart(fresh)) manifest = fresh } catch (e) { failure('daemon', coded(e, 'manifest-unreadable')) }

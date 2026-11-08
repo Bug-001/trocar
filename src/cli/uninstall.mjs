@@ -37,7 +37,7 @@ import { refuseElevatedByWhoami, disableScheduledTask, undoScheduledTask, TASK_N
 import { holdersOf } from '../off/holders.mjs'
 import { readDoorSeen, msOf } from '../off/door-seen.mjs'
 import { readStateFile } from '../off/state.mjs'
-import { SUPERVISOR_START_TOLERANCE_MS as START_AGREE_MS } from '../off/daemon-stop.mjs' // two readers of one process's start agree to within this (4.8 §7)
+import { SUPERVISOR_START_TOLERANCE_MS as START_AGREE_MS, stopByHand } from '../off/daemon-stop.mjs' // two readers of one process's start agree to within this (4.8 §7)
 import { readAgentList } from '../off/identity.mjs'
 import { signHelperPath, carrierPlacesFor } from '../collector/arch/model-backends.mjs'
 import { NATIVE } from '../collector/arch/darwin/native.mjs'
@@ -289,7 +289,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       if (stop.signals.length || !stop.stopped) put({ kind: 'daemon-stop', how: stop.how, signals: stop.signals, stopped: stop.stopped, pid: stop.pid, reason: stop.stopped ? `the daemon was stopped (${stop.signals.join(', ') || 'it had exited'})` : `the daemon was NOT stopped${stop.error ? `: ${stop.error}` : ''}` })
       // nothing to stop (no lock, no unit that was running, no pid known from the daemon's own reply) is not "the daemon (pid null) was stopped": the receipt says no daemon was there
       receipt.daemon = !stop.stopped ? { pid: stop.pid, state: 'unresponsive' } : (routing.state === 'none' || routing.state === 'stale') ? { pid: null, state: 'none' } : { pid: stop.pid ?? routing.daemon.pid, state: 'stopped' }
-      if (!stop.stopped) { receipt.problems.push(`the daemon (pid ${stop.pid}) could not be stopped${stop.error ? ` (${stop.error})` : ''}; stop it by hand: kill -9 ${stop.pid}, then run trocar uninstall again`); failed.push({ code: 'stop-failed', reason: receipt.problems.at(-1) }) }
+      if (!stop.stopped) { receipt.problems.push([`the daemon (pid ${stop.pid}) could not be stopped${stop.error ? ` (${stop.error})` : ''}. Stop it by hand with this, then run trocar uninstall again:`, ...((h) => [...h.commands.map((c) => `${COMMAND_INDENT}${c}`), ...(h.after ? [h.after] : [])])(stopByHand({ platform: w.platform, dir: w.dir, pid: stop.pid, fs: w.fs, run: w.exec, env }))].join('\n')); failed.push({ code: 'stop-failed', reason: receipt.problems.at(-1) }) }
       else if (routing.relayed !== 'unknown') { // what the daemon was still holding went with it, counted (1.6 §1.1)
         const last = drained && drained.rel ? drained.rel : routing.relayed
         receipt.relayed = { closing: 0, waiting: 0, cut: drained && drained.gone ? 0 : last.closing + last.waiting }

@@ -24,6 +24,8 @@ const installFix = (c) => (c.fm && c.fm.certificate && c.fm.certificate.command 
 const os = (ctx, byPlatform) => ({ run: byPlatform[ctx.platform] || byPlatform.linux, shell: ctx.platform === 'win32' ? 'powershell' : 'sh' })
 const gui = (run) => ({ run, shell: 'gui' })
 const unknownValue = (what, reason) => `unknown ${what} (${reason})`
+/** The proxy address a step cannot name: a value for `setAt` that is not one a command may carry. */
+const unknownProxy = (reason) => ({ unknown: unknownValue('proxy address', reason) })
 
 /**
  * Where a proxy setting lives, for a command that names the line to edit: the place the facts read it from (`setting.source[0]`: a variable of the shell that starts the agent, or a key of one of its files;
@@ -38,17 +40,24 @@ function placeOf(hf, setting) {
   if (files[0]) return { kind: 'file', ...files[0] }
   return { kind: 'env', name: (b.env && b.env[0]) || 'HTTPS_PROXY' }
 }
-/** The step that puts `value` where the setting lives. One verb for one step (附录 B). */
-function setAt(h, place, value) {
-  if (place.kind === 'env') return `In the terminal that starts ${h}, run: export ${place.name}=${value}`
-  if (place.kind === 'system') return `Set your system proxy to ${value}`
-  return place.format === 'json' ? `Set ${place.key} in ${place.path} to "${value}"` : `Put the line ${place.key}=${value} in ${place.path}`
+// a variable on Windows: the user's own, set for good (PowerShell has no export; a window's own $env: dies with it), read by the programs started after it. The command is its own
+// line, short enough for a console not to wrap it: setx sets it, the value one PowerShell literal (the step names PowerShell; only ' is special inside ''); setx cannot remove one, so removing is the .NET call. A value of the machine's
+// or of a PowerShell profile wins over the user's, and is named as the place to look.
+const psQuote = (v) => `'${String(v).replace(/'/g, "''")}'`
+const winEnv = (h, name, cmd, unknown = null) => [...(unknown ? [gui(`${unknown}: in PowerShell, run setx ${name} followed by your proxy's address, then start ${h} again from a new window`)] : [gui(`In PowerShell, run this, then start ${h} again from a new window; it applies to every program you start from now on, not only this terminal:`), { run: cmd, shell: 'powershell' }]),
+  gui(`If ${name} still has another value in a new window, it is set for the whole machine or in your PowerShell profile; change it there`)]
+/** The steps that put `value` where the setting lives. One verb for one step (附录 B). */
+function setAt(h, place, proxy, platform) {
+  const value = proxy.unknown ?? proxy
+  if (place.kind === 'env') return platform === 'win32' ? winEnv(h, place.name, `setx ${place.name} ${psQuote(value)}`, proxy.unknown) : [gui(`In the terminal that starts ${h}, run: export ${place.name}=${value}`)]
+  if (place.kind === 'system') return [gui(`Set your system proxy to ${value}`)]
+  return [gui(place.format === 'json' ? `Set ${place.key} in ${place.path} to "${value}"` : `Put the line ${place.key}=${value} in ${place.path}`)]
 }
-/** The step that takes the setting away from where it lives. */
-function removeAt(h, place) {
-  if (place.kind === 'env') return `In the terminal that starts ${h}, run: unset ${place.name}`
-  if (place.kind === 'system') return 'Turn off your system proxy'
-  return place.format === 'json' ? `Remove ${place.key} from ${place.path}` : `Remove the ${place.key}= line from ${place.path}`
+/** The steps that take the setting away from where it lives. */
+function removeAt(h, place, platform) {
+  if (place.kind === 'env') return platform === 'win32' ? winEnv(h, place.name, `[Environment]::SetEnvironmentVariable('${place.name}',$null,'User')`) : [gui(`In the terminal that starts ${h}, run: unset ${place.name}`)]
+  if (place.kind === 'system') return [gui('Turn off your system proxy')]
+  return [gui(place.format === 'json' ? `Remove ${place.key} from ${place.path}` : `Remove the ${place.key}= line from ${place.path}`)]
 }
 // darwin: the kernel's own TCP table, the one `status` reads (arch/darwin/netfacts.mjs) — `lsof -nP -iTCP:<port> -sTCP:LISTEN` names only the
 // processes whose fd table this user may open, so a port held by ANOTHER user's program came back empty, which is the case this step is for.
@@ -80,14 +89,14 @@ const deadProxy = (t) => t.nodes.find((n) => n.kind === 'proxy' && n.down === tr
 /** The places of the USER's own that hold the address this finding is about (`diagnose` filtered them: a key trocar wrote is never among them, 1.6 附录 B `places`). */
 const userPlaces = (c) => (Array.isArray(c.places) ? c.places : [])
 /** The steps that take that address out of the user's own settings, one named step per place; with no place known, the one the setting was read from. */
-const removeSteps = (c) => (userPlaces(c).length ? userPlaces(c).map((p) => gui(removeAt(c.h, p))) : [gui(c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('setting', 'absent'))])
+const removeSteps = (c) => (userPlaces(c).length ? userPlaces(c).flatMap((p) => removeAt(c.h, p, c.platform)) : c.setting ? removeAt(c.h, placeOf(c.hf, c.setting), c.platform) : [gui(unknownValue('setting', 'absent'))])
 
 /** not-routed, by the reason the model's route plan gave the form (`fm.route.reason`, src/collector/core/proxymode/entries.mjs; 4.11 §3, 1.6 附录 B): the why, and the steps
  *  (the place the plan named in `at`, else `unknown`). A PAC the facts see and no reason of the plan's is the PAC row; nothing known is the generic row. */
 function notRoutedOf(c) {
   const r = (c.fm && c.fm.route) || {}, at = r.at || unknownValue('place', 'absent'), on = trocar(c, `trocar on ${c.h}`)
   if (!c.fm && c.t && (c.t.branches || []).some((b) => b.form === null && b.reason === 'not-routed')) return { why: c.hf && c.hf.formsHere === false ? `None of the forms of ${c.h} that trocar sets up is on this machine; a copy of it installed another way does not go through trocar.` : `A copy of ${c.h} runs that is none of the forms trocar sets up here (installed another way); it does not go through trocar.`, commands: [gui(`Install ${c.h} with its own installer`), trocar(c, 'trocar install'), on] } // 4.11 P5
-  if (r.reason === 'system-pac' || (!r.reason && c.pac)) return { why: 'The system proxy it follows is a PAC script, which trocar does not run.', commands: [gui(`${setAt(c.h, placeOf(c.hf, c.setting), unknownValue('proxy address', 'pac'))}`), on] }
+  if (r.reason === 'system-pac' || (!r.reason && c.pac)) return { why: 'The system proxy it follows is a PAC script, which trocar does not run.', commands: [...setAt(c.h, placeOf(c.hf, c.setting), unknownProxy('pac'), c.platform), on] }
   // a form the door cannot tell from the blocked one (r.via): it reaches trocar and is forwarded; the way out is the same setting's
   if (r.via && r.reason === 'blocker') return { why: `trocar cannot tell ${c.fm.id} from ${r.via}, which a setting of yours (${at}) keeps off any entry trocar can use.`, commands: [gui(`Remove the setting at ${at}`), on] }
   if (r.via) return { why: `trocar cannot read ${at}, so it cannot tell ${c.fm.id} from ${r.via} and forwards it unread.`, commands: [gui(`Make ${at} readable, or fix it`), on] }
@@ -145,7 +154,7 @@ export const NEG_CAUSES = Object.freeze(Object.keys(NEG))
 export const FINDINGS = {
   'desired-off': { cls: 'expected', trocarFirst: true, what: (c) => `Capture is off for ${c.h}.`, why: () => 'trocar is not on its path: it connects directly, or through your own proxy.', commands: (c) => [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   'daemon-not-running': { cls: 'problem', trocarFirst: true, what: () => 'trocar is not running in the background, so nothing is captured.', why: () => 'Without it there is no engine, and new connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
-  'daemon-not-responding': { cls: 'problem', trocarFirst: true, what: () => 'trocar runs in the background but does not answer, so nothing is captured.', why: () => 'Its heartbeat is stale, so new connections already go straight out.', commands: (c) => [trocar(c, 'trocar off'), trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
+  'daemon-not-responding': { cls: 'problem', trocarFirst: true, what: () => 'trocar runs in the background but does not answer, so nothing is captured.', why: () => 'Its heartbeat is stale, so new connections already go straight out.', commands: (c) => [trocar(c, `trocar off${c.h ? ` ${c.h}` : ''}`), trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'helper-missing': { cls: 'problem', trocarFirst: false, what: () => 'trocar\'s capability helper is missing or is the wrong version.', why: () => 'Without it trocar cannot attach to the kernel, so nothing is captured.', commands: (c) => [{ run: setupHelperCommand(), shell: 'sh' }, trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'link-missing': { cls: 'problem', trocarFirst: true, what: () => 'Capture is on, but trocar is not attached, so nothing is captured.', why: () => 'New connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'entry-missing': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar is gone.`, why: () => 'It was removed, or it was never written.', commands: (c) => installFix(c) || [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
@@ -157,20 +166,21 @@ export const FINDINGS = {
   // 4.11 P11 status 4–5: the door has not seen this life and history cannot tell — a note with no restart step (1.6 附录 B, §2 判词)
   'not-seen': { cls: 'note', trocarFirst: false, what: (c) => `trocar has not seen ${c.pid ? `pid ${c.pid}` : c.h} use its proxy yet; its next connection is judged.`, why: () => 'When it started does not tell whether it read trocar\'s setting.', commands: () => [], verify: (c) => `trocar status ${c.h}` },
   'not-routed': { cls: 'problem', trocarFirst: false, what: (c) => (c.fm && c.fm.route && c.fm.route.via ? `New connections from ${c.h} (${c.fm.id}) reach trocar and are forwarded only.` : ['blocker-unreadable', 'unreadable'].includes(((c.fm && c.fm.route) || {}).reason) ? `Whether new connections from ${c.h} (${c.fm.id}) go through trocar is not known.` : `New connections from ${c.h}${c.fm && c.fm.id ? ` (${c.fm.id})` : ''} do not go through trocar.`), why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `trocar status ${c.h}` },
-  'route-loop': { cls: 'problem', trocarFirst: true, what: (c) => `trocar's upstream for ${c.h} would be trocar itself.`, why: () => 'The proxy setting trocar read already points at one of trocar\'s own ports, so trocar did not connect this form.', commands: (c) => [trocar(c, `trocar off ${c.h}`), gui(setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('proxy address', 'absent'))), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar doctor ${c.h}` },
+  'route-loop': { cls: 'problem', trocarFirst: true, what: (c) => `trocar's upstream for ${c.h} would be trocar itself.`, why: () => 'The proxy setting trocar read already points at one of trocar\'s own ports, so trocar did not connect this form.', commands: (c) => [trocar(c, `trocar off ${c.h}`), ...setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownProxy('absent'), c.platform), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar doctor ${c.h}` },
   'proxy-dead': { cls: 'problem', trocarFirst: false, what: (c) => `Nothing is listening on ${c.dead.addr}:${c.dead.port}, the proxy ${c.h} is set to use.`, why: () => 'Your proxy is not running; trocar did not write this setting.',
     places: userPlaces, commands: (c) => [gui(`Start your proxy, so that it listens on ${c.dead.addr}:${c.dead.port}`), ...removeSteps(c), portCheck(c, c.dead.port)], verify: (c) => `trocar status ${c.h}` },
   'proxy-unsupported': { cls: 'problem', trocarFirst: false, what: (c) => `${c.h} does not support the proxy scheme ${c.setting.scheme}.`, why: (c) => (c.silent ? `${c.h} connects directly and says nothing, so that proxy has no effect.` : `${c.h} cannot use a ${c.setting.scheme} proxy.`),
-    commands: (c) => [gui(setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('proxy address', 'absent')))], verify: (c) => `trocar status ${c.h}` },
+    commands: (c) => setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownProxy('absent'), c.platform), verify: (c) => `trocar status ${c.h}` },
   'proxy-changed': { cls: (c) => (c.F.routing === 'proxy' ? 'problem' : 'expected'), trocarFirst: true, what: (c) => `${c.h}'s proxy setting is not the one trocar connected to.`, why: () => 'You changed it.',
-    commands: (c) => (c.F.routing === 'proxy' ? [trocar(c, `trocar on ${c.h}`), trocar(c, `trocar off ${c.h}`)] : [trocar(c, `trocar status ${c.h}`)]), verify: (c) => `trocar status ${c.h}` },
+    commands: (c) => (c.F.routing === 'proxy' ? [trocar(c, `trocar on ${c.h}`), gui(`Or, to stop capturing ${c.h}: trocar off ${c.h}`)] : [trocar(c, `trocar status ${c.h}`)]), verify: (c) => `trocar status ${c.h}` },
   'elevated-agent': { cls: 'problem', trocarFirst: false, what: (c) => `${c.h}${c.pid ? ` (pid ${c.pid})` : ''} runs elevated, so trocar only forwards it.`, why: () => 'trocar never decrypts an elevated process.', commands: () => [gui('Quit it and start it again without administrator rights')], verify: (c) => `trocar status ${c.h}` },
-  'forwarder-down': { cls: 'problem', trocarFirst: true, what: (c) => `trocar is not listening${c.port ? ` on :${c.port}` : ''}, so ${c.h || 'your agents'} cannot connect.`, why: () => 'The port lives with trocar\'s background process, which is not there.', commands: (c) => [trocar(c, 'trocar on'), trocar(c, `trocar off ${c.h}`)], verify: () => 'trocar status' },
+  'forwarder-down': { cls: 'problem', trocarFirst: true, what: (c) => `trocar is not listening${c.port ? ` on :${c.port}` : ''}, so ${c.h || 'your agents'} cannot connect.`, why: () => 'The port lives with trocar\'s background process, which is not there.', // off is the other way out (use it now without trocar), never a step after on
+    commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`), ...(c.h ? [gui(`Or, to use ${c.h} now without trocar: trocar off ${c.h}, then restart ${c.h}`)] : [])], verify: () => 'trocar status' },
   'upstream-unreachable': { cls: 'problem', trocarFirst: false, what: (c) => `trocar cannot reach the proxy${c.upPort ? ` :${c.upPort}` : ''} it uses for ${c.h}.`, why: () => 'Your proxy has quit while a setting still points at it; without trocar it would not connect either.',
     places: userPlaces,
     // trocar's door is on the path, and its upstream is the address nobody answers: the key trocar wrote holds the door, so removing THAT changes nothing
     // (`off` would write the prior value back). What to take away, to get off this proxy for good, are their own keys that still name it.
-    commands: (c) => [gui('Start your proxy, or turn off the system proxy that points at it'), ...(userPlaces(c).length ? [trocar(c, `trocar off ${c.h}`), ...userPlaces(c).map((p) => gui(removeAt(c.h, p))), trocar(c, `trocar on ${c.h}`)] : []),
+    commands: (c) => [gui('Start your proxy, or turn off the system proxy that points at it'), ...(userPlaces(c).length ? [trocar(c, `trocar off ${c.h}`), ...userPlaces(c).flatMap((p) => removeAt(c.h, p, c.platform)), trocar(c, `trocar on ${c.h}`)] : []),
       ...(c.upPort ? [portCheck(c, c.upPort)] : [])], verify: (c) => `trocar status ${c.h}` },
   'shim-not-on-path': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h} does not start through the program trocar installed.`, why: () => 'Another command of the same name comes first on PATH, or it was started another way.',
     commands: (c) => [trocar(c, 'trocar install'), gui(`Quit ${c.h} and start it again from a new terminal`)], verify: (c) => `trocar status ${c.h}` },
@@ -210,7 +220,7 @@ export const FINDINGS = {
   'local-upstream': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} sends its model calls to ${localHosts(c)}, a program on this machine, so trocar does not see them.`, why: () => 'Calls to this machine never go through a proxy, so they never reach trocar.',
     commands: (c) => [gui(`No action needed: ${c.h} keeps working, and its calls to ${localHosts(c)} are not recorded`)], verify: (c) => `trocar status ${c.h}` },
   'prior-proxy-unknown': { cls: 'note', trocarFirst: false, what: (c) => `trocar could not recover the proxy ${c.h}${c.pids && c.pids.length ? ` (pid ${c.pids.join(', ')})` : ''} started with.`,
-    why: () => 'The process that set it has quit, so trocar uses the system proxy, or none.', commands: (c) => [gui(setAt(c.h, placeOf(c.hf, null), unknownValue('proxy address', 'env-unreadable'))), trocar(c, `trocar on ${c.h}`), gui(`Restart ${c.h}`)],
+    why: () => 'The process that set it has quit, so trocar uses the system proxy, or none.', commands: (c) => [...setAt(c.h, placeOf(c.hf, null), unknownProxy('env-unreadable'), c.platform), trocar(c, `trocar on ${c.h}`), gui(`Restart ${c.h}`)],
     verify: (c) => `trocar status ${c.h}` },
   'collectors-online': { cls: 'problem', trocarFirst: true, what: (c) => `Capture is still on${c.online ? ` for ${c.online}` : ''}, so nothing was uninstalled.`, why: () => 'trocar never turns capture off for you.', commands: (c) => [...(c.online || !(c.holders || []).length ? [trocar(c, 'trocar off')] : []),
     // a process started while capture was on keeps trocar in its environment until it exits, and off cannot end it: quit it, and end what outlives that
@@ -243,7 +253,7 @@ function make(code, ctx) {
   const w = ctx.platform === 'win32' && !planSaid ? FINDINGS_WIN32[code] : null
   const def = FINDINGS[code] || TRUST
   const c = { ...ctx, code }
-  c.removeOwn = userPlaces(c).map((p) => gui(removeAt(c.h, p))) // the user's own places, as steps: both catalogues name them (1.6 附录 B)
+  c.removeOwn = userPlaces(c).flatMap((p) => removeAt(c.h, p, c.platform)) // the user's own places, as steps: both catalogues name them (1.6 附录 B)
   const clsOf = (d) => (typeof d.cls === 'function' ? d.cls(c) : d.cls)
   const at = (f) => (w && w[f] ? w[f](c) : def[f](c))
   const pl = def.places ? def.places(c) : null

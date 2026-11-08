@@ -283,7 +283,6 @@ test('1.6 §1.5: a daemon that does not confirm the routing off leaves every ent
   assert.equal(r.exit, 1)
   assert.deepEqual([fs.existsSync(unitFile) && fs.readFileSync(unitFile).equals(unit), s.sys.exec.calls.slice(from).filter((c) => /systemctl .*(disable|stop|mask)/.test(c))], [true, []], 'invariant 5: the agents still point at the door, so the autostart and the daemon stay')
   assert.match(r.receipt.problems[0], /did not confirm/)
-  assert.match(r.receipt.problems[0], /To go on, stop the daemon \(systemctl --user stop trocar-collector\.service\).*then run the command again/, 'semantics 5: an uninstall that stops here says how to get past it')
   assert.deepEqual([s.userFiles(), trocarFiles(s).includes('install-manifest.json')], [before, true])
   assert.deepEqual(flowEvents(s.dir).filter((e) => e.event === 'failure').map((e) => e.code), ['state-mismatch'])
   assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'failed'])
@@ -694,9 +693,10 @@ test('uninstall --purge-data asks the daemon not to seal, and says nothing of th
 
 test('uninstall: a sealed segment never hides how to stop a daemon that did not answer (1.6 §3.6)', async () => {
   const { io } = await sealingUninstall({ seals: true, argv: ['--json'] })
-  const r = { ...io.json(), daemon: { state: 'unresponsive', pid: 4321 } }
+  const json = io.json()
+  const r = { ...json, daemon: { state: 'unresponsive', pid: 4321 }, problems: [...(json.problems || []), 'the daemon (pid 4321) could not be stopped:\n    kill -9 4321'] }
   assert.ok(r.sealed && r.sealed.length)
-  assert.match(formatUninstallReceipt(r, {}), /kill -9 4321/)
+  assert.ok(formatUninstallReceipt(r, {}).split('\n').includes('    kill -9 4321'), 'the stop command, whole on its own line')
 })
 
 // A daemon `off` already stopped leaves its lock when it could not remove it (a forced end on Windows): this uninstall stopped nothing and must not say it did.

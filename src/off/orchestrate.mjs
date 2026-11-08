@@ -26,7 +26,7 @@ import { readManifest, refuseOldManifest, unknownItems, undoByHand, MANIFEST_VER
 import { undoHarnesses, undoRootKeys, OWNED_ROLES } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { pathKey } from './fsutil.mjs'
-import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
+import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock, stopByHand, WIN_FIND_DAEMON, SUPERVISE_FIRST } from './daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from './control-client.mjs'
 import { unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { isProxyMode } from './mode.mjs'
@@ -42,7 +42,7 @@ import { describeEntry } from './journal.mjs'
 import { orphanBackups } from './backup.mjs'
 import { osRootsFor } from './os-roots.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from './names.mjs'
-import { textLines, labelLines } from './receipt.mjs'
+import { textLines, labelLines, COMMAND_INDENT } from './receipt.mjs'
 
 export const OFF_LOCK_WAIT_MS = 10_000 // 1.6 R12: the lock is waited for at most this long
 const OFF_ASK_MS = 5000 // a daemon that does not answer this fast is stuck (1.6 §1.4 第 2 步)
@@ -79,8 +79,16 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
 /** What the user does when a daemon that answers cannot be made to confirm that its routing is off (1.6 §1.5 「确认不了就不撤」 leaves the entries alone, so the way out is said):
  *  stopping the daemon takes its helper and the links with it, and then the command is run again. On darwin the agent is booted out first — a daemon stopped under a loaded LaunchAgent is pulled right back by KeepAlive (4.9 §4). */
 const wayOut = (w, pid) => w.unitManaged()
-  ? (w.platform === 'darwin' ? `To go on, stop the autostart (launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}), so the daemon is not started again, then run the command again` : `To go on, stop the daemon (systemctl --user stop trocar-collector.service), which takes its links off with it, then run the command again`)
-  : `To go on, stop the daemon (${Number.isInteger(pid) ? `kill ${pid}` : "no pid is on record: find it with pgrep -f 'trocar.* (daemon|collector start)'"}), which takes its links off with it, then run the command again`
+  ? (w.platform === 'darwin' ? withCommands('To go on, stop the autostart, so the daemon is not started again, then run the command again:', [`launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}`]) : withCommands('To go on, stop the daemon, which takes its links off with it, then run the command again:', ['systemctl --user stop trocar-collector.service']))
+  : Number.isInteger(pid) ? killBy(w, pid, 'To go on, stop the daemon, which takes its links off with it, then run the command again:')
+    : withCommands(`To go on, stop the daemon, which takes its links off with it, then run the command again. No pid is on record; find it with:`, findDaemon(w), w.platform === 'win32' ? SUPERVISE_FIRST : null)
+/** A sentence that ends in ":" and the commands it names, each on a line of its own at COMMAND_INDENT, so the receipt prints them whole (1.6 §1.1⑥), then an optional closing sentence. */
+const withCommands = (sentence, commands, after = null) => [sentence, ...commands.map((c) => `${COMMAND_INDENT}${c}`), ...(after ? [after] : [])].join('\n')
+// the commands of this OS that find and stop a daemon by hand: Windows has no pgrep and no kill <pid>. On Windows the daemon is the child of a
+// `daemon --supervise` parent that starts it again after any non-zero exit (arch/win32/autostart.mjs superviseChild), so the supervisor goes
+// first, as stopDaemon does it (daemon-stop.mjs stopByHand): its pid from a supervisor.lock whose holder still runs, else the process to end named by its command line.
+const findDaemon = (w) => (w.platform === 'win32' ? WIN_FIND_DAEMON : ["pgrep -f 'trocar.* (daemon|collector start)'"])
+const killBy = (w, pid, sentence) => { const { commands, after } = stopByHand({ platform: w.platform, dir: path.dirname(w.lockFile), pid, fs: w.fs, run: w.exec, env: w.env }); return withCommands(sentence, commands, after) }
 
 /** Is the autostart going to bring the daemon back the moment it is stopped — systemd's Restart=on-failure mid-wait, or launchd's KeepAlive with the agent still loaded (4.9 §4)? A tool that cannot be asked says no: the lock decides. */
 const unitIsUp = (w) => {
@@ -203,7 +211,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.relayed = 'unknown'; r.relayed_reason = `the daemon ${why}, so it could not say how many connections it relayed; it was stopped and they went with it`
     } else {
       r.unstoppable = true; r.daemon = { pid: s.pid, state: 'unresponsive' }; r.relayed_reason = 'the daemon does not answer'
-      fail('stop-failed', `the daemon (pid ${s.pid}) ${why} and could not be stopped${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, new connections are direct while its heartbeat is stale; stop it by hand: kill -9 ${s.pid}`)
+      fail('stop-failed', killBy(w, s.pid, `the daemon (pid ${s.pid}) ${why} and could not be stopped${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, new connections are direct while its heartbeat is stale. Stop it by hand:`))
     }
   }
   if (st.state === 'running') {
@@ -231,9 +239,10 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.stop = s; r.how = s.how
       r.events.push({ kind: 'daemon-stop', how: s.how, signals: s.signals, stopped: s.stopped, pid: s.pid, reason: `no daemon is running, but the autostart would bring one back (${w.platform === 'darwin' ? 'the LaunchAgent is loaded: launchd KeepAlive' : 'the unit is up or about to restart: systemd Restart=on-failure'}); ${s.stopped ? (w.platform === 'darwin' ? 'booted out (launchctl bootout)' : 'stopped (systemctl stop, reset-failed)') : `NOT stopped${s.error ? `: ${s.error}` : ''}`}` })
       if (s.stopped) { r.confirmed = true; r.daemon = { pid: null, state: 'none' } } // there was no engine: nothing was relayed, and what the stop did is on `stop`
-      else { r.unstoppable = true; fail('stop-failed', w.platform === 'darwin' ? `the LaunchAgent could not be booted out${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but launchd may bring a daemon back with nothing attached; run: launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}, then run trocar off again` : `systemd keeps the autostart unit up or restarting${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but a daemon may come back with nothing attached; stop it: systemctl --user stop trocar-collector.service, then run trocar off again`) }
+      else { r.unstoppable = true; fail('stop-failed', w.platform === 'darwin' ? withCommands(`the LaunchAgent could not be booted out${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but launchd may bring a daemon back with nothing attached. Run this, then trocar off again:`, [`launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}`]) : withCommands(`systemd keeps the autostart unit up or restarting${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but a daemon may come back with nothing attached. Stop it with this, then run trocar off again:`, ['systemctl --user stop trocar-collector.service'])) }
     } else { r.confirmed = true; r.how = 'no-daemon'; r.daemon = { pid: null, state: 'none' } }
-  } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no trocar daemon runs (pgrep -f 'trocar.* (daemon|collector start)' finds none), delete ${w.lockFile} and run trocar off again; if one does, stop it by hand first`)
+  } else fail('control-error', withCommands(`${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. Look for a trocar daemon with:`, findDaemon(w),
+    `If it finds none, delete ${w.lockFile} and run trocar off again; if it finds one, stop it by hand first${w.platform === 'win32' ? ` (${SUPERVISE_FIRST.replace(/\.$/, '')})` : ''}.`))
   return r
 }
 

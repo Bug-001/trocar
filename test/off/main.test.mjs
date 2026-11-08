@@ -109,7 +109,7 @@ test('§3.4: the receipt text of an off with no names — no certificate item (D
   assert.ok(out.trimEnd().endsWith('Certificates stay installed. To remove them: trocar uninstall'), 'the last line says the certificates stay, and how to remove them')
   const bad = formatOffReceipt({ ok: false, all: true, harnesses: [], routing: { confirmed: true }, daemon: { pid: 9, state: 'unresponsive' }, relayed: 'unknown', relayed_reason: 'the daemon does not answer', changed: [], removed: [], skipped: [], left: [{ path: '/h/.codex/.env', result: 'left-unparsable', reason: 'is no longer valid JSON' }], problems: ['x'], notes: [] }, { home: '/h' })
   assert.match(bad, /^Capture is not fully off: trocar is off their path, but some items were left\./m)
-  assert.match(bad, /The daemon \(pid 9\) does not answer and could not be stopped\.\nStop it by hand: kill -9 9/)
+  assert.match(bad, /The daemon \(pid 9\) does not answer and could not be stopped\./)
   assert.match(bad, /Connections still going through trocar: unknown \(the daemon does not answer\)\./)
   assert.match(bad, /Not undone: ~\/\.codex\/\.env \(is no longer valid JSON\)/)
 })

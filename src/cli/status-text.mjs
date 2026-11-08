@@ -6,6 +6,7 @@ import { codeId } from '../version.mjs'
 import { renderRoutes, routeNotes } from '../netenv/topology-text.mjs'
 import { failureBrief, failureWord, squashed, statusNote } from './words.mjs'
 import { carrierWords } from './receipt.mjs'
+import { setupSteps } from '../collector/core/proxymode/status-facts.mjs'
 
 // ── the summary (§3.5) ────────────────────────────────────────────────────────────────────────────────────────────
 /** The NOTE column of the summary: one short English clause for the reason a harness is not captured (the shared catalog, src/cli/words.mjs statusNote). Values are filled in; a code with no sentence there says the code is unknown, never prints a code name. */
@@ -36,6 +37,8 @@ const CAPTURED = (h) => (h.captured === true ? 'yes' : h.desired === 'off' ? 'of
 
 /** `on` would refuse it (§3.3 前提) for a carrier of its own; the root missing from the store is one row for the whole machine (Certificate), never one per harness. */
 const needsSetup = (x) => x.setup?.state === 'needed' && (x.setup.missing || []).some((m) => m.what !== 'root-missing')
+// the steps that set it up, from what is missing (4.11 P4b), as `on` gives them (model-on.mjs): the longest list, since install is every list's last step
+const setupFix = (x) => (x.setup.missing || []).filter((m) => m.what !== 'root-missing').map((m) => setupSteps(m.what)).reduce((a, c) => (c.length > a.length ? c : a), [])
 
 /** The one-screen summary of `trocar status` (§3.5). `doc` is the 附录 C.3 document. */
 /** C.3 `out_of_scope` (4.11 CM43): why an app on this machine is not captured. */
@@ -58,7 +61,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor(), ho
     for (const h of shown) {
       const x = doc.harnesses[h]
       const pid = (x.processes || []).find((p) => p.captured === false) || null
-      rows.push([h, CAPTURED(x), needsSetup(x) && x.captured !== true ? 'set up first: trocar install' : x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid, cause: pid && pid.cause })])
+      rows.push([h, CAPTURED(x), needsSetup(x) && x.captured !== true ? `set up first: ${setupFix(x).join(', then ')}` : x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid, cause: pid && pid.cause })])
     }
     lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
   }
@@ -130,7 +133,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     if (finding.why) rows.push(['', finding.why])
     finding.commands.forEach((cmd, i) => rows.push([i ? '' : 'Fix', cmd.run]))
     rows.push(['Check', finding.verify])
-  } else if (needsSetup(x) && x.captured !== true) rows.push(['Why', `${h} has no trocar certificate in place yet`], ['Fix', 'trocar install'], ['', `trocar on ${h}`])
+  } else if (needsSetup(x) && x.captured !== true) rows.push(['Why', `${h} has no trocar certificate in place yet`], ...[...setupFix(x), `trocar on ${h}`].map((cmd, i) => [i ? '' : 'Fix', cmd]))
   else if (x.captured === true && !notSeenYet(x)) rows.push(['Why', (x.processes || []).length ? 'every running process of it is captured' : 'no process of it is running; new ones will be captured']) // never claims processes that are not there
   const login = loginRow(doc.autostart)
   if (login) rows.push(login)

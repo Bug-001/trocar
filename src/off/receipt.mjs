@@ -95,7 +95,7 @@ function daemonLines(r, past, cutNote) {
   else if (d.state === 'running') lines.push(...fit((r.still_on || []).length ? `The daemon${pid} ${past ? 'keeps' : 'will keep'} serving ${r.still_on.join(', ')}.`
     : heldOpen(r) ? `The daemon${pid} ${past ? 'keeps' : 'will keep'} running, with one door still open for the connections below.`
     : `The daemon${pid} ${past ? 'keeps' : 'will keep'} running.`))
-  else if (d.state === 'unresponsive') lines.push(`The daemon${pid} does not answer and could not be stopped.`, `Stop it by hand: kill -9 ${d.pid}`)
+  else if (d.state === 'unresponsive') lines.push(`The daemon${pid} does not answer and could not be stopped.`) // how to stop it is the stop-failed problem's, with this OS's commands on their own lines
   if (r.relayed === 'unknown') lines.push(...fit(`Connections still going through trocar: unknown (${r.relayed_reason || 'they could not be read'}).`))
   else if (rel) {
     if (rel.closing > 0) lines.push(...fit(`${rel.closing} connection${rel.closing === 1 ? ' is' : 's are'} still going through trocar; ${rel.closing === 1 ? 'it closes' : 'they close'} when the response in flight is through.`))
