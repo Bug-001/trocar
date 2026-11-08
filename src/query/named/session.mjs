@@ -272,6 +272,9 @@ const states = warmCache({ cost: (v) => v.cost, drop: letGoState });
 /** How long after a request a session counts as being read (3.5 §内存有界): the worker's idle branch waits as long, so its slices find no reader. */
 export const READING_MS = 2000;
 let reading = { k: null, at: -Infinity }; // the session of the last request's read
+/** roomFor() → whether the heap has room for a session that waits for it (heapHasRoom); null while a session is read: the look would let
+ *  its state go (3.5 §内存有界「正被读」, #62). */
+export const roomFor = () => (performance.now() - reading.at < READING_MS ? null : heapHasRoom());
 // The ledger let `st` go (3.5 §内存有界): the references that would keep it in the heap go, the ones keyed by something else than this
 // state compared first. Never closed: a request may be answering from it; its descriptor goes when it is collected (line-file.mjs).
 function letGoState(st) {
@@ -566,7 +569,6 @@ async function advance(ctx, id, { budgetMs, request, said = [] }) {
     if (!b) throw new BlockUnread('field-missing', `record ${rid} has no block at ${ref}`);
     return b;
   };
-  let retried = false;
   for (;;) {
     keeping = true; // a HeapBound retry keeps what it reads again
     const plan = planOf(members, k, store, id);
@@ -588,9 +590,7 @@ async function advance(ctx, id, { budgetMs, request, said = [] }) {
       // rounded down to a quarter power of two (3.5 §内存有界); the stopped state is closed and garbage by now
       const got = Math.max(e.rows, Math.floor(plan.read.length / 2)) - 1, fit = got < 1 ? 0 : Math.floor(2 ** (Math.floor(Math.log2(got) * 4) / 4));
       if (fit < 1 || beside) {
-        // once more, every warm entry let go first; never beside the reader, which holds its state whatever gives way
-        if (!retried && !beside) { retried = true; yieldCaches(); continue; }
-        // this fold's state is closed and its plan holds every member (PLAN_PER_MEMBER): a live heap past the line without the plan is
+        // bounded() let every warm entry but the reader's go before it threw; this fold's state is closed and its plan holds every member (PLAN_PER_MEMBER): a live heap past the line without the plan is
         // held by others (another session's state, the fill), and the session waits for room (heap-busy); else it does not fit with the
         // heap otherwise free (heap-no-room, 3.5 §内存有界)
         kept.clear();
@@ -671,6 +671,10 @@ function shapeOf(s) {
 // with the stop's code (FOLD_STOPS) and the first line of its message; the same stop again writes nothing. The session's next slice
 // that does not throw clears it (extendSession). A request's own failure is its answer (a 500), not a stop.
 const stops = new Set(); // the session ids whose last background slice threw
+const callsNow = (ctx, id, members) => { const store = stores.get(keyOf(ctx, id)); return callsPast({ members, n: members.length }, reachOf(ctx, id, store && fileLogs.get(store)?.log, members)); };
+/** noRoomStop(ctx, id): a session that waited for room (heap-busy) while nothing else in the heap could give way does not fit: its
+ *  heap-no-room stop, as a background slice writes it (3.5 §内存有界). */
+export const noRoomStop = (ctx, id) => stopped(ctx, id, Object.assign(new Error(`the heap holds no room for this session (${mb(heapBudget())} MB budget)`), { code: 'heap-no-room' }));
 async function stopped(ctx, id, e) {
   if (ctx.writer !== true || e instanceof HandOff || e?.code === 'heap-busy') return; // heap-busy: the session waits for room, no stop
   const stop = { code: e && e.code === 'heap-no-room' ? 'heap-no-room' : 'fold-failed', reason: String((e && e.message) || e).split('\n')[0] };
@@ -681,7 +685,7 @@ async function stopped(ctx, id, e) {
   try {
     const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
     if (members) {
-      const k = keyOf(ctx, id), store = stores.get(k), calls = callsPast({ members, n: members.length }, reachOf(ctx, id, store && fileLogs.get(store)?.log, members));
+      const calls = callsNow(ctx, id, members);
       writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ ...d.pending, done, total: members.length, ...seenOf(d), calls, stopped: stop }), fs, titleOf({ home, fs, id, members })), fs);
       heads.set(id, { sig, shape: null });
     }
@@ -846,20 +850,22 @@ function thenOf(s, M) {
 const headKept = (ctx, id) => readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs);
 // the head a request answers while the disk's stands or a write failed: the file, else the tier-0 head (never a head that lists what is not on disk)
 const headStanding = (ctx, s) => pendingHead(ctx.home ?? trocarHome(), s.id, s.rows, s.indexErrors, (d) => d.pending, ctx.fs || nodeFs, s.title);
+/** headAsked(params) → whether a `session` request asks for the head (`--head`). */
+export const headAsked = (p) => p.head != null && p.head !== false && p.head !== 'false' && p.head !== '0';
 export async function run(ctx) {
   const { params: p, errors } = ctx;
   const id = one(p.id), since = one(p.since), before = one(p.before);
   if (id == null) throw new QueryArgError('trocar query session: --id is required (a session id; `trocar query sessions` lists them)');
   if (since != null && before != null) throw new QueryArgError('trocar query session: --since and --before cannot be given together');
-  const asHead = p.head != null && p.head !== false && p.head !== 'false' && p.head !== '0';
+  const asHead = headAsked(p);
   if (asHead && (since != null || before != null || p.limit != null)) throw new QueryArgError('trocar query session: --head cannot be given with --since, --before or --limit');
   const limit = limitOf(p.limit);
   let s;
   try { s = await sessionState(ctx, id); } catch (e) {
     if (!asHead || e?.code !== 'heap-busy') throw e;
-    // others hold the heap: the head as it stands, the file's or the tier-0 one, with its pending (3.5 §内存有界)
+    // others hold the heap: the head as it stands, the file's or the tier-0 one, with a pending of now and no stop (3.5 §内存有界); nothing written
     const idx = await indexed(ctx), members = sessionGroups(idx.rows).get(id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
-    const doc = headStanding(ctx, { id, rows: members, indexErrors: idx.errors, title: titleOf({ home, fs, id, members }) });
+    const doc = pendingHead(home, id, members, idx.errors, (d, done) => ({ done, total: members.length, ...seenOf(d), calls: callsNow(ctx, id, members) }), fs, titleOf({ home, fs, id, members }));
     errors.push(...doc.errors);
     return doc;
   }

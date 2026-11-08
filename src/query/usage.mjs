@@ -178,6 +178,9 @@ async function fillOne({ home, fs, segment }) {
 // SERIAL within this process (one chain), and a segment already waiting in it is not queued twice.
 let chain = Promise.resolve();
 const waiting = new Set();
+let fills = 0;
+/** filling() → whether a fill is underway in this process: what it holds may still let go. */
+export const filling = () => fills > 0;
 /** fillUsage({home, fs, segments}) → Promise<void>: brings each segment's sidecar up to its index. For the query
  *  worker, after it has answered (D63): it yields between chunks and segments, and runs on no timer. Never throws. */
 export function fillUsage({ home = trocarHome(), fs = nodeFs, segments = [] } = {}) {
@@ -185,8 +188,9 @@ export function fillUsage({ home = trocarHome(), fs = nodeFs, segments = [] } = 
     const key = `${fsTag(fs)}\n${home}\n${segment}`;
     if (waiting.has(key)) continue;
     waiting.add(key);
+    fills++;
     chain = chain.then(() => { waiting.delete(key); return fillOne({ home, fs, segment }); })
-      .catch((e) => noteProblem(home, fs, segment, String((e && e.message) || e)));
+      .catch((e) => noteProblem(home, fs, segment, String((e && e.message) || e))).finally(() => { fills--; });
   }
   return chain;
 }
