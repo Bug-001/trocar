@@ -322,9 +322,6 @@ export function normRespChat(rec) {
   return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools };
 }
 
-// ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────
-export function boardFlatFor(shape, req) { return shape === 'chat' ? boardFlatChat(req) : boardFlat(req); }
-export function normRespFor(shape, rec) { return shape === 'chat' ? normRespChat(rec) : normResp(rec); }
 // derived per-call counts the board header reads, per wire shape (Responses: input[]/instructions;
 // Chat: messages[] with the leading system messages as the system text).
 export function reqCountsFor(shape, req) {
