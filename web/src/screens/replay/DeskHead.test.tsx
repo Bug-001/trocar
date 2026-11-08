@@ -217,3 +217,14 @@ test('2.3 归约前沿: the session-info rows are not in the DOM until the ⓘ o
   await act(async () => { fireEvent.click(el.querySelector<HTMLElement>(`.sh-info [aria-label="${W.SESSION_INFO_LABEL}"]`)!) })
   expect(document.querySelectorAll('.sipb [data-row]').length).toBeGreaterThan(0)
 })
+
+test('1.2 #7: a declared parent is a link to #/session/<id>; the layer draws no link for a no-keys answer', async () => {
+  for (const [meta, link] of [[{ lineage_source: 'wire', parent_session_id: 'P 1', fork_of_session_id: null }, '#/session/P%201'], [{ lineage_source: 'no-keys' }, null]] as const) {
+    const { el } = head({ meta })
+    await act(async () => { fireEvent.click(el.querySelector<HTMLElement>(`.sh-info [aria-label="${W.SESSION_INFO_LABEL}"]`)!) })
+    const links = [...document.querySelectorAll('.sipb [data-row] a[href^="#/session/"]')].map((a) => a.getAttribute('href'))
+    expect(links).toEqual(link ? [link] : [])
+    cleanup()
+  }
+})
+
