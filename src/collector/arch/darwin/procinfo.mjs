@@ -132,7 +132,7 @@ function cached(cache, kind, pid, startedAt, read) {
 }
 
 /** envOf(pid, names, { startedAt, exec, procenvPath, cache }) → { <name>: value } for the `names` set in the process's LAUNCH
- *  environment (procenv: sysctl KERN_PROCARGS2, M2; same user only), or null when it cannot be read. Names compare exactly (macOS
+ *  environment (procenv: sysctl KERN_PROCARGS2; same user only), or null when it cannot be read. Names compare exactly (macOS
  *  environment names are case-sensitive). Later setenv() calls in the process do not show: launch values only. Only the named
  *  variables are asked for, returned and cached (RFC 4.9 §5.2): the cache key carries the name set, the rest never enters memory. */
 export function envOf(pid, names, { startedAt = null, exec = null, env = process.env, procenvPath = nativePath(NATIVE.procenv), cache = procCache, psTimeoutMs = PS_TIMEOUT_MS } = {}) {

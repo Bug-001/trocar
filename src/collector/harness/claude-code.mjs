@@ -169,7 +169,7 @@ const proxyMode = {
   forms: [
     { id: 'claude-code.cli', os: ['darwin', 'win32'], route: 'settings', cert: 'bundled', trust: 'bundled', present: [{ command: 'claude' }, perOs({ darwin: { base: 'home', path: '.local/bin/claude' }, win32: { base: 'home', path: '.local/bin/claude.exe' } })], verified: { darwin: true, win32: true } },
     { id: 'claude-code.vscode', os: ['darwin', 'win32'], route: 'settings', cert: 'bundled', trust: 'bundled', present: editorExtension(EXTENSION, ['desktop']), verified: { darwin: true, win32: true } },
-    // the app with its Code tab (the bundled `claude` takes HTTPS_PROXY from the PAC's first PROXY); verified in 3p mode (R4-M, R4-W); its own first-party
+    // the app with its Code tab (the bundled `claude` takes HTTPS_PROXY from the PAC's first PROXY); verified in 3p mode; its own first-party
     // hosts stay forward-only until a logged-in cell passes (ruling ⑲): sign-in, the updater and the Code-tab engine download
     { id: 'claude-code.desktop', os: ['darwin', 'win32'], route: 'library', cert: 'root', trust: 'root',
       present: [perOs({ darwin: { base: 'abs', path: '/Applications/Claude.app' }, win32: { base: 'localAppData', path: 'AnthropicClaude' } }), perOs({ darwin: { base: 'home', path: 'Applications/Claude.app' }, win32: { base: 'localAppData', path: 'Packages', glob: 'Claude_*' } })],

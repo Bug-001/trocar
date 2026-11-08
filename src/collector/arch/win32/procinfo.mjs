@@ -76,7 +76,7 @@ export async function factsOfPid(pid, { helper, psTimeoutMs = PS_TIMEOUT_MS, onU
 }
 
 // ---- the environment, cwd and parent of a pid (RFC 4.11 P7's proc readers; the upstream chain asks them) --------------------------
-// One helper `proc-env` read answers all three (W2: one PEB read gives the environment entries asked for, the current directory and the
+// One helper `proc-env` read answers all three (one PEB read gives the environment entries asked for, the current directory and the
 // parent that created it). Cached by pid + start time for the life of the process: a busy agent costs one read, not one per connection
 // (the single helper channel). A caller that does not know the start time gets no caching (a pid alone can be reused); an answer of
 // another life than the one asked about is no answer. Only the named variables are asked for, returned and cached (4.9 §5.2).

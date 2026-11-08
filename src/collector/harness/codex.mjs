@@ -86,7 +86,7 @@ const proxy = {
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (every form reads $CODEX_HOME/.env, the app's
-// embedded codex included; NO_PROXY is required on win, R3-W5). Trust is the root installed by `install` (D57): trocar writes no SSL_CERT_FILE.
+// embedded codex included; NO_PROXY is required on win). Trust is the root installed by `install` (D57): trocar writes no SSL_CERT_FILE.
 const ENV_FILE = ROUTE_PLACES.codex.file // where `on` writes the proxy block, the place the marker undo looks too
 const proxyMode = {
   forms: [
