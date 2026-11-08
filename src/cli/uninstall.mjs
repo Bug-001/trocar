@@ -93,7 +93,8 @@ const keptOf = (home, fs) => KEEPS.map(([dir, what]) => ({ what, path: dir(troca
 // 1.6 §3.6: while a shared helper keeps the code the install manifest goes (root's `setup-helper --remove` reads a manifest as an install in use), so
 // the PATH item's record, which the next uninstall takes it out by, is kept on its own here
 const pathItemFile = (w) => path.join(w.dir, 'path-item.json')
-const readPathItem = (w) => { try { return JSON.parse(w.fs.readFileSync(pathItemFile(w), 'utf8')) } catch { return null } }
+/** The PATH item's own record (kept beside the helper's code) → the item, null when there is none; one that cannot be read throws (D38: never taken as none). */
+const readPathItem = (w) => { let t; try { t = w.fs.readFileSync(pathItemFile(w), 'utf8') } catch (e) { if (e.code === 'ENOENT') return null; throw e } return JSON.parse(t) }
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const errText = (e) => String((e && e.message) || e)
 

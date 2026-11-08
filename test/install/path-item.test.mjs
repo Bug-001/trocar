@@ -149,6 +149,19 @@ test('1.6 §3.6: a helper still installed: exit 0, one shared left row with the 
   assert.deepEqual([fs.existsSync(appDir(s.home)), fs.existsSync(launcherPath(s.home, 'linux'))], [false, false])
 })
 
+test('D38: a PATH item record that cannot be read is said, never taken as no PATH item', async () => {
+  const s = scriptLinux({ helper: true })
+  assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
+  assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(fakeIo())), 0)
+  const rec = path.join(s.home, '.trocar', 'collector', 'path-item.json')
+  fs.writeFileSync(rec, '{ not json')
+  const io = fakeIo()
+  let exit = null, threw = null
+  try { exit = await runUninstallCli(['--yes', '--json'], s.ctx(io, false)) } catch (e) { threw = e }
+  assert.ok(threw || exit !== 0, `not a silent success: ${exit} ${io.text()}`)
+  assert.ok(fs.readFileSync(s.rc, 'utf8').includes('.trocar/bin'), 'the PATH item is not quietly left behind as if gone')
+})
+
 test('D58: once a script uninstall removed trocar itself, its receipt names no trocar command; the kept records are named by path', async () => {
   const s = scriptLinux()
   assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo())), 0)
