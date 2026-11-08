@@ -9,7 +9,7 @@ import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand } from '../off/paths.mjs'
+import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, homeMismatch, accountHomeOf } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
@@ -96,6 +96,9 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
   const say = json ? (s) => lines.push(s) : io.out
   if ((deps.getuid || processUid)() === 0) { io.err('trocar install: run this as your own user, not as root.'); return EXIT.usage }
   const fs = deps.fs || nodeFs
+  // 1.6 §1.5 (V126): a HOME that is not the account's is refused before anything is read — the daemon the login entry starts would use the other one
+  const away = homeMismatch({ home, account: deps.accountHome ? deps.accountHome() : accountHomeOf(home, platform), platform, fs })
+  if (away) { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code: away.code, message: away.message }, notes: [away.message] }); else io.err(fit([`trocar install: ${away.message}`]).join('\n')); return EXIT.usage }
   const old = refuseOldManifest({ home, platform, fs })
   if (old) { if (json) printJson(io, { ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }); else io.err(fit([`trocar install: ${old.message}`], { home }).join('\n')); return EXIT.incomplete }
   const { isModelOs } = await import('../collector/model-install.mjs')
