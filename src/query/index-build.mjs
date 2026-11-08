@@ -363,6 +363,10 @@ export function segmentSource(home, segment, fs = nodeFs) {
   return fs.existsSync(plainPath) ? plainPath : path.join(rawDir(home), `${segment}.sealed`);
 }
 
+/** Whether a read of plaintext `file` failed because the seal worker unlinked it after the look: it does so only with the sealed copy in
+ *  place (4.2 读者与封存并发), so that copy holds the bytes. A plaintext still there and unreadable is a failure: it wins while it exists. */
+export const plainWentSealed = (home, segment, fs, file) => !file.endsWith('.sealed') && !fs.existsSync(file) && fs.existsSync(path.join(rawDir(home), `${segment}.sealed`));
+
 // The mark of a plaintext segment covered up to byte `end` (just past line `lines`), the way a scan builds it: `size`
 // claims only what was covered, so a file that is longer reads as GROWN and resumes from `end` (usability below).
 export function plainMark(fs, source, end, lines) {
@@ -496,6 +500,7 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
       : (owner && fromEntries(fs, source, stored, how, entries))
         || scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes, progress);
   } catch (e) {
+    if (plainWentSealed(home, segment, fs, source)) return segmentIndex({ home, segment, fs, maxBytes, owner, entries, past, progress });
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(source)}: ${String((e && e.message) || e)}` });
     return { segment, source, records: stored && how === 'resume' ? stored.records || [] : [], problems: [...prior, ...problems], bytesRead: 0, done: true, stored: kept, grown: false };
   }
