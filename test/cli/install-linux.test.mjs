@@ -193,6 +193,22 @@ test('Linux install replaces a collector that answers another code: the receipt 
   assert.equal(sys.daemon.state.up, true, 'the unit brought the collector up again')
 })
 
+// 1.6 §3.2 step 5, as on macOS / Windows: an install that changes the unit a running collector on this code was started from (the NODE_EXTRA_CA_CERTS
+// its Environment= carries) replaces it; one that leaves the unit as it is leaves the collector
+test('Linux install replaces a running collector on this code when it changes the unit, and only then', async () => {
+  const home = tmpDir('trocar-install-unit-')
+  seedClaude(home)
+  const sys = fakeSystem({ up: true })
+  const stops = []
+  const deps = { daemonCode: async () => (sys.daemon.state.up ? codeId() : null), stopDaemon: async () => { sys.daemon.state.up = false; stops.push('stop'); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } } }
+  const run = async (env) => { const io = fakeIo(); assert.equal(await runInstallCli(['--yes', '--json'], { ...onCtx(home, io, { exec: sys.exec, daemon: sys.daemon, deps, env }), platform: 'linux' }), 0, io.text()); return io.json() }
+  await run({})
+  sys.daemon.state.up = true // a collector runs, started from the unit just written
+  assert.deepEqual([(await run({})).daemon.replaced, stops], [false, []], 'the same unit: the collector is left')
+  const r = await run({ NODE_EXTRA_CA_CERTS: path.join(home, 'corp', 'relay.pem') })
+  assert.deepEqual([r.daemon.replaced, r.daemon.state, stops], [true, 'running', ['stop']], JSON.stringify(r.daemon))
+})
+
 // 1.6 §5.5 step 4: the update that runs install replaces the collector itself, right after it
 test('Linux install under an update that replaces the collector next leaves it running and plans no replacement', async () => {
   const home = tmpDir('trocar-install-keep-')

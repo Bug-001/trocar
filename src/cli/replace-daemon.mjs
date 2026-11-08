@@ -14,16 +14,17 @@ export const CUT = 'Connections the collector still holds are cut when it is rep
 /** The daemon on this code: one that runs another (or answers no `code`) is taken out of the way the way `uninstall` takes it — the same
  *  drain-then-stop path (`drainDaemon`: `POST /off {exit:true}`, then the wait, §5.2) and the same `stopDaemon` — and pulled up again
  *  through the login entry install registered (a stopped LaunchAgent is booted out, so this bootstraps it, 4.9 §4).
- *  `by` is the command that runs it ('update' | 'install'): the drain names it, and the remedy says to run it again.
+ *  `by` is the command that runs it ('update' | 'install'): the drain names it, and the remedy says to run it again. `sameCode`: replaced on this code too
+ *  (install rewrote the login entry it was started from).
  *  → `{ restarted, stopped?, notes, elsewhere?, from }` (`from`: the code the old daemon answered, null when none; `stopped`: whether the old
  *  daemon was stopped, absent when it already ran this code — so a caller knows a collector still runs after a failure); what went wrong is pushed on
  *  `problems`. The three modules of this step are the running code's: they are loaded here, in the process that finishes, never in one
  *  that merged. */
-export async function replaceDaemon({ by, env, home, platform, deps, dir, root, fs, problems }) {
+export async function replaceDaemon({ by, env, home, platform, deps, dir, root, fs, problems, sameCode = false }) {
   const again = `Fix that, then run trocar ${by} again`
   const notes = []
   const running = await daemonCode({ platform, dir, env, fs, deps })
-  if (running === codeId(root)) return { restarted: false, notes, from: running }
+  if (running === codeId(root) && !sameCode) return { restarted: false, notes, from: running } // `sameCode`: install's own call when the login entry it was started from changed
   const { offWorld, drainDaemon } = await import('../off/orchestrate.mjs')
   const w = offWorld({ home, env, deps: { ...deps, platform } })
   let { routing } = await drainDaemon(w, { drainMs: deps.drainMs, by })

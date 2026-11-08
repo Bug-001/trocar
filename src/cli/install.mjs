@@ -35,26 +35,35 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 const COST = "While installed, programs you run trust certificates issued by this machine's trocar root. Remove it: trocar uninstall"
 const RISK = 'Any program running as you can ask trocar to issue a trusted certificate, but cannot copy the key. If you suspect misuse: trocar uninstall, then trocar install.'
 
-// 1.6 §3.2 step 5: the code the answering collector names when it is not this copy's (`root`), else null — a collector that names none is a build
-// from before the first release (D67④) and is left. Under `deps.keepDaemon` nothing is stale: the update that runs this install replaces the
-// collector itself right after it, once the login entry is written (§5.5 step 4)
-async function staleDaemon({ platform, home, env, fs, deps, root }) {
+// 1.6 §3.2 step 5: why the answering collector is replaced → { from, why } | null. `why` 'code': it names another copy's code than this one's (`root`);
+// 'unit': it runs this code, but the login entry it was started from changes in this run (the environment it carries, the program it names): a daemon
+// keeps the entry it started with until it is started again. A collector that names no code is a build from before the first release (D67④) and is
+// left. Under `deps.keepDaemon` nothing is replaced: the update that runs this install replaces the collector itself right after it (§5.5 step 4)
+async function staleDaemon({ platform, home, env, fs, deps, root, unit = null }) {
   if (deps.keepDaemon) return null
-  const running = await daemonCode({ platform, dir: path.join(home, '.trocar', 'collector'), env, fs, deps })
-  return typeof running === 'string' && running !== codeId(root) ? running : null
+  const dir = path.join(home, '.trocar', 'collector')
+  const running = await daemonCode({ platform, dir, env, fs, deps })
+  if (typeof running !== 'string') return null
+  if (running !== codeId(root)) return { from: running, why: 'code' }
+  if (!unit || typeof unit.text !== 'function') return null
+  let onDisk = null
+  try { onDisk = fs.readFileSync(unit.path, 'utf8') } catch { return null } // no entry on disk: the daemon was not started from one this run changes
+  const { daemonEnv } = await import('../collector/install.mjs')
+  return onDisk !== unit.text(daemonEnv(env, dir).env) ? { from: running, why: 'unit' } : null
 }
 
-// 1.6 §3.2 step 5, after the login entry is up: a daemon that answers another copy's code is replaced through the routine update uses; routing is
-// not touched (D61②). → null when it was left, else replaceDaemon's answer plus `replaced`; what went wrong is pushed on `problems` (exit 1, D38)
-async function replaceStale({ platform, home, env, fs, deps, root, unit, problems }) {
-  if (!(await staleDaemon({ platform, home, env, fs, deps, root }))) return null
+// 1.6 §3.2 step 5, after the login entry is up: the collector the plan named (`stale`) is replaced through the routine update uses; routing is not
+// touched (D61②). A collector this run started is on the new entry already. → null when it was left, else replaceDaemon's answer plus `replaced`
+// and `why`; what went wrong is pushed on `problems` (exit 1, D38)
+async function replaceStale({ stale, dmn, platform, home, env, fs, deps, root, unit, problems }) {
+  if (!stale || !dmn.up || dmn.started) return null
   const before = problems.length
-  const rep = await replaceDaemon({ by: 'install', env, home, platform, deps: { ...deps, unit }, dir: path.join(home, '.trocar', 'collector'), root, fs, problems })
-  return { ...rep, replaced: rep.restarted && !rep.elsewhere && problems.length === before }
+  const rep = await replaceDaemon({ by: 'install', env, home, platform, deps: { ...deps, unit }, dir: path.join(home, '.trocar', 'collector'), root, fs, problems, sameCode: stale.why === 'unit' })
+  return { ...rep, why: stale.why, replaced: rep.restarted && !rep.elsewhere && problems.length === before }
 }
-// the plan's line for a daemon on other code, and the receipt's line once it was replaced (both install paths)
-const staleItem = (stale, root) => stale ? [{ what: 'daemon', detail: `the collector runs ${stale}, so it is stopped and started again on ${codeId(root)}` }] : []
-const replacedRow = (rep, root) => rep && rep.replaced ? [['collector', `replaced: it ran ${rep.from}, it now runs ${codeId(root)}`]] : []
+// the plan's line for a collector install replaces, and the receipt's line once it was replaced (both install paths)
+const staleItem = (stale, root) => !stale ? [] : [{ what: 'daemon', detail: stale.why === 'code' ? `the collector runs ${stale.from}, so it is stopped and started again on ${codeId(root)}` : 'the collector\'s login entry changes, so the running collector is stopped and started again from the new one' }]
+const replacedRow = (rep, root) => rep && rep.replaced ? [['collector', rep.why === 'code' ? `replaced: it ran ${rep.from}, it now runs ${codeId(root)}` : 'started again from the new login entry']] : []
 // the receipt's `daemon` (附录 C.2): after a replacement that stopped the old one, what runs is whether the new one came up
 const daemonRow = (dmn, rep) => ({ state: rep && rep.stopped ? (rep.restarted ? 'running' : 'not-running') : dmn.state, started: dmn.started, replaced: !!(rep && rep.replaced) })
 
@@ -159,7 +168,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const unit = deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch(platform)).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
     const root = deps.root || packageRoot()
     // 1.6 §3.2 step 5: a collector on another copy's code is replaced (not by the board's Set up: it is not an install, and the board hangs on that daemon)
-    const stale = unit && !only ? await staleDaemon({ platform, home, env, fs, deps, root }) : null
+    const stale = unit && !only ? await staleDaemon({ platform, home, env, fs, deps, root, unit }) : null
     const pathItem = only ? null : await pathPlan({ root, home, env, platform, fs })
     const carrierOf = (r) => (r.carrier === 'root'
       ? 'reads your user trust store'
@@ -221,7 +230,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     if (dmn.problems.length) r.exit = 1
     const dir = path.join(home, '.trocar', 'collector')
     // 1.6 §3.2 step 5: the daemon that answers runs another copy's code → replaced through the routine update uses; routing is not touched (D61②)
-    const rep = unit && !only && dmn.up ? await replaceStale({ platform, home, env, fs, deps, root, unit, problems: r.problems }) : null
+    const rep = unit && !only ? await replaceStale({ stale, dmn, platform, home, env, fs, deps, root, unit, problems: r.problems }) : null
     if (rep) { dmnNotes.push(...rep.notes); if (!rep.replaced) r.exit = 1 }
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
@@ -299,7 +308,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   try { due = standaloneDue({ home, version: OFF_VERSION, platform, fs }) } catch { due = standaloneFiles(home, platform) } // a copy that cannot be read is said by the write below
   const stdNew = due.length > 0
   const root = deps.root || packageRoot()
-  const stale = unit ? await staleDaemon({ platform, home, env, fs, deps, root }) : null // 1.6 §3.2 step 5, as on macOS / Windows
+  const stale = unit ? await staleDaemon({ platform, home, env, fs, deps, root, unit }) : null // 1.6 §3.2 step 5, as on macOS / Windows
   const pathItem = await pathPlan({ root, home, env, platform, fs })
   const daemonItem = [...staleItem(stale, root), ...(pathItem ? [pathItem] : [])]
   const planned = [...planItems({ ...plan, standalone: due }, { home, platform }), ...daemonItem]
@@ -327,7 +336,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   // D61 (1.6 §3.2 step 5): the login entry is an item of the install like any other — one that could not be registered is a problem and exit 1, never only a note
   const dmn = r.daemon || { up: false, state: 'not-running', started: false, problems: [], unitFailed: null }
   const problems = [...dmn.problems, ...(done.path && done.path.problem ? [done.path.problem] : []), ...(r.skipped || []).map((x) => x.reason)] // a carrier left off someone else's file (4.11 P4): the install is not done
-  const rep = r.daemon && dmn.up ? await replaceStale({ platform, home, env, fs, deps, root, unit: args.unit, problems }) : null
+  const rep = r.daemon ? await replaceStale({ stale, dmn, platform, home, env, fs, deps, root, unit: args.unit, problems }) : null
   // the capability helper is an item of its own (D53, 1.6 §3.8): install never waits on it, the collector runs without it and captures nothing, and the receipt says the one sudo line
   const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)
   const h = helperState ? await helperState() : null
