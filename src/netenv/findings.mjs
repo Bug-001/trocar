@@ -94,6 +94,16 @@ function notRoutedOf(c) {
   return { why: 'This form has no entry trocar can use.', commands: [gui(`Use ${c.h}'s CLI form instead`), trocar(c, `trocar status ${c.h}`)] }
 }
 
+/** A route `on` did not write, for its receipt's row (which names the place): `{ why, steps }` in the doctor's words (1.6 附录 B) — the steps as text,
+ *  the last one the command that writes it then. Only the reasons that need no more than the place: any other is null (the receipt keeps its code). */
+export function routeRefusal({ h, reason, at }) {
+  if (!['own-egress', 'blocker', 'unreadable', 'blocker-unreadable', 'absent', 'credentialed-own-leg', 'no-path', 'no-applied-entry'].includes(reason)) return null
+  // the receipt's row already names the place: the setting of the user's is "there", said once
+  if (reason === 'own-egress' || reason === 'blocker') return { why: `It holds a setting of yours, which keeps ${h} off any entry trocar can use.`, steps: ['Remove your value there', `run: trocar on ${h}`] }
+  const r = notRoutedOf({ h, sh: 'sh', fm: { route: { reason, at } } })
+  return { why: r.why, steps: r.commands.map((x) => (x.shell === 'gui' ? x.run : `run: ${x.run}`)) }
+}
+
 /** The catalogue (附录 B). `applies` is `diagnose`'s business; each entry says what it is. `cls` is the class, or a function of the context where it depends (`proxy-changed`). */
 // a negative-cache finding's words by the cause the engine recorded for this harness's processes (any cause else: trocar's certificate refused). The
 // sentence names every pid and host of that cause in this harness's entries (hf.negatives), and when trocar tries them again (the latest retry_at),

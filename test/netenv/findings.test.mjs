@@ -530,3 +530,14 @@ test('§1.1⑥ renderFindings: a GUI step folds inside 80 columns, hanging two d
   assert.ok(lines[step + 1].startsWith(' '.repeat(at + 2)) && lines[step + 1][at + 2] !== ' ', `the fold hangs two deeper:\n${lines.join('\n')}`)
   assert.ok(lines.some((l) => l.trim() === cmd), 'the command is whole on its own line')
 })
+
+// on's receipt says a route it did not write in these words (1.6 附录 B), on the row that names the place: why, and steps whose last one is the command that writes it then —
+// a refusal never leaves the user with a bare code (own-egress after the user's value outlived an off, mac 2026-11-07)
+test('routeRefusal: own-egress ends in trocar on <harness>, with a step before it; a reason it has no words for is null', async () => {
+  const { routeRefusal } = await import('../../src/netenv/findings.mjs')
+  const at = '~/Library/Application Support/Claude-3p/configLibrary/u1.json#egressProxyPacUrl'
+  const r = routeRefusal({ h: 'claude-code', reason: 'own-egress', at })
+  assert.equal(r.steps.at(-1), 'run: trocar on claude-code')
+  assert.ok(r.steps.length >= 2, 'a step before it: what to do with the value')
+  assert.equal(routeRefusal({ h: 'claude-code', reason: 'system-pac', at }), null)
+})

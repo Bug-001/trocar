@@ -9,6 +9,9 @@ import { modelWorld } from '../helpers/model-world.mjs'
 import { turnOnModel } from '../../src/collector/model-on.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
+import { runDoctor } from '../../src/cli/doctor.mjs'
+import { describeEntry } from '../../src/off/journal.mjs'
+import { redactProxyUrl } from '../../src/netenv/redact.mjs'
 import { readManifest, saveManifest } from '../../src/collector/core/trust/journal.mjs'
 import { emptyState, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
@@ -24,6 +27,14 @@ async function statusDoc(w, h) {
   const fsx = { ...fs, existsSync: (p) => String(p).startsWith(w.home + path.sep) && fs.existsSync(p) } // hermetic: only the world's own app is present
   await runStatusCli(['--json', h], { io, home: w.home, platform: 'darwin', env: w.env, deps: { request: async (q) => (q.path === '/status' ? r : assert.fail(q.path)), socketPath: SOCK, procs: async () => [], spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'boot-1' }), fs: fsx } })
   return JSON.parse(io.stdoutText())
+}
+/** a command's stdout, the same daemon and world as statusDoc */
+async function text(w, h, cmd, argv) {
+  const doors = JSON.parse(fs.readFileSync(path.join(w.dir, 'ingress.json'), 'utf8')).groupPorts
+  const r = { pid: 99, doors, harnesses: { [h]: { desired: 'on', attached: true } }, holders: null, agents: [], negatives: [], cert: { key: 'present', intermediate: 'ready', expires: '2026-12-22T09:00:02Z' }, engine: {} }
+  const io = fakeIo(), fsx = { ...fs, existsSync: (p) => String(p).startsWith(w.home + path.sep) && fs.existsSync(p) }
+  await cmd(argv, { io, home: w.home, platform: 'darwin', env: w.env, deps: { request: async (q) => (q.path === '/status' ? r : { }), socketPath: SOCK, procs: async () => [], spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'boot-1' }), fs: fsx } })
+  return io.stdoutText()
 }
 const status = async (w, h) => (await statusDoc(w, h)).harnesses[h]
 const reasonsIn = (doc) => [...new Set(JSON.stringify(doc).match(/"reason":"[a-z-]+"/g).map((x) => x.slice(10, -1)))]
@@ -61,7 +72,11 @@ test('P10: status names trocar\'s stale PAC address with trocar on; on rewrites 
   assert.deepEqual([...new Set(pacs().map((r) => r.door))], [valueNow()], 'its records tagged with what it wrote')
   const after = await statusDoc(w, h)
   assert.notEqual(after.harnesses[h].reason, 'pac-address-stale')
-  assert.ok(!JSON.stringify(after).includes(new URL(valueNow()).pathname), 'the key is never printed (a capability, P10)')
+  // the key is a capability (P10): only the entry holds it. Every face that shows the address masks it, the same way
+  const secret = new URL(valueNow()).pathname.split('/')[1]
+  const faces = { 'status --json': JSON.stringify(after), status: await text(w, h, runStatusCli, []), 'status <h>': await text(w, h, runStatusCli, [h]), 'doctor --json': await text(w, h, runDoctor, ['--json']), doctor: await text(w, h, runDoctor, []), 'a receipt\'s entry': pacs().map(describeEntry).join('\n'), 'a proxy url shown': redactProxyUrl(valueNow()) }
+  for (const [face, t] of Object.entries(faces)) assert.ok(t.length > 20 && !t.includes(secret), `${face}: said, the key masked`)
+  assert.match(faces["a receipt's entry"], /\/\*\*\*\/trocar\.pac/)
 
   // the record an older tip wrote: the address with no key, tagged with the door — a tag that differs like any other, the entry holding its value
   const m = readManifest(w.dir), origin = new URL(valueNow()).origin, old = `${origin}/trocar.pac`
