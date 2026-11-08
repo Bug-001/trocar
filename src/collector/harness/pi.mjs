@@ -59,8 +59,8 @@ const proxy = {
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3): data only. The install-time extension in pi's extensions dir carries the root and reads
 // the switch file once at import (so a pi started while on is a holder, P12); every form has it. Verified: the official install's pi accepted a
-// leaf chained to the root with only the extension adding it (fetch, WebSocket and node:https; both test machines). npm's and rpc mode on
-// macOS too, with no trocar root in any CA variable; on Windows they were measured only beside a user CA file trocar may have appended to.
+// leaf chained to the root with only the extension adding it (fetch, WebSocket and node:https; both test machines). npm's and rpc mode too, on
+// both: decrypted with no trocar root in any CA variable (the only extra CA being the relay's own), so the extension alone carries trust.
 const PI = (p) => ({ ...HOME_PLACES.pi.dir, path: p })
 const NOT_MEASURED = { reason: 'not-measured' }
 const form = (id, present, verified = NOT_MEASURED) => ({ id, os: ['darwin', 'win32'], route: 'switch', cert: 'ext', trust: 'node', present, verified: { darwin: verified, win32: verified } })
@@ -69,8 +69,8 @@ const proxyMode = {
     // only the official installer writes install/current-version (its launcher reads it; both OS); <agent dir>/bin is not a sign of it: pi
     // downloads fd / rg there for every install
     form('pi.cli', [PI('install/current-version')], true),
-    { ...form('pi.npm', [{ command: 'pi' }]), verified: { darwin: true, win32: NOT_MEASURED } },
-    { ...form('pi.rpc', [{ command: 'pi' }]), verified: { darwin: true, win32: NOT_MEASURED } },
+    form('pi.npm', [{ command: 'pi' }], true),
+    form('pi.rpc', [{ command: 'pi' }], true),
     // the Bun binary is an archive unpacked anywhere and leaves nothing of its own to probe, so any `pi` on PATH stands for it; it stays
     // out of scope (Bun has no tls.setDefaultCACertificates, so the extension cannot add the root)
     form('pi.bin', [{ command: 'pi' }], { reason: 'out-of-scope' }),
