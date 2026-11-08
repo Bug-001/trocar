@@ -15,7 +15,7 @@ import { sha256 } from '../../src/off/fsutil.mjs'
 import { certBlocks, composeBundle } from '../../src/off/pem.mjs'
 import { lineComment } from '../../src/off/text-edit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { applyTextEntry, applyJsonKey, applyJsonArrayItem, saveManifest } from '../../src/collector/core/trust/journal.mjs'
+import { applyTextEntry, applyJsonKey, applyJsonKeys, saveManifest } from '../../src/collector/core/trust/journal.mjs'
 
 const ROOT = createCa({ commonName: 'undo root' }), CORP = createCa({ commonName: 'undo corp relay' }), OSROOT = createCa({ commonName: 'undo os root' })
 const roots = { node: [ROOT.certPem], osText: '' }
@@ -133,7 +133,7 @@ test('two entries in one file, the file back to its bytes before the first: both
   const m = readManifest(s.b.dir)
   const file = write(s.b, '.aa/vs/settings.json', '{\n  "editor.fontSize": 13\n}\n'), pre = fs.readFileSync(file)
   const at = { dir: s.b.dir, manifest: m, harness: 'aa', phase: 'on', home: s.b.home, now: new Date(), fs }
-  applyJsonArrayItem({ ...at, file, keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' })
+  applyJsonKeys({ ...at, file, items: [{ keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' }] })
   applyJsonKey({ ...at, file, keys: ['http.proxy'], value: 'http://127.0.0.1:47011' })
   saveManifest(s.b.dir, m, fs)
   assert.equal(readManifest(s.b.dir).entries.filter((e) => e.path === file).length, 2)
@@ -153,7 +153,7 @@ test('an entry put back among the left ones after step 1 dropped its backup name
   const m = readManifest(s.b.dir)
   const file = write(s.b, '.aa/vs/settings.json', `{\n  "ca": ${JSON.stringify(s.b.ca('combined-aa.pem'))}\n}\n`), pre = fs.readFileSync(file)
   const at = { dir: s.b.dir, manifest: m, harness: 'aa', phase: 'on', home: s.b.home, now: new Date(), fs }
-  applyJsonArrayItem({ ...at, file, keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' })
+  applyJsonKeys({ ...at, file, items: [{ keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' }] })
   applyJsonKey({ ...at, file, keys: ['http.proxy'], value: 'http://127.0.0.1:47011' })
   saveManifest(s.b.dir, m, fs)
   fs.writeFileSync(file, pre)
@@ -171,7 +171,7 @@ test('two entries in one file with a user edit between them: the later backup is
   const m = readManifest(s.b.dir)
   const file = write(s.b, '.aa/vs/settings.json', '{\n  "editor.fontSize": 13\n}\n'), pre = fs.readFileSync(file)
   const at = { dir: s.b.dir, manifest: m, harness: 'aa', phase: 'on', home: s.b.home, now: new Date(), fs }
-  applyJsonArrayItem({ ...at, file, keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' })
+  applyJsonKeys({ ...at, file, items: [{ keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' }] })
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('13', '14')) // the user's edit, between the two writes
   applyJsonKey({ ...at, file, keys: ['http.proxy'], value: 'http://127.0.0.1:47011' })
   saveManifest(s.b.dir, m, fs)
