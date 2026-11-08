@@ -8,12 +8,12 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.mjs'
-import { samePath } from '../collector/core/trust/journal.mjs'
+import { samePath, MARKED_WITHOUT_RECORD } from '../collector/core/trust/journal.mjs'
 import { replacedNote } from '../off/backup.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, homeMismatch, accountHomeOf, collectorDir, backupDir } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
-import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, UNDO_WORDS, asDir } from './receipt.mjs'
+import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, markedRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT, CODE } from '../collector/core/codes.mjs'
@@ -192,8 +192,12 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     if (rep) { dmnNotes.push(...rep.notes); if (!rep.replaced) r.exit = 1 }
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
+    // 1.6 §3.2: the carriers skipped for trocar's marked text no record lists — the receipt is that refusal's: each file a problem, the code, and the uninstall that takes the text out
+    const marked = [...new Set(r.carriers.filter((c) => c.code === MARKED_WITHOUT_RECORD && c.path).map((c) => c.path))]
+    const mwr = marked.length ? markedRefusal('install', { code: MARKED_WITHOUT_RECORD, message: `${marked.length === 1 ? 'this file holds' : 'these files hold'} trocar's text from an earlier install whose record is gone, so trocar left ${marked.length === 1 ? 'it' : 'them'} and installed the rest. The line below takes that text out by trocar's own marks; then run trocar install again.`, paths: marked }) : null
+    if (mwr) r.problems.push(...mwr.problems)
     const receipt = { ...newReceipt('install'), ok: r.exit === 0, skipped: r.carriers.filter((c) => c.code === CODE.notTrocarsFile && c.path).map((c) => ({ what: c.path, reason: c.why })), undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: daemonRow(dmn, rep), ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
-      ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
+      ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : mwr ? { error: mwr.error } : {}),
       ...(r.path && r.path.rec ? { path_item: r.path.rec } : {}),
       planned, ...(left.length ? { left } : {}), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
     try { appendEvent(dir, { event: EVENT.installNote, where: 'install', kind: 'result', outcome: receipt.ok ? 'installed' : 'partial', reason: `install: root ${r.fp256 || 'not made'}; ${r.carriers.length} carrier row(s); ${r.pending.length} pending` }) } catch (e) { r.problems.push(`the install-note could not be written (${e.message})`) }
@@ -221,12 +225,12 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       ...pairs([...carrierRows, ...replacedRow(rep, root), ...pathRow(r.path), ...(receipt.autostart ? [['autostart', `${receipt.autostart.entry}: ${receipt.autostart.enabled ? 'enabled, and a collector starts at every login' : 'NOT enabled (see the problem below): no collector starts at login'}`]] : [])], { home }),
       ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: trocar install`),
       ...receipt.notes.map((n) => `Note: ${n}`),
-      ...r.problems.map((p) => `Problem: ${p}`),
+      ...r.problems.filter((p) => !(mwr && mwr.problems.includes(p))).map((p) => `Problem: ${p}`),
       // the residual risk (RISK) is the last line of the plan printed just above in this same run (§3.2 prints it there, and the
       // receipt sample does not carry it); printing it again put the paragraph on the screen twice (a macOS test machine 2026-10-18).
       // `--json` keeps it as `residual_risk`, because a document has no plan above it.
       ...(r.problems.length ? [] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3): it is no next step until install has finished
-      ...breakGlass(home, platform)], { home }).join('\n'))
+      ...breakGlass(home, platform)], { home }).concat(mwr ? ['', ...formatRefusal(mwr, { home, paths: marked })] : []).join('\n')) // the marked files: each whole on its own line, then the command (§1.1⑥)
     return r.exit
   }
 }
@@ -248,7 +252,13 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   if (only) return await linuxSetup({ io, home, platform, flags, json, say, fs, locked, inst, args: { ...args, ids: [only], unit: null }, only })
   let plan
   const ingressPath = path.join(home, '.trocar', 'collector', 'ingress.json')
-  try { plan = await inst.planOn(args) } catch (e) { io.err(`trocar install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
+  try { plan = await inst.planOn(args) } catch (e) {
+    if (e && e.code === inst.MARKED_WITHOUT_RECORD) { // 1.6 §3.2: refused before anything is written; every such file named, and the one line that takes the text out
+      const r = markedRefusal('install', e)
+      if (json) printJson(io, r); else io.err(formatRefusal(r, { home, paths: e.paths }).join('\n'))
+      return EXIT.incomplete
+    }
+    io.err(`trocar install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
   if (plan.created && (await import('../collector/core/ingress-config.mjs')).readIngressConfig({ dir: path.dirname(ingressPath), fs }).boardPort === undefined) plan.created.push(ingressPath) // the board's port, recorded below (V85: the plan names what the run writes)
   // trocar-off (R3) is install's: named in the plan and the dry run when this run would write it, i.e. when it is not already what src/off generates
   const stdPath = standalonePath(home)

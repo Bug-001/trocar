@@ -338,12 +338,22 @@ export function applyJsonKeys({ dir, manifest, harness, phase, file, sets = [], 
 // under an install this manifest does not list is refused: a second block or row would only be undone once. `joined` (the
 // caller has checked the manifest lists the block for this harness) is the only way past that refusal, and only into the
 // existing block (text-edit.mjs joinDotenvBlock); the default stays the refusal, so nothing joins by accident.
-function editText(file, text, edit, { joined = false, phase = 'install' } = {}) {
+export const MARKED_WITHOUT_RECORD = 'marked-without-record' // 1.6 §3.2: the refusal's code, which install's plan collects over every file
+function refuseMarked(file, text, edit, joined = false) {
   if (text != null && (text.includes(BLOCK_OPEN) || (edit.line && holdsMarked(text, edit.line)))) { // the marker's fixed part: what any release wrote (4.6「标记的字」)
     if (!(joined && text.includes(BLOCK_OPEN) && edit.format === 'dotenv-block')) {
-      throw new Error(`${file} already holds trocar's text from an install this manifest does not list; take it out, then install again`)
+      throw Object.assign(new Error(`${file} already holds trocar's text from an install this manifest does not list; take it out, then install again`), { code: MARKED_WITHOUT_RECORD, path: file })
     }
   }
+}
+/** Why a text entry into `file` would be refused for trocar's marked text no record lists, or null: what a plan says of a write the run refuses
+ *  (1.6 §1.4). Any other trouble with the file is the run's to report. */
+export function markedWithoutRecord({ file, edit, fs = nodeFs }) {
+  try { refuseMarked(file, readUserText(file, readOrNull(fs, editTarget(file, fs))).text, edit) } catch (e) { return e && e.code === MARKED_WITHOUT_RECORD ? e.message : null }
+  return null
+}
+function editText(file, text, edit, { joined = false, phase = 'install' } = {}) {
+  refuseMarked(file, text, edit, joined)
   try {
     if (edit.format === 'dotenv-block') {
       const how = { quote: edit.quote === true, neutralize: edit.neutralize || [], fold: edit.fold === true, at: edit.at || 'top', phase } // `at: 'end'`: 4.11 P5 dotenv-block, after the user's lines

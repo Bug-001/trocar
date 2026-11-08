@@ -11,7 +11,7 @@ import path from 'node:path'
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
-import { fit, formatOnReceipt, formatPlan, planItems, onlyRefused } from './receipt.mjs'
+import { fit, formatOnReceipt, formatPlan, planItems, onlyRefused, formatRefusal, markedRefusal } from './receipt.mjs'
 import { colors, noColor } from './text.mjs'
 import { renderCompact, BRANCH_SEP } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -139,6 +139,11 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     }
     return exit
   } catch (e) {
+    if (e && e.code === 'marked-without-record' && Array.isArray(e.paths)) { // 1.6 §3.2: the same refusal install gives, with the line that gets past it
+      const r = markedRefusal('on', e)
+      if (json) printJson(io, r); else io.err(formatRefusal(r, { home, paths: e.paths }).join('\n'))
+      return EXIT.incomplete
+    }
     const message = String((e && e.message) || e)
     if (json) printJson(io, { ...newReceipt('on'), ok: false, notes: [message] }); else io.err(`trocar on: ${message}`)
     return EXIT.incomplete

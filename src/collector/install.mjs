@@ -22,7 +22,7 @@ import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { patternsOf } from '../off/signature.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, notTrocars, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256, replaceable, retireEntry, inheritDirs } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, notTrocars, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256, replaceable, retireEntry, inheritDirs, MARKED_WITHOUT_RECORD } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
@@ -197,6 +197,12 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   let descs = kept.filter((d) => driverForms(d, ctxFor(d)).length)
   const R = roots || await bundleRoots(arch)
   let draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
+  // marked text no record lists (1.6 §3.2), over every harness's files BEFORE any harness is dropped below, so the refusal names them all;
+  // any other per-file refusal is left to the preview further down, which throws it for the harnesses still planned
+  const marked = [...new Set(draft.entries.filter((e) => judgeEntry({ manifest: prior, planned: e, fs }).action === 'write').map((e) => {
+    try { if (e.kind === 'text') previewTextEntry({ file: e.path, edit: e, fs }); else previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs }); return null } catch (err) { return err && err.code === MARKED_WITHOUT_RECORD ? err.path : null }
+  }).filter(Boolean))]
+  if (marked.length) throw Object.assign(new Error(`${marked.length === 1 ? 'this file holds' : 'these files hold'} trocar's text from an earlier install whose record is gone, so nothing was changed. The line below takes it out by trocar's own marks; then run this command again.`), { code: MARKED_WITHOUT_RECORD, paths: marked })
   // 4.11 P4: an owned file the manifest does not list that would land on someone else's file (notTrocars) skips its harness whole, before
   // anything is written (D38); the plan is made again without it, so nothing of that harness is written, the other harnesses are
   const foreign = draft.owned.filter((o) => judgeOwned({ manifest: prior, file: o.path, fs }).action === 'write').map((o) => ({ harness: o.harness, what: o.path, reason: notTrocars({ dir, file: o.path, fs }) })).filter((x) => x.reason)
@@ -797,3 +803,5 @@ function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.joi
 
 // `trocar install` on macOS and Windows (4.11 §1, plan T20): the model's install lives beside this one; Linux keeps installCollector.
 export { runInstall } from './model-install.mjs'
+
+export { MARKED_WITHOUT_RECORD } // the plan's refusal code, for the command that prints it (src/cli/install.mjs)

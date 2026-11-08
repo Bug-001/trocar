@@ -9,11 +9,10 @@
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { newReceipt, EXIT, UNDO_LINE } from '../off/schema.mjs'
-import { offWorld, desiredOff, drainDaemon, undoSide, harnessIdsOf, flowWriter, OFF_LOCK_WAIT_MS, MARKER_TEXT, perFile } from '../off/orchestrate.mjs'
-import { planByMarker } from '../off/marker.mjs'
+import { offWorld, desiredOff, drainDaemon, undoSide, harnessIdsOf, flowWriter, marksNotListed, markRows, OFF_LOCK_WAIT_MS } from '../off/orchestrate.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { readManifest, saveManifest, manifestPath, refuseOldManifest, undoByHand, PHASES } from '../off/manifest.mjs'
+import { readManifest, saveManifest, manifestPath, refuseOldManifest, undoByHand } from '../off/manifest.mjs'
 import { rootName, rootStore, sameRoot, strayRoots as strayRootsOf } from '../off/root-store.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath, AGENT_LABEL } from '../off/darwin.mjs'
@@ -99,15 +98,15 @@ const errText = (e) => String((e && e.message) || e)
 /** What `uninstall --dry-run` would do (and what is printed when a yes is missing), read and written nowhere → the receipt fields. */
 function planUninstall(w, m, purgeData = false, root = packageRoot(), places = []) {
   const usable = m && !m.unsupported
-  const marks = m ? [] : planByMarker({ home: w.home, fs: w.fs, env: w.env, platform: w.platform, phases: PHASES, places }) // no record: what the run would undo by trocar's marks
-  const markRow = (p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, harness: p.harness })
   const heldRow = helperHoldsCode(w, root), held = !!heldRow // the code, the PATH item and the records stay (see below); the plan says so, as the run will
   const script = !held && channelOf(root, { home: w.home, fs: w.fs }) === 'script'
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
+  // the files the run undoes by trocar's marks: those the record does not list (all of them when there is no record); none for a record it does not read
+  const marks = markRows(m && m.unsupported ? [] : marksNotListed(w, usable ? [...m.entries, ...m.files].map((e) => e && e.path).filter(Boolean) : [], places))
   return {
     changed: [...entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "trocar's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
-      ...(usable && m.path_item && !held ? [{ path: m.path_item.path, change: 'the PATH item taken out', backup: m.path_item.backup ?? null }] : []), ...perFile(marks.filter((p) => p.how !== 'owned-file').map(markRow))],
-    removed: [...new Set(marks.filter((p) => p.how === 'owned-file').map((p) => p.path)), ...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), ...standaloneFiles(w.home, w.platform), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData && !held ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m && !held ? [manifestPath(w.dir)] : []), ...(script ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
+      ...(usable && m.path_item && !held ? [{ path: m.path_item.path, change: 'the PATH item taken out', backup: m.path_item.backup ?? null }] : []), ...marks.changed],
+    removed: [...(usable ? m.files.map((f) => f.path) : []), ...marks.removed, ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), ...standaloneFiles(w.home, w.platform), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData && !held ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m && !held ? [manifestPath(w.dir)] : []), ...(script ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
     kept: purgeData && !held ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
@@ -138,9 +137,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   // §1.4 / appendix C: the plan itself is a key of the JSON document — every file by its full path and what would happen to it
   const plannedItems = (p) => [...p.changed.map((c) => ({ path: c.path, change: c.change, harness: c.harness ?? null })), ...p.removed.map((x) => ({ path: x, change: 'removed' }))]
   const stray = dryRun || !yes ? await strayPlan(w, m) : null // 4.11 §3 ㉔: the roots the run would sweep, read once, so the plan the user agrees to names them (1.6 §1.4)
-  // no install record: the places install's certificate carriers are at by the harness descriptors (macOS / Windows), looked at beside trocar's marks (1.6 R3)
-  const { places, unseen } = !m && isModelOs(w.platform) ? await carrierPlacesFor({ os: w.platform, home, env, harnesses: deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses(), renderHook: (await import('../collector/harness/templates/index.mjs')).renderHook, run: w.exec, fs }) : { places: [], unseen: [] }
-  const lost = unseenNote(unseen, w.platform) // D38: a block trocar may have put in a file nothing names now is said, with the way to take it out
+  // the places install's certificate carriers are at by the harness descriptors (macOS / Windows), looked at beside trocar's marks: with no record (1.6 R3)
+  // and with one, for the carriers it does not list (§3.6 「记录没列的标记」); a record this build does not read is not undone at all
+  const found = isModelOs(w.platform) && !(m && m.unsupported) ? await carrierPlacesFor({ os: w.platform, home, env, harnesses: deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses(), renderHook: (await import('../collector/harness/templates/index.mjs')).renderHook, run: w.exec, fs }) : { places: [], unseen: [] }
+  const places = found.places
+  const lost = unseenNote(m ? [] : found.unseen, w.platform) // D38: a block trocar may have put in a file nothing names now is said, with the way to take it out
   const planOf = () => { const p = planUninstall(w, m, purgeData, deps.root, places); return { ...p, changed: [...p.changed, ...stray.changed], removed: [...p.removed, ...stray.removed], notes: [...p.notes, ...stray.notes, ...lost] } }
   const plan = () => { const p = planOf(); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
   if (dryRun) { plan(); return { receipt, exit: EXIT.ok } }
