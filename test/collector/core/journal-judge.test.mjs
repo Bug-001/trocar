@@ -35,7 +35,7 @@ test('judgeEntry: not listed → write; intact → skip-intact and applying it a
     fs.writeFileSync(file, JSON.stringify({ env: { CA_FILE: '/the/users/own.pem' } }))
     const j = judgeEntry({ manifest: m, planned: planned(file) })
     assert.equal(j.action, 'skip-user-changed'); assert.match(j.why, /no longer holds what trocar wrote/)
-    assert.throws(() => applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), /trocar off.*trocar on/)
+    assert.throws(() => applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), /trocar install/, 'an install item: install is the way back (D55: off and on never write it)')
     assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).env.CA_FILE, '/the/users/own.pem', 'the user\'s value is left')
   } finally { b.done() }
 })
