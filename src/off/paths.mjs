@@ -23,6 +23,8 @@ export const backupDir = (home = os.homedir()) => path.join(trocarHome(home), 'b
 export const standalonePath = (home = os.homedir()) => path.join(trocarHome(home), 'bin', 'trocar-off')
 /** ~/.trocar/app: what the install script places (4.5 §A, D74): `<version>/`, `node/<id>/`, the pointer `current`. The one resolver of it. */
 export const appDir = (home = os.homedir()) => path.join(trocarHome(home), 'app')
+/** ~/.trocar/compile-cache: Node's compiled code of trocar's modules, kept between runs (D62; module.enableCompileCache). Only an installed machine has one, and `uninstall` removes it. */
+export const compileCacheDir = (home = os.homedir()) => path.join(trocarHome(home), 'compile-cache')
 /** ~/.trocar/bin/trocar (Windows trocar.cmd): the launcher that reads `app/current` and runs the version it names. */
 export const launcherPath = (home = os.homedir(), platform = process.platform) => path.join(trocarHome(home), 'bin', platform === 'win32' ? 'trocar.cmd' : 'trocar')
 const cmdBeside = (p) => `${p}.cmd`

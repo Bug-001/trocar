@@ -110,7 +110,7 @@ test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 
     const daemon = { startDaemon: async (o) => ({ port: 1, socketPath: '/s', foreground: o.foreground, stop: async (x) => { stops.push(x); return { failed } } }) }
     const proc = new EventEmitter()
     // 1.6 §5.2: before install the daemon refuses and writes nothing — not even the collector directory it would log into
-    let t = io(); assert.equal(await runCli(['daemon'], { home, env: {}, daemon, proc, exit: () => {}, platform: 'linux', getuid: () => 1000, ...t }), 1, 'no install, no daemon')
+    let t = io(); assert.equal(await runCli(['daemon'], { home, env: {}, daemon, proc: { stdin: { isTTY: true }, on() {} }, exit: () => {}, platform: 'linux', getuid: () => 1000, ...t }), 1, 'no install, no daemon (at a terminal)')
     assert.match(t.e.join('\n'), /^trocar daemon: certificates are not installed\. Run: trocar install$/)
     assertEnglish(t.e.join('\n'))
     assert.deepEqual([t.o, stops, fs.existsSync(path.join(home, '.trocar'))], [[], [], false], 'nothing started, nothing written')
@@ -368,3 +368,30 @@ test('cli: a control endpoint held by something that does not answer is a failur
   assert.deepEqual(checkRecord(held[0]), [], 'the code and where are in the closed sets')
   fs.rmSync(home, { recursive: true, force: true })
 })
+
+// 1.6 §5.2: nothing installed — a person at a terminal gets 1 and nothing is written; a service manager's start gets 0 (systemd's Restart=on-failure,
+// launchd's KeepAlive {SuccessfulExit:false} and the Windows supervisor do not relaunch a 0: a relaunch is refused the same way), with one record where
+// the collector directory already is (after an uninstall that kept captures, say) and none created for it
+for (const platform of ['linux', 'darwin', 'win32']) {
+  for (const by of ['terminal', 'systemd', 'service']) {
+    for (const dirThere of [false, true]) {
+      test(`daemon (${platform}, ${by}, collector directory ${dirThere ? 'there' : 'absent'}): not installed is refused${by === 'terminal' ? ' with 1' : ' with 0'}, with a record only where the directory is`, async () => {
+        const home = tmpDir('trocar-cli-ni-'), dir = path.join(home, '.trocar', 'collector')
+        if (dirThere) fs.mkdirSync(dir, { recursive: true })
+        const proc = { stdin: { isTTY: by === 'terminal' }, on: () => {} }
+        const env = by === 'systemd' ? { INVOCATION_ID: 'x' } : {}
+        const daemon = { loadArch: async () => ({}), startDaemon: async () => { throw new Error('a daemon that is not installed is not started') } }
+        const t = io()
+        const exit = await runDaemonCli([], { io: t, home, env, platform, deps: { daemon, proc, getuid: () => 1000 } })
+        assert.equal(exit, by === 'terminal' ? 1 : 0)
+        assert.match(t.e.join('\n'), /certificates are not installed\. Run: trocar install/)
+        const flows = path.join(dir, 'flows')
+        const recs = fs.existsSync(flows) ? fs.readdirSync(flows).flatMap((f) => fs.readFileSync(path.join(flows, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : []
+        assert.deepEqual(recs.map((r) => [r.where, r.code]), dirThere && by !== 'terminal' ? [['start', 'not-installed']] : [], JSON.stringify(recs))
+        recs.forEach((r) => assert.deepEqual(checkRecord(r), [], JSON.stringify(r)))
+        assert.equal(fs.existsSync(dir), dirThere, 'the collector directory is never made for the refusal')
+      })
+    }
+  }
+}
+

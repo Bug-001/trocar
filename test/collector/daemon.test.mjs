@@ -2060,3 +2060,33 @@ test('daemon: the 5 s check takes a proxy-mode record\'s own semantics — the f
     assert.deepEqual(fs.readFileSync(file), bytes)
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+// Invariant 5, 4.6 fail-open: the links go on only once every door of the engine listens — a link attached first steers a new agent connection to a port
+// nobody answers. Pinned on the real Linux redirector over the fake helper: at the moment attach() reaches the helper, both loopback doors (127.0.0.1 and,
+// where this machine has IPv6 loopback, [::1]) accept a real connection on the port the helper was configured with. Both ways the links go on: a start
+// that restores a harness already on, and an /on after a start with nothing on.
+const v6Loopback = await new Promise((resolve) => { const s = net.createServer(); s.once('error', () => resolve(false)); s.listen(0, '::1', () => s.close(() => resolve(true))) })
+const accepts = (host, port) => new Promise((resolve) => { const c = net.connect({ host, port }); c.once('connect', () => { c.destroy(); resolve(true) }); c.once('error', () => resolve(false)) })
+for (const via of ['restore', 'on']) {
+  test(`daemon: the links are attached only once every door listens (${via === 'restore' ? 'a start with a harness on' : '/on after a start with nothing on'})`, async () => {
+    const s = sandbox(); const p = fakeProc()
+    await install(s)
+    if (via === 'restore') writeStateAtomic(path.join(s.collector, 'state.json'), setDesired(emptyState(), ['claude-code'], 'on'))
+    const seen = []
+    const makeClient = () => {
+      const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
+      let port = null
+      const configure = c.configure, attach = c.attach
+      c.configure = async (p0) => { port = p0; return configure(p0) }
+      c.attach = async () => { seen.push({ port, v4: await accepts('127.0.0.1', port), v6: v6Loopback ? await accepts('::1', port) : true }); return attach() }
+      return c
+    }
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) }, harnesses: [cc] })
+    try {
+      if (via === 'on') assert.equal((await req(s.sock, 'POST', '/on', {})).actual, 'on')
+      else await until(() => seen.length > 0)
+      assert.ok(seen.length > 0, 'the links were attached')
+      for (const a of seen) assert.deepEqual([a.v4, a.v6], [true, true], `every door listened on port ${a.port} when attach reached the helper`)
+    } finally { await d.stop(); p.done(); s.done() }
+  })
+}

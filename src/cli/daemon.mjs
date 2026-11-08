@@ -55,7 +55,15 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   // V14 first: a platform with no collector is refused before anything starts or is written — loadArch's own error, so the CLI holds no platform list
   // (ahead of the install gate: on such a platform "not supported yet" is the honest answer, installing would not help)
   if (typeof D.loadArch === 'function') { try { await D.loadArch(platform) } catch (e) { io.err(`trocar daemon: ${e.message}`); return EXIT.incomplete } } // an injected daemon without one answers for the platform itself
-  if (!daemonMayStart(readInstallManifest(dir, deps.fs || nodeFs))) { io.err('trocar daemon: certificates are not installed. Run: trocar install'); return EXIT.incomplete }
+  if (!daemonMayStart(readInstallManifest(dir, deps.fs || nodeFs))) {
+    const message = 'certificates are not installed. Run: trocar install'
+    io.err(`trocar daemon: ${message}`)
+    if (!env.INVOCATION_ID && !!(proc.stdin && proc.stdin.isTTY)) return EXIT.incomplete // a person at a terminal
+    // a service manager's start: a relaunch meets the same state, so 0 (as node-too-old and another daemon answering), or systemd, launchd and the
+    // Windows supervisor loop on it. One record where the collector directory is; none is made for it (no residue after an uninstall, D38)
+    try { if ((deps.fs || nodeFs).existsSync(dir)) appendEvent(dir, { event: 'failure', where: 'start', code: 'not-installed', reason: message }) } catch { /* stderr has it */ }
+    return EXIT.ok
+  }
   let crashed
   const crashedFirst = new Promise((resolve) => { crashed = resolve })
   // An uncaught exception or rejection: one `crash` record with the first line of the stack, then a non-zero exit — the next start's "no clean stop" then has a reason on disk (D-5).
