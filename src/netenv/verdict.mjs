@@ -22,7 +22,7 @@ const NOT_SEEN = 'not-seen' // 4.11 P11 status 4–5: the door has not seen this
  *                harness's own row, are not captured (`local-upstream`); a process the door judged keeps the door's word (what was observed beats what the config says)
  *   blocked      { <form id>: false | null } — proxy mode: forms a blocker keeps off trocar's route (false) or whose blocker could not be read (null), routeOfForms below
  *   routeOf      { <form id>: <route id> } — proxy mode: the route each form is on. The door judges a process against the forms of the route it came in on, so a process
- *                that may be on several routes is judged per route; where the routes disagree status cannot know which the process uses: not known (`split`)
+ *                that may be on several routes is judged per route; where the routes disagree status cannot know which the process uses: not known (`split`: the forms decrypted, the forms forwarded)
  *   cert         true | null | a code — the certificate the harness's agents check trocar's leaves with is in effect (true; also where nothing says otherwise, Linux), not known (null), or not
  *                in effect and why (the 1.6 附录 B `cert-*` code of the form's `certificate`, certOfForms below). Like the entry, it decides only a process the daemon has not judged, and the harness's own row
  * → { captured: true | false | null, rows: [{ pid?, captured, reason }] }; `reason` is one of STATUS_REASONS, null when captured or not known. With no process the one row has no pid and is
@@ -47,14 +47,14 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
   const notRouted = (ids) => { const v = Object.entries(blocked).filter(([f]) => !ids || ids.includes(f)).map(([, x]) => x); return v.includes(false) ? verdict(false, 'not-routed') : v.includes(null) ? verdict(null) : null }
   const off = notRouted(null)
   // a process the door has not judged, on the forms it may be (4.11 P11): per route, any blocked form forwards it (the door needs every form of that route to
-  // decrypt); every route alike gives that route's word, routes that disagree give not known with the routes each way (`split`): never captured on a guess
+  // decrypt); every route alike gives that route's word, routes that disagree give not known with the forms each way (`split`): never captured on a guess
   const byRoute = (ids) => {
     const groups = new Map()
     for (const f of ids) groups.set(routeOf[f] ?? null, [...(groups.get(routeOf[f] ?? null) || []), f])
-    const each = [...groups].map(([r, fs]) => [r, notRouted(fs)])
+    const each = [...groups.values()].map((fs) => [fs, notRouted(fs)])
     if (each.every(([, v]) => v === null)) return null
     if (each.every(([, v]) => v && v.captured === false)) return verdict(false, 'not-routed')
-    const dec = each.filter(([, v]) => v === null).map(([r]) => r), fwd = each.filter(([, v]) => v && v.captured === false).map(([r]) => r)
+    const dec = each.filter(([, v]) => v === null).flatMap(([fs]) => fs), fwd = each.filter(([, v]) => v && v.captured === false).flatMap(([fs]) => fs)
     return { ...verdict(null), ...(dec.length && fwd.length ? { split: { decrypted: dec, forwarded: fwd } } : {}) }
   }
   const entry = entryIntact === true ? null : entryIntact === false ? verdict(false, entryWhy) : verdict(null)
@@ -72,15 +72,20 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
     if (local) return row(local)
     if (absent) return row(absent)
     const own = Array.isArray(p.forms) && p.forms.length ? byRoute(p.forms) : null
-    if (own) return row(own)
-    if (entry) return row(entry)
-    if (certificate) return row(certificate)
-    if (p.start !== undefined) return row(p.start === null ? verdict(true) : p.start === NOT_SEEN ? verdict(null, NOT_SEEN) : verdict(false, p.start)) // proxy mode: the door's own rule, judged by the caller (4.11 P11 status)
-    const started = at(p.startedAt)
-    if (started == null || Number.isNaN(started)) return row(verdict(false, 'start-time-unknown'))
-    if (installed == null || Number.isNaN(installed)) return row(verdict(null))
-    return row(started < installed ? verdict(false, 'config-after-start') : verdict(true))
+    if (own && own.captured === false) return row(own)
+    const rest = later(p)
+    return row(own && rest.captured !== false ? own : rest) // a route verdict not known (a split, a blocker not read) gives way only to a certain no below
   })
+  // the steps after the route verdict, in order: the entry · the certificate · the start time (4.11 P11 status in proxy mode)
+  function later(p) {
+    if (entry) return entry
+    if (certificate) return certificate
+    if (p.start !== undefined) return p.start === null ? verdict(true) : p.start === NOT_SEEN ? verdict(null, NOT_SEEN) : verdict(false, p.start) // proxy mode: the door's own rule, judged by the caller (4.11 P11 status
+    const started = at(p.startedAt)
+    if (started == null || Number.isNaN(started)) return verdict(false, 'start-time-unknown')
+    if (installed == null || Number.isNaN(installed)) return verdict(null)
+    return started < installed ? verdict(false, 'config-after-start') : verdict(true)
+  }
   // 1.6 §2 判词: a `not-seen` row never makes the harness `no`, and beside a captured one it is `yes` ("N not seen yet", from the rows)
   const open = rows.filter((r) => r.captured === null)
   const captured = rows.some((r) => r.captured === false) ? false : rows.some((r) => r.captured === true) && open.every((r) => r.reason === NOT_SEEN) ? true : open.length ? null : true

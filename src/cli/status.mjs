@@ -288,8 +288,8 @@ function judgeCertificates(f) {
     // a certificate not known (D38) says what could not be read, once
     // a blocker not read (4.11 ⑩) says which setting, once
     if (h.judged.captured === null && Array.isArray(h.why)) for (const x of forms) { const w = x.route && x.route.reason === 'blocker-unreadable' && `could not read ${x.route.at}`; if (w && !h.why.includes(w)) h.why.push(w) }
-    // a process whose routes disagree (verdict.mjs byRoute) says which way each goes, once
-    if (Array.isArray(h.why)) for (const r of h.judged.rows) { const w = r.split && `not known whether pid ${r.pid} is captured: decrypted through ${r.split.decrypted.join(', ')}, forwarded through ${r.split.forwarded.join(', ')}`; if (w && !h.why.includes(w)) h.why.push(w) }
+    // a process whose routes disagree (verdict.mjs byRoute) says which of its forms is captured and which forwarded only, once
+    if (Array.isArray(h.why)) for (const r of h.judged.rows) { const w = r.split && `trocar cannot tell whether pid ${r.pid} is ${r.split.decrypted.join(' or ')}, which it captures, or ${r.split.forwarded.join(' or ')}, which it only forwards`; if (w && !h.why.includes(w)) h.why.push(w) }
     if (cert === null && Array.isArray(h.why)) for (const x of forms) { const u = x.certificate && x.certificate.in_effect === null && x.certificate.user_file, w = u && u.reason && `could not read ${u.reason}`; if (w && !h.why.includes(w)) h.why.push(w) }
   }
 }

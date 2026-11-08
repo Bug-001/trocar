@@ -37,11 +37,11 @@ async function zcodeWorld(setting, { app = true } = {}) {
   return w
 }
 
-async function status(w, argv) {
+async function status(w, argv, table = []) {
   const r = { pid: 99, doors: w.doors, harnesses: { 'z-code': { desired: 'on', attached: true } }, holders: null, agents: [], negatives: [], cert: { key: 'present', intermediate: 'ready', expires: '2026-12-22T09:00:02Z' }, engine: {} }
   const io = fakeIo()
   const fsx = { ...fs, existsSync: (p) => (w.app && p === APP) || (String(p).startsWith(w.home + path.sep) && fs.existsSync(p)) }
-  await runStatusCli(argv, { io, home: w.home, platform: 'darwin', env: w.env, deps: { request: async (q) => (q.path === '/status' ? r : assert.fail(q.path)), socketPath: SOCK, procs: async () => [], spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: w.store, user: 'alice', fs: fsx } })
+  await runStatusCli(argv, { io, home: w.home, platform: 'darwin', env: w.env, deps: { request: async (q) => (q.path === '/status' ? r : assert.fail(q.path)), socketPath: SOCK, procs: async () => table, spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: w.store, user: 'alice', fs: fsx } })
   return io.stdoutText()
 }
 
@@ -154,6 +154,20 @@ test('4.11 P11 · status: a process is judged per route, as the door judges it; 
   assert.equal(row(SETTINGS, DESKTOP).captured, true, "the reverse: a managed proxy for the CLI does not reach the desktop's route")
   assert.deepEqual([row(SETTINGS, SETTINGS).captured, row(SETTINGS, SETTINGS).reason], [false, 'not-routed'])
   const both = row(DESKTOP, [...SETTINGS, ...DESKTOP])
-  assert.deepEqual([both.captured, both.reason, both.split], [null, null, { decrypted: ['settings'], forwarded: ['library'] }], 'either route: not known')
+  assert.deepEqual([both.captured, both.reason, both.split], [null, null, { decrypted: SETTINGS, forwarded: DESKTOP }], 'either route: not known')
   assert.deepEqual([row([...SETTINGS, ...DESKTOP], [...SETTINGS, ...DESKTOP]).captured], [false], 'every route forwards it')
+  const gone = judgeHarness({ ...ready, entryIntact: false, blocked: routeOfForms([{ id: DESKTOP[0], route: { reason: 'blocker' } }]), procs: [{ pid: 7, trusted: null, start: null, forms: [...SETTINGS, ...DESKTOP] }] }).rows[0]
+  assert.deepEqual([gone.captured, gone.reason], [false, 'entry-missing'], 'not known by route gives way to a certain no after it')
+})
+
+// The same through `status` and its drawing: a Z-Code process status cannot tie to one form (its program file not read: every form of the one route),
+// with the desktop's CA setting set, reads not captured, and the CLI form's branch draws what the door does with it: through trocar's door, forwarded only.
+test('4.11 P11 · status: a process on a blocked form and its form\'s branch agree: not captured, through the door, forwarded only', async () => {
+  const w = await zcodeWorld(SHAPES.set.write)
+  const p = { pid: 4321, ppid: 1, uid: 501, startedAt: Date.now() + 60_000, exe: null, argv: ['zcode-cli'], env: () => new Map() }
+  const doc = JSON.parse(await status(w, ['--json', 'z-code'], [p]))
+  assert.deepEqual(doc.harnesses['z-code'].processes.map((x) => [x.pid, x.captured, x.reason]), [[4321, false, 'not-routed']])
+  const t = doc.topology['z-code'], b = t.branches.find((x) => x.form === 'z-code.cli')
+  const kinds = b.path.map((id) => t.nodes.find((n) => n.id === id).kind)
+  assert.deepEqual([b.on_path, b.captured, b.reason, kinds.includes('trocar-forwarder')], [true, false, 'not-routed', true], JSON.stringify(kinds))
 })
