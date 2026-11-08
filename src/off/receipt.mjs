@@ -171,7 +171,10 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   }
   const shown = new Set(changed.map((c) => c.backup).filter(Boolean))
   for (const k of (r.kept_backups || []).filter((x) => !shown.has(x.backup))) lines.push(...fit(`A copy of ${t(k.path)} as it was is kept at ${t(k.backup)} (${k.reason}).`))
-  for (const x of r.residue || []) lines.push(...fit(`Left in place, written by an agent while capture was on: ${t(x.path)}`))
+  if ((r.residue || []).length) { // what an agent wrote because of trocar's plugin, after install: said once, then each file (why each appeared is in --json and the log)
+    lines.push(...fit('Left in place: an agent wrote these after install because of trocar\'s plugin, and they may serve your own plugins too:'))
+    for (const x of r.residue) lines.push(...fit(`  ${t(x.path)}`))
+  }
   for (const p of r.user_processes || []) lines.push(...fit(`Still running, started by you: ${p.command} (pid ${p.pid}, ${p.note}).`))
   if ((r.pending || []).length) {
     lines.push(past ? 'Found by trocar\'s own marks and not undone yet:' : 'Will be undone by trocar\'s own marks:')
