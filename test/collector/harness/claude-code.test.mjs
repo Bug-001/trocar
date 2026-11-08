@@ -138,3 +138,25 @@ test('claude-code inject: a value in the shell, a running CC, ~/.claude.json or 
     assert.ok(plan.notes.some((n) => /exported only in a shell trocar did not see/.test(n)))
   } finally { s.done() }
 })
+
+// Managed settings override trocar's entry (ruling ⑩). Places from Claude Code's docs and changelog: macOS /Library/Application Support/ClaudeCode;
+// Windows C:\Program Files\ClaudeCode (read from 2.0.58, the only one from 2.1.75) and C:\ProgramData\ClaudeCode (read before 2.1.75).
+test('claude-code proxy mode: a managed HTTPS_PROXY in any managed-settings place blocks the CLI forms; none leaves them routed', async () => {
+  const { world, door } = await import('../core/proxymode/fixtures/entries-ctx.mjs')
+  const { writeRoutes } = await import('../../../src/collector/core/proxymode/entries.mjs')
+  const places = [['darwin', '/Library/Application Support/ClaudeCode'], ['win32', 'C:/Program Files/ClaudeCode'], ['win32', 'C:/ProgramData/ClaudeCode']]
+  const cli = (os) => cc.proxyMode.forms.find((f) => f.id === 'claude-code.cli' && f.os.includes(os))
+  for (const [os, dir] of places) for (const at of [{ path: `${dir}/managed-settings.json` }, { path: `${dir}/managed-settings.d`, glob: '*.json' }]) {
+    const w = world({ os })
+    w.present(cli(os))
+    w.plant({ file: { base: 'abs', ...at }, format: 'json', keys: ['env', 'HTTPS_PROXY'] })
+    const out = writeRoutes(cc, w.ctx, () => door())
+    assert.deepEqual(out.notRouted.map((x) => [x.form, x.reason]), [['claude-code.cli', 'blocker']], `${os} ${at.path}`)
+  }
+  for (const os of ['darwin', 'win32']) {
+    const w = world({ os })
+    w.present(cli(os))
+    const out = writeRoutes(cc, w.ctx, () => door())
+    assert.deepEqual([out.notRouted, out.results.map((x) => x.ok)], [[], [true]], os)
+  }
+})
