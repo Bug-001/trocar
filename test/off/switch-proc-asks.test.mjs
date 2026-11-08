@@ -68,12 +68,13 @@ const request = async ({ path: p }) => {
 }
 
 /** One `off codex` on a simulated Windows, with the daemon's read client either answering (`warm`) or failing. */
-async function offOnce(reader) {
+async function offOnce(reader, { daemon = true } = {}) {
   const { home, envFile, pre } = world()
   const t = tools()
+  const gone = async () => { throw Object.assign(new Error('connect ENOENT'), { code: 'ENOENT' }) } // no daemon: its pipe is not there
   const { receipt, exit } = await runOff({
     home, env: { TROCAR_TEST_SANDBOX: '1', USERPROFILE: home, HOME: home }, ids: ['codex'], yes: true,
-    deps: { platform: 'win32', exec: t.run, request, socketPath: PIPE, daemonReader: reader, alive: () => true, lockWaitMs: 0 },
+    deps: { platform: 'win32', exec: t.run, request: daemon ? request : gone, socketPath: PIPE, daemonReader: reader, alive: daemon ? () => true : () => false, lockWaitMs: 0 },
   })
   return { receipt, exit, shells: t.shells, envAfter: fs.readFileSync(envFile), pre, home }
 }
@@ -131,3 +132,11 @@ test('D62: `on` on Windows asks the daemon for the table once and starts no powe
     } finally { await box.stop() }
   })
 })
+
+test('D38: with no daemon running, asking the OS is the normal way — `off` notes no fallback, as status does', async () => {
+  const none = await offOnce(deadReader(), { daemon: false })
+  assert.equal(none.exit, 0, `off finished${none.receipt.problems.length ? `: ${none.receipt.problems[0]}` : ''}`)
+  assert.notEqual(none.receipt.routing.state, 'running')
+  assert.deepEqual(none.receipt.notes.filter((n) => /could not answer a read question/.test(n)), [])
+})
+

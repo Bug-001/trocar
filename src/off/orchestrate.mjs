@@ -500,7 +500,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   // whole table in ONE local start and the other three come out of it (proc.mjs winIdentity), with the reason in the receipt.
   // `w.procs()` is that one read (offWorld's `once`), so step 5 below reads nothing again.
   const closeProcs = await primeProcQuestions({ platform: w.platform, dir: w.dir, env, fs: w.fs, ...(deps.daemonReader !== undefined ? { reader: deps.daemonReader } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath !== undefined ? { socketPath: deps.socketPath } : {}) })
-  for (const why of procAskNotes()) receipt.notes.push(`the daemon could not answer a read question, so the OS was asked instead: ${why}`) // D38: a fallback is never silent
+  const procAsks = procAskNotes() // said once the routing step knows a daemon runs (below): with none, asking the OS is the normal way, as status judges it
   try {
   // 1 · the lock, off first: the desired state is written before the wait when the lock is held, so an `on` that is mid-way stops (R12)
   const tryOff = () => { try { return { r: desiredOff(w, ids, installed), error: null } } catch (e) { return { r: null, error: e } } }
@@ -533,6 +533,8 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     // directly instead of waiting out launchd's ThrottleInterval. `uninstall` passes `exit: true` itself, on either mode.
     const routing = await switchRoutingOff(w, { ids, now, exit: ids === null && !isProxyMode(w.platform) })
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
+    // D38: a fallback is never silent — when a daemon runs and could not answer; with none running, the OS is the reader and nothing fell back
+    if (routing.state === 'running') for (const why of procAsks) receipt.notes.push(`the daemon could not answer a read question, so the OS was asked instead: ${why}`)
     receipt.daemon = routing.daemon && routing.daemon.state === 'draining' ? { ...routing.daemon, exits_after: routing.relayed && routing.relayed !== 'unknown' ? routing.relayed.closing : null } : routing.daemon // C.2 `daemon:{state, pid, exits_after}`
     receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason
