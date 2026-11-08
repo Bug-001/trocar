@@ -87,7 +87,7 @@ export const FINDINGS_WIN32 = {
     verify: () => 'trocar status',
   },
   'forwarder-down': {
-    commands: (c) => [trocar(c, 'trocar on'), trocar(c, `trocar off ${c.h}`), gui(`Restart ${c.h} after that, and it connects without trocar`)],
+    commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`), ...(c.h ? [gui(`Or, to use ${c.h} now without trocar: trocar off ${c.h}, then restart ${c.h}`)] : [])], // off is the other way out, not a step after on
     verify: () => 'trocar status',
   },
   'form-unsupported': {

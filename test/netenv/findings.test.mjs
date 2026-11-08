@@ -595,3 +595,13 @@ test('routeRefusal: own-egress ends in trocar on <harness>, with a step before i
   assert.ok(r.steps.length >= 2, 'a step before it: what to do with the value')
   assert.equal(routeRefusal({ h: 'claude-code', reason: 'system-pac', at }), null)
 })
+
+// a Fix is followed in order: a step that turns a harness off never comes after the one that turns it back on (the way out without trocar is a gui line, not a step)
+const trocarSteps = (f) => f.commands.filter((x) => x.shell !== 'gui').map((x) => x.run)
+test('V49 forwarder-down: the first step is `trocar on <h>`, and no `trocar off` step follows it, on every platform', () => {
+  for (const platform of ['linux', 'darwin', 'win32']) {
+    const f = findingsOf({ ...SETS['forwarder-down'].facts, platform }).find((x) => x.code === 'forwarder-down')
+    assert.equal(f.commands[0].run, 'trocar on codex', platform)
+    assert.ok(!trocarSteps(f).some((r) => /^trocar off\b/.test(r)), `${platform}: off is not a step`)
+  }
+})
