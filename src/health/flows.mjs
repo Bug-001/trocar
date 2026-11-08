@@ -262,6 +262,9 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
       if (agent) { const a = agentRow(agent); if (later(a.last_failure, iso)) { a.last_failure = iso; a.last_failure_key = key } }
     } else if (ENDS[r.event]) {
       for (const g of groups.values()) if (ENDS[r.event].includes(g.last.event) || ENDS[r.event].includes(g.last.code)) g.resolved = true
+    } else if (r.event === 'agent-trusted' && r.pid != null) {
+      // a process judged untrusted that reports trust after all (a plugin's marker after the grace) ended that failure: its own pid only (C.3)
+      for (const g of groups.values()) if (g.last.event === 'agent-untrusted' && g.last.pid === r.pid) g.resolved = true
     } else if (isRow(r)) {
       if (notCapturedClass(r.not_captured, r.reason) === 'expected') {
         const k = expectedKey(r) // a by-design reason counts under its own name ('not-an-agent'), not under 'untracked'
