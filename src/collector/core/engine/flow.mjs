@@ -46,6 +46,11 @@ const IDLE = { boundary: () => ({ idle: true, headPending: false, seq: null, bli
 // reported keeps its code. wait = {phase, t0} | null; phase 'tls' | 'proxy-reply' | 'connect' (the upstream's TCP connection not made yet).
 const synthetic = (e) => !(e instanceof Error) || (e.code === 'ECONNRESET' && !e.syscall)
 const WAITED = { tls: ['closed_before_handshake', "the upstream's TLS handshake"], 'proxy-reply': ['closed_before_reply', "the proxy's reply"], connect: ['closed_before_reply', 'the upstream connection'] }
+// One wait on the upstream said once (RFC 4.6 §记录), by the flow and by the door's dial, which has no flow yet. `ms`: the threshold (a timer can fire a ms early)
+export function slowEvent(host, phase, t0, ms) {
+  const waited_ms = Math.max(ms, Date.now() - t0)
+  return { code: 'upstream-slow', host, phase, waited_ms, reason: `${host}: still waiting for ${WAITED[phase][1]} after ${waited_ms} ms` }
+}
 export function wentBy(side, err = null, wait = null, now = Date.now()) {
   const w = wait ? { phase: wait.phase, ms: Math.max(0, now - wait.t0) } : null
   if (!synthetic(err)) return { type: err.code || `${side}_error`, message: msgOf(err), side, ...(w ? { wait: w } : {}) }
@@ -137,21 +142,28 @@ export function handleFlow(client, meta, ctx) {
   let reached = false       // that connection was made (Node clears `connecting` before it emits a failed connect's error, so it is kept here)
   let firstByteTimer = null
   let slowTimer = null      // the upstream-slow watch while the engine waits on the upstream (RFC 4.6 §记录)
-  let wait = null           // {phase, t0} while the engine waits on the upstream: what a side going then is written with (wentBy)
+  let wait = null           // {phase, t0, host} while the engine waits on the upstream: what a side going then is written with (wentBy)
+  let after = null          // [phase, host]: the wait that starts once the upstream's TCP connection is made
   let planned = null        // the decision already made while the engine waits on the upstream: kept on the row if a side goes then
-  // a TLS wait whose upstream TCP connection has not been made yet (transparent mode dials and handshakes at once) is a wait on the connect
-  const went = (side, err) => wentBy(side, err, wait && wait.phase === 'tls' && !reached ? { ...wait, phase: 'connect' } : wait)
-  // Waiting on the upstream (our TLS handshake to it, a proxy's reply) has no time limit: cutting the
+  // a dial nothing has been decided on yet (transparent mode dials at accept) is no wait a side's going is written with: that is closed_before_decision
+  const went = (side, err) => wentBy(side, err, wait && (wait.phase !== 'connect' || after) ? wait : null)
+  // Waiting on the upstream (the TCP dial, our TLS handshake to it, a proxy's reply) has no time limit: cutting the
   // agent because its upstream or proxy is slow would break it (D31). Past `upstreamSlowMs` (5 s) the
   // wait is recorded once as an upstream-slow event (D38), and the connection goes on.
   function waitFor(phase, host) {
+    // a handshake or a reply cannot begin before the TCP connection is made (transparent mode dials and handshakes at once): the dial's wait runs on, this one starts at the connect
+    if (!reached && phase !== 'connect') { after = [phase, host]; if (wait) wait.host = host; return }
     waitDone()
     const ms = ctx.upstreamSlowMs ?? 5000, t0w = Date.now()
-    wait = { phase, t0: t0w }
-    slowTimer = setTimeout(() => { slowTimer = null; ctx.failure({ code: 'upstream-slow', flow_id: rec.flow_id, host, phase, waited_ms: Math.max(ms, Date.now() - t0w), reason: `${host} has not answered the ${phase === 'proxy-reply' ? 'proxy request' : 'TLS handshake'} for ${Math.max(ms, Date.now() - t0w)} ms; still waiting` }) }, ms) // a timer can fire a ms early
+    wait = { phase, t0: t0w, host }
+    slowTimer = setTimeout(() => { slowTimer = null; ctx.failure({ ...slowEvent(wait.host, phase, t0w, ms), flow_id: rec.flow_id }) }, ms)
     if (slowTimer.unref) slowTimer.unref()
   }
-  function waitDone() { wait = null; if (slowTimer) { clearTimeout(slowTimer); slowTimer = null } }
+  function waitDone() { wait = null; after = null; if (slowTimer) { clearTimeout(slowTimer); slowTimer = null } }
+  function watchDial(sock, host) {
+    waitFor('connect', host)
+    sock.once('connect', () => { reached = true; const next = after; waitDone(); if (next) waitFor(...next) })
+  }
   // the row's not_captured code (closed set, codes.mjs) and why (RFC 4.6 §记录 连接行怎么落码)
   function notCaptured(code, reason) { rec.not_captured = code; if (reason != null) rec.reason = reason }
   // policy(meta, host): true = decrypt; false = outside the decrypt policy; or the daemon's own code
@@ -248,7 +260,7 @@ export function handleFlow(client, meta, ctx) {
   // a synchronous throw (e.g. net.connect on a bad port) ends this flow with a record (D38)
   try { upstream = ctx.connectUpstream(meta.dst) } catch (e) { internalError(e); return flowDone }
   track(client); track(upstream)
-  reached = !upstream.connecting; if (!reached) upstream.once('connect', () => { reached = true })
+  reached = !upstream.connecting; if (!reached) watchDial(upstream, meta.dst.address)
   // What the engine's drain() asks of this flow (RFC 1.6 §1.3). start() → 'closing' | 'waiting' | 'closed' | 'cut';
   // state() → 'open' (not asked) | 'closing' | 'waiting' | 'closed' | 'cut' | 'done'.
   if (ctx.register) ctx.register({
@@ -466,6 +478,7 @@ export function handleFlow(client, meta, ctx) {
         finish(null, { error })
       })
     }
+    if (fresh.connecting) watchDial(fresh, host)
     fresh.write(buf)                                    // the ClientHello, byte for byte
     cSock.resume(); relay(cSock, fresh)
   }

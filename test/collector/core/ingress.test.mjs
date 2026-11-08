@@ -737,6 +737,43 @@ test('W15 a proxy that does not answer is waited for without a limit and said on
   assert.deepEqual(S.failures.map((f) => [f.code, f.phase]), [['upstream-slow', 'proxy-reply']], 'one event, for the client that stayed; none for the one that left before the threshold')
 })
 
+// a TCP connect that takes `ms`, on a real socket: the slow dial, then the upstream at `port`
+const lateSocket = (port, ms) => { const s = new net.Socket(); s.connecting = true; setTimeout(() => { if (!s.destroyed) s.connect(port, '127.0.0.1') }, ms); return s }
+
+test('a door dial that does not connect is waited for without a limit and said once: upstream-slow (phase connect) on CONNECT, SOCKS5 and a forwarded request; the client not cut', T, async (t) => {
+  for (const [name, open] of [
+    ['CONNECT', (c) => c.write(connectHead('upstream.test:443'))],
+    ['SOCKS5', async (c) => { c.write(Buffer.from([5, 1, 2])); await c.bytes(2); c.write(Buffer.from([1, USER.length, ...Buffer.from(USER), TOKEN.length, ...Buffer.from(TOKEN)])); await c.bytes(2); c.write(Buffer.from([5, 1, 0, 3, 13, ...Buffer.from('upstream.test'), 1, 187])) }],
+    ['forwarded', (c) => c.write(absHead(80, '/', '', 'GET', 'upstream.test'))],
+  ]) {
+    const L = await lab(t, { timing: { upstreamSlowMs: 60 }, connectUpstream: () => hungSocket() })
+    const c = L.client(); await open(c); const said = c.buf.length
+    await until(() => L.failures.length, `${name}: the upstream-slow event`); await sleep(150)
+    assert.deepEqual(L.failures.map((f) => [f.where, f.code, f.phase, f.host, f.agent]), [['engine', 'upstream-slow', 'connect', 'upstream.test', 'claude-code']], name)
+    assert.ok(L.failures[0].waited_ms >= 60, `waited_ms ${L.failures[0].waited_ms}`); assert.deepEqual(checkRecord(L.failures[0]), [])
+    assert.equal(c.sock.destroyed || c.buf.length !== said, false, `${name}: nothing said, nothing cut`)
+  }
+})
+
+test('a door dial: the slow connect and the slow proxy reply are one event each; a connect that comes late still goes through; a fast one and one the client left say nothing', T, async (t) => {
+  // connected late, then the proxy is slow as well: two waits, two events; the wait had no limit, the proxy's answer reaches the agent
+  const proxy = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => setTimeout(() => s.write('HTTP/1.1 200 Connection established\r\n\r\n'), 150)) })
+  await listen(proxy); t.after(() => proxy.close())
+  const L = await lab(t, { timing: { upstreamSlowMs: 60 }, connectUpstream: (d) => lateSocket(d.port, 150), meta: { upstream: { kind: 'http', host: '127.0.0.1', port: proxy.address().port } } })
+  const c = L.client(); c.write(connectHead('upstream.test:443'))
+  assert.match(await c.head(), /^HTTP\/1\.1 200 /)
+  assert.deepEqual(L.failures.map((f) => [f.code, f.phase, f.host]), [['upstream-slow', 'connect', 'upstream.test'], ['upstream-slow', 'proxy-reply', 'upstream.test']])
+  c.sock.destroy()
+  // direct, connected within the threshold: nothing
+  const F = await lab(t, { timing: { upstreamSlowMs: 400 } })
+  const fast = F.client(); fast.write(connectHead(`127.0.0.1:${proxy.address().port}`))
+  assert.match(await fast.head(), /^HTTP\/1\.1 200 /); await sleep(500); assert.deepEqual(F.failures, []); fast.sock.destroy()
+  // the client left during the dial: the dial is dropped and the watch with it
+  const G = await lab(t, { timing: { upstreamSlowMs: 400 }, connectUpstream: () => hungSocket() })
+  const gone = G.client(); gone.write(connectHead('upstream.test:443')); await until(() => G.dials.length, 'the dial'); gone.sock.destroy()
+  await sleep(500); assert.deepEqual(G.failures, [])
+})
+
 test('W15 a proxy whose reply to CONNECT is not an HTTP status line is a dial that failed, not a refusal: 502, bad_proxy_reply in the row, the proxy\'s own bytes not forwarded', T, async (t) => {
   const garbage = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => s.write('SSH-2.0-OpenSSH_9.6\r\n\r\n')) })
   await listen(garbage); t.after(() => garbage.close())

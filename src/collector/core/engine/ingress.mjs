@@ -23,7 +23,7 @@ import crypto from 'node:crypto'
 import net from 'node:net'
 import { STATUS_CODES } from 'node:http'
 import { parseHead } from './sniff.mjs'
-import { SLOW_ENGINE_MS, wentBy } from './flow.mjs'
+import { SLOW_ENGINE_MS, slowEvent, wentBy } from './flow.mjs'
 import { socks5Greeting, socks5Request } from './socks.mjs'
 import { HOOK_HEADER as UPSTREAM_HEADER } from '../proxymode/chain.mjs'
 import { absTarget, forwardHttp, withCredential } from './forward.mjs'
@@ -255,7 +255,7 @@ async function viaSocks5(sock, up, target, deadline) {
  *   refuse           (meta, info) — the flows/ row of a connection the upstream refused or could not be reached (no flow started)
  *   ownerOfPeer      optional async (peer) → { pid, process?, why? }: who holds the client's end (the door's own owner question); an `ingress-unknown`
  *                    record names that process, or says why it could not be told (`owner_unread`)
- *   timing           {ingressOpenerMs = 10000, ingressHealthIdleMs = 30000, ingressDialMs = 0 (no limit), upstreamSlowMs = 5000 (one upstream-slow event while a proxy has not answered),
+ *   timing           {ingressOpenerMs = 10000, ingressHealthIdleMs = 30000, ingressDialMs = 0 (no limit), upstreamSlowMs = 5000 (one upstream-slow event per wait while the dial has not connected or a proxy has not answered),
  *                    ingressChallengeMs = 10000 (a 407 challenge its source has not answered by then is one ingress-challenge-unanswered)}
  * The connection handlers take an optional DOOR (D47, 4.9 §3): `null` = the engine's own ingress (the global token, the client's own user),
  * `{ user, token, open }` = one of the engine's per-group doors — `user` is the group id the lookup is asked with (whoever the client did or did
@@ -508,7 +508,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       const up = meta.upstream || { kind: 'direct' }
       let current = null
       r.whenGone(() => { if (current) current.destroy() })
-      const dial = () => dialUpstream(up, o.target, (s) => { current = s }, { forward: side })
+      const dial = () => dialUpstream(up, o.target, (s) => { current = s }, { forward: side, agent: meta.agent })
       const shown = { kind: up.kind || 'direct', ...(up.host ? { host: up.host } : {}), ...(up.port != null ? { port: up.port } : {}) }
       // The negative cache's key is part of the lookup's contract (§5.5); one that comes without it is keyed here the way the contract says, so a lookup that
       // forgets it cannot make every connection without a pid share the key "null" and poison one another's hosts.
@@ -542,34 +542,39 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
 
   // `forward`: a forwarded plain-http flow's stand-in. Through an http proxy it is no CONNECT: its requests go to the proxy as they are, each head
   // with the user's credential when there is one (withCredential, at the stand-in's marks), 4.8 §5.2.
-  async function dialUpstream(up, target, track, { slow: watchSlow = true, forward = null } = {}) {
+  async function dialUpstream(up, target, track, { slow: watchSlow = true, forward = null, agent = null } = {}) {
     const kind = up.kind || 'direct'
     // `proxy: true` marks a failure of the door's upstream itself (every connection of the door fails the same way), as opposed to one target (4.8 W73)
     if (!['direct', 'http', 'socks5'].includes(kind)) return { ok: false, kind: 'unreachable', proxy: true, error: { type: 'unsupported_upstream', message: `the upstream kind ${JSON.stringify(printable(kind))} is not one the ingress dials (direct, http, socks5)` } }
     const to = kind === 'direct' ? { address: target.host, port: target.port } : { address: up.host, port: up.port }
-    // Waiting on the user's proxy has no time limit (D31: cutting the agent because a proxy is slow would break it), but it is not silent either (D38):
-    // once, past upstreamSlowMs, the same upstream-slow event the flow raises for the waits it owns (flow.mjs waitFor). No flow exists yet, so no flow_id.
+    // Waiting on the upstream has no time limit (D31: cutting the agent because a host or a proxy is slow would break it), but it is not silent either (D38):
+    // each wait (the TCP connect, then a proxy's reply) is said once, past upstreamSlowMs, the same upstream-slow event the flow raises for the waits it owns
+    // (flow.mjs waitFor). No flow exists yet, so no flow_id.
     let slow = null
-    if (kind !== 'direct' && watchSlow) {
+    const watch = (phase) => {
+      clearTimeout(slow); slow = null
+      if (!watchSlow) return
       const ms = timing.upstreamSlowMs ?? 5000, t0 = Date.now()
-      slow = setTimeout(() => { slow = null; const waited = Math.max(ms, Date.now() - t0); failure({ code: 'upstream-slow', host: target.host, phase: 'proxy-reply', waited_ms: waited, reason: `${target.host} has not answered the proxy request for ${waited} ms; still waiting` }) }, ms) // a timer can fire a ms early
+      slow = setTimeout(() => { slow = null; failure({ ...(agent != null ? { agent } : {}), ...slowEvent(target.host, phase, t0, ms) }) }, ms)
       if (slow.unref) slow.unref()
     }
     try {
       let sock
       const viaProxy = kind !== 'direct' // a direct dial reaches the target itself: its failure is that one host's, not the door's upstream
       const failed = (e) => ({ ok: false, kind: 'unreachable', proxy: viaProxy, ...(e && e.syscall ? { syscall: e.syscall } : {}), error: { type: e.code || 'upstream_error', message: msgOf(e) } })
+      watch('connect')
       try { sock = connectUpstream(to) } catch (e) { return failed(e) }
       track(sock)
       sock.on('error', () => {}) // the handshake owns the outcome; a late error must not be uncaught
       try { await whenConnected(sock) } catch (e) { sock.destroy(); return failed(e) }
       if (kind === 'direct') return { ok: true, sock, reply: null, rest: Buffer.alloc(0) }
       if (kind === 'http' && forward) return { ok: true, sock: up.auth ? withCredential(sock, Buffer.from(credentialOf(up.auth), 'latin1'), (forward.marks = [])) : sock, reply: null, rest: Buffer.alloc(0) }
+      watch('proxy-reply')
       const deadline = timing.ingressDialMs ? Date.now() + timing.ingressDialMs : Infinity
       const d = kind === 'socks5' ? await viaSocks5(sock, up, target, deadline) : await viaHttp(sock, up, target, deadline)
       if (!d.ok) sock.destroy()
       return d
-    } finally { if (slow) clearTimeout(slow) }
+    } finally { clearTimeout(slow) }
   }
 
   // an origin-form GET (4.11 P10) on an auth:false door with a PAC server (serve routes only those here; on any other door it is closed and
