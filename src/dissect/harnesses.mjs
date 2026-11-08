@@ -28,7 +28,9 @@ const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'm
 // src/dissect/project.mjs only. [] = this harness states none that is read.
 // main lane: a ` - Primary working directory:` list item in a system-role message; a subagent prompt: a bare line
 const CC_CWD = [{ in: 'system', re: /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }];
-const ROW = { ua: null, parentKeys: [], forkKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [], entry: [] };
+// chainLane: inside a keyed session, the lane of a call whose system text is not the session's main one, one lane per message chain
+// (3.4 带键会话里的消息链); null: the harness's calls take only its declared lane hints
+const ROW = { ua: null, parentKeys: [], forkKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [], entry: [], chainLane: null };
 const DESKTOP = { is: 'desktop', re: /desktop/ }, CLI = { is: 'cli', re: /cli/ };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
@@ -83,7 +85,8 @@ const ROWS = [
     entry: [CLI],
     cwd: [{ in: 'system', re: /urrent working directory is `([^`\n]+)`/ }],
     sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])],
-    synth: true }, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
+    synth: true, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
+    chainLane: 'aux' }, // one key holds the main conversation and the agents it opens, none declared
   { ...ROW, id: 'dsh',
     cwd: [{ key: ['dsh_session_log', 'session', 'cwd'] }, { in: 'system', re: /^Your working directory is ([^\n]+?)\.?$/m }],
     sessionKeys: [H('x-deepseek-harness-session-id')],

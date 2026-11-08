@@ -23,7 +23,7 @@ import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, pl
 import { warmCache, fsTag, statKey } from './warm.mjs';
 import { trocarHome } from '../paths.mjs';
 
-const USAGE_V = 3; // 3: the facts are the session's extraction and reduction (lane = its lane header's kind)
+export const USAGE_V = 4; // the facts are the session's extraction and reduction (lane = its lane header's kind)
 export const USAGE_CHUNK_BYTES = 4 << 20; // stored bytes of model calls read back per chunk (4.2 §用量旁注 ④)
 
 export const usageFile = (home, segment) => path.join(indexDir(home), `${segment}.usage.json`);
@@ -37,7 +37,7 @@ function usageOf(x) {
   try { return mapUsage(x.format, raw, { vendor: x.wire.vendor }); } catch { return null; }
 }
 
-/** foldFacts({rows, read}) → [{id, lane, model, failed, cache_known, usage, ask?}] (`ask`: a main or subagent lane call's lane task) — one per call `session` reduces from
+/** foldFacts({rows, read}) → [{id, lane, model, failed, cache_known, usage, ask?, msgs?, text?}] (`ask`: a main or subagent lane call's lane task) — one per call `session` reduces from
  *  these rows (index rows), by the same extraction (view/extract.mjs) and reduction (view/reduce.mjs). `read(rows)` → their records, asked for one at a time as the
  *  fold reaches them, so the fold holds no more than one. A session is the segment index's `session_id`; its store is held in memory for this call only. Items and failed members give no line. */
 export function foldFacts({ rows, read }) {
@@ -55,7 +55,9 @@ export function foldFacts({ rows, read }) {
         out.push({ id: row.rid, lane: h.kind, model: (row.rec && row.rec.request && row.rec.request.model) ?? null, failed,
           cache_known: !!(row.wire && row.wire.cacheSemanticsKnown), usage: u ? [u.input_uncached, u.output, u.cache_read, u.cache_write] : null,
           // a main or subagent lane's task rides on its calls: the title table takes the earliest one's (src/query/titles.mjs); no sidecar line holds it
-          ...(h.kind === 'main' || h.kind === 'subagent' ? { ask: h.task ?? null } : null) });
+          ...(h.kind === 'main' || h.kind === 'subagent' ? { ask: h.task ?? null } : null),
+          // a call with a chain in a keyed session (3.4 带键会话里的消息链): its message count and system text, what the main text is decided by
+          ...(x.chain ? { msgs: x.msgCount || 0, text: x.chain.hash } : null) });
       }
     } finally { store.close(); }
   }
