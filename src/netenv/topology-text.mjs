@@ -5,7 +5,6 @@
 // hop says `unknown (<reason>)` (D58③).
 import { unknownWords } from '../cli/words.mjs'
 
-export const ROUTING_TEXT = Object.freeze({ driver: 'driver mode', proxy: 'proxy mode', legacy: 'the old capture', none: 'no capture', unknown: 'routing unknown' })
 const BRANCH_TEXT = { http: 'HTTP', ws: 'WebSocket' }
 const tri = (v, yes = 'yes', no = 'no') => (v === true ? yes : v === false ? no : 'unknown')
 const base = (p) => String(p).split(/[\\/]/).pop()
@@ -154,18 +153,3 @@ export function renderRoutes(t, { width = 80 } = {}) {
 
 /** The `Routes` block with the two sentences 附录 A asks for after it (kept for callers that want the whole detail in one call). */
 export const renderDetail = (t) => [...renderRoutes(t), ...routeNotes(t).map((s) => `  ${s}`)]
-
-/**
- * One line per harness, for a caller that wants the paths of several of them at once (the board and `--json` read the topology itself).
- * `topo` = { <h>: HarnessTopology }, `ids` the order.
- */
-export function renderPathBlock(topo, { ids = Object.keys(topo) } = {}) {
-  const list = ids.filter((h) => topo[h])
-  if (!list.length) return []
-  const lines = []
-  for (const h of list) {
-    const t = topo[h], rows = renderCompact(t)
-    rows.forEach((r, i) => lines.push(`  ${i ? ' '.repeat(13) : h.padEnd(13)} ${r}`))
-  }
-  return lines
-}

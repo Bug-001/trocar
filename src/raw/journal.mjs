@@ -9,7 +9,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { trocarHome } from '../paths.mjs';
 
-export const defaultJournalPath = () => path.join(trocarHome(), 'raw', 'journal.jsonl');
+const defaultJournalPath = () => path.join(trocarHome(), 'raw', 'journal.jsonl');
 
 // journal: a path, or null to disable (only for callers that report through another durable channel).
 // Never throws: a journal that cannot be written must not mask the failure being journalled. It
@@ -40,14 +40,6 @@ export function appendJournal(entry, { journal = defaultJournalPath(), fs = node
     warn(`trocar: could not write the raw journal ${journal} (${e.message}) — this outcome is recorded nowhere else: ${JSON.stringify(entry)}`);
     return false;
   }
-}
-
-// A journal that does not exist yet is empty. One that exists but cannot be read (permissions, a
-// directory in its place) throws: "cannot read" MUST NOT read as "nothing happened" (D38 S-7).
-export function readJournal({ journal = defaultJournalPath(), fs = nodeFs } = {}) {
-  let text;
-  try { text = fs.readFileSync(journal, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
-  return text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return { unparseable: l }; } });
 }
 
 // A read-side summary of what went wrong in one sealed file (from readRecords' scan), or null.

@@ -19,7 +19,7 @@ export const MAX_DECODED_BYTES = 256 * 1024 * 1024;
 // bytes stay as stored and the call is labelled 「压缩请求体未解码」 — 12 records of 9 KB each measured 2.4 GB of heap at the old limit.
 // The capture side imports both limits from here (src/capture/request-body.mjs).
 export const NON_INFERENCE_MAX_DECODED_BYTES = 1024 * 1024;
-export const decodeLimitOf = (rec) => (rec && rec.is_llm_call === true ? MAX_DECODED_BYTES : NON_INFERENCE_MAX_DECODED_BYTES);
+const decodeLimitOf = (rec) => (rec && rec.is_llm_call === true ? MAX_DECODED_BYTES : NON_INFERENCE_MAX_DECODED_BYTES);
 
 // ONE parse per record, however many readers ask (D62 A2). A session's cold answer ran JSON.parse over the SAME
 // request-body string three times — src/dissect/cc.mjs `detect`, src/dissect/openai.mjs `bodyOf` and

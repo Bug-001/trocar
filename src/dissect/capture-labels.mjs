@@ -121,7 +121,7 @@ export function contextStateOfRequest(rec) {
 // message count either (3.4: no compaction verdict from an unobserved count). The same test as the board's own
 // "unparsed" (analyze.mjs::isUnparsed) so the two sides cannot disagree. null / absent body: no body
 // at all (a WebSocket call whose request was not stored, a v0 envelope), not this case.
-export function bodyUnparsedOf(rec) {
+function bodyUnparsedOf(rec) {
   const b = rec && rec.req_body;
   if (typeof b !== 'string') return false;
   // The body as stored, never a stub a reader stood on the record: the one parse every reader shares (a body that does not parse is null)
@@ -185,7 +185,7 @@ export function captureLabelsOf(rec, closed = false) {
 // body_retention:'log' and its bodies are {raw_chars, verbatim:false}; `legacy-meta` — a non-LLM record from BEFORE D40,
 // whose request body is {raw_chars, verbatim:false} and which carries no body_retention (the shape alone identifies it: the
 // bytes were never kept and cannot be recovered). Nothing reads either of the last two as an empty body or a complete one.
-export const LEGACY_META_TEXT = 'Stored as length only (captured before full bodies were kept)';
+const LEGACY_META_TEXT = 'Stored as length only (captured before full bodies were kept)';
 export const isLogOnly = (rec) => !!rec && typeof rec === 'object' && rec.body_retention === 'log';
 export function bodyRetentionOf(rec) {
   if (isLogOnly(rec)) return 'log';

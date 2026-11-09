@@ -14,7 +14,7 @@ import path from 'node:path'
 import { isFailure, notCapturedClass, expectedKey, LEVELS, NOTHING_LOST } from './codes.mjs'
 
 export const WINDOW_MS = 24 * 3600e3
-export const MAX_BYTES = 4 << 20
+const MAX_BYTES = 4 << 20
 const DAY = /^(\d{4}-\d{2}-\d{2})\.ndjson$/
 const errText = (e) => String((e && e.message) || e)
 export class HealthUnreadable extends Error { constructor(m) { super(m); this.name = 'HealthUnreadable' } }

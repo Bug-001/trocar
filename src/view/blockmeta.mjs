@@ -140,9 +140,6 @@ function blockHead(b) {
   return { role: r, tag, label: shorten(txt) };
 }
 
-/** 短预览 for the row body — distinct from head.label, which previews the tool ARGUMENT. */
-const blockPreview = (b) => shorten(bodyTextOf(b));
-
 // ── composition: what this call's context is MADE OF, in nine buckets ────────────────────────────
 //
 // Ported verbatim from the browser's COMP_KIND / COMP_ROLE / compBucket / callComp (index.html:916).

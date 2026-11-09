@@ -16,7 +16,7 @@ const SCRIPT = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
  * already failed (ok:false) is the answer: there is nothing to confirm. Both answers are what the command prints with --json, so a URL's password
  * is `***@` in them (1.6 §1.2「不印凭据」); the plan_id is over the plan as shown.
  */
-export async function planThenConfirm({ dryRun, run, confirm }) {
+async function planThenConfirm({ dryRun, run, confirm }) {
   const receipt = hidden(await dryRun())
   if (receipt.ok === false) return { status: 200, doc: receipt }
   const plan_id = crypto.createHash('sha256').update(JSON.stringify(receipt.planned)).digest('hex')
