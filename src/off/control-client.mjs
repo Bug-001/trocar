@@ -76,7 +76,9 @@ export function controlRequest({ socketPath, method = 'GET', path: p = '/status'
     const payload = body == null ? null : JSON.stringify(body)
     const headers = payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}
     if (token != null) headers[CONTROL_TOKEN_HEADER] = token
-    const req = httpModule().request({ socketPath, method, path: p, headers }, (res) => {
+    // its own connection (`agent: false`): Node's default agent keeps a finished one and hands it to the next request on this path, and one the
+    // collector ended meanwhile (its keep-alive ran out while this process ran synchronous steps) fails that request with EPIPE
+    const req = httpModule().request({ socketPath, method, path: p, headers, agent: false }, (res) => {
       const chunks = []
       res.on('data', (c) => chunks.push(c))
       res.on('end', () => {

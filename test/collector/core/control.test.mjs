@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 import { controlSocketPath, startControlServer, controlRequest, DAEMON_ALREADY_UP, DAEMON_ENDPOINT_BUSY } from '../../../src/collector/core/control.mjs'
@@ -95,4 +96,19 @@ test('control: an endpoint that answers a 401 is another daemon serving, not an 
   try {
     await assert.rejects(startControlServer({ socketPath, token: 'y'.repeat(16), pipe: false, routes: {} }), (e) => e[DAEMON_ALREADY_UP] === true && e[DAEMON_ENDPOINT_BUSY] === undefined)
   } finally { await a.close(); fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+// `trocar update` finishes in one process: its last request to the new collector, then `install` in the same process, whose synchronous steps
+// (keychain, launchctl) ran longer than the collector keeps an idle connection open. A pooled connection the collector had ended carried
+// install's first request, which failed with "write EPIPE" and was read as a collector that does not answer: install exit 1, update stopped.
+test('control: a request after the collector ended an idle connection still gets its answer', async () => {
+  const dir = runDir(); const socketPath = path.join(dir, 'c.sock')
+  const srv = http.createServer((req, res) => { req.resume(); res.setHeader('content-type', 'application/json'); res.end('{"code":"x"}') })
+  await new Promise((r) => srv.listen(socketPath, r))
+  try {
+    assert.deepEqual(await controlRequest({ socketPath, method: 'GET', path: '/status' }), { code: 'x' })
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) // the reply is done and its connection is idle
+    srv.closeIdleConnections() // the collector ends it (its keep-alive ran out) while this process was busy and did not look
+    assert.deepEqual(await controlRequest({ socketPath, method: 'GET', path: '/status' }), { code: 'x' })
+  } finally { await new Promise((r) => srv.close(r)); fs.rmSync(dir, { recursive: true, force: true }) }
 })
