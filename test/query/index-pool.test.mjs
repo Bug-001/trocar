@@ -5,7 +5,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { indexPool, poolSize, sweepTemps } from '../../src/query/index-pool.mjs'
+import { indexPool, needsBuild, poolSize, sweepTemps } from '../../src/query/index-pool.mjs'
+import { spawnSync } from 'node:child_process'
 import { indexDir, segmentFiles, segmentIndex } from '../../src/query/index-build.mjs'
 import { WORKER_MEMORY_MB } from '../../src/query/warm.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -62,7 +63,8 @@ for (const how of ['open', 'write']) {
     const temps = () => (fs.existsSync(indexDir(home)) ? fs.readdirSync(indexDir(home)).filter((f) => f.includes('.tmp-')) : [])
     if (how === 'write') assert.equal(temps().length, 1, 'the temp file it wrote')
     sweepTemps(home) // its pid is this process's: a live writer's temp file stays
-    if (how === 'write') { assert.equal(temps().length, 1); for (const f of temps()) fs.renameSync(path.join(indexDir(home), f), path.join(indexDir(home), f.replace(/\.tmp-\d+-/, '.tmp-999999-'))) }
+    const gone = spawnSync(process.execPath, ['-e', '']).pid // a process that has ended
+    if (how === 'write') { assert.equal(temps().length, 1); for (const f of temps()) fs.renameSync(path.join(indexDir(home), f), path.join(indexDir(home), f.replace(/\.tmp-\d+-/, `.tmp-${gone}-`))) }
     sweepTemps(home) // a gone process's goes
     assert.deepEqual(temps(), [])
     await segmentIndex({ home, segment }) // the caller's own build (worker.mjs readRows)
@@ -79,4 +81,29 @@ test('3.5 §行表先读: when every thread has died, the builds still waiting r
   process.env.TROCAR_TEST_THREAD_DIES = 'open'
   const pool = indexPool({ home, threads: 1, deps: DEPS })
   try { assert.deepEqual(await Promise.all(sealed.map((seg) => pool.build(seg))), [false, false, false]) } finally { pool.close(); delete process.env.TROCAR_TEST_THREAD_DIES }
+})
+
+test('3.5 §行表先读: a thread that says nothing for the stuck limit is stopped, and its build resolves false', { timeout: 30_000 }, async () => {
+  const home = path.join(tmpDir('trocar-pool-hang-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'collector'), { recursive: true })
+  const s = bigSession({ home, id: 'pool-dddd-4a1b-9c2d-000000000004' })
+  s.append(3); await s.seal()
+  const [segment] = segmentFiles(home).filter(([, at]) => at.sealed).map(([seg]) => seg)
+  process.env.TROCAR_TEST_THREAD_DIES = 'hang'
+  const pool = indexPool({ home, threads: 1, deps: DEPS, stuckMs: 500 })
+  try { assert.equal(await pool.build(segment), false) } finally { pool.close(); delete process.env.TROCAR_TEST_THREAD_DIES }
+})
+
+test('3.5 §行表先读: a warm start sends no segment to a thread: only one with no index of this version that matches its file', async () => {
+  const home = path.join(tmpDir('trocar-pool-warm-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'collector'), { recursive: true })
+  const s = bigSession({ home, id: 'pool-eeee-4a1b-9c2d-000000000005' })
+  s.append(3); await s.seal()
+  const [segment] = segmentFiles(home).filter(([, at]) => at.sealed).map(([seg]) => seg)
+  assert.equal(needsBuild(home, segment), true, 'no index file')
+  await segmentIndex({ home, segment })
+  assert.equal(needsBuild(home, segment), false, 'its index is current')
+  const file = path.join(indexDir(home), `${segment}.json`)
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/"v":(\d+)\}\n$/, (m, v) => `"v":${Number(v) - 1}}\n`))
+  assert.equal(needsBuild(home, segment), true, 'an index of another version')
 })

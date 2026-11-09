@@ -58,7 +58,7 @@ import { lowerPriority } from '../low-priority.mjs'
 import { READING_MS, extendSession, headAsked, heapHasRoom, indexed, noRoomStop, openSessions, rereadingNow, roomFor, saveIndexes, sealParts } from './named/session.mjs'
 import { dropProvisional, indexRows, provisionalRows, sessionGroups } from './rows.mjs'
 import { segmentFiles, warmSegmentIndex } from './index-build.mjs'
-import { indexPool, poolSize, sweepTemps } from './index-pool.mjs'
+import { indexPool, needsBuild, poolSize, sweepTemps } from './index-pool.mjs'
 import { filling, pauseFill } from './usage.mjs'
 import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
 import { foldStale } from './fold-log.mjs'
@@ -414,9 +414,12 @@ async function readRows() {
     // a sealed segment's index is built on the pool's threads when this machine has room for them (index-pool.mjs), all queued at once, newest
     // first; this thread reads each back in that order, and builds here what a thread did not (a plain segment, a thread that failed)
     sweepTemps(home)
-    const segs = segmentFiles(home, nodeFs, []).reverse(), threads = poolSize(), pool = threads > 1 ? indexPool({ home, threads, deps: process.argv[3] || null, tick: progress }) : null
+    const segs = segmentFiles(home, nodeFs, []).reverse(), todo = segs.filter(([s, at]) => at.sealed && !at.plain && needsBuild(home, s))
+    let pool = null
     try {
-      const built = new Map(pool ? segs.filter(([, at]) => at.sealed && !at.plain).map(([s]) => [s, pool.build(s)]) : [])
+      const threads = todo.length > 1 ? poolSize() : 1
+      if (threads > 1) try { pool = indexPool({ home, threads, deps: process.argv[3] || null, tick: progress }) } catch (e) { say(e) } // no threads: this one builds them all
+      const built = new Map(pool ? todo.map(([s]) => [s, pool.build(s)]) : [])
       for (const [segment, at] of segs) {
         await built.get(segment)
         try { await warmSegmentIndex({ home, segment, fs: nodeFs, at, progress, ease }); ready.add(segment) } catch (e) { say(e) }
