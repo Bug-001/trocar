@@ -178,8 +178,8 @@ collector to replace, or `trocar install` from another copy) stays captured: its
 decrypted and recorded as usual, and a response on one of them is waited for like any other. An update that stops half way leaves a note
 behind and says one thing to run: `trocar update`, which goes on from where it stopped. In a checkout it first pulls newer code if
 there is any, so a fix that landed since is what finishes it; what cannot be pulled is said, and the code there finishes.
-A checkout pulled with `git pull` instead is finished by the next `trocar update` too: while the last `install` ran older
-code it is not up to date, so update switches capture off, puts the service on the new code, installs and switches capture
+A checkout pulled with `git pull` instead is finished by the next `trocar update` too: while this checkout's own last `install`
+ran older code it is not up to date, offline too, so update switches capture off, puts the service on the new code, installs and switches capture
 on again. `status` and `doctor` name `trocar update` for that state; `trocar install` alone would leave what `on` wrote as
 the older code wrote it.
 
