@@ -212,7 +212,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     // an uncaught exception that takes this process down. The 'close' that follows fails the query with the exit's reason.
     c.stdin.on('error', () => {})
     err = { part: '', lines: [], fatal: null, thrown: null, open: null }
-    c.stderr.setEncoding('utf8') // a character split between two chunks stays whole
+    c.stderr.setEncoding?.('utf8') // a character split between two chunks stays whole
     const mine = err
     c.stderr.on('data', (b) => { // the reason a crash gives, for the D38 record, line by line (stderrReason)
       if (err !== mine) return
