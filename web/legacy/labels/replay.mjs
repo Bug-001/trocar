@@ -478,3 +478,4 @@ export const CALL_DETAILS = 'Call details'
 export const CD_EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n}`
 // 2.5: a chapter head's compaction numbers (the landing step's compaction-landed event); an empty side reads —
 export const partCompaction = (from, to) => `${from ?? '—'} → ${to ?? '—'} messages`
+export { TITLE_PENDING_TIP } from './common.mjs'
