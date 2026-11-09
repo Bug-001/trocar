@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from '../../../legacy/core/api.mjs'
+import { CUT_OFF } from '../../../legacy/core/http.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { CLASS_NAME } from '../../../legacy/core/classes.mjs'
 import * as W from '../../../legacy/labels/settings.mjs'
@@ -196,6 +197,8 @@ test('V6: each answer leaves its receipt; server words only in technical details
   const cases: Array<[string, (b: Body) => Answer | Promise<Answer>]> = [
     ['not-changed', (b) => (b.confirm ? { ok: false, status: 400, data: { error: `bad class ${TOKEN}` }, error: 'HTTP 400' } : serve(b))],
     ['offline', () => { throw new Error(`fetch failed ${TOKEN}`) }],
+    // the confirm went out and its answer was cut (a post's status 0, http.mjs): the write may have landed, so no 'nothing was changed'
+    ['unknown', (b) => (b.confirm ? { ok: false, status: 0, data: null, error: CUT_OFF } : serve(b))],
     ['already', (b) => (b.confirm ? { ok: true, status: 200, data: { ok: true, before: { keep: 'log' }, after: { keep: 'log' } }, error: null } : serve(b))],
   ]
   await mount()
@@ -209,6 +212,7 @@ test('V6: each answer leaves its receipt; server words only in technical details
       await press(rc.querySelector('.disc-t')!)
       expect(visible()).toContain(TOKEN)
     }
+    if (kind === 'unknown') expect(rc.textContent).not.toContain(W.RCPT_OFFLINE)
     if (kind === 'offline') {
       const n = bodies().length
       await press(within(rc).getByRole('button', { name: W.RETRY }))
