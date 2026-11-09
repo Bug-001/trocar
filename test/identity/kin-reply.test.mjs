@@ -184,19 +184,23 @@ test('kinship by reply: a reply no reader can read is no reply, and its segment 
   assert.equal(m.get(recs[3].id), m.get(recs[0].id), 'the summary still joins by the reply it carries')
 })
 
-test('kinship by reply: a compaction request whose record cannot be read back decides nothing by its replies, says so, and is not remembered', async () => {
+test('kinship by reply: a compaction request whose record cannot be read back decides nothing by its replies and says so on every read; a minute on, it is read again', async () => {
   const r = prose(61, 900), recs = [turn('messages', 0, 0, r, T0), summary('messages', [r], T0 + MIN)]
   const home = homeOf([recs]), at = Buffer.byteLength(JSON.stringify(recs[0])) // a seek to the summary's line reads from the newline before it (records.mjs plainReader)
-  const disk = { failing: true } // a read of the summary's own bytes fails while `failing`; the index scan reads from the start
-  const f = { ...fs, readSync: (fd, b, o, n, pos, ...a) => { if (disk.failing && pos === at) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return fs.readSync(fd, b, o, n, pos, ...a) } }
-  const read = async () => { const errors = [], rows = [...await indexRows({ home, fs: f, errors })]; return { errors, rows } }
-  for (const turn of [1, 2]) { // said by every read while it fails: the list it gave is not kept
+  const disk = { failing: true, reads: 0 } // a read of the summary's own bytes fails while `failing`; the index scan reads from the start
+  const f = { ...fs, readSync: (fd, b, o, n, pos, ...a) => { if (pos === at) { disk.reads++; if (disk.failing) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }) } return fs.readSync(fd, b, o, n, pos, ...a) } }
+  let clock = 0
+  const read = async () => { const errors = [], rows = [...await indexRows({ home, fs: f, errors, now: () => clock })]; return { errors, rows } }
+  for (const turn of [1, 2]) {
     const { errors, rows } = await read()
-    assert.deepEqual(errors.map((e) => [e.where, e.code]), [[`segments/${SEG[0]}`, 'record-unreadable']], `read ${turn}`)
+    assert.deepEqual(errors.map((e) => [e.where, e.code]), [[`segments/${SEG[0]}`, 'record-unreadable']], `read ${turn}: said`)
     assert.match(errors[0].reason, new RegExp(`${rows[1].id}: a compaction request could not be read back`))
     assert.notEqual(rows[1].session_id, rows[0].session_id, 'not joined by a reply it could not be read for')
   }
+  assert.equal(disk.reads, 1, 'the list it gave is kept: one record that stays unreadable is not read again on every read')
   disk.failing = false
+  clock += 60_000 // the first read a minute on says it and lets that list go; the next builds and reads again
+  assert.equal((await read()).errors.length, 1)
   const { errors, rows } = await read()
   assert.deepEqual(errors, [])
   assert.equal(rows[1].session_id, rows[0].session_id, 'read back once the disk answers, it joins, as a cold build does')

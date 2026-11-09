@@ -2,7 +2,7 @@
 //
 // `sessions` and `session` must agree on membership, so it is computed here once (3.4: membership is a
 // read-side decision) and both ask this module: `sessions` counts the rows, `session` reads back only the
-// records of the one session it was asked for. Nothing here parses a record but a compaction request's own (headsAt below): a row is what the segment
+// records of the one session it was asked for. Nothing here parses a record but a compaction request's own (headsReader below): a row is what the segment
 // index already stored (src/query/index-build.mjs), which is why `sessions` can meet its ≤ 1 s budget on
 // 1 GB (1.6 §4.1 速度目标) where reading every record back cost 4.5 s on Windows and 7 s on macOS.
 import nodeFs from 'node:fs';
@@ -73,7 +73,7 @@ async function stateAt(parts, j, heads) {
  * function, is awaited after every segment and inside a long scan (index-build.mjs `easing`), so a read of every segment leaves the
  * event loop to others (3.5 §行表先读); the rows are the same with it or without.
  */
-export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null, ease = null } = {}) {
+export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null, ease = null, now = Date.now } = {}) {
   const segs = [];
   for (const [segment, at] of segmentFiles(home, fs, errors)) {
     const { records, problems } = await warmSegmentIndex({ home, segment, fs, at, progress, ease });
@@ -83,24 +83,37 @@ export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [],
     if (ease) await ease();
   }
   const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n'), key = `${fsTag(fs)}\n${home}`, heads = headsReader({ home, fs, errors, progress, ease });
-  const list = await lists.get(key, stamp, (old) => rowList(segs, old, false, heads));
-  // a list built while a read back failed is answered once and never kept, as a failed read is never remembered (records.mjs): the next
-  // read builds it again, reads again and says it again (D38), and no later build starts from its state
-  if (heads.failed) lists.take(key);
+  let built = false;
+  const list = await lists.get(key, stamp, async (old) => {
+    built = true;
+    const prev = old ? await Promise.resolve(old).catch(() => null) : null, v = await rowList(segs, prev, false, heads);
+    // a list built while a read back failed, or grown from one, carries that failure: its state lacks what that read would have given
+    v.failed = heads.errors.length ? { at: now(), errors: heads.errors } : prev && prev.failed ? prev.failed : null;
+    return v;
+  });
+  // ...and says it on every read it answers (D38). It is kept, so one record that stays unreadable does not cost a whole build per read;
+  // the first read FAILED_RETRY_MS after it was built takes it out, so the next one builds it again and reads again (records.mjs: a failed
+  // read is never remembered for good)
+  if (list.failed) {
+    if (!built) errors.push(...list.failed.errors);
+    if (now() - list.failed.at >= FAILED_RETRY_MS) lists.take(key);
+  }
   return list.rows;
 }
-/** A compaction request's windows, read back from its record (one seek), with a progress tick and a yield after each: a build that meets
- *  many is background work like a scan (3.5 后台抽取与归约). One that cannot be read decides nothing by its replies, and is said (D38). */
+const FAILED_RETRY_MS = 60_000;
+/** A compaction request's windows, read back from its record (one seek), with a progress tick after each, and a yield where the caller gives
+ *  one (`ease`: the worker's boot pass, 3.5 后台抽取与归约). One that cannot be read decides nothing by its replies, and is said (D38):
+ *  `read.errors` holds what this build said. */
 const headsReader = ({ home, fs, errors, progress, ease }) => {
   const read = async (r) => {
     const segment = String(r.id).split(':').slice(0, -1).join(':'), errs = [];
     const [rec] = recordsAt({ home, fs, rows: [{ id: r.id, segment, lineNo: lineOf(r.id), offset: r.offset, stored_bytes: r.stored_bytes }], errors: errs, remember: false });
-    if (!rec) { read.failed = true; errors.push({ where: `segments/${segment}`, code: 'record-unreadable', reason: `${r.id}: a compaction request could not be read back, so its replies decide nothing: ${errs.map((x) => x.reason).join('; ') || 'no record'}` }); }
+    if (!rec) { const e = { where: `segments/${segment}`, code: 'record-unreadable', reason: `${r.id}: a compaction request could not be read back, so its replies decide nothing: ${errs.map((x) => x.reason).join('; ') || 'no record'}` }; read.errors.push(e); errors.push(e); }
     if (progress) progress();
     if (ease) await ease();
     return rec ? headsFactOf(rec) : null;
   };
-  read.failed = false;
+  read.errors = [];
   return read;
 };
 
