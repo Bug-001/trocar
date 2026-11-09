@@ -144,8 +144,8 @@ test('off (D38): a fact it could not read is in the default text, the conclusion
     for (const note of notes) {
       const text = formatOffText(offReceipt({ notes: [note] }, platform), { home })
       assert.deepEqual(unsaidIn(text), [], `${platform}:\n${text}`)
-      const said = flat(text), sought = flat(note.split(' ').map((w) => (w.startsWith(home) ? `~${w.slice(home.length).replace(/\\/g, '/')}` : w)).join(' '))
-      assert.ok(said.includes(sought) || said.includes(flat(note)), `${platform}: the note is said:\n${text}`)
+      const sought = flat(note.split(home + path.sep).join(`~${path.sep}`)) // HOME as ~, by the host's separator as src/off says it
+      assert.ok(flat(text).includes(sought), `${platform}: the note is said:\n${text}`)
       assert.notEqual(text.split('\n')[0], formatOffText(offReceipt({}, platform), { home }).split('\n')[0], 'the conclusion is not the one of an off that read everything')
     }
     const plan = formatOffText(offReceipt({ dry_run: true }, platform), { home }), details = formatOffReceipt(offReceipt({ dry_run: true }, platform), { home })

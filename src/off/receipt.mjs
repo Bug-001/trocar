@@ -39,7 +39,7 @@ function fit(text) {
 
 // a text of several lines (refuseOldManifest's refusal) keeps its lines, with HOME as `~` (§1.1⑤): a line at COMMAND_INDENT is a command to copy,
 // printed whole on its own line (§1.1⑥; `~` only for a POSIX HOME, where the shell expands it), every other line folded by fit
-const tildeWords = (s, home) => s.split(' ').map((w) => offTilde(w, home)).join(' ')
+const tildeWords = (s, home) => s.split(' ').map((w) => (w.startsWith('(') ? `(${offTilde(w.slice(1), home)}` : offTilde(w, home))).join(' ') // a path in parentheses too
 export const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeWords(l, home))))
 /** Rows of [label, value] as a labelled list (§1.1②, cli/text.mjs pairs' layout, written here for the same reason as fit): each label at column 2, padded so every
  *  value starts in one column; a value folds at its own column (never COMMAND_INDENT: that column is at least 2 + 1 + 2), a word longer than the room keeps
