@@ -86,7 +86,6 @@ test('D62 ⑥: with a holder the receipt never claims "no door open" nor that tr
   assert.doesNotMatch(held, /no door open/, `a door IS open for the holder below: ${held}`)
   assert.doesNotMatch(held, /trocar exits|exits when/, `in proxy mode the daemon never exits: ${held}`)
   assert.match(held.replace(/\s+/g, ' '), /\b4012\b[^.]*\bkeeps running\b[^.]*\bdoor\b/, 'D62 ⑥: the daemon stays, a door open for the holder')
-  assert.match(held, /^That door closes when it exits; the daemon keeps running\.$/m)
 
   // --dry-run: no daemon was asked anything, so there is no pid
   const dry = formatOffReceipt({ ...base, dry_run: true, daemon: { pid: null, state: 'running' }, holders: [] })

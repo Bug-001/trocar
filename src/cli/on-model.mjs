@@ -14,7 +14,8 @@ import { opLockFile } from '../off/paths.mjs'
 import { daemonReader } from '../off/daemon-read.mjs'
 import { readManifest, saveManifest } from '../collector/core/trust/journal.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
-import { fit, tilde, formWords, routeWords, refusedLines, setupBlocked, setupError, routeReason, ownTreeItem, commandLine, restartLine } from './receipt.mjs'
+import { fit, tilde, formWords, routeWords, refusedLines, setupBlocked, setupError, routeReason, ownTreeItem, commandLine, restartLine, untilRestart } from './receipt.mjs'
+import { endSentence } from '../off/receipt.mjs'
 import { pairs, andList } from './text.mjs'
 import { printJson } from './json.mjs'
 import { plainSentence } from './words.mjs'
@@ -28,7 +29,9 @@ const planLine = (p, home) => [p.harness, p.paths.length ? `${p.paths.map((x) =>
 // §1.1 ④ rule 4: a fact not read gives the default text a step to take, by its code; --details and --json keep the fact (`text`)
 const NOTE_STEPS = { 'restart-unread': () => 'Restart any agent that was already open; trocar could not list them.', 'start-time-unknown': (n) => `Restart ${n.harness} if it was already open; trocar could not tell when it started.` }
 const shortNoteLine = (n) => (NOTE_STEPS[n.code] ? NOTE_STEPS[n.code](n) : plainSentence(noteLine(n)))
-const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
+const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${endSentence(`${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)}`)
+// a route's file (§3.3's --details sample): its `at`, else the paths its plan row names (a route written this run carries no `at`), else its form in words
+const whereOf = (x, rc, home) => { const p = x.at ? [x.at] : ((rc.planned || []).find((q) => q.harness === x.harness && q.route === x.route) || {}).paths || []; return p.length ? p.map((y) => tilde(y, home)).join(', ') : x.route ? formWords(`.${x.route}`) : '' }
 // 1.6 §1.1: the headline of a run that did not finish names the harnesses that did not: refused, or a route of theirs not written
 const unfinished = (r) => [...new Set([...r.refused.map((x) => x.harness), ...(r.routes || []).filter((x) => !x.ok).map((x) => x.harness)])]
 // 1.6 §3.3 · §1.1 ④: the notes the default text says — a step left to do (install pending), a fact not read (D38), a form that only forwards (invariant 4).
@@ -58,11 +61,11 @@ export function formatModelOnReceipt(receipt, exit, home) {
     // §1.1: no two rows the same. One agent with several routes (Claude Code's settings and its config library) said "the setting is in place"
     // twice (a Windows test machine 2026-10-18): the row names the file the setting is in, so each row is the fact it reports
     ...pairs([...new Map((receipt.routes || []).map((r) => {
-      const where = r.at ? tilde(r.at, home) : r.route ? formWords(`.${r.route}`) : ''
-      const w = r.ok ? null : routeRefusal({ h: r.harness, reason: r.reason, at: r.at ? tilde(r.at, home) : where }) // the doctor's words and steps: never a bare code
+      const where = whereOf(r, receipt, home)
+      const w = r.ok ? null : routeRefusal({ h: r.harness, reason: r.reason, at: where }) // the doctor's words and steps: never a bare code
       return [`${r.harness}|${where}|${r.ok}|${r.reason || ''}`, [r.harness, `${where ? `${where}: ` : ''}${r.ok ? 'the setting is in place' : w ? `not written. ${w.why} ${w.steps.join(', then ')}.` : `not written: ${routeReason(r)}`}`]]
     })).values()], { home }),
-    ...((receipt.restart || []).length ? [`  ! Restart to capture: ${receipt.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}: started before capture was on. Until then they connect as they do now.`] : []),
+    ...((receipt.restart || []).length ? [`  ! Restart to capture: ${receipt.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}: started before capture was on. ${untilRestart(receipt.restart.length)}`] : []),
     ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)], { home }).join('\n')
 }
 /** The default text of a macOS / Windows `on` (1.6 §3.3): the conclusion, the Restart line, and what the user must act on, each with its way out. */

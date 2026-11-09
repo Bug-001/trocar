@@ -16,6 +16,8 @@ export const COMMAND_INDENT = '    '
 export const foldHang = (lead) => (lead ? ' '.repeat(Math.max(lead.length, COMMAND_INDENT.length) + 2) : '')
 /** Is this line of a several-line text a command to copy (it starts at COMMAND_INDENT)? */
 export const isCommandLine = (l) => String(l).startsWith(COMMAND_INDENT) && /\S/.test(String(l).charAt(COMMAND_INDENT.length))
+/** A note as a sentence (§1.1): one full stop at its end, none after a mark (inside a closing `)` too), a path or a command line that ends it (a path or command is copied whole). */
+export const endSentence = (s) => { const t = String(s).trimEnd(), last = t.split('\n').at(-1); return /[.!?:]\)?$/.test(t) || isCommandLine(last) || /[\\/][^\s)]*$/.test(last) ? t : `${t}.` }
 
 const WIDTH = 80
 const offTilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
@@ -151,7 +153,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     const who = [...new Map(r.holders.map((x) => [x.pid, x])).values()]
     lines.push(...fit(`Still connected through trocar, which only passes their traffic on and records nothing of it: ${who.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}.`))
     // the daemon stays and closes that one door when they go (D62 ⑥)
-    lines.push(`That door closes when ${who.length === 1 ? 'it exits' : 'they exit'}; the daemon keeps running.`, 'Cut them now: trocar off --now')
+    lines.push(`That door closes when ${who.length === 1 ? 'it exits' : 'they exit'}.`, 'Cut them now: trocar off --now')
   }
   if ((r.still_trusting || []).length) {
     const roots = r.still_trusting.filter((p) => p.what === 'root')
@@ -185,7 +187,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   }
   for (const l of r.left || []) lines.push(...fit(`Not undone: ${t(l.path)} (${l.reason || l.result})`))
   for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(n)))
-  for (const n of r.notes || []) lines.push(...textLines(n, home)) // HOME as ~ (1.6 §1.1⑤), a note's command on its own line
+  for (const n of r.notes || []) lines.push(...textLines(endSentence(n), home)) // HOME as ~ (1.6 §1.1⑤), a note's command on its own line
   lines.push(...extra, footer || (past ? 'Certificates stay installed. To remove them: trocar uninstall' : 'Nothing was changed. Run it without --dry-run to do it.'))
   return lines.join('\n')
 }
