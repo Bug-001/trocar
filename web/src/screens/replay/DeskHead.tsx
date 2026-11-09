@@ -41,7 +41,7 @@ function Row({ m, s }: { m: Head, s: DeskState }) {
   return (
     <div className="sesshead">
       <a className="sh-back" href={m.back.href}>{m.back.text}</a>
-      <span className="sh-name" title={`${t.sourceTip}\n${W.SESSION_ID} ${t.id}`}>{t.text ?? t.fallback}</span>
+      <span className="sh-name" title={[t.text, t.sourceTip, `${W.SESSION_ID} ${t.id}`].filter(Boolean).join('\n')}>{t.text ?? t.fallback}</span>
       <a className="sh-chip" href={c.href} title={c.name}>
         <HarnessIcon id={c.key} />
         <span className="chipname" title={c.raw || undefined}>{c.name}</span>

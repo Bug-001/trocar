@@ -65,6 +65,14 @@ test('1.2 #17: title_source unread reads the fixed word, not the untitled one', 
   expect(name.title).toContain(W.PROMPT_UNREAD_TIP)
 })
 
+test('1.2 #17: the head cuts a long title (one line, ellipsis): its hover carries the title as the server sent it, with the source and the id', () => {
+  const title = 'Refactor the session reader so '.repeat(9).trim() // ≤ 300 code points, the server's cap (4.4)
+  const name = head({ meta: { title, title_source: 'wire' } }).el.querySelector<HTMLElement>('.sh-name')!
+  expect(name.title).toContain(title)
+  expect(name.title).toContain(W.TITLE_FROM_WIRE)
+  expect(name.title).toContain('sid-1')
+})
+
 test('1.2 #3: with another session of the same title, the head is only the table\'s parts and names the title once', () => {
   const title = 'Same name'
   const other = { session_id: 'sid-2', title, harness: 'claude-code' }

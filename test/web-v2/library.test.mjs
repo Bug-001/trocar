@@ -17,7 +17,8 @@ test('(2) title rules: the hover follows title_source and carries the id (and a 
     [null, 'pending', W.titlePending, W.TITLE_PENDING], [null, 'a-value-from-a-later-release', W.titlePending, W.TITLE_PENDING], [null, undefined, W.titlePending, W.TITLE_PENDING]]) {
     for (const harness_inferred of [false, true]) {
       const s = S({ title, title_source, harness_inferred }), tip = titleTipOf(s), why = JSON.stringify({ title_source, harness_inferred })
-      assert.ok(tip.includes(wantTip(s.session_id)), why); assert.equal(titleText(s), wantText, why)
+      if (title == null) assert.equal(tip, wantTip(s.session_id), why); else assert.ok(tip.includes(wantTip(s.session_id)), why)
+      assert.equal(titleText(s), wantText, why)
       if (title != null) assert.ok(tip.includes(title), `${why}: the row cuts a long title, so its hover carries it whole`)
       assert.ok(tip.includes(s.session_id), why); assert.ok(!titleText(s).includes(s.session_id), why)
       assert.deepEqual([rowModel(s, NOW).titleText, rowModel(s, NOW).titleTip, rowModel(s, NOW).untitled], [titleText(s), tip, title == null], why)

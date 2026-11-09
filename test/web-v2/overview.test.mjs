@@ -218,7 +218,7 @@ test('#11 recent sessions: a title that could not be read says so, with its own 
 })
 
 test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled without a time, the probe-only mark, the replay href', () => {
-  const rows = [session(3), session(1, { title: null, title_source: null }), session(6, { title: 'Refactor the session reader so '.repeat(10).trim() }), session(2),
+  const rows = [session(3), session(1, { title: null, title_source: null }), session(6, { title: 'Refactor the session reader so '.repeat(9).trim() /* ≤ 300 code points, the server's cap (4.4) */ }), session(2),
     session(4, { calls: 0, probes: 3 }), session(7)]
   const want = [...rows].sort((a, b) => Date.parse(b.last_ts) - Date.parse(a.last_ts)).slice(0, 5)
   assert.deepEqual(recentRows({ sessions: rows }).map((r) => r.id), want.map((r) => r.session_id))

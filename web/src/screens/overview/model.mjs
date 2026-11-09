@@ -336,7 +336,7 @@ export function recentCard(s, now) {
       return {
         id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? (unread ? PROMPT_UNREAD : pending ? TITLE_PENDING : UNTITLED), untitled: r.title == null,
         // the row cuts a long title (one line, ellipsis): the hover carries it whole, on its own line
-        titleTip: [r.title, [r.title != null ? TITLE_FROM_WIRE : unread ? PROMPT_UNREAD_TIP : pending ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · ')].filter((x) => x != null).join('\n'),
+        titleTip: [r.title, [r.title != null ? TITLE_FROM_WIRE : unread ? PROMPT_UNREAD_TIP : pending ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · ')].filter(Boolean).join('\n'),
         calls: { text: probe ? W.PROBE_ONLY : W.CALLS_N(r.calls), tip: probe ? W.PROBE_ONLY_TIP : null }, when: when(r.last, now), href: r.href,
       }
     }),
