@@ -12,6 +12,7 @@ import { readHead } from '../../../src/query/ctx-files.mjs'
 import { bigSession } from '../../query/big-session.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { QUERY_WAIT_PROBLEMS } from '../../../src/health/codes.mjs'
+import { TC_ROW } from '../../../web/legacy/labels/replay.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -169,7 +170,7 @@ test('1.3 #16 · 2.1 §token 计数行: the head\'s probes.series draws the toke
     await c.page.goto(`${w.b.url}/#/replay/${encodeURIComponent(w.project)}/${encodeURIComponent(w.id)}`)
     const row = await c.page.waitForSelector('#rails .k-token-count', { timeout: 15_000 })
     assert.equal(await row.$$eval('.pbar[data-lane="token-count"]', (e) => e.length), series.length, 'a bar per measured size')
-    assert.match(await row.$eval('.railname', (e) => e.textContent), new RegExp(`\\b${probes.count}\\b`), 'the row names probes.count, the full truth')
+    assert.equal((await row.$eval('.railname .tn', (e) => e.textContent)).trim(), TC_ROW(probes.count), 'the row names probes.count, the full truth')
     assert.deepEqual(c.errors, [])
   } finally { await c.context.close() }
 })

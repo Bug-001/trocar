@@ -249,3 +249,13 @@ test('1.3 §叠加轨: a lane that arrives late lands in step order of its first
   applySession(desk, { base: desk.mark, mark: desk.mark, calls: [], gone: [], events: [], lanes: [{ lane: 'R9-0', kind: 'monitor', first: 'R9-0', count: 4 }, { lane: before[0], kind: 'subagent', first: before[0], count: 3 }] })
   assert.deepEqual(buildLanes(desk, null).map((l) => l.id), [...after, 'R9-0'])
 })
+
+test('1.5 K-04 · 2.1:17: the token-count row is never the anchor (it is no lane); its bars keep the retention each count was stored with', () => {
+  const series = [{ ts: '2026-10-07T00:00:01.000Z', tokens: 10, retention: 'log' }, { ts: '2026-10-07T00:00:02.000Z', tokens: 20, retention: 'full' }]
+  const only = buildLanes(deskOf([]), { count: 3, series })
+  assert.ok(only.some((l) => l.kind === 'token-count'), 'the row is built')
+  assert.equal(anchorLane(only), null, 'a session of token counts alone has no step to anchor on (K-04: its own empty state)')
+  const tc = buildLanes(deskOf([{ kind: 'main', rows: [{}] }]), { count: 3, series })
+  assert.equal(anchorLane(tc).kind, 'main')
+  assert.deepEqual(tc.find((l) => l.kind === 'token-count').calls.map((c) => c.retention), ['log', 'full'], 'the drawer says how each was kept (invariant 4)')
+})
