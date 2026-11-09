@@ -15,7 +15,7 @@ export function readNetenvFile(home, { fs = nodeFs } = {}) {
 }
 /** What a write keeps of the file already there: `adopted` (what `on` found, 1.6 §9.5) is carried over when the new result has none, and so is each harness of
  *  `topology` the new one does not redraw (a `status codex` redraws codex only: the others keep their own `at`). */
-export function mergeNetenv(prev, result) {
+function mergeNetenv(prev, result) {
   const out = { ...result }
   if (!prev) return out
   if (out.adopted === undefined && prev.adopted !== undefined) out.adopted = prev.adopted

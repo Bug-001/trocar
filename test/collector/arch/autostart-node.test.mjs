@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process'
 import { autostartNode, autostartProgram } from '../../../src/collector/arch/autostart-node.mjs'
 import { appDir, launcherPath } from '../../../src/off/paths.mjs'
 import { runPlaceCli, nodeExe } from '../../../src/cli/place.mjs'
+import { identityRunner } from '../../helpers/lock-probe.mjs'
 import { userUnit as darwinUnit } from '../../../src/collector/arch/darwin/autostart.mjs'
 import { userUnit as linuxUnit } from '../../../src/collector/arch/linux/unit.mjs'
 import { userUnit as winUnit } from '../../../src/collector/arch/win32/autostart.mjs'
@@ -83,7 +84,7 @@ test('script channel: the login entry each OS writes names the launcher, so afte
   const home = tmpDir("autostart script 'q' ")
   const app = appDir(home)
   version(app, '0.1.0', '22.0.0')
-  assert.equal(await runPlaceCli([path.join(app, '0.1.0')], { io: quiet, home }), 0)
+  assert.equal(await runPlaceCli([path.join(app, '0.1.0')], { io: quiet, home, deps: { exec: identityRunner().run } }), 0)
   // the copy that runs `install`: the private Node and the versioned script of 0.1.0
   const asked = { home, node: nodeExe(app, `22.0.0-${target}`), script: path.join(app, '0.1.0', 'bin', 'trocar.mjs'), env: { PATH: '' } }
   const items = {
@@ -92,7 +93,7 @@ test('script channel: the login entry each OS writes names the launcher, so afte
     win32: winUnit({ ...asked, user: 'H\\ada' }).text(),
   }
   version(app, '0.1.1', '22.1.0') // what update's --stage leaves, then its place
-  assert.equal(await runPlaceCli([path.join(app, '0.1.1')], { io: quiet, home }), 0)
+  assert.equal(await runPlaceCli([path.join(app, '0.1.1')], { io: quiet, home, deps: { exec: identityRunner().run } }), 0)
   for (const [os, text] of Object.entries(items)) {
     assert.ok(text.includes(launcherPath(home, os)), `${os}: the item names ${launcherPath(home, os)}`)
     assert.ok(!text.includes(path.join(app, '0.1.0')) && !text.includes(path.join(app, 'node')), `${os}: the item names no version directory and no private Node`)

@@ -13,6 +13,7 @@ import { bigSession } from '../../query/big-session.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { QUERY_WAIT_PROBLEMS } from '../../../src/health/codes.mjs'
 import { TC_ROW } from '../../../web/legacy/labels/replay.mjs'
+import { listed } from '../../helpers/head-done.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -53,7 +54,7 @@ async function folded(ms) {
     const r = await b.get('session', { id: s.id, head: '1' })
     head = r.doc
     const file = readHead(home, s.id)
-    if (file && file.tier === 1 && !file.pending && file.packs.length >= 3 && file.mark === head.mark) { head = file; break }
+    if (file && file.tier === 1 && !file.pending && listed(file) && file.packs.length >= 3 && file.mark === head.mark) { head = file; break }
     assert.ok(Date.now() < until, `the session was not folded with its files in 240 s (${JSON.stringify(head && { tier: head.tier, pending: head.pending, packs: head.packs && head.packs.length })})`)
     await new Promise((ok) => setTimeout(ok, 500))
   }

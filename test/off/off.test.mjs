@@ -12,7 +12,8 @@ import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { undoSide, offWorld, runOff } from '../../src/off/orchestrate.mjs'
-import { formatOffReceipt } from '../../src/off/receipt.mjs'
+import { formatOffReceipt, formatOffText } from '../../src/off/receipt.mjs'
+import { applyJsonKey } from '../../src/collector/core/trust/journal.mjs'
 import { certBlocks, SYSTEM_BUNDLES } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -943,6 +944,25 @@ test('off by trocar\'s marks keeps the backups no record names, and its receipt 
   const text = formatOffReceipt(receipt, { home: s.home })
   assert.ok(receipt.orphan_backups.every((b) => text.includes(`~${b.slice(s.home.length)}`)), text)
   assert.ok(!text.includes(s.home), text)
+})
+
+// 1.6 §1.1⑤: a file off cannot undo is named with its backup and the line that puts it back; the text and --details show HOME as ~ in the
+// words and in that line (sh, zsh and bash expand an unquoted ~/), never the absolute HOME
+test('a file off leaves: its backup and the line that puts it back show HOME as ~, in the text and in --details', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const file = path.join(s.home, '.claude', 'settings.json')
+  const m = readManifest(s.dir)
+  applyJsonKey({ dir: s.dir, manifest: m, harness: 'claude-code', phase: 'on', file, keys: ['env', 'HTTPS_PROXY'], value: 'http://127.0.0.1:1', home: s.home })
+  saveManifest(s.dir, m)
+  fs.appendFileSync(file, '\n{ not json') // a file trocar can no longer read: left, with its backup
+  const r = await s.off({ yes: true })
+  const left = r.receipt.left.find((l) => l.path === file)
+  assert.ok(left && left.backup && left.restore, JSON.stringify(r.receipt.left))
+  for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+    const out = f(r.receipt, { home: s.home })
+    assert.ok(!out.includes(s.home), `${name}:\n${out}`)
+    assert.ok(out.replace(/\s+/g, ' ').includes(`cp ~${left.backup.slice(s.home.length)} ~${file.slice(s.home.length)}`), `${name}: the line that puts it back, with ~:\n${out}`)
+  }
 })
 
 // the supervisor supervisor.lock names (pid 4040) still runs: the one powershell question stopByHand asks, answered

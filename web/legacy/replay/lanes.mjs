@@ -99,8 +99,13 @@ export function windowCalls(lane, anchorTs, view) {
   const first = (pred) => { let a = 0, b = calls.length; while (a < b) { const m = (a + b) >> 1; if (pred(toMs(calls[m].ts))) b = m; else a = m + 1 } return a }
   const from = lo > 0 && lo < n ? first((t) => t >= anchorTs[lo]) : 0
   const to = hi < n ? first((t) => t > anchorTs[hi]) : calls.length
+  // a window past step 0, or before the lane's last step with no held step after it, has no place for a call outside its held rows:
+  // stepPos would pile it at the edge (2.1 ③). The last column ends at the next step's time when the view knows it (`cutTs`), else
+  // its tail waits for that step's row
+  const t0 = view.cutBefore ? anchorTs[lo] : -Infinity, tail = view.cutAfter && hi >= n
+  const kept = (t) => t >= t0 && (!tail || (view.cutTs != null ? t < view.cutTs : t <= anchorTs[n - 1]))
   const out = []
-  for (let i = from; i < to; i++) if (inWindow(anchorTs, view, calls[i].ts)) out.push({ c: calls[i], i })
+  for (let i = from; i < to; i++) if (kept(toMs(calls[i].ts)) && inWindow(anchorTs, view, calls[i].ts)) out.push({ c: calls[i], i })
   return out
 }
 // index of the lane call nearest in time (over EVERY call, not just the drawn ticks); `fallback` is kept when ts is unparsable
@@ -114,14 +119,15 @@ export function nearestByTs(lane, ts, fallback = 0) {
   return best
 }
 // the lane call nearest a click at fraction f of the rail, among the calls IN the window (out-of-window calls all clamp to an
-// edge and would hijack edge clicks); the whole lane when none is in the window. Always a real index, drawn tick or not.
+// edge and would hijack edge clicks); the whole lane when none is in the window and it holds every step there, else -1 (a call the window
+// culls is not drawn and is not picked). A real index otherwise, drawn tick or not.
 export function nearestByX(lane, anchorTs, view, f) {
   let b = -1, bd = Infinity
   for (const { c, i } of windowCalls(lane, anchorTs, view)) {
     const d = Math.abs(xOf(anchorTs, view, c.ts) - f)
     if (d < bd) { bd = d; b = i }
   }
-  if (b < 0) lane.calls.forEach((c, i) => { const d = Math.abs(xOf(anchorTs, view, c.ts) - f); if (d < bd) { bd = d; b = i } })
+  if (b < 0 && !view.cutBefore && !view.cutAfter) lane.calls.forEach((c, i) => { const d = Math.abs(xOf(anchorTs, view, c.ts) - f); if (d < bd) { bd = d; b = i } })
   return b
 }
 export const turnsReviewed = (anchorTs, ts) => { const t = toMs(ts); return anchorTs.filter((x) => x <= t).length }

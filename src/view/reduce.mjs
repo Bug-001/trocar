@@ -24,7 +24,7 @@ import { openFoldLog } from '../query/fold-log.mjs';
 
 // Ground-truth from PROVEN byte-identity (not the structural proxy). Strict wording per 3.3:73 — the
 // claim is only "MY outbound prefix is byte-identical", never "the provider is wrong".
-export function realGroundTruth(prefixByteIdentical, read, create) {
+function realGroundTruth(prefixByteIdentical, read, create) {
   if (!prefixByteIdentical) return null;             // no proven byte-identical reusable prefix
   if (read > 0) return null;                          // genuinely reused → normal
   return create > 0 ? 'ttl-rebuild' : 'provider-contradiction';
@@ -58,7 +58,7 @@ export function unknownSummary(recs, partial) {
 
 // Lanes a flat-lane wire can be split into by the harness table's hints (3.4). Labels are server-side
 // (invariant 3); the board renders them as it renders analyze()'s lanes.
-export const FLAT_LANES = {
+const FLAT_LANES = {
   main: { kind: 'main', icon: '💬', label: 'conversation' },
   subagent: { kind: 'subagent', icon: '🧬', label: 'subagent' },
   aux: { kind: 'aux', icon: '⚙', label: 'unnamed background call' },
@@ -736,7 +736,7 @@ function skeletonOf(R) {
 /** The heap one entry of a kept ledger takes (a resource, a segment or load of it, a seen path; replayLedger's `units`): the most
  *  measured over ledgers of 3,040 resources (1–4 segments, 1–8 loads each) and 0–13,738 seen paths of ~50 characters, after a forced
  *  GC (232 B, all resources of one segment and load), × 1.25. */
-export const LEDGER_UNIT_BYTES = 300;
+const LEDGER_UNIT_BYTES = 300;
 /** The heap the kept lane ledgers may take (src/query/named/lane.mjs): a K term of the reduction's bound (3.5 §内存有界), each weighed
  *  by ledgerWeight; room for a lane of the generated 6,598-call session in test/query/big-session.mjs. */
 export const LEDGER_BYTES = 8 << 20;

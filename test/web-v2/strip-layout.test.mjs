@@ -173,8 +173,13 @@ test('1.3 #22 #23 · placeWindow: as the session grows a window parked at the li
 test('1.3 #23 · anchorSpan: the span\'s local indexes when every step is held in a row; none when one is not', () => {
   const rows = Array.from({ length: 6 }, () => ({ usage: null })), older = 4
   const desk = deskOf([{ kind: 'main', rows, head: { count: rows.length + older } }]), s = { desk, anchor: anchorLane(buildLanes(desk)) }
-  assert.deepEqual(anchorSpan(s, { lo: older, hi: older + 6 }), { lo: 0, hi: 6 })
-  assert.deepEqual(anchorSpan(s, { lo: older + 2, hi: older + 4 }), { lo: 2, hi: 4 })
+  const local = (v) => ({ lo: v.lo, hi: v.hi })
+  assert.deepEqual(local(anchorSpan(s, { lo: older, hi: older + 6 })), { lo: 0, hi: 6 })
+  assert.deepEqual(local(anchorSpan(s, { lo: older + 2, hi: older + 4 })), { lo: 2, hi: 4 })
+  // 1.3 §叠加轨: the span says whether steps lie before or after it, so the rails cull calls the held rows cannot place
+  assert.equal(anchorSpan(s, { lo: older, hi: older + 6 }).cutBefore, true)
+  assert.equal(anchorSpan(s, { lo: older, hi: older + 6 }).cutAfter, false)
+  assert.equal(anchorSpan(s, { lo: older + 2, hi: older + 4 }).cutAfter, true)
   for (const span of [{ lo: 0, hi: 3 }, { lo: older - 1, hi: older + 2 }, { lo: older + 5, hi: older + 7 }]) assert.equal(anchorSpan(s, span).none, true, JSON.stringify(span))
   assert.equal(anchorSpan({ desk, anchor: null }, { lo: 0, hi: 2 }).none, true)
 })

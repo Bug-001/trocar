@@ -8,7 +8,6 @@ import { isFailure, UNFOLDED_CODES } from '../../health/codes.mjs'
 import { readFlows } from '../../health/flows.mjs'
 
 // The closed sets and the failure / expected split live in src/health/codes.mjs (D38: writers and readers share them).
-export { isFailure }
 
 // The line writer is src/off/events.mjs (`trocar off` writes the same lines without this directory, 1.6 R3). `day` (YYYY-MM-DD): the file to write,
 // when the caller keeps a day that never goes back (the daemon's recorder)

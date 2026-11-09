@@ -45,7 +45,7 @@ export async function topicHelp(_argv, { io, json, args }) {
 
 /** The name list (§4.1): every query and the parameters it takes. The query core is imported here only (it is most of
  *  this command's load time, and the daemon path does not need it). */
-export const queryList = async () => {
+const queryList = async () => {
   const { QUERIES } = await import('../query/named/index.mjs')
   const rows = [['NAME', 'PARAMETERS'], ...Object.entries(QUERIES).map(([name, q]) => [name, q.params.length ? q.params.map((p) => `--${p}`).join(' ') : 'none'])]
   // the parameters fold under their own column rather than pass 80 columns (§1.1⑥)

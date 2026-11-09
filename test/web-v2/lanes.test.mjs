@@ -51,6 +51,27 @@ test('stepPos is the walked step position, and windowCalls is exactly the calls 
   }
 })
 
+// 2.1 ③: a window over held rows that do not reach the lane's first or last step draws exactly the calls whose place over the WHOLE lane
+// lies in it: none piled at an edge for a step whose row is not here. The oracle is the full anchor; the desk holds a slice [k, m) of it.
+// When the next step's time is unknown, the last column's tail waits for its row (dropped, never misplaced)
+test('2.1 ③ · windowCalls over a held slice draws exactly the calls whose place over the whole lane is in the window', () => {
+  for (let seed = 1; seed <= 40; seed++) {
+    const r = rng(seed), int = (lo, hi) => lo + Math.floor(r() * (hi - lo + 1))
+    const N = int(2, 30)
+    let t = T0
+    const full = Array.from({ length: N }, () => (t += int(1, 5000))) // strictly increasing: one place per time
+    const calls = Array.from({ length: int(1, 60) }, () => T0 - 20000 + Math.floor(r() * (t - T0 + 40000))).sort((x, y) => x - y).map((ms, i) => ({ rid: `r${i}`, ts: iso(ms) }))
+    const k = int(0, N - 1), m = int(k + 1, N), held = full.slice(k, m)
+    for (let g0 = k; g0 < m; g0++) for (let g1 = g0 + 1; g1 <= m; g1++) for (const known of [true, false]) {
+      const view = { lo: g0 - k, hi: g1 - k, cutBefore: g0 > 0, cutAfter: g1 < N, ...(known && g1 < N ? { cutTs: full[g1] } : null) }
+      const got = windowCalls({ calls }, held, view).map(({ c }) => c.rid)
+      const place = (c) => refPos(full, Date.parse(c.ts)), unsure = (c) => !known && g1 < N && g1 === m && Date.parse(c.ts) > full[m - 1]
+      const want = calls.filter((c) => place(c) >= g0 && place(c) < g1 && !unsure(c)).map((c) => c.rid)
+      assert.deepEqual(got, want, `seed ${seed} N ${N} held [${k}, ${m}) window [${g0}, ${g1}) next time ${known ? 'known' : 'unknown'}`)
+    }
+  }
+})
+
 test('2.1 #11 · the lane kind table covers the server\'s kinds: every harness aux kind is event-only and named; token-count alone is no lane; no word holds an emoji', () => {
   const { 'token-count': tc, ...lanes } = LANE_KIND
   assert.ok(tc && !laneMeta('token-count'))

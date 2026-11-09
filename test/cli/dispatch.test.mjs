@@ -182,6 +182,16 @@ test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cann
   assert.equal((await s.run(['daemon'], { deps: { startDaemon: async () => { throw new Error('the port is taken') } } })).exit, 1)
 })
 
+test('D38: the daemon log carries a dying query worker\'s last stderr lines under its record line', async () => {
+  const s = await installedViaCli()
+  const died = Object.assign(new Error('the query worker exited (signal SIGABRT): FATAL ERROR: heap out of memory'), { code: 'query-failed', detail: ['<--- Last few GCs --->', 'FATAL ERROR: heap out of memory'] })
+  const r = await s.run(['daemon'], { deps: { startDaemon: async ({ log }) => { log('daemon', died); throw new Error('the port is taken') } } })
+  const lines = r.io.text().split('\n')
+  const at = lines.findIndex((l) => l.includes('[daemon] the query worker exited (signal SIGABRT)'))
+  assert.ok(at >= 0, r.io.text())
+  assert.deepEqual(lines.slice(at + 1, at + 3).map((l) => l.replace(/^.*\|\s?/, '')), died.detail)
+})
+
 test('the real bin: --version, help, help off, an unknown command, `daemon --bogus` and `classes set` of an unknown class (sandbox HOME, no OS tool)', () => {
   const home = tmpDir('trocar-bin-')
   const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', TROCAR_TEST_SANDBOX: '1' }
@@ -216,4 +226,21 @@ test('4.11 present: uninstall records no PATH of the user; its --dry-run leaves 
   const before = snapshot(s.home)
   await s.run(['uninstall', '--dry-run'], { env: { ...s.ctx().env, PATH: '/a/path/this/run/has' } })
   assert.deepEqual(snapshot(s.home), before, 'the dry run wrote nothing, user-path.json included')
+})
+
+// 1.6 §1.4: a dry run writes nothing — the PATH record main.mjs makes around a command included; a real `on` still records it.
+// The one exception: Node's compile cache under ~/.trocar/compile-cache (D62) is not state; every command of an installed trocar writes it.
+test('1.6 §1.4: on --dry-run and off --dry-run leave ~/.trocar byte for byte and mtime for mtime; a plain on records the PATH', async () => {
+  const s = sandbox()
+  assert.equal((await s.run(['install', '--yes'])).exit, 0)
+  const trocar = path.join(s.home, '.trocar'), recorded = path.join(s.dir, 'user-path.json')
+  const stamp = () => Object.fromEntries(Object.entries(snapshot(trocar)).filter(([p]) => p.split(/[\\/]/)[0] !== 'compile-cache').map(([p, h]) => [p, h === 'dir' ? h : `${h}:${fs.statSync(path.join(trocar, p)).mtimeMs}`]))
+  const env = { ...s.ctx().env, PATH: '/a/path/this/run/has' }
+  for (const argv of [['on', '--dry-run'], ['off', '--dry-run']]) {
+    const before = stamp()
+    await s.run(argv, { env })
+    assert.deepEqual(stamp(), before, `${argv.join(' ')} wrote nothing`)
+  }
+  assert.equal((await s.run(['on', '--yes'], { env })).exit, 0)
+  assert.match(fs.readFileSync(recorded, 'utf8'), /\/a\/path\/this\/run\/has/, 'a real on records the PATH it ran with')
 })

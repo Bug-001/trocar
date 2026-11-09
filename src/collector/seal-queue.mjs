@@ -18,7 +18,7 @@ const TEMP = /^\..*\.tmp$/ // a temp an interrupted seal left in raw/ (seal.mjs 
 export const WORKER_GONE_EXIT = 75
 
 /** How long a closed segment waits for the index keeper's catch-up before it is sealed anyway (see startSealing). */
-export const BEFORE_SEAL_MS = 5_000
+const BEFORE_SEAL_MS = 5_000
 
 /** Seal `file` in a child process → { code, reason }. The child exits as soon as this parent disconnects. Low priority, except `normal`
  *  (an uninstall stop's seals of what is still plaintext, 4.2 §自动封存); `onProgress({step, done, total})` hears the child's progress. */

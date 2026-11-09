@@ -50,7 +50,7 @@ export function classesTable(doc, { home = null, colors: c } = {}) {
 }
 
 /** `trocar classes <class>` (§4.2): the class, where its level comes from, and its rules by number. */
-export function classDetail(doc, name, { now = Date.now(), colors: c } = {}) {
+function classDetail(doc, name, { now = Date.now(), colors: c } = {}) {
   const x = doc.classes.find((y) => y.class === name)
   const change = doc.last_change && doc.last_change.class === name ? `, changed ${ago(doc.last_change.ts, now)}` : ''
   // Whose table it is, is the table's own question, not the class's: every class of your copy is yours to change,
@@ -67,7 +67,7 @@ export function classDetail(doc, name, { now = Date.now(), colors: c } = {}) {
 const brief = (c) => (c ? `keep ${keepOf(c)}, ${rules(c).length} rule${rules(c).length === 1 ? '' : 's'}` : 'not in the table')
 
 /** The receipt of a change (§4.2): the class before and after, the files written, and what the change does and does not touch. */
-export function changeLines(r, { home = null } = {}) {
+function changeLines(r, { home = null } = {}) {
   const said = { removed: 'Removed', written: 'Wrote', appended: 'Recorded the change in' }
   const out = [r.before === null && r.after === null
     ? 'classes: the table is as trocar ships it again'

@@ -203,7 +203,7 @@ test('D55 / 4.11 P13 the new kinds: known, each with a sentence of undo by hand;
 // v2 manifest and an unknown kind before it changes anything; a copy written by 12 lists those kinds as unknown and would undo a v2 manifest it no longer reads right.
 
 // a save with the same bytes does not rewrite the record, but a record left at a looser mode is brought back to 0600 (modes do not apply on win32)
-test('a save with the same bytes brings a looser manifest back to 0600, bytes unchanged', { skip: process.platform === 'win32' }, () => {
+test('a save with the same bytes brings a looser manifest back to 0600, bytes unchanged', { skip: process.platform === 'win32' && 'Windows has no POSIX file modes' }, () => {
   const { dir } = dirOf()
   const m = newManifest()
   saveManifest(dir, m)

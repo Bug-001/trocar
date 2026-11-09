@@ -12,6 +12,7 @@ import { samePath, MARKED_WITHOUT_RECORD } from '../collector/core/trust/journal
 import { replacedNote } from '../off/backup.mjs'
 import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
+import { identityFor } from '../off/proc.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, homeMismatch, accountHomeOf, collectorDir, backupDir } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { fit, tilde, restartLine, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, markedRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
@@ -175,7 +176,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
   // R12: the writes run under op.lock, taken after the yes (a plan that is only printed takes nothing and writes nothing)
   const locked = async (fn) => {
     let lock
-    try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) {
+    try { lock = await acquireOpLock({ file: opLockFile(home), identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) {
       if (e && e.code === LOCK_BUSY) { io.err(`trocar install: ${e.message}`); return null }
       throw e
     }
@@ -262,7 +263,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs), after the lock: the OS can hold the start longer than off waits for the lock (R12)
     // Set up (only): the login entry is not in its plan, so it is neither rewritten above nor registered here (4.4 #13); the daemon asking is up, this only reads it
     // a failure record that cannot be written is a problem of the run (D38: a failure is never silent)
-    const dmn = unit && !r.refused ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.trocar', 'collector'), env, fs, unit, register: !only, put: (e) => { try { appendEvent(path.join(home, '.trocar', 'collector'), e) } catch (err) { r.problems.push(`a failure record could not be written (${err.message}): ${e.reason}`); r.exit = 1 } }, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
+    const dmn = unit && !r.refused ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.trocar', 'collector'), env, fs, exec: deps.exec || null, unit, register: !only, put: (e) => { try { appendEvent(path.join(home, '.trocar', 'collector'), e) } catch (err) { r.problems.push(`a failure record could not be written (${err.message}): ${e.reason}`); r.exit = 1 } }, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
     r.problems.push(...dmn.problems)
     const dmnNotes = dmn.notes.filter((n) => !r.problems.includes(n)) // 附录 C.1: `problems` is the failure channel; what trocar could not do but said is `notes` (M-2)
     if (dmn.problems.length) r.exit = 1

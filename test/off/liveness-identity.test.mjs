@@ -24,7 +24,7 @@ import { variantsOf } from '../helpers/proc-variants.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { seedFootprint } from '../helpers/footprint.mjs'
 import { darwinTools } from './fixtures/darwin-tools.mjs'
-import { fakeSystem } from '../cli/fixtures/on-ctx.mjs'
+import { fakeSystem, recordingExec } from '../cli/fixtures/on-ctx.mjs'
 
 const ROOT = createCa({ commonName: 'liveness-identity root' })
 const roots = { node: [ROOT.certPem], osText: '' }
@@ -60,7 +60,7 @@ async function codexBox(asked = 'darwin') {
   const install = () => installCollector({ home, env: { HOME: home }, ids: ['codex'], osName, arch, harnesses: HARNESSES, freePort: async () => 47011, scan: async () => [], roots })
   const sys = fakeSystem()
   const on = async () => { if (!fs.existsSync(manifestFile)) await install() // the Linux plan's on wants install's certificate first (D55⑥)
-    const r = await turnOn({ home, env: { HOME: home }, ids: ['codex'], osName, arch, harnesses: HARNESSES, freePort: async () => 47011, roots, confirm: async () => true, unit: null, autostart: false, request: sys.daemon.request, socketPath: path.join(home, 'collector.sock'), sleep: async () => {} }); assert.equal(r.exit, 0, JSON.stringify(r.problems)); return r }
+    const r = await turnOn({ home, env: { HOME: home }, exec: recordingExec().run, ids: ['codex'], osName, arch, harnesses: HARNESSES, freePort: async () => 47011, roots, confirm: async () => true, unit: null, autostart: false, request: sys.daemon.request, socketPath: path.join(home, 'collector.sock'), sleep: async () => {} }); assert.equal(r.exit, 0, JSON.stringify(r.problems)); return r }
   const manifestFile = path.join(dir, 'install-manifest.json')
   const agents = (list) => { fs.mkdirSync(path.join(home, '.trocar'), { recursive: true }); fs.writeFileSync(path.join(home, '.trocar', 'agents.json'), typeof list === 'string' ? list : JSON.stringify({ version: 1, agents: list })) }
   return { home, dir, arch, install, on, manifestFile, agents, bundle: path.join(dir, 'ca', 'combined-codex.pem'), caFp: () => certBlocks(fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'), 'utf8'))[0].fp }
@@ -189,7 +189,7 @@ for (const osName of Object.keys(OS)) {
     const s = await codexBox(osName)
     const sys = fakeSystem()
     await s.install()
-    const on = () => turnOn({ home: s.home, env: { HOME: s.home }, ids: ['codex'], osName: installOs(osName), arch: s.arch, harnesses: HARNESSES, freePort: async () => 47011, roots, confirm: async () => true, unit: null, autostart: false, request: sys.daemon.request, socketPath: path.join(s.home, 'collector.sock'), sleep: async () => {} })
+    const on = () => turnOn({ home: s.home, env: { HOME: s.home }, exec: recordingExec().run, ids: ['codex'], osName: installOs(osName), arch: s.arch, harnesses: HARNESSES, freePort: async () => 47011, roots, confirm: async () => true, unit: null, autostart: false, request: sys.daemon.request, socketPath: path.join(s.home, 'collector.sock'), sleep: async () => {} })
     assert.equal((await on()).exit, 0)
     const m = readManifest(s.dir)
     const compiled = m.liveness.codex.identity

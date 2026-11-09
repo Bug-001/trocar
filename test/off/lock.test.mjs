@@ -188,7 +188,7 @@ const childRun = (script) => new Promise((resolve) => {
   c.on('close', (code, signal) => { clearTimeout(limit); resolve({ code, signal, out: out.trim(), err }) })
 })
 for (const [name, { posix, make }] of Object.entries(SHAPES)) {
-  test(`1.6 §3.1: ${name} on the lock's path is nobody's lock: the command gets the lock at once, on a regular file, and leaves nothing behind`, { skip: posix !== undefined && posix !== POSIX }, async () => {
+  test(`1.6 §3.1: ${name} on the lock's path is nobody's lock: the command gets the lock at once, on a regular file, and leaves nothing behind`, { skip: posix !== undefined && posix !== POSIX && (posix ? 'Windows has no such file type' : 'POSIX has no named pipes') }, async () => {
     const file = fileOf(); fs.mkdirSync(path.dirname(file), { recursive: true })
     const held = await make(file, path.join(path.dirname(path.dirname(file)), 'away'))
     assert.ok(fs.lstatSync(file), 'the shape is there')
@@ -206,7 +206,7 @@ for (const [name, { posix, make }] of Object.entries(SHAPES)) {
   })
 }
 
-test('1.6 §3.1: a FIFO put on the path while the lock is held does not stop the release, and what is there is not the holder\'s to remove', { skip: !POSIX }, async () => {
+test('1.6 §3.1: a FIFO put on the path while the lock is held does not stop the release, and what is there is not the holder\'s to remove', { skip: !POSIX && 'Windows has no FIFOs' }, async () => {
   const file = fileOf()
   const r = await childRun(`
     import fs from 'node:fs'
@@ -218,4 +218,18 @@ test('1.6 §3.1: a FIFO put on the path while the lock is held does not stop the
     lock.release()
     console.log(fs.lstatSync(file).isFIFO())`)
   assert.deepEqual([r.code, r.signal, r.out], [0, null, 'true'], r.err)
+})
+
+// a held lock is polled every 25 ms for up to the wait; each poll asking each pid's identity again was a spawn storm on macOS (ps + sysctl per question)
+test('R12: while acquireOpLock waits on a held lock it asks each pid\'s identity once, and still sees the holder exit', async () => {
+  const file = fileOf(), c = clock(), asked = []
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({ pid: 4545, start_time: '11', boot_id: 'b' }))
+  let holderUp = true, polls = 0
+  const identity = (pid) => { asked.push(pid); return pid === 4545 ? { start_time: '11', boot_id: 'b' } : { start_time: '99', boot_id: 'b' } }
+  const lock = await acquireOpLock({ file, identity, alive: (pid) => pid === process.pid || (pid === 4545 && holderUp), waitMs: 10_000, now: c.now, sleep: async (ms) => { await c.sleep(ms); if (++polls === 40) holderUp = false } })
+  assert.ok(polls >= 40, 'it waited')
+  assert.deepEqual([...new Set(asked)].sort(), [4545, process.pid].sort())
+  assert.equal(asked.length, 2, `one question per pid over ${polls} polls: ${asked.length}`)
+  lock.release()
 })

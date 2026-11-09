@@ -62,7 +62,7 @@ export const projectionFile = (home, sessionKey) => path.join(sessionDir(home, s
  *  `<k>.fold.idx`) renamed into `ctx/<k>/` (4.3 §4 迁移): rename only, never a copy; offsets do not change, so the sidecars
  *  still hold. The directory may be there already with answer files only (the start-up sweep's tier-0 head comes before any read);
  *  one that holds a projection or fold log of its own makes the flat files an older copy, and they are deleted (derived, D69②). */
-export function migrateFlat({ home = trocarHome(), fs = nodeFs, key }) {
+function migrateFlat({ home = trocarHome(), fs = nodeFs, key }) {
   const flat = path.join(ctxDir(home), hashOf(key)), dir = sessionDir(home, key);
   if (!fs.existsSync(`${flat}.ndjson`)) return;
   const own = fs.existsSync(dir) && fs.readdirSync(dir).some((n) => /^(?:extract|fold)\./.test(n));

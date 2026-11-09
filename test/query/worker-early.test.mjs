@@ -2,8 +2,9 @@
 // segments read so far name the way the full list will (a session key, no chain) is answered from them, the newest segment first, and says
 // that capture files are still being re-indexed; once the pass ends it is the one-pass answer. A session a rule decides (a synthesized key)
 // waits for the pass. The real service and the real worker fork over a temp HOME with no index on disk (what an INDEX_V change leaves); the
-// older segments' raw opens are slowed (worker-early-deps.mjs), so the pass is long and the newest segment quick: what comes first is
-// asserted by the order of the answer and the worker's `{rows: true}`, not by a time.
+// older segments' raw opens are held until the test releases them (worker-early-deps.mjs, in the worker and in its index threads), so the
+// pass cannot end before the early answers, at any pool size and any load, while the newest segment is quick: what comes first is asserted
+// by the order of the answer and the worker's `{rows: true}`, not by a time.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -19,9 +20,9 @@ import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const DEPS = fileURLToPath(new URL('./worker-early-deps.mjs', import.meta.url))
-const SLOW_MS = 1000 // each older segment's raw open: eleven of them make a pass of 11 s and more, beside a newest segment read in milliseconds
 const K = 'early-kkkk-4a1b-9c2d-000000000001', L = 'early-llll-4a1b-9c2d-000000000002'
 const S0 = '20261020T164700Z', NEWEST = '20261020T164712Z'
 
@@ -88,13 +89,15 @@ const twin = (home) => {
   fs.cpSync(home, other, { recursive: true })
   return other
 }
-function service(home, slow) {
-  const said = []
-  const fork = slow ? workerForkIn({ TROCAR_TEST_RAW_FAST: NEWEST, TROCAR_TEST_RAW_SLOW_MS: String(SLOW_MS) }) : workerFork
-  const watched = (h) => { const c = slow ? fork(h, DEPS) : fork(h); c.on('message', (m) => said.push(m)); return c }
-  return { said, svc: createQueryService({ home, fork: watched }) }
+/** A service whose worker's boot pass is held (worker-early-deps.mjs): the older segments' raw opens wait until `release()`. */
+function service(home, held) {
+  const said = [], hold = path.join(tmpDir('trocar-early-hold-'), 'hold')
+  if (held) fs.writeFileSync(hold, '')
+  const fork = held ? workerForkIn({ TROCAR_TEST_RAW_FAST: NEWEST, TROCAR_TEST_RAW_HOLD: hold }) : workerFork
+  const watched = (h) => { const c = held ? fork(h, DEPS) : fork(h); c.on('message', (m) => said.push(m)); return c }
+  return { said, svc: createQueryService({ home, fork: watched }), release: () => fs.rmSync(hold, { force: true }) }
 }
-const folded = (home, id) => { const h = readHead(home, id); return !!h && h.tier === 1 && h.pending == null && !pendingOf(h).length }
+const folded = (home, id) => { const h = readHead(home, id); return !!h && h.tier === 1 && h.pending == null && listed(h) }
 /** Asks for the session until its head says it is folded to its end. */
 async function settle(svc, home, id) {
   for (let i = 0; i < 300 && !folded(home, id); i++) { await ask(svc, 'session', { id }); await new Promise((r) => setTimeout(r, 100)) }
@@ -107,7 +110,7 @@ const pendingOf = (doc) => (doc.errors || []).filter((e) => e.code === 'index-pe
 test('3.5 §行表先读: a keyed session in the newest segment is answered before the pass ends, says capture files are still re-indexed, and then is the one-pass answer', async () => {
   const { home } = await world()
   const one = twin(home)
-  const { said, svc } = service(home, true)
+  const { said, svc, release } = service(home, true)
   const ref = service(one, false)
   try {
     const first = await ask(svc, 'session', { id: K })
@@ -121,6 +124,7 @@ test('3.5 §行表先读: a keyed session in the newest segment is answered befo
     assert.equal(rowsSaid(said), false, 'answered while the pass still reads')
     assert.equal(early.status, 200)
     assert.deepEqual(early.doc.records.map((r) => String(r.id).split(':')[0]), Array(6).fill(NEWEST), 'L as far as the newest segment holds it')
+    release()
     await until(() => rowsSaid(said), 'the pass ended')
     // asked nothing since: the worker's own slices bring the head to the pass's end
     await until(() => { const h = readHead(home, K); return !!h && !pendingOf(h).length }, 'K\'s head no longer says it')
@@ -146,10 +150,11 @@ test('3.5 §行表先读: a keyed session in the newest segment is answered befo
 
 test('3.5 §行表先读: a session the synthesized-key rule decides waits for the pass, even when its calls are all read', async () => {
   const { home, H } = await world()
-  const { said, svc } = service(home, true)
+  const { said, svc, release } = service(home, true)
   try {
     assert.equal((await ask(svc, 'session', { id: K })).status, 200, 'the newest segment is read')
     assert.equal(rowsSaid(said), false)
+    release()
     const { status } = await ask(svc, 'session', { id: H })
     assert.equal(rowsSaid(said), true, 'answered only once the pass ended')
     assert.equal(status, 200)

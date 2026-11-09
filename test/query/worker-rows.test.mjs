@@ -15,6 +15,7 @@ import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const DEPS = fileURLToPath(new URL('./worker-rows-deps.mjs', import.meta.url))
 const HOLD_MS = 2_000 // the row pass held shut this long with a kick waiting: a slice that ran anyway has written by then; too short only lets a fault pass
@@ -90,7 +91,7 @@ test('3.5 §行表先读: a session asked and a kick given before the rows are r
     assert.equal(hasHead(home, B), false, 'the kick waits for the rows: no slice')
     open()
     assert.equal((await asked.answer).status, 200)
-    await until(() => { const h = readHead(home, B); return h && h.tier === 1 && h.pending === null }, 'the kicked session folded')
+    await until(() => { const h = readHead(home, B); return h && h.tier === 1 && h.pending === null && listed(h) }, 'the kicked session folded')
   } finally { svc.stop() }
 })
 

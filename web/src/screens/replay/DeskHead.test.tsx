@@ -11,6 +11,7 @@ import { FOLD_STOPS } from '../../../../src/health/codes.mjs'
 import { reasonsWith } from '../../../../test/web-v2/visible.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { DeskHead } from './DeskHead'
+import { titleText } from '../library/model.mjs'
 import { reactView } from './view'
 
 afterEach(() => { cleanup(); document.body.replaceChildren() })
@@ -246,3 +247,15 @@ test('1.2 #7: a declared parent is a link to #/session/<id>; the layer draws no 
   }
 })
 
+
+// 1.2 §会话头 标题 · 1.8 §标题规则: one title rule on two screens, so the replay head and the session list never say two things about one
+// session at one moment, whatever its title_source (a stored head from before an update may carry another value, or none)
+test('1.2 标题: the replay head\'s title is the session list row\'s for the same meta, for every title_source', () => {
+  const cases: object[] = [{ title: 'A title', title_source: 'wire' }, { title: null, title_source: null }, { title: null, title_source: 'unread' },
+    { title: null }, { title: null, title_source: 'pending' }]
+  for (const m of cases) {
+    const { s, el } = head({ meta: m })
+    expect(el.querySelector('.sh-name')!.textContent).toBe(titleText(s.meta))
+    cleanup()
+  }
+})
