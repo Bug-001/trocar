@@ -47,16 +47,11 @@ test('the desk default survives a reload through storage', async () => {
   assert.equal(b.deskMode({ storage }), 'read')
 })
 
-test('2.3 #14: a storage that throws leaves the desk default at Raw and never throws', async () => {
+test('2.3 #14: a storage that throws never throws a choice back', async () => {
   const bad = { getItem() { throw new Error('denied') }, setItem() { throw new Error('denied') } }
   const m = await import(CELL + '?fresh=c1')
-  assert.equal(m.deskMode({ storage: bad }), 'raw')
-  assert.doesNotThrow(() => m.setDeskMode('read', { storage: bad }))
-})
-
-test('2.3 #14: Raw is the default of a desk with nothing stored', async () => {
-  const storage = memStorage()
-  assert.equal((await import(CELL + '?fresh=d1')).deskMode({ storage }), 'raw')
+  assert.doesNotThrow(() => m.setDeskMode('raw', { storage: bad }))
+  assert.equal(m.deskMode({ storage: bad }), 'raw', 'the page keeps the choice it could not store')
 })
 
 test('the cell keys are a pure function of the key event, and the desk keys ignore them', () => {

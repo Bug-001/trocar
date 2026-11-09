@@ -187,12 +187,14 @@ const opened = new Map() // scope + bid -> Map('path|span' -> open): what the re
 let scope = ''
 export const overrideScope = (key) => { scope = String(key) + '\n' }
 
+// the desk starts Readable (D70): the reader's stored choice (Shift+V) wins, then this page's last one; a cell with no view is Raw only (onlyMode)
+const START = 'read'
 export function deskMode({ storage = local() } = {}) {
-  try { const v = storage && storage.getItem(DESK_KEY); if (MODES.has(v)) return v } catch { /* storage denied: memory, then Raw */ }
-  return desk ?? 'raw'
+  try { const v = storage && storage.getItem(DESK_KEY); if (MODES.has(v)) return v } catch { /* storage denied: memory, then the start */ }
+  return desk ?? START
 }
 export function setDeskMode(m, { storage = local() } = {}) {
-  desk = MODES.has(m) ? m : 'raw'
+  desk = MODES.has(m) ? m : START
   overrides.clear(); opened.clear()
   try { storage && storage.setItem(DESK_KEY, desk) } catch { /* full or denied: the choice holds for this page only */ }
   modeChanged()

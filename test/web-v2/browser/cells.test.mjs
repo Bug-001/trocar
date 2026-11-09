@@ -102,6 +102,7 @@ const randomCopies = (page, ref, n) => page.evaluate(([ref, n]) => {
 async function copyCase(chromium) {
   const b = await withBoard({ chromium })
   try {
+    await b.page.evaluate(() => localStorage.setItem('trocar.v2.cellView', 'raw')) // the copy of the bytes is the Raw view's claim
     await openBusiest(b)
     const cells = await eachLaidCell(b.page, async (ref) => {
       const bytes = (await b.get('block', { ref })).doc.blocks[0].bytes
@@ -163,7 +164,8 @@ test('Shift+V redraws the cells within one window height below the visible area 
     // the same cells afterwards, by their data-bid (a cell drawn shorter in the other mode moves the ones below it up)
     const modesOf = (bids) => b.page.evaluate((bids) => bids.map((bid) => document.querySelector(`#ctxwin .cell[data-bid="${CSS.escape(bid)}"]`)?.dataset.mode ?? null), bids)
     const before = await cellsBelow()
-    assert.ok(before.length > 0 && before.every((c) => c.mode === 'raw'), 'open cells below the visible area, in the Raw default')
+    const was = before[0]?.mode, flipped = was === 'raw' ? 'read' : 'raw'
+    assert.ok(before.length > 0 && before.every((c) => c.mode === was), 'open cells below the visible area, in the desk default')
     await b.page.evaluate(() => {
       const R = document.querySelector('#ctxwin').getBoundingClientRect()
       // the key goes to a visible part of a row: its head, or — when an open cell fills the visible area — that cell's body
@@ -172,7 +174,7 @@ test('Shift+V redraws the cells within one window height below the visible area 
       head.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', shiftKey: true, bubbles: true, cancelable: true }))
     })
     await b.page.evaluate(() => new Promise((r) => { let n = 60; const f = () => (--n ? requestAnimationFrame(f) : r()); requestAnimationFrame(f) }))
-    assert.deepEqual(await modesOf(before.map((c) => c.bid)), before.map(() => 'read'), 'every cell within one height below the visible area is redrawn')
+    assert.deepEqual(await modesOf(before.map((c) => c.bid)), before.map(() => flipped), 'every cell within one height below the visible area is redrawn')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
