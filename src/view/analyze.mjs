@@ -26,7 +26,7 @@ import { compactionVerdict, compactionBaseline, hasCompactionPreamble } from '..
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key.
-import { respOf } from '../dissect/record-fields.mjs'
+import { respOf, normResp } from '../dissect/record-fields.mjs'
 import { HEAD, TASK_HEAD, taskOf, shorten } from './blockmeta.mjs'
 import { num52, numTable } from '../query/projection.mjs'
 import { mapUsage } from '../model/schema.mjs'
@@ -54,29 +54,8 @@ const monitorFlag = (text, stop) => {
   return said.size === 1 ? said.has('yes') : null
 }
 
-// Unify the two response shapes: streamed SSE (already reconstructed into
-// response.{usage,text,tool_calls}) and non-streaming JSON (raw body in response.body). The reply's tool calls leave
-// under the neutral name `tools` (2.6 §A): `tool_calls` is a wire name the board does not read (invariant 3).
-// Without this, JSON responses (all the security-monitor calls) read as ctx=0 / no text.
-export function normResp(r) {
-  const rs = respOf(r) || {}
-  if (rs.kind === 'json' && rs.body && typeof rs.body === 'object') {
-    const c = Array.isArray(rs.body.content) ? rs.body.content : []
-    return {
-      status: rs.status,
-      usage: rs.body.usage || {},
-      text: c.filter((b) => b.type === 'text').map((b) => b.text || '').join(''),
-      thinking: c.filter((b) => b.type === 'thinking').map((b) => b.thinking || '').join('') || undefined,
-      tools: c.filter((b) => b.type === 'tool_use' || b.type === 'server_tool_use')
-        .map((b) => ({ id: b.id, name: b.name, input: b.input })),
-      stop_reason: rs.body.stop_reason,
-    }
-  }
-  return {
-    status: rs.status, usage: rs.usage || {}, text: rs.text || '',
-    thinking: rs.thinking, tools: rs.tool_calls || [], stop_reason: rs.stop_reason,
-  }
-}
+// normResp: the reply in one shape, read in src/dissect (synth-key reads replies too, and dissect imports nothing above it, 0.1 §2)
+export { normResp }
 
 // Pull a short readable label from a tool call's input.
 export function toolArg(name, input = {}) {
