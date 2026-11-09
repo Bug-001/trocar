@@ -101,7 +101,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const dir = path.join(home, '.trocar', 'collector')
   const run = new Date().toISOString() // on every line this run writes, so the board's "last on" is this run's lines (as install's, 1.6 §1)
   const put = (rec) => { try { if (fs.existsSync(dir)) appendEvent(dir, { ...rec, run, ...(source ? { source } : {}) }) } catch { /* the receipt carries it (R11) */ } }
-  const [{ turnOnModel, offSince, offWords, STOPPED_BY_OFF }, { backendsFor, sourcesCtx, systemProxyNow }, { renderHook }, { hostTreeNote }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs'), import('../collector/core/proxymode/entries.mjs')])
+  const [{ turnOnModel, offSince, offWords, STOPPED_BY_OFF }, { backendsFor, sourcesCtx, systemProxyNow }, { renderHook }, { hostTreeNote, pacStale }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs'), import('../collector/core/proxymode/entries.mjs')])
   const b = deps.backends || (await backendsFor({ os, home, run: deps.exec || null, env, fs }))
   const ctx = deps.ctx || sourcesCtx({ os, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
   const args = { os, home, env, ids, harnesses: deps.harnesses || parts.harnesses, ctx, fs, renderHook, rootStore: b.rootStore || null, persistentEnv: (b.facts && b.facts.persistentEnv) || null, source, ...(deps.now ? { now: deps.now } : {}) }
@@ -148,6 +148,23 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     return done(receiptOf({ ...plan, exit: 2, problems: [autostartBlk] }, { blocked, error: { code: AUTOSTART_MISSING, message: autostartBlk } }), EXIT.usage)
   }
   const m = readManifest(dir, fs)
+  // 1.6 §3.3「要确认时」: a dry run's default plan leaves out the agents already on (D54's test) whose every planned route is on record, intact and not
+  // stale (status's `held && !stale`); a fact not read is not in place (D38: the dry run never claims more than it read)
+  let inPlace = []
+  if (flags.has('--dry-run') && !details && !json) {
+    const [{ intactOf }, { readIngressConfig }, { samePath }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/ingress-config.mjs'), import('../collector/core/trust/journal.mjs')])
+    const recs = [...(m.entries || []), ...(m.files || [])], ing = readIngressConfig({ dir, fs })
+    const token = typeof ing.listenerToken === 'string' ? ing.listenerToken : null, notOn = offSince(path.join(dir, 'state.json'), plan.on, { fs })
+    // each planned file has its own record (a moved CODEX_HOME is a new file to write), intact and not stale; an ingress.json not read judges no PAC: none in place
+    // a route that writes into a folder (a config library) plans the folder; its records are the entry files in it
+    const within = (f, dirPath) => { const r = path.relative(dirPath, f); return !!r && !r.startsWith('..') && !path.isAbsolute(r) }
+    const ok = (es, d, p) => es.length > 0 && es.every((i) => intactOf(m, i, fs) && !pacStale(i, d.proxyMode.routes[p.route], token))
+    const held = (h, p, d) => { const es = recs.filter((i) => i.harness === h && i.route === p.route); return p.paths.length ? p.paths.every((f) => ok(es.filter((i) => samePath(i.path, f, fs) || within(i.path, f)), d, p)) : ok(es, d, p) }
+    if (!ing.error) inPlace = plan.on.filter((h) => { try {
+      const l = (m.liveness || {})[h], d = args.harnesses.find((x) => x.name === h), mine = plan.planned.filter((p) => p.harness === h)
+      return !notOn.includes(h) && !!(l && l.on_at && !l.off_at) && mine.length > 0 && mine.every((p) => held(h, p, d))
+    } catch { return false } })
+  }
   const seen = new Set(m.confirmed_paths || [])
   const fresh = [...new Set(plan.planned.flatMap((p) => p.paths))].filter((p) => !seen.has(p))
   // 1.6 §3.3: each setting is one row; a row new since an earlier yes says so on itself — with no earlier yes there is no "last" to speak of
@@ -157,13 +174,15 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   // 1.6 §3.3「要确认时」: the default plan is printed when a yes is asked (or for --dry-run): one line per agent and file of yours, `new` on a file
   // not confirmed last time, then each registered side effect of a route this on adds, once (a host-tree form's, the descriptor's `effects` by their
   // short sentence) — under --yes, with no plan to print, the side effects alone, before the receipt. --details prints the full plan on every run.
-  const added = fresh.length ? plan.planned.filter((p) => !p.paths.length || p.paths.some((x) => fresh.includes(x))) : []
+  const added = fresh.length ? plan.planned.filter((p) => !inPlace.includes(p.harness) && (!p.paths.length || p.paths.some((x) => fresh.includes(x)))) : []
   const effects = [...new Map(args.harnesses.filter((d) => added.some((p) => p.harness === d.name)).flatMap((d) => {
     const forms = new Set(added.filter((p) => p.harness === d.name).flatMap((p) => p.forms || [])), pm = d.proxyMode || {}
     return [...(pm.forms || []).filter((f) => f.hostTree && forms.has(f.id)).map((f) => [f.id, `${d.name}: ${hostTreeNote(f.id)}.`]), ...(pm.effects || []).map((e) => [e.id, `${d.name}: ${e.short || e.when}.`])]
   })).values()]
   if (plan.on.length && !details && (flags.has('--dry-run') || (fresh.length && !flags.has('--yes')))) {
-    say(fit(['trocar on will point these agents at trocar:', ...pairs(plan.planned.flatMap((p) => (p.paths.length ? p.paths.map((x) => [p.harness, `${tilde(x, home)}${seen.size && fresh.includes(x) ? '  new' : ''}`]) : plan.planned.some((q) => q.harness === p.harness && q.paths.length) ? [] : [[p.harness, 'no file of yours']])), { home }), ...effects], { home }).join('\n'))
+    const rows = plan.planned.filter((p) => !inPlace.includes(p.harness)), already = inPlace.length ? [`Already on, nothing to change: ${andList(inPlace)}.`] : []
+    say(fit(!rows.length ? [`trocar on would change nothing: ${andList(inPlace)} ${inPlace.length === 1 ? 'is' : 'are'} already on.`]
+      : ['trocar on will point these agents at trocar:', ...pairs(rows.flatMap((p) => (p.paths.length ? p.paths.map((x) => [p.harness, `${tilde(x, home)}${seen.size && fresh.includes(x) ? '  new' : ''}`]) : rows.some((q) => q.harness === p.harness && q.paths.length) ? [] : [[p.harness, 'no file of yours']])), { home }), ...effects, ...already], { home }).join('\n'))
   } else if (plan.on.length && details) say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
     ...pairs([...plan.planned.map((p) => { const [h, v] = planLine(p, home); return [h, isNew(p) ? `${v} (new since you last said yes)` : v] }), [own.what, own.detail]], { home })], { home }).join('\n'))
   else if (plan.on.length && effects.length) say(fit(effects, { home }).join('\n'))
