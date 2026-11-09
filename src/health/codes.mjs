@@ -20,6 +20,9 @@ export const PROJECTION_NOTES = Object.freeze(['projection-rebuilt', 'projection
 export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing', 'view-unreadable'])
 
 /** The codes of a query the daemon ended before a worker answered it (src/query/service.mjs; 3.5 §行表先读, 1.6 C.5). */
+// C.3: codes that record a wait and lose nothing (the connection goes on, its bytes are kept): their groups are notes from their first record,
+// and a replay's capture gap does not count them (1.2 §会话保真行)
+export const NOTHING_LOST = Object.freeze(['upstream-slow'])
 export const QUERY_WAIT_PROBLEMS = Object.freeze(['still-reading'])
 /** The codes of a `session` read's own errors (src/query/named/session.mjs; 3.5 §会话读): no such session, a member that did not read back or extract. */
 export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable',
