@@ -797,7 +797,8 @@ function openDesk(ctx, route0, makeView) {
     if (s.dead) return
     const desk = s.desk, keepPins = pin(), prevRow = curCall()
     s.meta = desk.meta
-    s.lanes = buildLanes(desk, { count: desk.probes || 0, series: [] }, { prev: s.lanes, changed })
+    // the token-count row (1.3 #16): the head's measured sizes; the count is the desk's, the full truth
+    s.lanes = buildLanes(desk, { count: desk.probes || 0, series: desk.head?.probes?.series || [] }, { prev: s.lanes, changed })
     const prevAnchor = s.anchor
     s.anchor = anchorLane(s.lanes)
     judgeGap()

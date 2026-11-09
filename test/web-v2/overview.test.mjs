@@ -218,7 +218,7 @@ test('#11 recent sessions: a title that could not be read says so, with its own 
 })
 
 test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled without a time, the probe-only mark, the replay href', () => {
-  const rows = [session(3), session(1, { title: null, title_source: null }), session(6), session(2),
+  const rows = [session(3), session(1, { title: null, title_source: null }), session(6, { title: 'Refactor the session reader so '.repeat(9).trim() /* ≤ 300 code points, the server's cap (4.4) */ }), session(2),
     session(4, { calls: 0, probes: 3 }), session(7)]
   const want = [...rows].sort((a, b) => Date.parse(b.last_ts) - Date.parse(a.last_ts)).slice(0, 5)
   assert.deepEqual(recentRows({ sessions: rows }).map((r) => r.id), want.map((r) => r.session_id))
@@ -228,7 +228,7 @@ test('#11 recent sessions: the five newest by last_ts, the hover by title_source
     const r = card.rows[i]
     assert.equal(r.id, `${m.project_slug}::${m.session_id}`)
     assert.equal(r.href, `#/replay/${m.project_slug}/${m.session_id}`)
-    if (m.title != null) assert.ok(r.titleTip.includes(TITLE_FROM_WIRE), r.titleTip)
+    if (m.title != null) { assert.ok(r.titleTip.includes(TITLE_FROM_WIRE), r.titleTip); assert.ok(r.titleTip.includes(m.title), 'the row cuts a long title: its hover carries it whole') }
     else {
       assert.equal(r.title, UNTITLED)
       assert.ok(!r.title.includes(fmtWhen(Date.parse(m.last_ts), NOW)), 'the untitled title carries no time: the row has its last-active column')

@@ -41,7 +41,7 @@ import { codeId } from '../version.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { trustReasonText, CODE } from '../collector/core/codes.mjs'
 import { pacStale } from '../collector/core/proxymode/entries.mjs'
-import { formatStatus, formatHealth, failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
+import { formatStatus, formatHealth, failuresBlock, statusSummary, statusDetail, restartNames } from './status-text.mjs'
 import { colors, noColor, tildeText, unknown as unknownText2 } from './text.mjs'
 import { squashed } from './words.mjs'
 import { tilde } from './receipt.mjs'
@@ -585,7 +585,7 @@ function findingsFor(f, ids) {
   try { return diagnose({ facts: f.facts, topology: f.topology, harnesses: ids, user: f.user }) } catch (e) { rethrowSandbox(e); return [] }
 }
 
-const USAGE = 'usage: trocar status [<harness>...] [--failures] [--json]'
+const USAGE = 'usage: trocar status [<harness>...] [--failures] [--details] [--json]'
 
 /** → the exit code (§3.5). `argv` is what follows `status`. `io` = { out, err }. */
 export async function runStatusCli(argv, ctx = {}) { return (await statusRun(argv, ctx)).exit }
@@ -593,10 +593,11 @@ export async function runStatusCli(argv, ctx = {}) { return (await statusRun(arg
 /** `runStatusCli` that also hands back what it read: `{ exit, f }`. `doctor` reads the same facts for its findings, so the daemon is asked once. */
 export async function statusRun(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const names = []
-  let json = false, failures = false
+  let json = false, failures = false, details = false
   for (const a of argv) {
     if (a === '--json') json = true
     else if (a === '--failures') failures = true
+    else if (a === '--details') details = true
     else if (a.startsWith('-')) { io.err(`trocar status: unknown option '${a}'\n${USAGE}`); return { exit: EXIT.usage, f: null } }
     else names.push(a)
   }
@@ -618,7 +619,8 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
       const finding = found.find((x) => x.harness === h && x.class !== 'note') || null
       for (const l of statusDetail(shown, h, { finding, now, colors: c, home })) io.out(l)
     })
-  } else for (const l of statusSummary(tildeAll(doc), { now, colors: c, home })) io.out(l)
-  if (failures) { io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now })) io.out(l) }
+  } else if (details || !failures) for (const l of statusSummary(tildeAll(doc), { now, colors: c, home, details })) io.out(l) // §3.5: --failures alone is its own screen
+  if (failures) { if (detail.length || details) io.out(''); const restart = restartNames(doc), alone = !detail.length && !details
+    for (const [i, l] of failuresBlock(doc.failures, effectiveHealth(f).health, { now, details, restart, more: alone && exit !== EXIT.ok && !restart.length }).entries()) io.out(i || !alone ? l : c.bold(l)) } // its own screen: the conclusion bold
   return { exit, f }
 }

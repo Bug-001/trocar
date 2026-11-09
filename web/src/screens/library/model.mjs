@@ -63,7 +63,7 @@ export const titleText = (s) => ({ title: () => String(s.title), unread: () => W
 export function titleTipOf(s) {
   const id = s.session_id, c = titleCase(s)
   if (c !== 'title') return c === 'unread' ? W.titleUnread(id) : c === 'none' ? W.titleNoKey(id) : W.titlePending(id)
-  return W.titleFromWire(id) // a title always comes from the wire (4.4 §人类标题的来源)
+  return [s.title, W.titleFromWire(id)].filter(Boolean).join('\n') // the row cuts a long title: the hover carries it whole; a title always comes from the wire (4.4 §人类标题的来源)
 }
 
 function matches(s, f, now, title) {

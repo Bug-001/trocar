@@ -11,13 +11,15 @@ import * as W from '../../web/legacy/labels/library.mjs'
 const NOW = new Date(2026, 9, 20, 12, 0, 0).getTime()
 const S = (o = {}) => ({ session_id: 'sess-1', project_slug: '_unresolved', project_path: null, harness: 'codex', harness_inferred: false, session_synthesized: false, title: null, title_source: null, entrypoint: null, calls: 3, probes: 0, logged: 0, has_subagent: false, last_ts: new Date(NOW - 60e3).toISOString(), ...o })
 
-test('(2) title rules: the hover follows title_source and carries the id, a null source is the untitled word, any other or none is not read yet; the title never carries the id', () => {
+test('(2) title rules: the hover follows title_source and carries the id (and a title whole), a null source is the untitled word, any other or none is not read yet; the title never carries the id', () => {
   const tips = new Set()
   for (const [title, title_source, wantTip, wantText] of [['Fix the queue', 'wire', W.titleFromWire, 'Fix the queue'], [null, 'unread', W.titleUnread, W.PROMPT_UNREAD], [null, null, W.titleNoKey, W.UNTITLED],
     [null, 'pending', W.titlePending, W.TITLE_PENDING], [null, 'a-value-from-a-later-release', W.titlePending, W.TITLE_PENDING], [null, undefined, W.titlePending, W.TITLE_PENDING]]) {
     for (const harness_inferred of [false, true]) {
       const s = S({ title, title_source, harness_inferred }), tip = titleTipOf(s), why = JSON.stringify({ title_source, harness_inferred })
-      assert.equal(tip, wantTip(s.session_id), why); assert.equal(titleText(s), wantText, why)
+      if (title == null) assert.equal(tip, wantTip(s.session_id), why); else assert.ok(tip.includes(wantTip(s.session_id)), why)
+      assert.equal(titleText(s), wantText, why)
+      if (title != null) assert.ok(tip.includes(title), `${why}: the row cuts a long title, so its hover carries it whole`)
       assert.ok(tip.includes(s.session_id), why); assert.ok(!titleText(s).includes(s.session_id), why)
       assert.deepEqual([rowModel(s, NOW).titleText, rowModel(s, NOW).titleTip, rowModel(s, NOW).untitled], [titleText(s), tip, title == null], why)
       tips.add(tip)
