@@ -206,6 +206,21 @@ test('on (macOS / Windows): the default receipt says no unsaid word and no pid; 
   }
 })
 
+// A sentence another module wrote (a refusal's why, a problem, a note a read failed with) reaches on's default text with its internal words
+// in it; the default text says them the user's way (plainSentence), --details and --json keep them as written.
+test('on: a sentence another module wrote says no unsaid word in the default text, and --details keeps it as written', () => {
+  const why = 'the collector did not answer (ECONNREFUSED), so which forms it serves could not be read', problem = 'the daemon was started from other code'
+  const linux = onReceipt({ ok: false, refused: [{ harness: 'pi', reason: 'setup-needed', why, commands: ['trocar install'] }], problems: [problem], notes: [problem, `${why}: ENOENT`] })
+  const text = formatOnText(linux, { home: HOMES.linux })
+  assert.deepEqual(unsaidIn(text), [], text)
+  assert.ok(formatOnReceipt(linux, { home: HOMES.linux, platform: 'linux' }).replace(/\s+/g, ' ').includes(problem), '--details keeps the sentence as written')
+  for (const platform of ['darwin', 'win32']) {
+    const r = { ...onReceipt({}, platform), ok: false, routes: [], refused: [{ harness: 'pi', reason: 'setup-needed', why, commands: ['trocar install'] }], problems: [problem], notes: [{ harness: null, text: `${why} (ENOENT)` }] }
+    const shown = formatModelOnText(r, 1, HOMES[platform])
+    assert.deepEqual(unsaidIn(shown), [], `${platform}:\n${shown}`)
+  }
+})
+
 test('uninstall: a refusal (capture on, or the service not answering) is one short line and its steps; --json keeps the full message', () => {
   const home = HOMES.darwin
   const steps = ['Run, in order:', '    trocar off', '    trocar uninstall']

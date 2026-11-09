@@ -11,6 +11,7 @@ import { HARNESS_IDS } from '../off/harness-names.mjs'
 import { TASK_NAME } from '../off/win32.mjs'
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { fitCompact } from '../netenv/topology-text.mjs'
+import { plainSentence } from './words.mjs'
 
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
 export const tilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
@@ -185,8 +186,8 @@ export function changeLines(r, { past = true, home = null } = {}) {
 
 // 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1); both modes' `on` say it this way
 // a refusal's two commands, each whole on a line of its own (§1.1⑥)
-export const refusedLines = (r, { past = true } = {}) => {
-  const head = `${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}.`, commands = r.commands || (r.command ? [r.command] : [])
+export const refusedLines = (r, { past = true, plain = false } = {}) => { // `plain`: the default text, where another module's sentence is said the user's way (§1.1 ④)
+  const head = `${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${plain ? plainSentence(r.why) : r.why}.`, commands = r.commands || (r.command ? [r.command] : [])
   return commands.length ? [`${head} Run, in order:`, ...commands.map(commandLine), commandLine(`trocar on ${r.harness}`)] : [head] // no command (a form not on this machine): the reason is the line
 }
 /** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
@@ -412,10 +413,10 @@ export function formatOnText(r, { tense = 'past', home = null, colors: c = noCol
     : idle ? "The settings are in place, but trocar's service is not running: nothing is captured until it is. Start it:"
       : past ? `${c.green('Capturing')} ${named}.` : `trocar will start capturing ${named}.`]
   if (idle) lines.push(commandLine('trocar daemon'))
-  lines.push(...restartLine(r), ...(r.refused || []).flatMap((x) => refusedLines(x, { past })))
+  lines.push(...restartLine(r), ...(r.refused || []).flatMap((x) => refusedLines(x, { past, plain: true })))
   if (lingerText(r)) lines.push(lingerText(r))
   const isProblem = (n) => (r.problems ? r.problems.includes(n) : r.ok === false && past) // as formatOnReceipt judges it
-  for (const n of r.notes || []) if (isProblem(n) || /(cannot|could not) be read/.test(n)) lines.push(`${isProblem(n) ? 'Problem' : 'Note'}: ${n}`)
+  for (const n of r.notes || []) if (isProblem(n) || /(cannot|could not) be read/.test(n)) lines.push(`${isProblem(n) ? 'Problem' : 'Note'}: ${plainSentence(n)}`)
   for (const b of r.blocked || []) if (b.command) lines.push(commandLine(b.command))
   return fit(lines, { home }).join('\n')
 }
