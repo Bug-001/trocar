@@ -9,7 +9,7 @@ import { controlEndpointFor } from '../off/control-client.mjs'
 import { autostartProgram } from '../collector/arch/autostart-node.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 
-export const CUT = 'Connections the collector still holds are cut when it is replaced.'
+export const CUT = "Open connections through trocar are cut once while trocar's service restarts; they reconnect." // 1.6 §1.1 ④ rule 3
 
 /** The daemon on this code: one that runs another (or answers no `code`) is taken out of the way the way `uninstall` takes it — the same
  *  drain-then-stop path (`drainDaemon`: `POST /off {exit:true}`, then the wait, §5.2) and the same `stopDaemon` — and pulled up again

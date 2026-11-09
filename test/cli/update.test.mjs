@@ -21,6 +21,7 @@ import { recentFailures } from '../../src/collector/core/events.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
+import { unsaidIn } from '../../src/cli/words.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 const IDENTITY = ['-c', 'user.email=test@trocar.invalid', '-c', 'user.name=trocar test', '-c', 'commit.gpgsign=false']
@@ -340,17 +341,21 @@ test('one plan per update: the process that finishes a handover does not print t
   const s = sandbox({ on: ['codex'] })
   s.ahead('one-plan.md')
   const parent = ctx(s)
+  // the parent's output is its plan alone (the new code is a stand-in here); a finish that prints the plan prints more than its result
+  const linesOf = (t) => t.io.stdoutText().split('\n').filter(Boolean)
   assert.equal(await runUpdateCli(['--yes'], parent.c), EXIT.ok, parent.io.text())
-  assert.match(parent.io.text(), /^Plan$/m, 'the parent prints the plan')
+  const plan = linesOf(parent)
+  assert.ok(plan.length > 0, 'the parent prints the plan')
   assert.equal(parent.calls.childEnv[HANDED_OVER], '1', 'and tells the process it starts that it did')
 
   const child = ctx(s, { env: parent.calls.childEnv })
   assert.equal(await runUpdateCli(['--yes'], child.c), EXIT.ok, child.io.text())
-  assert.doesNotMatch(child.io.text(), /^Plan$/m, 'the finish it hands over to prints no second one')
+  const result = linesOf(child)
+  assert.ok(plan.every((l) => !result.includes(l)), `the finish it hands over to prints no second plan: ${child.io.text()}`)
   const rerun = ctx(s)
   fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
   assert.equal(await runUpdateCli(['--yes'], rerun.c), EXIT.ok, rerun.io.text())
-  assert.match(rerun.io.text(), /^Plan$/m, 'an operator who runs update again to finish one is shown the plan')
+  assert.ok(linesOf(rerun).length > result.length, `an operator who runs update again to finish one is shown the plan: ${rerun.io.text()}`)
 })
 
 // §5.5: a finish that stopped may have stopped on a defect of the code that ran it — the newer code is pulled first, so `trocar update` can be the way out
@@ -438,7 +443,7 @@ test('V96: a step that writes to stderr as well as its document is read from std
 })
 
 // D38: a step that did not finish says why in its own receipt; without --json that reason is printed too, not only its exit code
-test('V96: an install or on that fails in the finish has its own reason printed; with --json it is in the receipt and stderr stays empty', async () => {
+test('V96: an install or on that fails in the finish has its own reason in --details; with --json it is in the receipt and stderr stays empty', async () => {
   const failing = {
     install: (why) => ({ install: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('install'), ok: false, error: { code: 'x', message: why }, problems: [], notes: [] })); return EXIT.incomplete } }),
     on: (why) => ({ on: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('on'), ok: false, problems: [why], notes: [] })); return EXIT.incomplete } }),
@@ -449,7 +454,7 @@ test('V96: an install or on that fails in the finish has its own reason printed;
       fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
       const why = `reason-${step}-${Math.random().toString(36).slice(2, 8)}`
       const t = ctx(s, { deps: deps(why) })
-      assert.equal(await runUpdateCli(['--yes', ...(json ? ['--json'] : [])], t.c), EXIT.incomplete, t.io.text())
+      assert.equal(await runUpdateCli(['--yes', json ? '--json' : '--details'], t.c), EXIT.incomplete, t.io.text())
       if (json) {
         assert.equal(t.io.stderrText(), '', `${step}: --json keeps stderr empty`)
         assert.ok(JSON.stringify(t.io.json()[step]).includes(why), `${step}: the step's receipt is in update's`)
@@ -458,14 +463,13 @@ test('V96: an install or on that fails in the finish has its own reason printed;
   }
 })
 
-// D38 · 1.6 §5.5: what install's receipt says is still the user's to do (its notes: a key helper kept that only a desktop Terminal can replace) is
-// said by the update that ran it too — an update is often the only install the user sees
-test('V96: the notes of the install a finish ran are printed by the update, once each', async () => {
+// D38 · 1.6 §1.1 ④ rule 10: the notes of the install an update ran are facts the short text leaves out, so --details says each, once
+test('V96: the notes of the install a finish ran are in the update\'s --details, once each', async () => {
   const s = sandbox()
   fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
   const note = `kept-${Math.random().toString(36).slice(2, 8)}: run trocar install from a Terminal in your desktop session`
   const t = ctx(s, { deps: { install: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('install'), ok: true, problems: [], notes: [note] })); return EXIT.ok } } })
-  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  assert.equal(await runUpdateCli(['--yes', '--details'], t.c), EXIT.ok, t.io.text())
   assert.equal(t.io.text().split(note).length - 1, 1, t.io.text())
 })
 
@@ -724,4 +728,37 @@ test('a script copy on a machine whose last uninstall kept its record (install: 
   const exit = await runUpdateCli(['--dry-run'], t.c)
   assert.equal(exit, EXIT.ok, t.io.text())
   assert.deepEqual([t.calls.install, t.calls.off, t.calls.on, t.calls.child], [[['--dry-run']], [], [], []])
+})
+
+// 1.6 §1.1 ④ (V128): every way an update ends — the plan, a finish, each stop after the code changed, the daemon-only step, a finish whose newer code
+// could not be pulled — says no unsaid word by default, and --details holds every fact of the --json receipt (from, to, the agents, each note, the error)
+test('§1.1 ④: the default text of every update says no unsaid word, and --details holds each fact of --json', async () => {
+  const waitingFor = (s) => fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex', 'pi'] }) + '\n')
+  const failing = (command) => async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt(command), ok: false, error: { code: 'x', message: `the daemon of ${command} said EPIPE` }, problems: [], notes: [] })); return EXIT.incomplete }
+  const cases = {
+    'a git update\'s plan': { on: ['codex', 'pi'], set: (s) => s.ahead('voice.md'), argv: ['--dry-run'] }, // the new code's process prints the rest
+    'a finish': { set: waitingFor },
+    'a finish whose install fails': { set: waitingFor, deps: { install: failing('install') } },
+    'a finish whose on fails': { set: waitingFor, deps: { on: failing('on') } },
+    'an npm install that fails': { on: ['codex'], set: (s) => s.ahead('package-lock.json'), deps: { exec: (f, a, o) => (f === 'npm' ? { status: 1, stdout: '', stderr: 'ENOSPC: no space left' } : spawnSync(f, a, o)) } },
+    'a finishing process killed': { on: ['codex'], set: (s) => s.ahead('killed.md'), childExit: { signal: 'SIGKILL' } },
+    'a finish whose newer code cannot be fetched': { set: (s) => { waitingFor(s); fs.rmSync(s.up, { recursive: true, force: true }) } },
+    'the collector alone': { daemonCode: () => '0.0.9+1234567' },
+  }
+  for (const [what, c] of Object.entries(cases)) {
+    const out = {}
+    for (const mode of ['default', '--details', '--json']) {
+      const s = sandbox({ on: c.on || [] })
+      c.set && c.set(s)
+      const unit = { path: '/login/entry', registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }) }
+      const t = ctx(s, { childExit: c.childExit, ...(c.daemonCode ? { daemonCode: c.daemonCode } : {}), deps: { unit, drainMs: 0, ...(c.deps || {}) } })
+      await runUpdateCli(['--yes', ...(c.argv || []), ...(mode === 'default' ? [] : [mode])], t.c)
+      out[mode] = mode === '--json' ? t.io.json() : t.io.text()
+    }
+    assert.deepEqual(unsaidIn(out.default), [], `${what}:\n${out.default}`)
+    const same = (x) => x.replace(/\s+/g, ' ').replace(/\+[0-9a-f]{7}\b/g, '+c').replace(/trocar-update-\w+/g, 'sandbox') // each mode had a sandbox (and commits) of its own
+    const details = same(out['--details']), r = out['--json']
+    const facts = [r.from, r.to, ...r.harnesses, ...r.notes, ...(r.error ? [r.error.message] : [])].filter((x) => typeof x === 'string' && x)
+    for (const f of facts) assert.ok(details.includes(same(f)), `${what}: --details says ${JSON.stringify(f)}:\n${out['--details']}`)
+  }
 })
