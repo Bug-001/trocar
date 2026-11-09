@@ -16,6 +16,7 @@ import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCo
 import { isInteractive, confirm } from '../off/io.mjs'
 import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, markedRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap, andList } from './text.mjs'
+import { plainSentence } from './words.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT, CODE } from '../collector/core/codes.mjs'
 import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
@@ -151,6 +152,7 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
  */
 export async function install({ io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {}, flags, only = null }) {
   const json = flags.has('--json'), details = flags.has('--details')
+  const worded = details ? String : plainSentence // §1.1 ④ rule 3: the default text says the service and no error code; --details says the sentence as written
   const lines = [] // §1.2: with --json stderr stays empty — the plan is a key of the one document on stdout
   const say = json ? (s) => lines.push(s) : io.out
   if ((deps.getuid || processUid)() === 0) { io.err('trocar install: run this as your own user, not as root.'); return EXIT.usage }
@@ -303,9 +305,9 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       ...(!details ? pathTodo(r.path) : pairs([['Fingerprint (SHA-256)', r.fp256 || 'unknown (no root was made)']], { home })), // the hex is one unbroken word under its label: one block, and in a block of its own, so it does not widen the rows below
       // the login entry install registered, confirmed like every other row (a Windows test machine 2026-10-18: the receipt said nothing about it) — in the carriers' own pairs() call, so its label column lines up with theirs (a Windows test machine 2026-10-19)
       ...(!details ? [] : pairs([...carrierRows, ...replacedRow(rep, root), ...pathRow(r.path), ...(receipt.autostart ? [['autostart', `${receipt.autostart.entry}: ${receipt.autostart.enabled ? 'enabled, and a collector starts at every login' : 'NOT enabled (see the problem below): no collector starts at login'}`]] : [])], { home })),
-      ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: trocar install`),
-      ...(details ? receipt.notes : r.notes).map((n) => `Note: ${n}`), // dmnNotes (the service's start) are --details' (§1.1 ④ rule 7)
-      ...r.problems.filter((p) => !(mwr && mwr.problems.includes(p))).map((p) => `Problem: ${p}`),
+      ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${worded(p.reason)}). Run again: trocar install`),
+      ...(details ? receipt.notes : r.notes).map((n) => `Note: ${worded(n)}`), // dmnNotes (the service's start) are --details' (§1.1 ④ rule 7)
+      ...r.problems.filter((p) => !(mwr && mwr.problems.includes(p))).map((p) => `Problem: ${worded(p)}`),
       // the residual risk (RISK) is the last line of the plan printed just above in this same run (§3.2 prints it there, and the
       // receipt sample does not carry it); printing it again put the paragraph on the screen twice (a macOS test machine 2026-10-18).
       // `--json` keeps it as `residual_risk`, because a document has no plan above it.
@@ -319,7 +321,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
 // (d)-level plugins) and the (c)-level config keys — every item phase 'install', as `on` wrote them before — plus trocar-off and the liveness record.
 // No unit, no state, no daemon: those are `on`'s. The plan printed is the one `on` used to print (formatPlan) with D55's cost line.
 async function linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked, only }) {
-  const details = flags.has('--details')
+  const details = flags.has('--details'), worded = details ? String : plainSentence
   const { readAgentList } = await import('../off/identity.mjs')
   const { writeStandalone, standaloneDue } = await import('../off/standalone.mjs')
   const { formatPlan, changeLines } = await import('./receipt.mjs')
@@ -398,9 +400,9 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && ((r.entryBefore && r.entryBefore !== 'present') || dmn.started) ? (details ? 'Installed. The certificates were in place; the login entry and the collector are up again.' : "Installed. The certificates were in place; trocar's service is running again.") : r.already && !(rep && rep.replaced) ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
     ...(r.already || !details ? [] : changeLines(receipt, { home })),
     ...(details ? pairs([...replacedRow(rep, root), ...pathRow(done.path)], { home }) : pathTodo(done.path)),
-    ...(details ? [...notes, ...(helperNote ? [helperNote] : [])] : (r.plan ? r.plan.notes : plan.uncaptured).filter((n) => !ofSkipped.has(n))).map((n) => `Note: ${n}`), // the helper's command is the Next step below, on a line of its own
-    ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: trocar install`] : []),
-    ...problems.map((p) => `Problem: ${p}`),
+    ...(details ? [...notes, ...(helperNote ? [helperNote] : [])] : (r.plan ? r.plan.notes : plan.uncaptured).filter((n) => !ofSkipped.has(n))).map((n) => `Note: ${worded(n)}`), // the helper's command is the Next step below, on a line of its own
+    ...(board ? [`Not done yet: the board's port is pending (${worded(board.reason)}). Run again: trocar install`] : []),
+    ...problems.map((p) => `Problem: ${worded(p)}`),
     ...(problems.length ? [] : sudoHelper ? [details ? 'Next: install the capability helper with this line, then run trocar on:' : 'Next: trocar captures nothing until its helper is installed. Run this line, then trocar on:', commandLine(sudoHelper)] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3) or the helper (§3.8): neither is a next step until it is there
     ...breakGlass(home, platform)], { home }).join('\n'))
   return board || problems.length ? EXIT.incomplete : EXIT.ok

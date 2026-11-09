@@ -22,6 +22,7 @@ import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { commandNamed, usageLine } from './commands.mjs'
 import { pairs as pairsAt, wrap, andList, tilde } from './text.mjs'
+import { plainSentence, unsaidIn } from './words.mjs'
 // every block of label-value rows an update prints (the plan, the result — maybe from another process) shares one value column
 const ROW = Object.freeze({ version: 'Code', collector: 'Collector', offOn: 'Off and on again', again: 'Capturing again', switchedOn: 'Switched on again' })
 const pairs = (rows) => pairsAt(rows, { label: Math.max(...Object.values(ROW).map((l) => l.length)) })
@@ -52,8 +53,10 @@ const updateLine = (from, to, verb = 'Update') => {
 }
 const offWhile = (ids) => (ids.length ? `While it runs, ${andList(ids)} ${are(ids)} not captured, and ${ids.length > 1 ? 'their' : 'its'} open connections through trocar are cut once; they reconnect.` : null)
 const offUntil = (ids) => (ids.length ? `${andList(ids)} ${are(ids)} not captured until it finishes.` : null)
-/** A reason as the default text says it: Node's error code in front of its message (`EACCES: permission denied, …`) is --details'. */
-const plain = (why) => String(why).replace(/\b(?:E[A-Z][A-Z0-9_]{2,}|ERR_[A-Z0-9_]+):\s*/g, '')
+/** A reason as the default text says it (the shared catalog's free-text form): the service by the user's word, Node's error code --details'. */
+const plain = (why) => plainSentence(why)
+/** A step's own reason in the default text only when the catalog leaves no unsaid word in it (§1.1 ④ rule 3); else it stays --details'. */
+const said = (why) => { const t = why ? plain(why) : ''; return t && !unsaidIn(t).length ? t : null }
 /** §1.1 ④ rule 4: an update that stopped after the code changed — where it stopped, what is not captured, and the one way out, `trocar update`;
  *  `first`: the step it cannot do itself, run before it (`where`: the directory to run it in). */
 const stoppedText = (to, what, off, { first = [], where = null, before = [], told = [] } = {}) => {
@@ -78,7 +81,7 @@ const todos = (doc) => {
     ...rows('blocked').filter((b) => b && b.command).map((b) => [b.reason, b.command]),
     ...rows('refused').filter((x) => x && Array.isArray(x.commands) && x.commands.length).map((x) => [`${x.harness}: ${x.why || x.reason}`, ...x.commands]),
     ...rows('notes').filter((n) => n && n.code === 'install-pending').map((n) => [`${n.item} is ${n.state}: ${n.why}`, n.command])]
-    .flatMap(([say, ...cmds]) => [...(say ? [plain(say)] : []), ...cmds.filter(Boolean).map((c) => INDENT + c)])
+    .flatMap(([say, ...cmds]) => [...(said(say) ? [said(say)] : []), ...cmds.filter(Boolean).map((c) => INDENT + c)])
 }
 const once = (ls) => ls.filter((l, k) => l.startsWith(INDENT) || ls.indexOf(l) === k) // a to-do two receipts carry is said once
 /** Set by the update that hands over (step 3) on the process that finishes it: the plan was printed and answered there, so the finish does not print it again (§1.1: one plan per command). */
@@ -120,8 +123,8 @@ async function update({ io, env, home, platform, deps, flags }) {
     r.error = { code, message: why }
     r.notes.push(why)
     // §1.1⑥: folded at 80 columns, never broken mid-word by the terminal; a reason's own lines (git's stderr) stay lines, a command stays whole
-    const said = details ? [`trocar update: ${why}`, ...(under ? [under] : [])] : text || [`trocar update: ${plain(why)}`]
-    if (!json) for (const l of fold(said.flatMap((t) => String(t).split('\n')))) io.err(l)
+    const shown = details ? [`trocar update: ${why}`, ...(under ? [under] : [])] : text || [`trocar update: ${plain(why)}`]
+    if (!json) for (const l of fold(shown.flatMap((t) => String(t).split('\n')))) io.err(l)
     r.ok = false
     if (json) printJson(io, r)
     return exit
@@ -156,8 +159,7 @@ async function update({ io, env, home, platform, deps, flags }) {
   const offFailed = (off, ids) => {
     const why = reasonOf(off.doc) // off's own reason: --details below the line, and in the default text without Node's codes
     return no('off-failed', `the agents being captured could not be switched off (trocar off exit ${off.exit}), so the code was left as it is`, EXIT.incomplete, why ? `trocar off: ${why}` : null,
-      // shortcut: off's own reason can name its internals, so it is --details' until the shared catalog words it (plainReason, lane 4)
-      [`trocar update: capture could not be switched off for ${andList(ids)}, so the code was left as it is. Run trocar update --details to see why.`])
+      [`trocar update: capture could not be switched off for ${andList(ids)}${said(why) ? ` (${said(why)})` : ''}, so the code was left as it is. ${said(why) ? 'Fix that, then run trocar update again.' : 'Run trocar update --details to see why.'}`])
   }
 
   /** The handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the code says. */
