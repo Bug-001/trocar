@@ -20,7 +20,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 
 const DEPS = fileURLToPath(new URL('./worker-early-deps.mjs', import.meta.url))
-const SLOW_MS = 400 // each older segment's raw open: eleven of them make a pass of 4 s and more, beside a newest segment read in milliseconds
+const SLOW_MS = 1000 // each older segment's raw open: eleven of them make a pass of 11 s and more, beside a newest segment read in milliseconds
 const K = 'early-kkkk-4a1b-9c2d-000000000001', L = 'early-llll-4a1b-9c2d-000000000002'
 const S0 = '20261020T164700Z', NEWEST = '20261020T164712Z'
 
@@ -121,6 +121,10 @@ test('3.5 §行表先读: a keyed session in the newest segment is answered befo
     assert.equal(early.status, 200)
     assert.deepEqual(early.doc.records.map((r) => String(r.id).split(':')[0]), Array(6).fill(NEWEST), 'L as far as the newest segment holds it')
     await until(() => rowsSaid(said), 'the pass ended')
+    // asked nothing since: the worker's own slices bring the head to the pass's end
+    await until(() => { const h = readHead(home, K); return !!h && !pendingOf(h).length }, 'K\'s head no longer says it')
+    // older members came before L's early mark: a delta from it is no delta, the whole answer (3.5 §行表先读「先答的会话」)
+    assert.equal((await ask(svc, 'session', { id: L, since: early.doc.mark })).doc.base, null, 'no delta from an early mark')
     for (const id of [K, L]) {
       await settle(svc, home, id)
       await settle(ref.svc, one, id)
@@ -161,4 +165,5 @@ test('provisionalRows: only a keyed row with no chain has a session; the rest is
   assert.equal(full.has(H) && full.has(KIMI), true)
   assert.deepEqual(errors.map((e) => [e.where, e.code]), [['index', 'index-pending']])
   assert.deepEqual((await provisionalRows({ home, ready: new Set(segmentFiles(home).map(([s]) => s)) })).errors, [], 'every segment read: no note')
+  assert.equal(await provisionalRows({ home: twin(home), ready: new Set([NEWEST]) }), null, 'a ready segment not usable now: no list, never one short of it')
 })

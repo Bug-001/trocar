@@ -134,6 +134,12 @@ const FITS_KEPT = 64;
 // one (its first member and the last one's last member at the same places) extends the plan by its new members; any other (a segment
 // indexed again, a store opened again) makes it afresh. So a slice and an answer cost by the new members (3.5 后台抽取与归约).
 // Exported for test/query/cut-grows.test.mjs, which grows a plan without records.
+const earlyArrays = new WeakSet(); // the member arrays of a provisional list (groupsOf)
+/** groupsOf(index) → the session groups of a request's index; a provisional list's member arrays are marked early (cutOf). */
+const groupsOf = (index) => {
+  const g = sessionGroups(index.rows);
+  return index.early ? { get: (id) => { const ms = g.get(id); if (ms) earlyArrays.add(ms); return ms; } } : g;
+};
 export function planOf(members, k, store, id, fit = fits.get(k) ?? Infinity) {
   let p = store.plan;
   if (p && p.members === members && p.n === members.length && p.fit === fit) return p;
@@ -144,7 +150,7 @@ export function planOf(members, k, store, id, fit = fits.get(k) ?? Infinity) {
   }
   const added = members.slice(p.n || 0);
   for (const r of added) { p.byId.set(String(r.id), r); sum(p.all, r); p.facts.add(r); }
-  p.members = members; p.n = members.length; p.last = String(members[members.length - 1].id);
+  p.members = members; p.n = members.length; p.last = String(members[members.length - 1].id); p.early = earlyArrays.has(members);
   p.key = `${p.all.n}:${p.first}:${p.last}:${p.all.stored + p.all.n}`;
   cut(p, fit, added);
   p.gen++;
@@ -371,7 +377,9 @@ function sidecars(store) {
 // 后台抽取与归约). A save writes the whole reduction state, so at most once a minute it is a small part of the fold's own work.
 // TROCAR_CHECKPOINT_MS, read once, shortens it for a test.
 const SAVE_MIN = 256, SAVE_PART = 8, CHECKPOINT_MS = Number(process.env.TROCAR_CHECKPOINT_MS) || 60_000;
-const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : null);
+// an early plan (members from the boot pass's provisional list, 3.5 §行表先读「先答的会话」) is named by `~` and its first member: older
+// members can still come before its mark, so a delta from an early document is taken against no other plan (sinceAt → null, a whole answer)
+const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : plan.early ? `~${plan.first}` : null);
 /** markOn(plan, rid) → the mark on the wire (3.5 id): the frontier rid, and when the plan is cut `@` and its cut's first rid, so a
  *  mark names the cut its document was answered under. sinceAt(plan, M) → the rid M names when its cut is this plan's, else null:
  *  a document under another cut has members the cut's move let in or out that no delta carries (3.5 #19), so M is not known. */
@@ -531,7 +539,7 @@ export const costOf = (st) => Math.max(st.meter.held, Math.min(heapBudget(), Mat
 // frontier (`writing`), and the fold takes up what came when it ends (3.5 后台抽取与归约).
 async function advance(ctx, id, { budgetMs, request, said = [] }) {
   const t0 = performance.now(), index = await indexed(ctx);
-  const members = sessionGroups(index.rows).get(id);
+  const members = groupsOf(index).get(id);
   if (!members) return null;
   const errors = [...index.errors, ...said], k = keyOf(ctx, id), progress = ctx.progress || (() => {});
   const store = storeOf(ctx, id, k);
@@ -687,7 +695,7 @@ async function stopped(ctx, id, e) {
   lagging.delete(id);
   if (h && h.sig === sig && hasHead(home, id, fs)) return;
   try {
-    const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
+    const index = await indexed(ctx), members = groupsOf(index).get(id);
     if (members) {
       const calls = callsNow(ctx, id, members);
       writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ ...d.pending, done, total: members.length, ...seenOf(d), calls, stopped: stop }), fs, titleOf({ home, fs, id, members })), fs);
@@ -827,8 +835,8 @@ function stateAt(ctx, r, id, reading = false) {
 export async function version(ctx) {
   const p = ctx.params;
   if (p.id == null || p.id === '') return null;
-  const { rows, errors } = await indexed(ctx);
-  const members = sessionGroups(rows).get(String(p.id));
+  const index = await indexed(ctx), { errors } = index;
+  const members = groupsOf(index).get(String(p.id));
   if (!members) return null;
   const k = keyOf(ctx, p.id), store = storeOf(ctx, String(p.id), k), plan = planOf(members, k, store, p.id);
   // a re-read answers off the disk at one frontier: its answer may not be kept past the switch

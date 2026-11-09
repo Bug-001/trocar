@@ -80,27 +80,30 @@ export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [],
 }
 
 /**
- * provisionalRows({home, fs, ready}) → {rows, errors}: the rows of the segments in `ready` (names) whose index is usable now, read as
+ * provisionalRows({home, fs, ready}) → {rows, errors, early: true}: the rows of the segments in `ready` (names) whose index is usable now, read as
  * `indexRows` reads them (warmOnly: never built here), while the worker's boot pass rebuilds the rest (3.5 §行表先读「先答的会话」).
  * A row is in a session only when the full list would put it in the same one whatever comes before it: it has a session key and no
  * chain (`synth_hash` null) — then it is that key's, with no lane key, in the full list too. A row whose session the synthesized-key
  * rule, kinship or a keyed session's chains decide has none here. While a segment is left out, `errors` says how many
- * (`index-pending`), so the answer says it may lack calls.
+ * (`index-pending`), so the answer says it may lack calls. null: a ready segment is not usable now (the caller asks again).
  */
 export async function provisionalRows({ home = trocarHome(), fs = nodeFs, ready } = {}) {
   const errors = [], segs = [], all = segmentFiles(home, fs, errors);
   for (const [segment, at] of all) {
     if (!ready.has(segment)) continue;
     let got;
-    try { got = await warmSegmentIndex({ home, segment, fs, at, warmOnly: true }); } catch (e) { if (e instanceof IndexPending) continue; throw e; }
+    // a ready segment whose index left the warm cache and is not on disk in this version (a plain one): no early answer, never one that lost members
+    try { got = await warmSegmentIndex({ home, segment, fs, at, warmOnly: true }); } catch (e) { if (e instanceof IndexPending) return null; throw e; }
     for (const pr of got.problems) errors.push(problemEntry(`segments/${segment}`, pr));
     segs.push({ segment, records: got.records, entry: recordsId(got.records) });
   }
-  if (segs.length < all.length) errors.push({ where: 'index', code: 'index-pending', level: 'state', reason: `${all.length - segs.length} of ${all.length} capture files are still being re-indexed, so this read may lack calls they hold.` });
+  if (segs.length < all.length) errors.push({ where: 'index', code: 'index-pending', level: 'state', reason: `${all.length - segs.length} of ${all.length} capture files are still being re-indexed; until that ends this read may lack calls.` });
   const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
-  return { rows: early.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old, true)).rows, errors };
+  return { rows: early.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old, true)).rows, errors, early: true };
 }
 const early = warmCache({ max: 1, cost: (v) => v.heap });
+/** dropProvisional({home, fs}): the boot pass ended, the provisional list goes. */
+export const dropProvisional = ({ home = trocarHome(), fs = nodeFs } = {}) => { early.take(`${fsTag(fs)}\n${home}`); };
 function rowList(segs, old, keyedOnly = false) {
   let i = 0;
   if (old) while (i < segs.length && i < old.parts.length && old.parts[i].segment === segs[i].segment && old.parts[i].entry === segs[i].entry) i++;

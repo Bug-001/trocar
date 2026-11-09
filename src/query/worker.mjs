@@ -56,7 +56,7 @@ import { answer } from './answers.mjs'
 import { ROLES } from './warm.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 import { READING_MS, extendSession, headAsked, heapHasRoom, indexed, noRoomStop, openSessions, rereadingNow, roomFor, saveIndexes, sealParts } from './named/session.mjs'
-import { indexRows, provisionalRows, sessionGroups } from './rows.mjs'
+import { dropProvisional, indexRows, provisionalRows, sessionGroups } from './rows.mjs'
 import { segmentFiles, warmSegmentIndex } from './index-build.mjs'
 import { filling, pauseFill } from './usage.mjs'
 import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
@@ -154,11 +154,14 @@ let rowsRead = false // the boot's pass over the rows has ended (readRows)
 const ready = new Set() // the segments the boot's pass has read the index of, the newest first (readRows): provisionalRows reads these
 /** While the pass reads, a `session` or `lane` of a session the segments read so far hold, by a key no rule decides (provisionalRows):
  *  those rows, for this request's index (session.mjs indexed); else null, and the request is asked again (3.5 §行表先读). */
+// The list is built again once the ready segments grew by a tenth, not per segment: each build reads every ready row, and the pass
+// prepends a segment at a time (the newest first), so a build per segment would cost the pass a read of every row it has read so far.
+let earlyList = null // {n, got}: the last provisional list and how many segments were ready for it
 async function earlyRows(name, params) {
   if (light || (name !== 'session' && name !== 'lane') || params?.id == null || !ready.size) return null
   try {
-    const got = await provisionalRows({ home, fs: nodeFs, ready })
-    return sessionGroups(got.rows).has(String(params.id)) ? got : null
+    if (!earlyList || ready.size >= earlyList.n * 1.1 + 1) { const got = await provisionalRows({ home, fs: nodeFs, ready }); earlyList = got && { n: ready.size, got } }
+    return earlyList && sessionGroups(earlyList.got.rows).has(String(params.id)) ? earlyList.got : null
   } catch (e) { say(e); return null }
 }
 let sweeping = false // a sweep, a scan or the title pass is between two sessions: it gives way to requests, not to other background work
@@ -411,7 +414,7 @@ async function readRows() {
     rows = await indexRows({ home, fs: nodeFs, errors: [], progress, ease })
   } catch (e) { say(e) }
   rowsRead = true
-  ready.clear()
+  ready.clear(); earlyList = null; dropProvisional({ home, fs: nodeFs })
   if (process.connected) process.send({ rows: true }) // the daemon's word for a warm worker (4.4 刷新)
   sweeping = true
   try {
