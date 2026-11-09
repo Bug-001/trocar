@@ -21,7 +21,7 @@ async function board(chromium, opts) {
   await b.page.route('**/api/block?**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ schema: 2, command: 'block', ok: true, errors: [],
     blocks: new URL(route.request().url()).searchParams.getAll('ref').map((ref) => ({ ref, bytes: LONG, encoding: 'utf8', fidelity: 'verbatim', truncated: false,
       ...(only.raw ? null : { view: { r: { as: 'markdown', f: { body: ['text'] } }, body: { text: LONG } } }) })) }) }))
-  await b.page.evaluate(() => { location.hash = '#/replay/p/S' })
+  await b.page.evaluate(() => { localStorage.setItem('trocar.v2.cellView', 'raw'); location.hash = '#/replay/p/S' }) // the case starts in Raw and flips one cell to Readable
   await b.page.waitForSelector('#ctxwin .cblk.collapsed[data-bi]')
   return { b, only }
 }

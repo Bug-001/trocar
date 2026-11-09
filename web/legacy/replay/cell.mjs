@@ -1,8 +1,8 @@
 // replay/cell.mjs — one block body, drawn the same everywhere (spec 2.3 §两种模式, D70):
 // the request's blocks, the reply's parts, the raw panel's non-block keys and the drawer. A cell is
-// {bid, ref?, inline?, r, ff, chars, preview, view?, reads?, block, noRange?, sides?}. Two modes: Raw (the default: the bytes, laid out by jsonlay; a block with no byte range of its own
-// has its stored parse there) and Readable (the `view` the `block`
-// answer or the definition brings, drawn by kinds.mjs). A cell has both, or only Raw (no view). The bytes are fetched, cached and copied by `ref` only (a
+// {bid, ref?, inline?, r, ff, chars, preview, view?, reads?, block, noRange?, sides?}. Two modes: Readable (the default: the `view` the `block`
+// answer or the definition brings, drawn by kinds.mjs) and Raw (the bytes, laid out by jsonlay; a block with no byte range of its own
+// has its stored parse there). A cell has both, or only Raw (no view). The bytes are fetched, cached and copied by `ref` only (a
 // content key is not an exact-byte id); `bid` keys only view state. DOM-free above wireCells, so the strings can be tested in Node.
 import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
@@ -187,12 +187,14 @@ const opened = new Map() // scope + bid -> Map('path|span' -> open): what the re
 let scope = ''
 export const overrideScope = (key) => { scope = String(key) + '\n' }
 
+// the desk starts Readable (D70): the reader's stored choice (Shift+V) wins, then this page's last one; a cell with no view is Raw only (onlyMode)
+const START = 'read'
 export function deskMode({ storage = local() } = {}) {
-  try { const v = storage && storage.getItem(DESK_KEY); if (MODES.has(v)) return v } catch { /* storage denied: memory, then Raw */ }
-  return desk ?? 'raw'
+  try { const v = storage && storage.getItem(DESK_KEY); if (MODES.has(v)) return v } catch { /* storage denied: memory, then the start */ }
+  return desk ?? START
 }
 export function setDeskMode(m, { storage = local() } = {}) {
-  desk = MODES.has(m) ? m : 'raw'
+  desk = MODES.has(m) ? m : START
   overrides.clear(); opened.clear()
   try { storage && storage.setItem(DESK_KEY, desk) } catch { /* full or denied: the choice holds for this page only */ }
   modeChanged()
