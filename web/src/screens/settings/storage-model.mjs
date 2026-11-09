@@ -74,6 +74,8 @@ export function receiptOf(out, keep) {
   }
   // no answer: to the plan request, nothing was written (4.4 先计划后确认); to the confirm, the write may have landed
   if (out.status === 0) return out.confirmSent ? { kind: 'unknown', text: W.RCPT_UNKNOWN, tech: out.error || '', keep } : { kind: 'offline', text: W.RCPT_OFFLINE, tech: out.error || '', keep }
+  // a 5xx to the confirm: the service may have failed after the write landed
+  if (out.confirmSent && out.status >= 500) return { kind: 'unknown', text: W.RCPT_FAILED_UNKNOWN, tech: `HTTP ${out.status}${out.error ? ` · ${out.error}` : ''}`, keep }
   if (out.status === 404 || out.status === 405) return { kind: 'read-only', text: W.RCPT_READ_ONLY, tech: `HTTP ${out.status}`, keep }
   return { kind: 'not-changed', text: W.RCPT_NOT_CHANGED, tech: out.error || `HTTP ${out.status}`, keep }
 }

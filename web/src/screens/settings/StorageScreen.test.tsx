@@ -200,6 +200,8 @@ test('V6: each answer leaves its receipt; server words only in technical details
     ['offline', (b) => (b.confirm ? serve(b) : { ok: false, status: 0, data: null, error: `fetch failed ${TOKEN}` })],
     // the confirm went out and its answer was cut (a post's status 0, http.mjs): the write may have landed, so no 'nothing was changed'
     ['unknown', (b) => (b.confirm ? { ok: false, status: 0, data: null, error: CUT_OFF } : serve(b))],
+    // a 5xx to the confirm: the service may have failed after writing, so no 'nothing was changed' either
+    ['unknown', (b) => (b.confirm ? { ok: false, status: 500, data: { error: `write failed ${TOKEN}` }, error: 'HTTP 500' } : serve(b))],
     ['already', (b) => (b.confirm ? { ok: true, status: 200, data: { ok: true, before: { keep: 'log' }, after: { keep: 'log' } }, error: null } : serve(b))],
   ]
   await mount()
