@@ -17,6 +17,7 @@
 // A whole-lane read answers the tail page only; older steps come back by `prev` (`to`) pages.
 
 import { compareStep } from '../../../src/view/step-order.mjs'
+import { INTERVAL } from '../core/poll.mjs'
 
 const KF_EVERY = 32
 // stepOf's memo (2.3 §读与画「长对话的窗口」 rule 1): a step is materialised once per desk change; the newest few are kept
@@ -71,6 +72,24 @@ export function removeRow(desk, row) {
   const l = desk.laneRids.get(row.lane)
   if (l) { unplace(desk, l, row.rid); if (!l.length) desk.laneRids.delete(row.lane) }
   desk.rows.delete(row.rid)
+}
+
+// a first read the worker has not begun: a tier-0 head with nothing read yet (1.2 §读取状态: the boot pass may hold it)
+export const notBegun = (desk) => !!desk && !!desk.head && !desk.head.tier && !!desk.pending && !desk.pending.stopped && !(Number(desk.pending.done) > 0)
+/**
+ * bootProbe({now, get}) → probe(desk): while the desk's first read has not begun, one read of the overview's default (`overview?since=24h`, a
+ * name that needs the index rows: during the boot pass it waits and is answered 503 still-reading; after it, a worker's answer — both
+ * noted by core/http.mjs bootPass) at the overview's own pace (core/poll.mjs INTERVAL.other, 4.4 §live-poll) and never two at once.
+ * Returns the read it sent, or null.
+ */
+export function bootProbe({ now, get }) {
+  let last = -Infinity, out = null
+  return (desk, opts) => {
+    if (out || !notBegun(desk) || now() - last < INTERVAL.other) return null
+    last = now()
+    out = Promise.resolve(get('overview', { since: '24h' }, { hold: false, cond: false, ...opts })).finally(() => { out = null })
+    return out
+  }
 }
 
 // the token-count calls the server names (`probes`: {count, series}; a tier-0 head may carry the bare count) as the count the desk holds

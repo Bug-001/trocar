@@ -37,7 +37,7 @@ import { setScreenKeys } from '../core/keys.mjs'
 import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
 import { buildLanes, anchorLane, stepsOf, nearestByTs, placeOf, stepOfMark } from './lanes.mjs'
-import { createDesk, readLedger, applyLedger, indexOf, ridAt, stepOf as deskStep } from './model.mjs'
+import { createDesk, readLedger, applyLedger, indexOf, ridAt, stepOf as deskStep, bootProbe } from './model.mjs'
 import { lineSlices, applyFile, applyHead } from './packs.mjs'
 import { get, getText } from '../core/http.mjs'
 import { QUERY_WAIT_PROBLEMS } from '../../../src/health/codes.mjs'
@@ -701,6 +701,8 @@ function openDesk(ctx, route0, makeView) {
     return createPoller({ base: POLL_MS, now: () => api.now(), alive: () => !s.dead && host != null && key === sessionKey(), idle,
       run: async () => { loadPricing().catch((e) => console.error(e)); try { return await pollOnce() } catch (e) { if (s.dead || key !== sessionKey() || (e && e.name === 'AbortError')) return; console.error(e); return { ok: false } } } }) }
   const poller = makePoller()
+  // a first read that has not begun: is the worker's boot pass holding it? (1.2 §读取状态; paced, model.mjs bootProbe)
+  const probeBoot = bootProbe({ now: () => api.now(), get: (n, p, o) => api.get(n, p, o) })
   // a reader's own read (the timer's are the poller's own, core/poll.mjs)
   function poll() {
     if (s.dead) return
@@ -752,6 +754,7 @@ function openDesk(ctx, route0, makeView) {
     const hadStale = !!s.staleErr; s.staleErr = null
     if (h.data) { keep('head', h.bytes || 0); applyHead(desk, h.data) }
     const head = desk.head
+    probeBoot(desk, { signal })?.then(() => { if (!stale()) renderHeader() })
     // 1.5 K-32: the tip ids after the newest member held, from every head answer (a 304 too), again once the tails brought theirs
     const behind = () => { const was = JSON.stringify(desk.behind ?? null); desk.behind = behindOf(h.tip, desk.newest); return JSON.stringify(desk.behind) !== was }
     const moved = behind()

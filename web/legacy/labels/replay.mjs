@@ -220,6 +220,8 @@ export const THIS_SESSION = 'This session'
 export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
 // 1.2 §会话头 读取状态: the server is still extracting this session (first read: share done; later: calls still to catch up)
 export const readingFirst = (pct) => `Reading this session for the first time · ${pct} %`
+// the worker's boot pass (after an update the index rows are read again) holds a first read that has not begun: no share, it has none
+export const BOOT_PASS = 'trocar is re-reading its index of your capture files · this session opens when that finishes (minutes after an update)'
 export const catchingUp = (n) => `Catching up · ${n === 1 ? '1 new call' : `${n} new calls`}`
 export const updatingTo = (pct, calls) => `Updating to this version · ${pct}%${calls > 0 ? ` · ${calls === 1 ? '1 new call appears' : `${calls} new calls appear`} when it finishes` : ''}`
 // 2.4 还在读: what stands where the empty list's line would while the ledger is answered behind the fold
