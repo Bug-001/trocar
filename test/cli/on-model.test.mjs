@@ -472,12 +472,13 @@ test('1.6 §3.3 (darwin): on names the processes started before capture was on, 
     'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
   } })
   const codex = (pid, startedAt) => ({ pid, ppid: 1, uid: 501, startedAt, exe: '/usr/local/bin/codex', argv: ['codex'], cmdline: 'codex', env: () => null })
-  const procs = async () => [codex(5530, 1), codex(5531, Date.now() + 60_000), { ...codex(77, 1), exe: '/bin/zsh', argv: ['zsh'], cmdline: 'zsh' }]
+  const procs = async () => [codex(5530, 1), codex(5531, Date.now() + 60_000), codex(5532, null), { ...codex(77, 1), exe: '/bin/zsh', argv: ['zsh'], cmdline: 'zsh' }]
   const run = async (argv) => { const io = fakeIo(); const deps = { getuid: () => 501, procs, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }; return { exit: await runOnCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps }), io } }
   try {
     const first = await run(['codex', '--yes', '--json'])
     assert.equal(first.exit, 0, first.io.text())
-    assert.deepEqual(first.io.json().restart, [{ harness: 'codex', pid: 5530 }], 'the one started before on; not the later one, not a shell')
+    assert.deepEqual(first.io.json().restart, [{ harness: 'codex', pid: 5530 }], 'the one started before on; not the later one, not one whose start is not known, not a shell')
+    assert.equal(first.io.json().notes.filter((n) => n.harness === 'codex' && /could not be read/.test(n.text)).length, 1, 'a start time not read is said (D38), never guessed')
     const again = await run(['codex', '--yes', '--json'])
     assert.deepEqual(again.io.json().restart, [], 'codex was already on: this on turned nothing on, so nothing to restart')
   } finally { await server.close() }

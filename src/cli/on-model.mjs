@@ -8,7 +8,7 @@ import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { primeProcQuestions, listProcs } from '../off/proc.mjs'
+import { primeProcQuestions, listProcs, psTableVia } from '../off/proc.mjs'
 import { harnessesOf } from '../off/signature.mjs'
 import { opLockFile } from '../off/paths.mjs'
 import { daemonReader } from '../off/daemon-read.mjs'
@@ -65,13 +65,25 @@ export function formatModelOnReceipt(receipt, exit, home) {
 export const formatModelOnText = (r, exit, home) => fit(shortReceipt(r, exit, home), { home }).join('\n')
 /** 1.6 §3.3「之后的效果」: the processes of the agents this on just turned on that were already running — `restart:[{harness, pid}]`, as Linux's.
  *  Read from the table this command's scope already holds (listProcs; on Windows the daemon's answer), judged by the manifest's liveness record:
- *  a route that is read again while running, or on every request, needs no restart. A table that cannot be read is said (D38). */
-async function restartOf({ m, ids, os, exec, env, procs }) {
-  const live = ids.map((h) => [h, (m.liveness || {})[h]]).filter(([, l]) => l && l.on_at && !l.rereads && !l.per_request)
-  if (!live.length) return { restart: [] }
-  let list
-  try { list = await (procs ? procs() : listProcs({ platform: os, exec, env })) } catch (e) { return { restart: [], note: { harness: null, text: `which running agents need a restart could not be read (${errText(e)})` } } }
-  return { restart: live.flatMap(([h, l]) => list.filter((p) => (p.startedAt == null || p.startedAt < Date.parse(l.on_at)) && harnessesOf({ [h]: l }, p).includes(h)).map((p) => ({ harness: h, pid: p.pid }))) }
+ *  a route that is read again while running, or on every request, needs no restart. A table or a manifest that cannot be read is said (D38), and so
+ *  is a process whose start time is not known: it is never guessed to be one started before. On Windows the table is read again from the running
+ *  daemon's helper (no process started), so a process started while the daemon came up is in it. */
+async function restartOf({ dir, fs, ids, os, exec, env, procs, reader }) {
+  const unread = (e) => ({ restart: [], notes: [{ harness: null, text: `which running agents need a restart could not be read (${errText(e)})` }] })
+  let live, list
+  try {
+    const m = readManifest(dir, fs)
+    live = ids.map((h) => [h, ((m && m.liveness) || {})[h]]).filter(([, l]) => l && l.on_at && !l.rereads && !l.per_request)
+    if (!live.length) return { restart: [], notes: [] }
+    const local = () => listProcs({ platform: os, exec, env })
+    list = await (procs ? procs() : os === 'win32' && reader ? psTableVia(reader).catch(local) : local())
+  } catch (e) { return unread(e) }
+  const notes = [], restart = live.flatMap(([h, l]) => {
+    const mine = list.filter((p) => harnessesOf({ [h]: l }, p).includes(h)), unknown = mine.filter((p) => p.startedAt == null).length
+    if (unknown) notes.push({ harness: h, text: `the start time of ${unknown} ${h} process${unknown === 1 ? '' : 'es'} could not be read, so whether ${unknown === 1 ? 'it needs' : 'they need'} a restart to be captured is not known` })
+    return mine.filter((p) => p.startedAt != null && p.startedAt < Date.parse(l.on_at)).map((p) => ({ harness: h, pid: p.pid }))
+  })
+  return { restart, notes }
 }
 const noFormError = (r) => { const x = r.refused.find((y) => y.reason === 'not-routed'); return x ? { code: 'not-routed', message: `${x.harness} was not turned on: ${x.why}` } : null }
 
@@ -183,9 +195,10 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
       try { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) } catch (e) { r.problems.push(`trocar could not record the files you said yes to (${errText(e)}); the next trocar on asks again`); r.exit = EXIT.incomplete }
     }
     if (up.up && (r.turnedOn || []).length) { // the processes started before capture was on (§3.3): only of the agents this run turned on
-      const rs = await restartOf({ m: readManifest(dir, fs), ids: r.turnedOn.filter((h) => notOn.includes(h)), os, exec: deps.exec || null, env, procs: deps.procs })
+      const rs = await restartOf({ dir, fs, ids: r.turnedOn.filter((h) => notOn.includes(h)), os, exec: deps.exec || null, env, procs: deps.procs,
+        reader: os !== 'win32' ? null : deps.daemonReader !== undefined ? deps.daemonReader : daemonReader({ platform: os, dir, env, fs }) })
       r.restart = rs.restart
-      if (rs.note) r.notes.push(rs.note)
+      r.notes.push(...rs.notes)
     }
     const b = setupBlocked(r)
     // an on that an off stopped: its code is the receipt's error, and the harnesses it wrote before are undone by `trocar off` (附录 C.1)
