@@ -202,17 +202,22 @@ const counted = (items, keyOf) => {
  *  what the user must act on, each with its own command line — a file not undone (its backup and the line that puts it back), a fact not read
  *  (D38), routing not confirmed off, a refusal. Every other fact (each file restored, your later keys, backups, the service, certificates,
  *  `--now`) is formatOffReceipt's, which `--details` prints. `--dry-run` names each file it would undo. */
+// D38: a note that says a fact was not read; such notes are plain strings in the receipt (--json `notes`), so they are known by their words
+const UNREAD = /(cannot|could not) (be read|tell)|is not known|counted as still connected/
 export function formatOffText(r, { home = null, tense = r.dry_run ? 'future' : 'past' } = {}) {
   if ((r.error && r.error.code === 'older-install') || r.nothing_installed) return formatOffReceipt(r, { home, tense }) // already only the conclusion and the way out
   const past = tense !== 'future'
   const t = (x) => offTilde(x, home)
   const ids = (r.harnesses || []).map((h) => (typeof h === 'string' ? h : h && h.harness)).filter(Boolean)
   const one = !r.all && ids.length === 1
+  const unread = (r.notes || []).filter((x) => UNREAD.test(x))
   const lines = fit(!past ? `Capture will be turned off for ${r.all ? 'all your agents' : ids.join(', ')}.`
     : r.ok === false ? (r.routing && r.routing.confirmed ? 'Capture is not fully off: trocar is off the path, but some files were not undone.' : 'Capture is not fully off. What to do is below.')
+      : unread.length ? 'Capture is off, but trocar could not check everything: what it could not read is below.'
       : r.all || !ids.length ? "Capture is off. trocar is no longer on your agents' path." : `Capture is off for ${ids.join(', ')}. trocar is no longer on ${one ? 'its' : 'their'} path.`)
   if (!past) { // the plan names every file of yours it undoes (§1.4)
-    for (const p of [...new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || []).map((x) => (typeof x === 'string' ? x : x.path))])]) lines.push(...fit(`  ${t(p)}`))
+    const own = (p) => !!home && p.startsWith(home) && /^[\\/]\.trocar([\\/]|$)/.test(p.slice(home.length)) // trocar's own files (its switch files) are --details facts
+    for (const p of [...new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || []).map((x) => (typeof x === 'string' ? x : x.path))])].filter((p) => !own(p))) lines.push(...fit(`  ${t(p)}`))
   }
   if (past && r.routing && !r.routing.confirmed) lines.push(...fit(`trocar could not confirm it is off their path (${r.routing.state || 'reason unknown'}). Run it again:`), `${COMMAND_INDENT}trocar off`)
   if (r.relayed === 'unknown' && r.relayed_reason) lines.push(...fit(`Connections still going through trocar: unknown (${r.relayed_reason}).`))
@@ -236,7 +241,7 @@ export function formatOffText(r, { home = null, tense = r.dry_run ? 'future' : '
     if (l.command) lines.push(`${COMMAND_INDENT}${l.command}`)
   }
   for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(tildeWords(n, home))))
-  for (const n of (r.notes || []).filter((x) => /(cannot|could not) be read|is not known/.test(x))) lines.push(...textLines(n, home)) // D38: a fact not read is never left to --details
+  for (const n of unread) lines.push(...textLines(n, home)) // D38: a fact not read is never left to --details
   if (!past) lines.push('Nothing was changed. Run it without --dry-run to do it.')
   return lines.join('\n')
 }

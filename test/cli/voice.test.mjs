@@ -133,6 +133,26 @@ test('off: the default text says no unsaid word and no pid; --details holds ever
   }
 })
 
+test('off (D38): a fact it could not read is in the default text, the conclusion is not a bare "Capture is off", and the plan leaves ~/.trocar to --details', () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+    // the producers' own sentences (src/off/marker.mjs json-value, src/off/undo.mjs readDoorSeen), as they print them
+    const notes = [`${j('.codex', 'config.json')}: the file names a loopback proxy, and trocar cannot tell whether it is trocar's own (${j('.trocar', 'collector', 'ingress.json')} is missing); it was left as it is`,
+      `trocar's connection record ${j('.trocar', 'collector', 'door-seen.json')} is not JSON, so every running program of an agent that was on is counted as still connected`]
+    const flat = (s) => s.replace(/\s+/g, ' ')
+    for (const note of notes) {
+      const text = formatOffText(offReceipt({ notes: [note] }, platform), { home })
+      assert.deepEqual(unsaidIn(text), [], `${platform}:\n${text}`)
+      const said = flat(text), sought = flat(note.split(' ').map((w) => (w.startsWith(home) ? `~${w.slice(home.length).replace(/\\/g, '/')}` : w)).join(' '))
+      assert.ok(said.includes(sought) || said.includes(flat(note)), `${platform}: the note is said:\n${text}`)
+      assert.notEqual(text.split('\n')[0], formatOffText(offReceipt({}, platform), { home }).split('\n')[0], 'the conclusion is not the one of an off that read everything')
+    }
+    const plan = formatOffText(offReceipt({ dry_run: true }, platform), { home }), details = formatOffReceipt(offReceipt({ dry_run: true }, platform), { home })
+    assert.ok(!plan.includes('.trocar'), `${platform}: trocar's own files are not in the default plan:\n${plan}`)
+    assert.ok(details.includes('switch'), `${platform}: --details keeps them`)
+  }
+})
+
 // an on with what its receipt can hold: files changed with backups, trocar's own files, processes to restart, a refusal with its commands, a
 // blocked step with its command, notes said once (loopback) and a problem
 const onReceipt = (over = {}, platform = 'linux') => {
