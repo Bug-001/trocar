@@ -6,13 +6,13 @@
 // Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error, nothing touched.
 import nodeOs from 'node:os'
 import { runOff } from './orchestrate.mjs'
-import { formatOffReceipt } from './receipt.mjs'
+import { formatOffReceipt, formatOffText } from './receipt.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, makeIo, hidingIo, printJson, asOneDocument } from './io.mjs'
 import { NAME_ALIASES, resolveHarnesses } from './harness-names.mjs'
 
 const OFF_USAGE = 'usage: trocar off [<harness>...] [--now] [--yes] [--dry-run] [--details] [--json]'
-const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--details', '--json']) // --details: today's text is the full one (1.6 §1.1 ④)
+const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--details', '--json']) // --details: every fact the default text leaves out (1.6 §1.1 ④)
 
 /** → the exit code. `argv` is what follows `off`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo; the process's own streams when none is given, which is how the
  *  standalone `trocar-off` calls it). `standalone`: this is the single-file copy (src/off/standalone.mjs ends in a call with it): the only difference is the words of what it
@@ -40,7 +40,7 @@ async function offCli(argv, { io, env = process.env, home = nodeOs.homedir(), pl
   if ((deps.getuid || (typeof process.getuid === 'function' ? () => process.getuid() : () => -1))() === 0) { io.err('trocar off: run this as your own user, not as root.'); return EXIT.usage } // §1.5: it refuses before it reads or writes anything
   try {
     const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: !json && isInteractive(io), io: { ...io, prompt: io.stdout }, say, deps: { platform, ...deps, ...(standalone ? { standalone: true } : {}) } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins): before the darwin flip a linux sandbox on a Mac host silently ran the darwin arms
-    if (json) printJson(io, receipt); else io.out(formatOffReceipt(receipt, { home }))
+    if (json) printJson(io, receipt); else io.out((flags.has('--details') ? formatOffReceipt : formatOffText)(receipt, { home }))
     return exit
   } catch (e) {
     const message = String((e && e.message) || e)

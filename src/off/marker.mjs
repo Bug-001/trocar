@@ -205,7 +205,7 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
         try { doc = parseJsonText(t) } catch { doc = undefined }
         if (!spec.door) { if (doc !== undefined) { const v = getPath(doc, spec.keys); if (under(v, root)) add({ keys: spec.keys, value: v }) } continue }
         ports = ports || doorPorts(collectorIn(root), fs)
-        const unknown = (where) => notes.push(`${file}: ${where} names a loopback proxy, and trocar cannot tell whether it is one of its doors (${ports.why}); it was left as it is`)
+        const unknown = (where) => notes.push(`${file}: ${where} names a loopback proxy, and trocar cannot tell whether it is trocar's own (${ports.why}); it was left as it is`)
         if (doc === undefined) { // no longer parses: a door URL anywhere in the text plans it, and the undo leaves it and says so (R3: exit 1)
           const urls = t.match(URL_IN_TEXT) || []
           if (ports.ports && urls.some((u) => isDoorValue(u, ports.ports))) add({ keys: null, door: true })
