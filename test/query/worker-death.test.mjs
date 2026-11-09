@@ -34,11 +34,12 @@ async function death(err, end) {
   assert.equal(said[0].code, 'query-failed')
   return said[0]
 }
-const abort = "process.kill(process.pid, 'SIGABRT')"
+// how V8 ends a process (SIGABRT on POSIX); an exit code here, so the same test holds where a process cannot signal itself (Windows)
+const abort = 'process.exit(134)'
 
 test('D38: a heap OOM after a handled no-room is recorded as the OOM, whatever came between, and its last stderr lines go with it', async () => {
   const e = await death(HANDLED + NOISE + FATAL + NATIVE, abort)
-  assert.match(e.message, /signal SIGABRT\): FATAL ERROR: Ineffective mark-compacts near heap limit/)
+  assert.match(e.message, /\(code 134\): FATAL ERROR: Ineffective mark-compacts near heap limit/)
   assert.doesNotMatch(e.message, /no room/)
   assert.ok(Array.isArray(e.detail) && e.detail.length === 40, 'the last 40 lines')
   assert.match(e.detail.at(-1), /OOMErrorHandler/, 'they end where its stderr ended')
@@ -46,12 +47,17 @@ test('D38: a heap OOM after a handled no-room is recorded as the OOM, whatever c
 
 test('D38: a death that printed no fatal line says so and borrows no handled line', async () => {
   const e = await death(HANDLED + NOISE.split('\n').slice(0, 10).join('\n') + '\n', abort)
-  assert.match(e.message, /\(signal SIGABRT\); no fatal message was captured/)
+  assert.match(e.message, /\(code 134\); no fatal message was captured/)
   assert.doesNotMatch(e.message, /no room/)
   assert.match(e.detail.join('\n'), /no room/, 'the handled line is in the log lines, as what it was')
 })
 
 test('D38: an error the worker threw and did not handle is its cause, with its first frame', async () => {
-  const e = await death(HANDLED + 'file:///x/worker.mjs:3\nthrow new Error(\'boom\')\n^\n\nError: boom\n    at serve (file:///x/worker.mjs:3:7)\n', 'process.exit(1)')
-  assert.match(e.message, /\(code 1\): Error: boom · at serve/)
+  const e = await death(HANDLED + 'file:///x/worker.mjs:3\nthrow new Error(\'boom\')\n^\n\nError: boom\n    at serve (file:///x/worker.mjs:3:7) {\n  [cause]: Error: inner\n      at read (file:///x/a.mjs:1:1)\n}\n', 'process.exit(1)')
+  assert.match(e.message, /\(code 1\): Error: boom · at serve/, 'the error thrown, not its cause')
+})
+
+test('D38: a V8 check failure is recorded by its Check failed line, not the banner above it', async () => {
+  const e = await death('\n#\n# Fatal error in , line 0\n# Check failed: !IsDone().\n#\n#\n#\n#FailureMessage Object: 0x16f\n', abort)
+  assert.match(e.message, /\(code 134\): # Check failed: !IsDone\(\)\./)
 })

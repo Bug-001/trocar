@@ -63,7 +63,9 @@ export const QUERY_IDLE_MS = 120_000
 // STDERR_LINES lines go to the daemon's log with the record. A worker's own report of work it handled ('trocar query worker: …', worker.mjs say)
 // is never a cause: it did not end the process.
 const STDERR_LINES = 40, LINE_MAX = 600
-const FATAL = /FATAL ERROR|Check failed|heap limit|out of memory/i, THROWN = /\b\w*Error:/, HANDLED = /^trocar query worker:/
+// case as V8 and node print them: V8's '# Fatal error in …' banner is not the cause, the 'Check failed' line under it is; a `[cause]:` line is an
+// inner error of the one thrown; every line of trocar's own ('trocar: …', 'trocar query worker: …') is a report, never a cause
+const FATAL = /FATAL ERROR|Check failed|heap limit|out of memory/, THROWN = /\b\w*Error:/, CAUSE = /^\[cause\]:/, HANDLED = /^trocar[\w ]*:/
 /** A control verb may run install's root steps (the board's Set up, 4.4 §控制面): the OS's root prompt, then its read-back, each up to OS_PROMPT_MS,
  *  and the rest of install. A worker killed while the dialog is open would leave no receipt and the carriers unplaced. */
 const CONTROL_DEADLINE_MS = 2 * OS_PROMPT_MS + DEADLINE_MS
@@ -193,13 +195,13 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
    *  the first JavaScript frame after it; null when neither was printed — the record then says so, never another line in their place. */
   const stderrReason = () => (err && (err.fatal || err.thrown) ? [err.fatal || err.thrown].map((x) => [x.line, x.at].filter(Boolean).join(' · '))[0] : null)
   function stderrLine(l) {
-    const t = l.trim().slice(0, LINE_MAX)
+    const t = l.replace(/\r/g, '').trim().slice(0, LINE_MAX)
     if (!t) return
     err.lines.push(t); if (err.lines.length > STDERR_LINES) err.lines.shift()
-    const last = err.fatal && !err.fatal.at ? err.fatal : err.thrown && !err.thrown.at ? err.thrown : null
-    if (last && /^at\s/.test(t)) last.at = t
-    if (HANDLED.test(t)) return
-    if (FATAL.test(t)) { if (!err.fatal) err.fatal = { line: t, at: null } } else if (THROWN.test(t)) err.thrown = { line: t, at: null }
+    if (/^at\s/.test(t)) { if (err.open && !err.open.at) err.open.at = t; return } // the first frame of the cause line just read
+    err.open = null
+    if (HANDLED.test(t) || CAUSE.test(t)) return
+    if (FATAL.test(t)) { if (!err.fatal) err.open = err.fatal = { line: t, at: null } } else if (THROWN.test(t)) err.open = err.thrown = { line: t, at: null }
   }
 
   function start() {
@@ -209,12 +211,13 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     // A worker the OS killed (SIGKILL, a heap OOM) breaks the pipe under the next write: EPIPE arrives here, and unheard it would be
     // an uncaught exception that takes this process down. The 'close' that follows fails the query with the exit's reason.
     c.stdin.on('error', () => {})
-    err = { part: '', lines: [], fatal: null, thrown: null }
+    err = { part: '', lines: [], fatal: null, thrown: null, open: null }
+    c.stderr.setEncoding('utf8') // a character split between two chunks stays whole
     const mine = err
     c.stderr.on('data', (b) => { // the reason a crash gives, for the D38 record, line by line (stderrReason)
       if (err !== mine) return
       const ls = (mine.part + String(b)).split('\n')
-      mine.part = ls.pop().slice(-LINE_MAX * 4)
+      mine.part = ls.pop().slice(0, LINE_MAX) // a line's head: where its cause is said
       for (const l of ls) stderrLine(l)
     })
     // a worker still working says so (worker.mjs PROGRESS_MS): its silence clock starts again (3.5:42), and so does the idle
