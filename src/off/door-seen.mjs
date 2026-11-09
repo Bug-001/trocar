@@ -18,15 +18,15 @@ export function readDoorSeen({ dir, fs = nodeFs } = {}) {
   let raw
   try { raw = fs.readFileSync(path.join(dir, DOOR_SEEN_FILE), 'utf8') } catch (e) {
     if (e && e.code === 'ENOENT') return { rows: [], error: null }
-    return { rows: null, error: `the door record ${DOOR_SEEN_FILE} could not be read (${(e && e.code) || e})` }
+    return { rows: null, error: `trocar's connection record ${path.join(dir, DOOR_SEEN_FILE)} could not be read (${(e && e.code) || e})` }
   }
   let doc
-  try { doc = JSON.parse(raw) } catch { return { rows: null, error: `the door record ${DOOR_SEEN_FILE} is not JSON` } }
-  if (!doc || typeof doc !== 'object' || !Array.isArray(doc.rows)) return { rows: null, error: `the door record ${DOOR_SEEN_FILE} has no rows list` }
+  try { doc = JSON.parse(raw) } catch { return { rows: null, error: `trocar's connection record ${path.join(dir, DOOR_SEEN_FILE)} is not JSON` } }
+  if (!doc || typeof doc !== 'object' || !Array.isArray(doc.rows)) return { rows: null, error: `trocar's connection record ${path.join(dir, DOOR_SEEN_FILE)} has no rows list` }
   const rows = doc.rows.filter((r) => r && typeof r === 'object')
   // the key alone means not known: a value that is not a time (a hand edit) counts as this read's moment, never as a complete file
   const unknownBefore = 'unknown_before' in doc ? msOf(doc.unknown_before) ?? Date.now() : null
-  if (unknownBefore != null) return { rows: null, kept: rows, unknownBefore, error: `the door record ${DOOR_SEEN_FILE} could not be read at ${new Date(unknownBefore).toISOString()}; the lives it held then are not known` }
+  if (unknownBefore != null) return { rows: null, kept: rows, unknownBefore, error: `trocar's connection record ${path.join(dir, DOOR_SEEN_FILE)} could not be read at ${new Date(unknownBefore).toISOString()}; the lives it held then are not known` }
   return { rows, error: null }
 }
 

@@ -57,9 +57,9 @@ test('R6: --dry-run still prints the same receipt the real run will — the same
   assert.equal(await runOnCli(['--dry-run'], onCtx(home, fakeIo())), 0)
   const realHome = tmpDir('trocar-r6-'); seedClaude(realHome); await installFirst(realHome); await installFirst(realHome); const sys = fakeSystem()
   const real = fakeIo()
-  assert.equal(await runOnCli(['--yes'], onCtx(realHome, real, { exec: sys.exec, daemon: sys.daemon })), 0, real.text())
+  assert.equal(await runOnCli(['--yes', '--details'], onCtx(realHome, real, { exec: sys.exec, daemon: sys.daemon })), 0, real.text()) // each file is a --details fact (§1.1 ④)
   const dryHome = tmpDir('trocar-r6-'); seedClaude(dryHome); await installFirst(dryHome); await installFirst(dryHome); const dry = fakeIo()
-  assert.equal(await runOnCli(['--dry-run'], onCtx(dryHome, dry)), 0, dry.text())
+  assert.equal(await runOnCli(['--dry-run', '--details'], onCtx(dryHome, dry)), 0, dry.text())
   assert.match(dry.stdoutText(), /^trocar will start capturing /m, 'the dry run is the same receipt in the future tense')
   // the same files, named the same way: `trocar will make:` in the dry run, `trocar's own files:` after the real one
   const files = (t, head, home) => (t.replace(/\n\s+/g, ' ').split('\n').find((l) => l.startsWith(head)) || '').slice(head.length).trim().split(/\s+/).map((f) => f.replace(home, '')).sort()

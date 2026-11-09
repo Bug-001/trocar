@@ -523,6 +523,14 @@ test('V66 process-unknown `named` (a preset name whose args missed, e.g. the Z C
   assert.doesNotMatch(f.why, /is on no list/)
 })
 
+// 4.11 P4b (driver mode): a needed setup is what `on` refuses on (precondition ⑪), so when the verdict's entry-missing and the setup's carrier-absent are one
+// finding, its fix is the setup's, `trocar install`; the verdict alone keeps `trocar on`
+test('4.11 P4b: entry-missing with a needed setup (carrier-absent) says trocar install; without the setup, trocar on', () => {
+  const run = (hOver) => findingsOf(facts('claude-code', {}, { entry: { state: 'missing' }, procs: [], installed: true, ...hOver }), ['claude-code']).filter((f) => f.code === 'entry-missing').map((f) => f.commands.map((c) => c.run))
+  assert.deepEqual(run({ setup: { state: 'needed', missing: [{ form: 'claude-code', what: 'carrier-absent' }], uncaptured: [] } }), [['trocar install']])
+  assert.deepEqual(run({}), [['trocar on claude-code']])
+})
+
 test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the route record\'s reason and place), and uninstall\'s collectors-online gives trocar off then trocar uninstall', async () => {
   const nr = (reason, at) => findingsOf(pfacts('hermes', form('hermes.cli', { entry: null, route: { code: 'not-routed', reason, ...(at ? { at } : {}) }, procs: [] }), fwForm(17993), { platform: 'darwin' }), ['hermes']).find((f) => f.code === 'not-routed')
   const absent = nr('absent', '/Users/a/.hermes/.env')

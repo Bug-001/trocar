@@ -95,7 +95,8 @@ const proxyMode = {
   trusts: {},
   userCertFiles: [],
   blockers: [],
-  effects: [{ id: 'opencode-1x-npm', paths: [CONFIG('package.json'), CONFIG('bun.lock'), CONFIG('node_modules')], when: 'the first OpenCode 1.x run with a plugin installs @opencode-ai/plugin in the config directory; every OpenCode start waits for that install until it succeeds once, so where the npm registry cannot be reached each start stalls until the install gives up (about 6.5 minutes measured); off reports it and deletes nothing' }],
+  effects: [{ id: 'opencode-1x-npm', paths: [CONFIG('package.json'), CONFIG('bun.lock'), CONFIG('node_modules')], when: 'the first OpenCode 1.x run with a plugin installs @opencode-ai/plugin in the config directory; every OpenCode start waits for that install until it succeeds once, so where the npm registry cannot be reached each start stalls until the install gives up (about 6.5 minutes measured); off reports it and deletes nothing',
+    short: 'OpenCode installs a plug-in package at its next start; where npm cannot be reached, each start waits for it (about 6.5 minutes)' }], // short: the on plan's sentence (1.6 §3.3); install and status say `when`
 }
 
 export default {
