@@ -80,7 +80,7 @@ function railHtml(l, s, { sub = false } = {}) {
 // the token 计数 row: mini bars stand for the measured context size; 「采样显示」 only when fewer were drawn than exist
 function tcRailHtml(l, s) {
   const col = s.collapsedRails.has(l.id)
-  const noSize = Math.max(0, (l.count || l.calls.length) - l.calls.length)
+  const noSize = Math.max(0, (l.count || l.calls.length) - (l.sized ?? l.calls.length)) // 2.1: count − series.length
   const hint = laneKind('token-count').hint + (noSize ? ` · ${TC_NO_SIZE(noSize)}` : '')
   const body = col ? '' : `<div class="tlane railbody" data-lane="token-count">${renderTicks(l, s)}${l.drawn != null && l.drawn < l.calls.length ? `<span class="tcsample" title="${esc(TC_SAMPLED_TIP(l.drawn, l.count || l.calls.length))}">${esc(L.SAMPLED)}</span>` : ''}</div>`
   return `<div class="rail k-token-count tkrow"><div class="tgut railname ${col ? 'col' : ''}" data-toggle="token-count" title="${esc(hint)}"><span class="tw">${discChev(!col)}</span> <span class="tn">${esc(TC_ROW(l.count || l.calls.length))}</span></div>${col ? '<div class="tlane"></div>' : body}</div>`
