@@ -21,7 +21,7 @@ async function world(os) {
   const custody = { kind: w.custody.kind, exists: () => w.custody.exists(), create: (a) => w.custody.create(a), issueIntermediate: (a) => w.custody.issueIntermediate(a), removes: 0, remove: (id) => { custody.removes++; return w.custody.remove(id) } }
   const install = async (argv) => {
     const io = fakeIo()
-    const exit = await runInstallCli(argv, { io, env: w.env, home: w.home, platform: os, deps: { getuid: () => 501, unit: null, backends: { custody, rootStore: w.store, installHelper: null, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } })
+    const exit = await runInstallCli(argv, { io, env: w.env, home: w.home, platform: os, deps: { getuid: () => 501, exec: recordingExec().run, unit: null, backends: { custody, rootStore: w.store, installHelper: null, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } })
     return { exit, io }
   }
   const uninstall = () => runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: recordingExec().run, custody, rootStore: w.store, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })

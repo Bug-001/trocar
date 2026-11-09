@@ -22,7 +22,7 @@ import { runInstallCli } from '../../src/cli/install.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { runDoctor } from '../../src/cli/doctor.mjs'
 import { VERBS } from '../../src/control/board.mjs'
-import { fakeIo } from './fixtures/on-ctx.mjs'
+import { fakeIo, recordingExec } from './fixtures/on-ctx.mjs'
 import { SOCK } from './fixtures/status-ctx.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 
@@ -48,7 +48,7 @@ const STEPS = [
     const SOURCES = path.dirname(fileURLToPath(import.meta.resolve('../../src/off/main.mjs')))
     const inside = (p) => String(p).startsWith(w.home + path.sep) || p === SOURCES
     const fsx = { ...fs, existsSync: (p) => w.ctx.exists(p), readdirSync: (p, ...a) => (inside(p) ? fs.readdirSync(p, ...a) : w.ctx.readdir(p)) }
-    const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: kitOf(w.os), dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, fs: fsx }
+    const deps = { getuid: () => 501, exec: recordingExec().run, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: kitOf(w.os), dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, fs: fsx }
     const exit = await runInstallCli(['--json', '--yes'], { io, env: w.env, home: w.home, platform: w.os, deps })
     return { exit, doc: JSON.parse(io.stdoutText()) }
   } },

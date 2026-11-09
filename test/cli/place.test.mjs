@@ -10,6 +10,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { runPlaceCli } from '../../src/cli/place.mjs'
 import { appDir, launcherPath, collectorDir } from '../../src/off/paths.mjs'
 import { saveManifest, MANIFEST_VERSION } from '../../src/off/manifest.mjs'
+import { identityRunner, lockWrites, STARTED, BOOTED } from '../helpers/lock-probe.mjs'
 
 const plat = process.platform === 'win32' ? 'win' : process.platform
 const target = `${plat}-${process.arch}`
@@ -38,7 +39,7 @@ test('place switches the pointer, writes a launcher that runs that version, and 
   saveManifest(collectorDir(home), { version: MANIFEST_VERSION, entries: [], files: [], install: { code: '0.1.1' } })
 
   const o = io()
-  assert.equal(await runPlaceCli([path.join(app, '0.1.3')], { io: o.io, home }), 0, o.err.join('\n'))
+  assert.equal(await runPlaceCli([path.join(app, '0.1.3')], { io: o.io, home, deps: { exec: identityRunner().run } }), 0, o.err.join('\n'))
   assert.equal(fs.readFileSync(path.join(app, 'current'), 'utf8'), `0.1.3 22.0.0-${target}\n`)
   assert.deepEqual(fs.readdirSync(app).filter((n) => /^\d/.test(n)).sort(), ['0.1.0', '0.1.1', '0.1.3'])
   assert.deepEqual(fs.readdirSync(path.join(app, 'node')).sort(), [`22.0.0-${target}`, `22.1.0-${target}`])
@@ -48,7 +49,7 @@ test('place switches the pointer, writes a launcher that runs that version, and 
   }
 
   const ino = fs.statSync(launcherPath(home)).ino
-  assert.equal(await runPlaceCli([path.join(app, '0.1.3')], { io: o.io, home }), 0)
+  assert.equal(await runPlaceCli([path.join(app, '0.1.3')], { io: o.io, home, deps: { exec: identityRunner().run } }), 0)
   assert.equal(fs.statSync(launcherPath(home)).ino, ino, 'a launcher with the same bytes is not rewritten')
 })
 
@@ -62,8 +63,18 @@ test('a directory that is not a complete version of ~/.trocar/app: exit 1 with a
   version(elsewhere, '0.3.0', '22.0.0')
   for (const dir of [path.join(app, '0.2.0'), path.join(elsewhere, '0.3.0')]) {
     const o = io()
-    assert.equal(await runPlaceCli([dir], { io: o.io, home }), 1)
+    assert.equal(await runPlaceCli([dir], { io: o.io, home, deps: { exec: identityRunner().run } }), 1)
     assert.ok(o.err.length, 'it says why')
     assert.equal(fs.readFileSync(path.join(app, 'current'), 'utf8'), `0.1.0 22.0.0-${target}\n`)
   }
+})
+
+test('R12 (win32 on any host): place asks op.lock\'s question about itself through the runner it was given, and the lock records that start time', async () => {
+  const home = tmpDir('trocar-place-')
+  version(appDir(home), '0.1.0', '22.0.0')
+  const os = identityRunner(), lw = lockWrites(), o = io()
+  await runPlaceCli([path.join(appDir(home), '0.1.0')], { io: o.io, home, platform: 'win32', deps: { exec: os.run, fs: lw.fs } })
+  assert.ok(os.calls.some((c) => c.startsWith('powershell ')), os.calls.join('\n'))
+  assert.ok(lw.held.length > 0)
+  for (const h of lw.held) assert.deepEqual([h.pid, h.start_time, h.boot_id], [process.pid, String(STARTED), String(BOOTED)])
 })

@@ -193,10 +193,12 @@ export function psIdentity(pid, { exec = null, env = process.env } = {}) {
   if (m) m.identity.set(key, v)
   return v
 }
+// lstart is local time: asked in the machine's own zone (no TZ), so a shell with TZ set, the daemon (launchd sets none) and an older copy all write one string for one process
+const idEnv = (env) => { const e = psEnv(env); delete e.TZ; return e }
 function psIdentityAsk(pid, { exec = null, env = process.env } = {}) {
-  return then(execTool('ps', ['-o', 'lstart=', '-p', String(pid)], { run: exec, env: psEnv(env) }), (r) => {
+  return then(execTool('ps', ['-o', 'lstart=', '-p', String(pid)], { run: exec, env: idEnv(env) }), (r) => {
     if (!(r.code === 0 && /\S/.test(r.out))) return { start_time: null, boot_id: null }
-    return then(execTool('sysctl', ['-n', 'kern.boottime'], { run: exec, env: psEnv(env) }), (b) => {
+    return then(execTool('sysctl', ['-n', 'kern.boottime'], { run: exec, env: idEnv(env) }), (b) => {
       const sec = b.code === 0 && /\bsec\s*=\s*(\d+)/.exec(b.out)
       return { start_time: r.out.replace(/\s+/g, ' ').trim(), boot_id: sec ? sec[1] : null }
     })

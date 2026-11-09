@@ -219,3 +219,17 @@ test('1.6 §3.1: a FIFO put on the path while the lock is held does not stop the
     console.log(fs.lstatSync(file).isFIFO())`)
   assert.deepEqual([r.code, r.signal, r.out], [0, null, 'true'], r.err)
 })
+
+// a held lock is polled every 25 ms for up to the wait; each poll asking each pid's identity again was a spawn storm on macOS (ps + sysctl per question)
+test('R12: while acquireOpLock waits on a held lock it asks each pid\'s identity once, and still sees the holder exit', async () => {
+  const file = fileOf(), c = clock(), asked = []
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({ pid: 4545, start_time: '11', boot_id: 'b' }))
+  let holderUp = true, polls = 0
+  const identity = (pid) => { asked.push(pid); return pid === 4545 ? { start_time: '11', boot_id: 'b' } : { start_time: '99', boot_id: 'b' } }
+  const lock = await acquireOpLock({ file, identity, alive: (pid) => pid === process.pid || (pid === 4545 && holderUp), waitMs: 10_000, now: c.now, sleep: async (ms) => { await c.sleep(ms); if (++polls === 40) holderUp = false } })
+  assert.ok(polls >= 40, 'it waited')
+  assert.deepEqual([...new Set(asked)].sort(), [4545, process.pid].sort())
+  assert.equal(asked.length, 2, `one question per pid over ${polls} polls: ${asked.length}`)
+  lock.release()
+})
