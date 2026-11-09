@@ -191,7 +191,7 @@ test('2.3 #32: a rest of 100 ms reads the step\'s own bodies, then the reply bod
     const press = async (key, n) => {
       await page.keyboard.press(key)
       await page.waitForFunction((n) => window.__stepNo()?.n === n, n, { polling: 'raf', timeout: 5000 })
-        .catch(async () => assert.fail(`${key}: step ${n} not reached in 5 s (on step ${await page.evaluate(() => window.__stepNo()?.n)})`))
+        .catch(async () => assert.fail(`${key}: step ${n} not reached in 5 s (on step ${await page.evaluate(() => window.__stepNo()?.n).catch(() => '?')})`))
       await page.waitForTimeout(150)
       await at(n)
     }
