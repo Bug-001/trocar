@@ -659,7 +659,7 @@ export async function extendSession(ctx, id, budgetMs) {
 const heads = new Map(); // session id → {sig, shape} of its last head write in this worker
 const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write (advance lets it go before a slice)
 // the index's codes too: a head written while capture files were still re-indexed (index-pending) is written again when that ends, at the same mark
-const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title, s.indexErrors.filter((e) => !e.level).map((e) => e.code)]);
+const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title, s.indexErrors.filter((e) => e.level !== 'note').map((e) => e.code)]);
 // the parts only the head carries, in O(packs): tier, axis, the packs (with their tags) and the open span, the compactions (a new
 // chapter on the axis; one on another lane too) and whether the axis ends on a marked one (its chapter opens on the step after it,
 // which counts no compaction: 1.3 §章), the cut, pending's presence, the failures and the index's codes, and the meta the
@@ -669,7 +669,7 @@ function shapeOf(s) {
   if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code), s.title]);
   const V = s.V, ax = V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || null, meta = { ...V.meta, ...s.title };
   return JSON.stringify([1, ax && ax.lane, s.files || null, V.stats.compactions, !!ax && isMarked(V.cols.fl[V.cols.slotOf(ax.last)]), s.truncated, !!s.pending, s.failed.length,
-    s.indexErrors.filter((e) => !e.level).map((e) => e.code), META.map((k) => meta[k])]);
+    s.indexErrors.filter((e) => e.level !== 'note').map((e) => e.code), META.map((k) => meta[k])]);
 }
 // A background fold that stopped (3.5 §会话读「`session --head`」 pending.stopped, D38②): the slice that threw writes the head at once,
 // with the stop's code (FOLD_STOPS) and the first line of its message; the same stop again writes nothing. The session's next slice

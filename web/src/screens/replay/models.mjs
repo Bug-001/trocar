@@ -135,8 +135,8 @@ function factsOf(desk, gap, harness) {
     if (u.endpoints && u.endpoints.length) tech.push(['endpoints', u.endpoints.join(', ')])
   }
   if (logged > 0) items.push({ kind: 'logged', text: W.loggedFact(logged), href: `#/settings/storage${h}` })
-  // a note (a slow index-cold read) is no loss, nor a capture file the worker has not re-indexed yet (it says so itself)
-  const lost = errs.filter((e) => e.level !== 'note' && e.code !== 'index-pending').length
+  // an entry with a level is no loss: a note (a slow index-cold read), a state (capture files still re-indexed, said on its own)
+  const lost = errs.filter((e) => !e.level).length
   if (errs.some((e) => e.code === 'index-pending')) items.push({ kind: 'reindexing', text: W.REINDEXING_FACT })
   if (lost) items.push({ kind: 'files', text: W.filesFact(lost), href: '#/settings/storage' })
   for (const e of errs) tech.push([String(e.where ?? '') + (e.code ? ' · ' + e.code : ''), String(e.reason ?? '')])

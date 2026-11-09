@@ -13,6 +13,7 @@ import { createQueryService } from '../../src/query/service.mjs'
 import { indexDir, segmentFiles } from '../../src/query/index-build.mjs'
 import { indexRows, provisionalRows, sessionGroups } from '../../src/query/rows.mjs'
 import { readHead } from '../../src/query/ctx-files.mjs'
+import { validateQueryDoc } from '../../src/cli/schema.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -111,7 +112,10 @@ test('3.5 §行表先读: a keyed session in the newest segment is answered befo
     const first = await ask(svc, 'session', { id: K })
     assert.equal(rowsSaid(said), false, 'answered while the pass still reads')
     assert.equal(first.status, 200)
-    assert.equal(pendingOf(first.doc).length, 1, 'it says capture files are still being re-indexed')
+    assert.deepEqual(pendingOf(first.doc).map((e) => e.level), ['state'], 'it says capture files are still being re-indexed')
+    assert.equal(first.doc.ok, true, 'a state, not a read that failed: `trocar query` exits as for any document (src/cli/query.mjs)')
+    assert.deepEqual(validateQueryDoc(first.doc), [])
+    assert.equal(pendingOf(readHead(home, K)).length, 1, 'the head says it too (the board reads it there)')
     const early = await ask(svc, 'session', { id: L })
     assert.equal(rowsSaid(said), false, 'answered while the pass still reads')
     assert.equal(early.status, 200)

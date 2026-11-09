@@ -96,7 +96,7 @@ export async function provisionalRows({ home = trocarHome(), fs = nodeFs, ready 
     for (const pr of got.problems) errors.push(problemEntry(`segments/${segment}`, pr));
     segs.push({ segment, records: got.records, entry: recordsId(got.records) });
   }
-  if (segs.length < all.length) errors.push({ where: 'index', code: 'index-pending', reason: `${all.length - segs.length} of ${all.length} capture files are still being re-indexed, so this read may lack calls they hold.` });
+  if (segs.length < all.length) errors.push({ where: 'index', code: 'index-pending', level: 'state', reason: `${all.length - segs.length} of ${all.length} capture files are still being re-indexed, so this read may lack calls they hold.` });
   const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
   return { rows: early.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old, true)).rows, errors };
 }

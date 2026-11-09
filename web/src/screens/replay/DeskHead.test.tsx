@@ -105,7 +105,7 @@ test('1.2 #14: the fidelity row exists iff one of the five facts does; an unknow
 })
 
 test('1.2 §会话保真行: capture files not re-indexed yet are their own fact, never counted as files not read in full', () => {
-  const pending = { where: 'index', code: 'index-pending', reason: 'r' }, lost = { where: 'segments/s', code: 'segment-unreadable', reason: 'gone' }
+  const pending = { where: 'index', code: 'index-pending', level: 'state', reason: 'r' }, lost = { where: 'segments/s', code: 'segment-unreadable', reason: 'gone' }
   for (const [errors, files] of [[[pending], null], [[pending, lost], '1 capture file was']] as Array<[object[], string | null]>) {
     const { el } = head({ desk: { errors } })
     expect(el.querySelector('[data-fact="reindexing"]'), JSON.stringify(errors)).not.toBeNull()
