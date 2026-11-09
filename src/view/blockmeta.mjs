@@ -257,19 +257,23 @@ const WORD = /[\p{L}\p{N}]/u;
  *  (only the first lanes of a line that just became shared: later ones have passed it over already); words(text) → the first line of
  *  `text` that is not shared and has a letter or digit once its leading marks are gone, without them, or null. */
 export function sharedLines() {
-  const seen = new Map(); // line → { n: the lanes holding it, first: those lanes, until it is shared }
+  // line → the one lane holding it, or the lanes holding it (an array once a second lane has it), until it is shared: then null. A line
+  // only one lane holds, most of them, costs its map entry alone (the read's bound, 3.5 SPINE_PER_ROW).
+  const seen = new Map();
   return {
     add(text, lane) {
       const moved = [];
       for (const l of linesOf(text)) {
-        const e = seen.get(l) || seen.set(l, { n: 0, first: [] }).get(l);
-        if (++e.n === SHARED_LANES) { moved.push(...e.first); e.first = null; } else if (e.first) e.first.push(lane);
+        const v = seen.get(l);
+        if (v === null) continue;
+        const lanes = v === undefined ? [] : Array.isArray(v) ? v : [v];
+        if (lanes.length + 1 >= SHARED_LANES) { moved.push(...lanes); seen.set(l, null); } else seen.set(l, lanes.length ? [...lanes, lane] : lane);
       }
       return moved;
     },
     words(text) {
       for (const l of linesOf(text)) {
-        if ((seen.get(l)?.n || 0) >= SHARED_LANES) continue;
+        if (seen.get(l) === null) continue;
         const w = l.replace(MARKS, '');
         if (WORD.test(w)) return w;
       }
