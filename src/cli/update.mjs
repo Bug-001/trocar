@@ -110,14 +110,14 @@ async function update({ io, env, home, platform, deps, flags }) {
 
   /** The handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the code says. */
   const pending = async () => readHandover(handover, fs, deps.harnessIds || (await (await import('../collector/harness/index.mjs')).loadHarnesses()).map((h) => h.name))
-  const resume = async (waiting) => {
+  const resume = async (waiting, answered = false) => {
     if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this trocar has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
     const gone = await noFormHere(waiting.on, { platform, home, env, fs, deps })
     if (gone.length) { waiting.on = waiting.on.filter((h) => !gone.includes(h)); r.notes.push(goneWords(gone)) }
     const to = codeId(root)
     r.from = waiting.from || r.from; r.to = to; r.harnesses = waiting.on // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
     const replaced = (await daemonCode({ platform, dir, env, fs, deps })) !== to // as replaceDaemon judges it: a collector on this code is left running
-    const g = await gate([[ROW.version, `${r.from} -> ${to}`], [ROW.switchedOn, waiting.on.join(', ') || 'nothing was being captured']],
+    const g = answered ? null : await gate([[ROW.version, `${r.from} -> ${to}`], [ROW.switchedOn, waiting.on.join(', ') || 'nothing was being captured']],
       [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: ${replaced ? 'the collector is replaced, ' : ''}install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], replaced ? CUT : null, yes && env[HANDED_OVER] === '1')
     if (g !== null) return g
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
@@ -210,23 +210,25 @@ async function update({ io, env, home, platform, deps, flags }) {
   if (channel !== 'git') return no('not-a-checkout', NOT_GIT, EXIT.usage)
 
   const git = (...args) => execTool('git', ['-C', root, ...args], { run: deps.exec || null, env })
-  // 先查,查不过什么都不改 (§5.5): your own changes first — a merge would carry them, and trocar does not touch what you wrote.
-  const dirty = git('status', '--porcelain', '--untracked-files=no')
-  if (dirty.code !== 0) return no('checkout-unreadable', `this checkout could not be read (${dirty.err || `git exit ${dirty.code}`})`)
-  if (dirty.out) return no('local-changes', 'this checkout has changes of your own. Commit or put them aside, then run trocar update again')
-  const upstream = git('rev-parse', '--abbrev-ref', '@{u}')
-  if (upstream.code !== 0) return no('no-upstream', 'the branch this checkout is on has no upstream, so there is nothing to update from')
-  const fetched = git('fetch')
-  if (fetched.code !== 0) return no('fetch-failed', `the newest code could not be fetched (${fetched.err || `git exit ${fetched.code}`})`)
-  const head = git('rev-parse', 'HEAD').out
-  const target = git('rev-parse', '@{u}').out
-  if (head !== target && git('merge-base', '--is-ancestor', 'HEAD', '@{u}').code !== 0) {
-    return no('not-fast-forward', `this checkout has commits ${upstream.out} does not have, so it cannot be fast-forwarded. Push or put them aside, then run trocar update again`)
-  }
-
   const waiting = await pending()
-  if (waiting) return resume(waiting)
-
+  // the process that pulled started this one (step 3): its code is the newest it saw, so it finishes — no second fetch
+  if (waiting && env[HANDED_OVER] === '1') return resume(waiting)
+  const checked = checkout(git)
+  // §5.5: a finish that stopped may have stopped on a defect of the code that ran it, so newer code is pulled first and finishes it; code that
+  // cannot be pulled refuses nothing — this code finishes, and the receipt says the newer code was not pulled
+  const unpulled = (why) => `the newest code was not pulled: ${why}. This update was finished with the code here`
+  if (waiting) {
+    if (checked.refusal) { r.notes.push(unpulled(checked.refusal.why)); return resume(waiting) }
+    if (checked.head === checked.target) return resume(waiting)
+    r.from = waiting.from || r.from; r.harnesses = waiting.on
+    r.to = codeIdOf(upstreamVersion(git, root, fs), checked.target)
+    const g = await gate([[ROW.version, `${r.from} -> ${r.to}`], [ROW.switchedOn, waiting.on.join(', ') || 'nothing was being captured']],
+      [{ what: 'code', detail: `an update is waiting to be finished: the code of this machine's trocar goes to ${r.to} first, and that code finishes it`, harnesses: waiting.on }], CUT)
+    if (g !== null) return g
+    return pullAndHand(checked, waiting.on, async (why) => { r.notes.push(unpulled(why)); return resume(waiting, true) })
+  }
+  if (checked.refusal) return no(checked.refusal.code, checked.refusal.message)
+  const { head, target } = checked
   if (head === target) {
     const running = await daemonCode({ platform, dir, env, fs, deps })
     r.to = r.from
@@ -256,23 +258,47 @@ async function update({ io, env, home, platform, deps, flags }) {
     return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so the code was left as it is`)
   }
 
-  // 2 · (old code) the merge, and `npm install` when what is installed changed with it
-  const touchesDeps = git('diff', '--name-only', head, target, '--', 'package.json', 'package-lock.json').out !== ''
-  const merged = git('merge', '--ff-only', target)
-  if (merged.code !== 0) {
+  // 2 · (old code) the merge, and `npm install` when what is installed changed with it; a merge that fails puts back what step 1 switched off
+  return pullAndHand(checked, on.ids, async (why) => {
     await reOn(on.ids, { io, env, home, platform, deps })
     try { fs.rmSync(handover, { force: true }) } catch { /* the reason below is what matters */ }
-    return no('merge-failed', `the new code could not be merged in (${merged.err || `git exit ${merged.code}`}); the agents that were being captured are being captured again`)
-  }
-  if (touchesDeps) {
-    const npmArgs = ['install', '--omit=dev', '--no-audit', '--no-fund']
-    const npm = execTool('npm', npmArgs, { run: deps.exec || null, env, cwd: root, timeoutMs: 600_000, platform })
-    // the code IS replaced: the handover file stays, so the next run goes on from step 4 (§5.5) — which skips npm, so the way out runs it by hand
-    if (npm.code !== 0) return no('npm-failed', `the code is now ${r.to}, but what it needs could not be installed (${npm.err || `npm exit ${npm.code}`}). In ${root}, run npm ${npmArgs.join(' ')}, then run trocar update again${on.ids.length ? `. Until then capture is off for ${on.ids.join(', ')}; that trocar update switches them on again` : ''}`)
-  }
+    return no('merge-failed', `the new code could not be merged in (${why}); the agents that were being captured are being captured again`)
+  })
 
-  // 3 · the new code finishes, in a process of its own. No harness name in its arguments (D67①): the file holds them.
-  return spawnNew(process.execPath, [path.join(root, 'bin', 'trocar.mjs'), 'update', '--yes', ...(json ? ['--json'] : [])], {}, r.to)
+  /** Steps 2 and 3: fast-forward to the upstream, `npm install` when the merge changed what is installed, then the new code finishes in a
+   *  process of its own. `unmerged(why)`: what a merge that fails comes to. `off`: the harnesses left off until the finish. */
+  async function pullAndHand({ head, target }, off, unmerged) {
+    const touchesDeps = git('diff', '--name-only', head, target, '--', 'package.json', 'package-lock.json').out !== ''
+    const merged = git('merge', '--ff-only', target)
+    if (merged.code !== 0) return unmerged(merged.err || `git exit ${merged.code}`)
+    if (touchesDeps) {
+      const npmArgs = ['install', '--omit=dev', '--no-audit', '--no-fund']
+      const npm = execTool('npm', npmArgs, { run: deps.exec || null, env, cwd: root, timeoutMs: 600_000, platform })
+      // the code IS replaced: the handover file stays, so the next run goes on from step 4 (§5.5) — which skips npm, so the way out runs it by hand
+      if (npm.code !== 0) return no('npm-failed', `the code is now ${r.to}, but what it needs could not be installed (${npm.err || `npm exit ${npm.code}`}). In ${root}, run npm ${npmArgs.join(' ')}, then run trocar update again${off.length ? `. Until then capture is off for ${off.join(', ')}; that trocar update switches them on again` : ''}`)
+    }
+    // 3 · the new code finishes, in a process of its own. No harness name in its arguments (D67①): the file holds them.
+    return spawnNew(process.execPath, [path.join(root, 'bin', 'trocar.mjs'), 'update', '--yes', ...(json ? ['--json'] : [])], {}, r.to)
+  }
+}
+
+/** 先查 (§5.5): → `{ head, target }`, or `{ refusal: { code, message, why } }` — `why` is the reason alone, `message` adds what to do.
+ *  Your own changes first: a merge would carry them, and trocar does not touch what you wrote. */
+function checkout(git) {
+  const refuse = (code, why, todo = '') => ({ refusal: { code, why, message: todo ? `${why}. ${todo}` : why } })
+  const dirty = git('status', '--porcelain', '--untracked-files=no')
+  if (dirty.code !== 0) return refuse('checkout-unreadable', `this checkout could not be read (${dirty.err || `git exit ${dirty.code}`})`)
+  if (dirty.out) return refuse('local-changes', 'this checkout has changes of your own', 'Commit or put them aside, then run trocar update again')
+  const upstream = git('rev-parse', '--abbrev-ref', '@{u}')
+  if (upstream.code !== 0) return refuse('no-upstream', 'the branch this checkout is on has no upstream, so there is nothing to update from')
+  const fetched = git('fetch')
+  if (fetched.code !== 0) return refuse('fetch-failed', `the newest code could not be fetched (${fetched.err || `git exit ${fetched.code}`})`)
+  const head = git('rev-parse', 'HEAD').out
+  const target = git('rev-parse', '@{u}').out
+  if (head !== target && git('merge-base', '--is-ancestor', 'HEAD', '@{u}').code !== 0) {
+    return refuse('not-fast-forward', `this checkout has commits ${upstream.out} does not have, so it cannot be fast-forwarded`, 'Push or put them aside, then run trocar update again')
+  }
+  return { head, target }
 }
 
 /** 4 · (the new code) the daemon, `install` and `on`, and the handover file gone when all three are done (§5.5). A login entry that starts this code

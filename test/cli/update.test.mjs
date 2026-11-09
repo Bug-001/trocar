@@ -353,6 +353,41 @@ test('one plan per update: the process that finishes a handover does not print t
   assert.match(rerun.io.text(), /^Plan$/m, 'an operator who runs update again to finish one is shown the plan')
 })
 
+// §5.5: a finish that stopped may have stopped on a defect of the code that ran it — the newer code is pulled first, so `trocar update` can be the way out
+test('§5.5: a waiting update.json with newer code upstream fast-forwards first, switches nothing off, and hands the finish to the new code', async () => {
+  const s = sandbox({ on: [] }) // the agents were switched off by the run that stopped
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  const target = s.ahead('the-fix.md')
+  const t = ctx(s)
+  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  assert.equal(head(s.root), target, 'HEAD was fast-forwarded to the upstream')
+  assert.deepEqual([t.calls.off, t.calls.install, t.calls.on], [[], [], []], 'step 1 is skipped, and the old code does not finish')
+  assert.equal(t.calls.child.length, 1, 'the new code finishes, in a process of its own')
+  assert.equal(t.calls.childEnv[HANDED_OVER], '1')
+  assert.deepEqual(s.handover(), { from: '0.1.0+0000000', on: ['codex'] }, 'the file stays for the new code')
+})
+
+test('§5.5: a waiting update.json whose newer code cannot be pulled is finished with the code here, and the receipt says so', async () => {
+  const cases = {
+    'tracked changes of your own': (s) => { fs.writeFileSync(path.join(s.root, 'package.json'), '{"version":"0.1.0","mine":true}\n'); s.ahead() },
+    'no upstream': (s) => { git(s.root, 'checkout', '-b', 'side') },
+    'a commit the upstream does not have': (s) => { fs.writeFileSync(path.join(s.root, 'MINE.md'), 'mine\n'); git(s.root, 'add', '-A'); git(s.root, 'commit', '-m', 'mine'); s.ahead() },
+    'git fetch fails': (s) => { fs.rmSync(s.up, { recursive: true, force: true }) },
+  }
+  for (const [why, set] of Object.entries(cases)) {
+    const s = sandbox({ on: [] })
+    fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+    set(s)
+    const was = head(s.root)
+    const t = ctx(s)
+    assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, `${why}: ${t.io.text()}`)
+    assert.equal(head(s.root), was, `${why}: HEAD did not move`)
+    assert.deepEqual([t.calls.child.length, t.calls.on.map((a) => a.filter((x) => !x.startsWith('--')))], [0, [['codex']]], `${why}: this code finished`)
+    assert.equal(s.handover(), null, `${why}: and the file is gone`)
+    assert.ok(t.io.json().notes.length >= 1, `${why}: a note says the newer code was not pulled`)
+  }
+})
+
 // ── V96 · the finish ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('V96: with a handover file the new code installs, switches the named harnesses on and removes the file; an `on` that fails keeps it, exit 1', async () => {
   const s = sandbox()
