@@ -130,10 +130,8 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null,
     kin_items: synth && synth.items ? synth.items.join(' ') : null,
     kin_late: synth && synth.late != null ? synth.late : null, // how many of kin_fp come from user texts after the first
     kin_mark: !!(synth && synth.mark),
-    // replies as kinship evidence (3.4 按内容认亲): the reply's sampled windows as one item (count, first, last, digest), and a
-    // compaction request's last user-text windows, each base64: hashes, never text
+    // a reply as kinship evidence (3.4 按内容认亲): its sampled windows as one item (count, first, last, digest), base64: hashes, never text
     kin_reply: (synth && synth.reply) ?? null,
-    kin_heads: (synth && synth.heads) ?? null,
     offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
   };
 }

@@ -184,6 +184,17 @@ test('kinship by reply: a reply no reader can read is no reply, and its segment 
   assert.equal(m.get(recs[3].id), m.get(recs[0].id), 'the summary still joins by the reply it carries')
 })
 
+test('kinship by reply: a compaction request whose record cannot be read back decides nothing by its replies, and says so', async () => {
+  const r = prose(61, 900), recs = [turn('messages', 0, 0, r, T0), summary('messages', [r], T0 + MIN)]
+  const home = homeOf([recs]), raw = path.join(home, 'raw', `${SEG[0]}.ndjson`)
+  let opens = 0 // the index scan opens the segment first; the next open is the read back of the summary's record, and it fails
+  const failing = { ...fs, openSync: (f, ...a) => { if (String(f) === raw && ++opens > 1) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return fs.openSync(f, ...a) } }
+  const errors = [], rows = [...await indexRows({ home, fs: failing, errors })]
+  assert.deepEqual(errors.map((e) => [e.where, e.code]), [[`segments/${SEG[0]}`, 'record-unreadable']])
+  assert.match(errors[0].reason, new RegExp(`${rows[1].id}: a compaction request could not be read back`))
+  assert.notEqual(rows[1].session_id, rows[0].session_id, 'not joined by a reply it could not be read for')
+})
+
 // past KEEP segments a build hands the rule's state from part to part (src/query/rows.mjs): the parts it keeps are copied, so a
 // later build that starts from one, after a middle segment is rewritten or a new one comes, reads what that part ended with
 test('kinship by reply: live = cold over 24 segments with replies, a middle segment rewritten, then a new one', async () => {
@@ -204,6 +215,14 @@ test('kinship by reply: live = cold over 24 segments with replies, a middle segm
   segs[16].push(turn('messages', 0, 17, prose(900, 400), at(16, segs[16].length)))
   fs.unlinkSync(path.join(live, 'raw', `${name(16)}.ndjson`)); writeSegment(live, name(16), lines(segs[16]))
   assert.deepEqual(await membership(live), await membership(homeOf(24)), 'a middle segment rewritten')
+  // segment 20 rewritten with a summary that carries only summary 17's own reply: the build replays parts 16 to 19 from part 15's state,
+  // summary 17 among them, whose windows are read back from its record (rows.mjs headsAt); read wrong, it keeps its reply under no session
+  const s17 = Math.floor(17 / 3) % 3, quote = summary(wire(s17), [prose(500 + 17, 400)], at(20, segs[20].length))
+  segs[20].push(quote)
+  fs.unlinkSync(path.join(live, 'raw', `${name(20)}.ndjson`)); writeSegment(live, name(20), lines(segs[20]))
+  const replayed = await membership(live)
+  assert.deepEqual(replayed, await membership(homeOf(24)), 'a replay over a compaction request')
+  assert.equal(replayed.get(quote.id), replayed.get(segs[17][s17].id), 'the summary quoting summary 17 joins its session')
   writeSegment(live, name(24), lines(segs[24]))
   assert.deepEqual(await membership(live), await membership(homeOf(25)), 'a new segment')
 })
