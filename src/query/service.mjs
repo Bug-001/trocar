@@ -113,7 +113,7 @@ const mb = (n) => `${(n / 1048576).toFixed(1)} MB`
 export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker, deadlineMs = DEADLINE_MS, controlDeadlineMs = CONTROL_DEADLINE_MS, idleMs = QUERY_IDLE_MS, againMs = AGAIN_MS, againLimitMs = AGAIN_LIMIT_MS, handsOff = false, pauseMs = PAUSE_MS, say = logLine, now = Date.now }) {
   let asked = 0, idle = null // requests queued or in flight; the idle clock, running only while there are none
   let child = null, pending = null, head = '', left = 0, paused = false, pauseTimer = null
-  let err = null // the current worker's stderr as read so far: {part, lines, fatal, thrown} (stderrOf)
+  let err = null // the current worker's stderr as read so far: {part, lines, fatal, thrown, open} (stderrLine)
   let rows = false // this child said `{rows: true}`: its pass over the rows has ended (3.5 §服务队列)
   let stats = new Map(), statsTimer = null // per name: {reads, bytes, cpu, slowest} since the last line
   const waiting = [] // {name, go, gone, resolve, reject} in arrival order; pump() takes the first of the lowest rank
