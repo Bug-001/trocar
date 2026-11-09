@@ -29,8 +29,8 @@ export const QUERY_WAIT_PROBLEMS = Object.freeze(['still-reading'])
 export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable',
   'record-missing', 'field-missing', 'index-pending']) // index-pending: answered while capture files are still re-indexed (3.5 §行表先读「先答的会话」), no loss // a member whose block the reduction could not read back (3.5 §读不全不静默)
 /** Why a session's background fold stopped (`pending.stopped.code` in its head, src/query/named/session.mjs; 3.5 §会话读「`session --head`」):
- *  not even one row of the session fits the heap's budget, or any other error a slice threw. */
-export const FOLD_STOPS = Object.freeze(['heap-no-room', 'fold-failed'])
+ *  not even one row of the session fits the heap's budget, any other error a slice threw, or its files cannot be saved (4.3 §4 盘满). */
+export const FOLD_STOPS = Object.freeze(['heap-no-room', 'fold-failed', 'projection-write-failed'])
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])

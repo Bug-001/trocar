@@ -26,7 +26,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
-import { sessionDir, lineIndex, lru, staleHeader, HEAP_PER_LINE_BYTE } from './projection.mjs';
+import { sessionDir, lineIndex, lru, staleHeader, unsaved, HEAP_PER_LINE_BYTE } from './projection.mjs';
 
 export const FOLD_V = 9; // past both lines that each moved it (the reads line's 8, the desk line's 2)
 /** The heap the read cache keeps of parsed lines (two times it): a K term of the reduction's bound (3.5 §内存有界). */
@@ -81,8 +81,7 @@ function kindOf(o) {
  *  there (shared with the cache: read-only). */
 export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = true, projection, errors = [], upTo = Infinity } = {}) {
   let sink = errors; // the errors of the request whose append is running
-  const lines = lineFile({ fs, base: path.join(sessionDir(home, key), 'fold'), write, onFail: (e) => sink.push({ where: 'fold-log', code: 'projection-write-failed', level: 'note',
-    reason: `The fold log could not be written (${e.code || e.message}); this session's reduction is kept in memory and done again next time.` }) });
+  const lines = lineFile({ fs, base: path.join(sessionDir(home, key), 'fold'), write, onFail: (e) => sink.push({ where: 'fold-log', code: 'projection-write-failed', level: 'note', reason: unsaved(home, e) }) });
   const calls = byOffset(), lanes = byOffset(), items = byOffset(), fails = byOffset(), fronts = new Map();
   const own = { i: items, x: fails };
   const cache = lru(2 * LOG_BYTES); // offset → [line, length]

@@ -191,13 +191,22 @@ export function lru(max) {
   };
 }
 
+/** unsaved(home, e) → the one line said when a session read's files could not be saved under index/ (4.3 §4 盘满; D38): what went
+ *  wrong and, for a cause with one, the step that fixes it (`Next:`); any other error is said as the system or the code gave it.
+ *  The same line is the episode's record and the head's stop. */
+export function unsaved(home, e, platform = process.platform) {
+  const dir = indexDir(home), code = e && e.code, said = String((e && e.message) || e).split('\n')[0];
+  const owned = platform === 'win32' ? `give your user full control of "${dir}"` : `sudo chown -R "$(id -un)" "${dir}" && chmod -R u+rwX "${dir}"`;
+  const fix = { ENOSPC: ['the disk is full', `free space on the disk that holds "${dir}"`], EDQUOT: ['your disk quota is used up', `free space within your quota on the disk that holds "${dir}"`],
+    EACCES: ['your user may not write there', owned], EPERM: ['your user may not write there', owned] }[code];
+  return fix ? `trocar's files in ${dir} could not be saved: ${fix[0]}. Next: ${fix[1]}.` : `trocar's files in ${dir} could not be saved: ${said}`;
+}
 /** openProjection({home, fs, key, write, errors}) → the session's store (see the head of this file). `errors`: where notes go
  *  when an append names no other sink (an append of a later request passes that request's `errors`). */
 export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = true, errors = [] } = {}) {
   if (write) try { migrateFlat({ home, fs, key }); } catch { /* the flat files stay where they are; the store is extracted again */ }
   let sink = errors; // the errors of the request whose append is running
-  const lines = lineFile({ fs, base: path.join(sessionDir(home, key), 'extract'), write, onFail: (e) => sink.push({ where: 'projection', code: 'projection-write-failed', level: 'note',
-    reason: `The context projection could not be written (${e.code || e.message}); this session is kept in memory and extracted again next time.` }) });
+  const lines = lineFile({ fs, base: path.join(sessionDir(home, key), 'extract'), write, onFail: (e) => sink.push({ where: 'projection', code: 'projection-write-failed', level: 'note', reason: unsaved(home, e) }) });
   const at = lineIndex(); // bid → its line
   const rowAt = lineIndex(); // rid → its line
   const rowCache = lru(2 * ROW_HEAP); // rid → row, weighed in heap
