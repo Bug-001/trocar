@@ -358,6 +358,34 @@ test('on --dry-run (macOS): an agent whose entry is no longer intact is in the p
   } finally { await server.close() }
 })
 
+test('on --dry-run (macOS): an agent turned off in the desired state (an off cut short) is in the plan, not named as already on', async () => {
+  const { w, fs, server, pathsOf, named } = await inPlaceWorld(['codex', 'opencode'])
+  try {
+    const stateF = path.join(w.dir, 'state.json'), st = JSON.parse(fs.readFileSync(stateF, 'utf8'))
+    st.harnesses.codex.desired = 'off'
+    fs.writeFileSync(stateF, JSON.stringify(st))
+    const dry = await runOn(w, ['--dry-run'])
+    for (const f of pathsOf('codex')) assert.ok(named(dry.text, f), `codex is in the plan: ${f}\n${dry.text}`)
+    for (const g of pathsOf('opencode')) assert.ok(!named(dry.text, g), `opencode is still in place: ${g}\n${dry.text}`)
+  } finally { await server.close() }
+})
+
+test('on --dry-run (macOS): an agent whose record is for another file than the one planned (its home moved) is in the plan', async () => {
+  const { w, fs, server, pathsOf, named } = await inPlaceWorld(['codex', 'opencode'])
+  try {
+    const f = pathsOf('codex')[0], moved = `${f}.before-move`
+    fs.copyFileSync(f, moved)
+    const { readManifest, saveManifest } = await import('../../src/off/manifest.mjs')
+    const m = readManifest(w.dir, fs)
+    let n = 0
+    for (const e of [...(m.entries || []), ...(m.files || [])]) if (e.harness === 'codex' && e.path === f) { e.path = moved; if (e.real_path) e.real_path = moved; n++ }
+    assert.ok(n > 0, 'the sandbox recorded codex at its planned file')
+    saveManifest(w.dir, m, fs)
+    const dry = await runOn(w, ['--dry-run'])
+    assert.ok(named(dry.text, f), `codex's planned file is in the plan\n${dry.text}`)
+  } finally { await server.close() }
+})
+
 test('on --dry-run --details / --json (macOS): agents already on keep their full plan', async () => {
   const { w, server, planned, named } = await inPlaceWorld(['codex', 'opencode'])
   try {

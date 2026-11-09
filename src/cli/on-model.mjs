@@ -152,12 +152,15 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   // stale (status's `held && !stale`); a fact not read is not in place (D38: the dry run never claims more than it read)
   let inPlace = []
   if (flags.has('--dry-run') && !details && !json) {
-    const [{ intactOf }, { readIngressConfig }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/ingress-config.mjs')])
-    const recs = [...(m.entries || []), ...(m.files || [])]
-    inPlace = plan.on.filter((h) => { try {
+    const [{ intactOf }, { readIngressConfig }, { samePath }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/ingress-config.mjs'), import('../collector/core/trust/journal.mjs')])
+    const recs = [...(m.entries || []), ...(m.files || [])], ing = readIngressConfig({ dir, fs })
+    const token = typeof ing.listenerToken === 'string' ? ing.listenerToken : null, notOn = offSince(path.join(dir, 'state.json'), plan.on, { fs })
+    // each planned file has its own record (a moved CODEX_HOME is a new file to write), intact and not stale; an ingress.json not read judges no PAC: none in place
+    const ok = (es, d, p) => es.length > 0 && es.every((i) => intactOf(m, i, fs) && !pacStale(i, d.proxyMode.routes[p.route], token))
+    const held = (h, p, d) => { const es = recs.filter((i) => i.harness === h && i.route === p.route); return p.paths.length ? p.paths.every((f) => ok(es.filter((i) => samePath(i.path, f, fs)), d, p)) : ok(es, d, p) }
+    if (!ing.error) inPlace = plan.on.filter((h) => { try {
       const l = (m.liveness || {})[h], d = args.harnesses.find((x) => x.name === h), mine = plan.planned.filter((p) => p.harness === h)
-      const ing = readIngressConfig({ dir, fs }), token = typeof ing.listenerToken === 'string' ? ing.listenerToken : null
-      return !!(l && l.on_at && !l.off_at) && mine.length > 0 && mine.every((p) => { const es = recs.filter((i) => i.harness === h && i.route === p.route); return es.length > 0 && es.every((i) => intactOf(m, i, fs) && !pacStale(i, d.proxyMode.routes[p.route], token)) })
+      return !notOn.includes(h) && !!(l && l.on_at && !l.off_at) && mine.length > 0 && mine.every((p) => held(h, p, d))
     } catch { return false } })
   }
   const seen = new Set(m.confirmed_paths || [])
