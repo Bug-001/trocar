@@ -15,6 +15,7 @@ import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
 import { writeNetenv, netenvFile } from '../../src/netenv/index.mjs'
 import { backupsOf } from '../../src/off/backup.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const BASE = new Date('2026-10-07T00:00:00Z')
 /** `trocar uninstall <argv>` over a sandbox: the exit code, and what it printed. §3.6 — uninstall always asks, so a case that is not about
@@ -36,7 +37,7 @@ const seedClasses = (s) => { const h = path.dirname(s.dir); fs.mkdirSync(path.jo
 const classTable = (s) => { const h = path.dirname(s.dir); return [path.join(h, 'classes.json'), path.join(h, 'logs', 'classes.ndjson')].map((f) => { try { return fs.readFileSync(f, 'utf8') } catch (e) { return `MISSING (${e.code})` } }) }
 const trocarFiles = (s) => ['ca', 'run', 'state.json', 'install-manifest.json', 'op.lock', 'lock'].filter((n) => fs.existsSync(path.join(s.dir, n)))
 
-test('uninstall: every entry is back as it was, trocar\'s own files are gone, the captures and the records stay, and the receipt says so in the past tense (exit 0, --json validates)', async () => {
+test('uninstall: every entry is back as it was, trocar\'s own files are gone, the captures and the records stay, and the receipt says so in the past tense (exit 0, --json validates)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); keep(s)
   const entries = s.manifest().entries
   const before = s.userFiles()
@@ -218,7 +219,7 @@ test('1.6 §1.5: after the operator stops a stuck daemon, the next uninstall fin
   assert.deepEqual(trocarFiles(s), [])
 })
 
-test('uninstall: when the install manifest cannot be saved after the entries were undone the run is blocked, not "uninstalled" — exit 1, outcome failed, the receipt lists the files that changed, the CA, the state and the manifest stay, and the next uninstall finishes', async () => {
+test('uninstall: when the install manifest cannot be saved after the entries were undone the run is blocked, not "uninstalled" — exit 1, outcome failed, the receipt lists the files that changed, the CA, the state and the manifest stay, and the next uninstall finishes', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const manifestFile = path.join(s.dir, 'install-manifest.json')
   const state = { broken: true }
@@ -432,7 +433,7 @@ test('R3: a manifest this build does not read leaves every entry and every file 
   assert.ok(!fs.readFileSync(path.join(t.home, '.claude', 'settings.json'), 'utf8').includes('trocar'), 'the entry went by its mark')
 })
 
-test('V8 (uninstall): every backup goes, the ones of files the user edited after trocar too — each named in the receipt as not byte for byte; the directory is gone; a backup that cannot be removed is said', async () => {
+test('V8 (uninstall): every backup goes, the ones of files the user edited after trocar too — each named in the receipt as not byte for byte; the directory is gone; a backup that cannot be removed is said', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const codexEnv = path.join(s.home, '.codex', '.env')
   fs.appendFileSync(codexEnv, 'EXTRA=1\n') // after install: undone but not identical
@@ -456,7 +457,7 @@ test('V8 (uninstall): every backup goes, the ones of files the user edited after
   assert.ok(fs.existsSync(bk), 'it is still there')
 })
 
-test('V27 (uninstall): an uninstall signals the daemon and its helper only, never restarts or starts anything, and lists — never stops — the agents and the foreground trocar processes', async () => {
+test('V27 (uninstall): an uninstall signals the daemon and its helper only, never restarts or starts anything, and lists — never stops — the agents and the foreground trocar processes', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); writeDaemonLock(s)
   const t = procTable({ ...DAEMON_ROWS, 5000: { start_time: '5', boot_id: 'boot-1' } }, { survives: { 4242: ['SIGTERM'] } })
   const agents = [
@@ -473,7 +474,7 @@ test('V27 (uninstall): an uninstall signals the daemon and its helper only, neve
   assert.deepEqual(r.receipt.user_processes.map((p) => p.pid), [7002], 'what the user started themselves is listed, never killed')
 })
 
-test('D38: every line uninstall writes is in the closed sets, one run has one `run`, and it ends with a result line', async () => {
+test('D38: every line uninstall writes is in the closed sets, one run has one `run`, and it ends with a result line', { skip: POSIX_WORLD }, async () => {
   const { checkRecord } = await import('../../src/health/codes.mjs')
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EXTRA=1\n')
@@ -531,7 +532,7 @@ test('formatUninstallReceipt: not done says so and what to do; the entries left 
   assertEnglish(purged, 'the receipt of uninstall --purge-data')
 })
 
-test('semantics 2: an install manifest of the wrong shape is treated as unreadable by uninstall too — the entries go by their marks (after a yes), a receipt is printed, and the way on is named when trocar on then refuses', async () => {
+test('semantics 2: an install manifest of the wrong shape is treated as unreadable by uninstall too — the entries go by their marks (after a yes), a receipt is printed, and the way on is named when trocar on then refuses', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   s.sys.daemon.state.up = false
   const file = path.join(s.dir, 'install-manifest.json')
@@ -698,7 +699,7 @@ test('uninstall: a sealed segment never hides how to stop a daemon that did not 
 })
 
 // A daemon `off` already stopped leaves its lock when it could not remove it (a forced end on Windows): this uninstall stopped nothing and must not say it did.
-test('1.6 §3.6: a lock left by a daemon already gone is no daemon stopped', async () => {
+test('1.6 §3.6: a lock left by a daemon already gone is no daemon stopped', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const r = await s.uninstall({ yes: true, deps: { daemonState: async () => ({ state: 'stale', lock: { pid: 13496 } }), stopDaemon: async () => ({ stopped: true, how: 'none', pid: 13496, helper_pid: null, signals: [] }) } })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))

@@ -19,6 +19,7 @@ import { sevenHomes } from '../off/fixtures/seven-homes.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { snapshot, fakeSystem, recordingExec, fakeDaemon, fakeIo, onCtx, seedClaude, ROOTS } from './fixtures/on-ctx.mjs'
 import { selfCommand } from '../../src/version.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 // a JSON key; the three that replace the system roots and so name a combined bundle (codex and hermes by a dotenv block, z-code by a JSON key); a plugin
 // directory and a YAML row
@@ -80,7 +81,7 @@ function bundlesAreValid(s) {
 }
 const entryStats = (s) => readManifest(s.dir).entries.map((e) => ({ path: e.path, installed_at: e.installed_at, ino: fs.statSync(e.real_path || e.path).ino, mtimeMs: fs.statSync(e.real_path || e.path).mtimeMs }))
 
-test('R9: a crash at every one of the writes of a first on is finished by the next on; at every point an entry that exists points at a valid bundle; the user files come back byte for byte', async () => {
+test('R9: a crash at every one of the writes of a first on is finished by the next on; at every point an entry that exists points at a valid bundle; the user files come back byte for byte', { skip: POSIX_WORLD }, async () => {
   const counter = await sandbox({ installed: false })
   let writes = 0
   const count = { ...fs, renameSync: (a, b) => { writes++; return fs.renameSync(a, b) } }
@@ -115,7 +116,7 @@ test('R9: a crash at every one of the writes of a first on is finished by the ne
   }
 })
 
-test('R9: a second on on a complete install leaves installed_at, inode and mtime of every entry unchanged, rewrites neither the manifest nor the state, and says what it left alone', async () => {
+test('R9: a second on on a complete install leaves installed_at, inode and mtime of every entry unchanged, rewrites neither the manifest nor the state, and says what it left alone', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   const first = await s.run()
   assert.equal(first.exit, 0)
@@ -136,7 +137,7 @@ test('R9: a second on on a complete install leaves installed_at, inode and mtime
   assert.ok(!s.sys.exec.calls.some((c) => /^systemctl --user (enable|disable)/.test(c)), 'and the login entry is install\'s: on enables and disables nothing — `is-enabled` is a read (1.6 §3.3)')
 })
 
-test('R9: an entry the operator changed after trocar wrote it is reported and left; on never overwrites it, and off then on writes it again', async () => {
+test('R9: an entry the operator changed after trocar wrote it is reported and left; on never overwrites it, and off then on writes it again', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   await s.run()
   const settings = path.join(s.home, '.claude', 'settings.json')
@@ -154,7 +155,7 @@ test('R9: an entry the operator changed after trocar wrote it is reported and le
   assert.equal(JSON.parse(fs.readFileSync(settings, 'utf8')).env.NODE_EXTRA_CA_CERTS, path.join(s.dir, 'ca', 'extra-cc.pem'), 'trocar\'s entry again — now through the merge path, since a CA of the user\'s is named in the file')
 })
 
-test('R9: an edit of the settings file elsewhere (Claude Code rewrites it) is not a change to the entry: it stays intact and is not written again', async () => {
+test('R9: an edit of the settings file elsewhere (Claude Code rewrites it) is not a change to the entry: it stays intact and is not written again', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   await s.run()
   const settings = path.join(s.home, '.claude', 'settings.json')
@@ -166,7 +167,7 @@ test('R9: an edit of the settings file elsewhere (Claude Code rewrites it) is no
   assert.deepEqual(entryStats(s).find((e) => e.path === settings), stat, 'installed_at is when trocar wrote it, not when the file was last edited')
 })
 
-test('R9: on after off writes the entries again with a new installed_at; a bundle off kept without the CA for a live process gets the CA back and loses its without_ca mark (4.6 「合并包」)', async () => {
+test('R9: on after off writes the entries again with a new installed_at; a bundle off kept without the CA for a live process gets the CA back and loses its without_ca mark (4.6 「合并包」)', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   await s.run()
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
@@ -188,7 +189,7 @@ test('R9: on after off writes the entries again with a new installed_at; a bundl
   assert.equal(bundlesAreValid(s).length, 3)
 })
 
-test('R9: a manifest an older trocar wrote has no liveness for some harness: on adds it, and rewrites the others from the descriptors (identity united with what was recorded, 4.6 「判活快照」)', async () => {
+test('R9: a manifest an older trocar wrote has no liveness for some harness: on adds it, and rewrites the others from the descriptors (identity united with what was recorded, 4.6 「判活快照」)', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   await s.run()
   const file = path.join(s.dir, 'install-manifest.json')
@@ -205,7 +206,7 @@ test('R9: a manifest an older trocar wrote has no liveness for some harness: on 
   assert.ok(after.codex && typeof after.codex.rereads === 'boolean', 'codex has its record again')
 })
 
-test('D61: the login entry is install\'s — install writes it, rewrites it when what it would say changed (a daemon-reload first), and a later on never writes it', async () => {
+test('D61: the login entry is install\'s — install writes it, rewrites it when what it would say changed (a daemon-reload first), and a later on never writes it', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   const unitFile = path.join(s.home, '.config', 'systemd', 'user', 'trocar-collector.service')
   const opts = (script) => ({ home: s.home, env: s.sh.env, osName: 'linux', harnesses: descs, freePort: async () => 47011, roots: ROOTS, confirm: async () => true, request: s.sys.daemon.request, socketPath: SOCK, sleep: async () => {}, linger: () => true, user: 'alice', unit: s.unit(script) })
@@ -222,7 +223,7 @@ test('D61: the login entry is install\'s — install writes it, rewrites it when
   assert.deepEqual([fs.statSync(unitFile).ino, fs.statSync(unitFile).mtimeMs], mark, 'the on after it does not write the entry (D61)')
 })
 
-test('R12: on reads state.json before each write and stops, exit 1, when it says off for a harness it is turning on; what it wrote is a resumable install', async () => {
+test('R12: on reads state.json before each write and stops, exit 1, when it says off for a harness it is turning on; what it wrote is a resumable install', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   let writes = 0
   const stateFile = path.join(s.dir, 'state.json')
@@ -243,7 +244,7 @@ test('R12: on reads state.json before each write and stops, exit 1, when it says
   assert.equal(flows.at(-1).kind, 'result')
 })
 
-test('R12: a state.json a version 1 collector wrote (desired on or off) is read for the installed harnesses and written as version 2 by on, which then goes through; the guard reads it the same way (the upgrade path)', async () => {
+test('R12: a state.json a version 1 collector wrote (desired on or off) is read for the installed harnesses and written as version 2 by on, which then goes through; the guard reads it the same way (the upgrade path)', { skip: POSIX_WORLD }, async () => {
   const stamp = '2026-10-01T00:00:00.000Z'
   for (const desired of ['on', 'off']) for (const ids of [null, ['codex']]) {
     const s = await sandbox()
@@ -267,7 +268,7 @@ test('R12: a state.json a version 1 collector wrote (desired on or off) is read 
   }
 })
 
-test('on: with no daemon answering and no login entry it writes everything, exits 0 and says how to start the daemon', async () => {
+test('on: with no daemon answering and no login entry it writes everything, exits 0 and says how to start the daemon', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   const down = fakeDaemon({ up: false })
   const bare = await s.run({ unit: null, request: down.request })
@@ -280,7 +281,7 @@ test('on: with no daemon answering and no login entry it writes everything, exit
 
 })
 
-test('on: a unit systemd refuses to enable, a daemon that never answers, a kernel that does not confirm — each exit 1 with the reason, recorded; the attach is not asked when the unit failed', async () => {
+test('on: a unit systemd refuses to enable, a daemon that never answers, a kernel that does not confirm — each exit 1 with the reason, recorded; the attach is not asked when the unit failed', { skip: POSIX_WORLD }, async () => {
   const refused = await sandbox()
   const sys = fakeSystem()
   // D61: `on` does not enable; it starts the daemon through the entry install registered, and itself when systemd refuses (the reason said, D38)
@@ -301,7 +302,7 @@ test('on: a unit systemd refuses to enable, a daemon that never answers, a kerne
   assert.ok(flows.some((f) => f.event === 'failure' && f.where === 'switch'), 'recorded where the board looks (D38)')
 })
 
-test('on: the processes the daemon says are not captured yet are the restart list (config-after-start, env-frozen, no-marker, kimi-not-via-shim), by pid and harness; trusted ones and the other harnesses\' are not', async () => {
+test('on: the processes the daemon says are not captured yet are the restart list (config-after-start, env-frozen, no-marker, kimi-not-via-shim), by pid and harness; trusted ones and the other harnesses\' are not', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   const sys = fakeSystem({ agents: [
     { pid: 4121, agent: 'claude-code', trusted: false, reason: 'config-after-start' },
@@ -316,7 +317,7 @@ test('on: the processes the daemon says are not captured yet are the restart lis
   assert.deepEqual(validateReceipt(r.receipt), [])
 })
 
-test('on: the linger line — false says how to enable it and never runs loginctl, true says nothing, unreadable says 不知道 and never "已开" (1.6 §1.1, V39 on side)', async () => {
+test('on: the linger line — false says how to enable it and never runs loginctl, true says nothing, unreadable says 不知道 and never "已开" (1.6 §1.1, V39 on side)', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   const r = await s.run({ linger: () => false })
   assert.deepEqual([r.receipt.linger, s.sys.exec.calls.some((c) => /loginctl/.test(c))], [false, false])
@@ -326,7 +327,7 @@ test('on: the linger line — false says how to enable it and never runs loginct
   assert.equal((await (await sandbox()).run({ linger: () => { throw new Error('EACCES') } })).receipt.linger, 'unknown')
 })
 
-test('on: named harnesses only — on codex writes codex\'s files and turns on codex alone; a named harness with nothing to install is skipped with the descriptor\'s reason and is not "done"', async () => {
+test('on: named harnesses only — on codex writes codex\'s files and turns on codex alone; a named harness with nothing to install is skipped with the descriptor\'s reason and is not "done"', { skip: POSIX_WORLD }, async () => {
   const all = await loadHarnesses()
   const s = await sandbox({ installed: false }); for (const p of ['.hermes', '.local/bin/hermes']) fs.rmSync(path.join(s.home, p), { recursive: true }) // Hermes is not installed here; the first run installs what it names
   const r = await s.run({ ids: ['codex', 'hermes'], harnesses: all })
@@ -343,7 +344,7 @@ test('on: named harnesses only — on codex writes codex\'s files and turns on c
   assert.deepEqual(snapshot(t.home), before, 'nothing to turn on: nothing written, not even the manifest')
 })
 
-test('on: root is refused by the library too (R7), and a missing helper stops it before anything is written', async () => {
+test('on: root is refused by the library too (R7), and a missing helper stops it before anything is written', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox(); const before = snapshot(s.home)
   await assert.rejects(s.run({ getuid: () => 0 }), /not as root/)
   const r = await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })
@@ -353,7 +354,7 @@ test('on: root is refused by the library too (R7), and a missing helper stops it
 
 // (R1, R6, V7): a failed `on` that wrote nothing still pointed at `~/.trocar/bin/trocar-off` and the flows/ log, neither of which exists; and a dry run with the helper
 // missing exited 1 with no plan, so the plan could not be read before deciding to `sudo trocar setup-helper` — V7 says a dry run exits 0.
-test('R1 / R6: an `on` that stopped before writing anything says so — no change, nothing made, no undo and no log to point at, no trocar-off path (helper missing, no agent found, the lock held)', async () => {
+test('R1 / R6: an `on` that stopped before writing anything says so — no change, nothing made, no undo and no log to point at, no trocar-off path (helper missing, no agent found, the lock held)', { skip: POSIX_WORLD }, async () => {
   const noHelper = () => ({ ok: false, reason: 'no helper' })
   const s = await sandbox(); const before = snapshot(s.home)
   const r = await s.run({ helperState: noHelper })
@@ -377,7 +378,7 @@ test('R1 / R6: an `on` that stopped before writing anything says so — no chang
   assert.equal(fs.readFileSync(path.join(held.home, '.claude', 'settings.json'), 'utf8'), settingsBefore, 'and none was')
 })
 
-test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and exits 0 — the stop a real run would meet is in the receipt (`blocked`, a note) — and writes nothing; the real run exits 1', async () => {
+test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and exits 0 — the stop a real run would meet is in the receipt (`blocked`, a note) — and writes nothing; the real run exits 1', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox(); const before = snapshot(s.home)
   const ok = await s.run({ dryRun: true })
   const dry = await s.run({ dryRun: true, helperState: () => ({ ok: false, reason: 'no helper' }) })
@@ -395,7 +396,7 @@ test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and 
 })
 
 // (R11): the lines of an `on` go through the same writer as `off`'s — a line that cannot be written reaches stderr first and the receipt's notes, and does not stop the install.
-test('R11: with flows/ unwritable `on` still installs (exit 0); stderr and the receipt say each line that could not be recorded', async () => {
+test('R11: with flows/ unwritable `on` still installs (exit 0); stderr and the receipt say each line that could not be recorded', { skip: POSIX_WORLD }, async () => {
   const s = await sandbox()
   const err = []
   const flaky = new Proxy(fs, { get: (o, k) => (k === 'appendFileSync' ? () => { throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) } : o[k]) })
@@ -429,7 +430,7 @@ test('R21 the plan reads agents.json: a running agent of a custom name (claude-n
 
 // R13 (1.6 V65, D48): the list file belongs to the user — `on`, a second `on`, and `off` leave ~/.trocar/agents.json byte for byte and untouched (mtime), whether it
 // reads cleanly (a custom item, an ignore, a bad item) or does not parse at all.
-test('R13 V65 on, on again and off leave agents.json byte for byte unchanged (a valid list with a bad item, and one that is not JSON)', async () => {
+test('R13 V65 on, on again and off leave agents.json byte for byte unchanged (a valid list with a bad item, and one that is not JSON)', { skip: POSIX_WORLD }, async () => {
   const { installedHome } = await import('../off/fixtures/off-ctx.mjs')
   const docs = {
     valid: `${JSON.stringify({ version: 1, agents: [{ harness: 'claude-code', name: 'claude-nightly' }, { harness: 'codex', name: 'codex', ignore: true }, { harness: 'claude-code', name: 'node' }] }, null, 2)}\n`,

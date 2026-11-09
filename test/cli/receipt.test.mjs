@@ -23,6 +23,7 @@ import { assertEnglish } from '../helpers/english.mjs'
 import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
 import { runStatus, down, reply, asDaemon } from './fixtures/status-ctx.mjs'
 import { selfCommand } from '../../src/version.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
 // 1.6 §3.2 sample: the line after `If trocar itself breaks, run:` is the standalone trocar-off, HOME shown as ~
@@ -255,7 +256,7 @@ const bookkeeping = (rel) => /^\.trocar\/(backup|collector\/flows)\//.test(rel) 
 const listedPaths = (r) => new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || []).map((x) => (typeof x === 'string' ? x : x.path)), ...(r.kept_bundles || []).map((k) => k.path), ...((r.autostart && r.autostart.removed) || [])])
 const ctxOf = (s, io, deps = {}) => ({ io, env: s.sh.env, home: s.home, platform: 'linux', deps: s.offDeps({ getuid: () => 1000, ...deps }) })
 
-test('V3 (off): every file the receipt lists, in the text and in --json, is a file that changed, and every user file that changed is listed', async () => {
+test('V3 (off): every file the receipt lists, in the text and in --json, is a file that changed, and every user file that changed is listed', { skip: POSIX_WORLD }, async () => {
   const setup = async () => {
     const s = await installedHome({ names: ['claude-code', 'codex'] })
     fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EDITED_AFTER=1\n') // a file the user edited after trocar: still listed, as undone-but-not-identical
@@ -279,7 +280,7 @@ test('V3 (off): every file the receipt lists, in the text and in --json, is a fi
   assert.deepEqual(rows.filter((f) => b.certs.has(f)), [], 'and lists none')
 })
 
-test('V3 (uninstall): the receipt lists what changed and what trocar removed — the files that changed or went are exactly those, the captures and the records excepted', async () => {
+test('V3 (uninstall): the receipt lists what changed and what trocar removed — the files that changed or went are exactly those, the captures and the records excepted', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   fs.mkdirSync(path.join(s.dir, 'audit'), { recursive: true }); fs.writeFileSync(path.join(s.dir, 'audit', 'a.ndjson'), '{}\n') // a capture: kept, so not in the receipt
   const before = snapshot(s.home)
@@ -294,7 +295,7 @@ test('V3 (uninstall): the receipt lists what changed and what trocar removed —
   assert.ok(r.dropped_backups.length > 0 && r.dropped_backups.every((b) => !fs.existsSync(b)), 'the backups it deleted are named')
 })
 
-test('V3 (uninstall — the certificate entries are its, D55① — the install manifest cannot be saved at the end): the entries were undone all the same, so the receipt — text and --json — lists exactly the files that changed, says why it stopped, exits 1; the next off finishes', async () => {
+test('V3 (uninstall — the certificate entries are its, D55① — the install manifest cannot be saved at the end): the entries were undone all the same, so the receipt — text and --json — lists exactly the files that changed, says why it stopped, exits 1; the next off finishes', { skip: POSIX_WORLD }, async () => {
   const setup = async () => {
     const s = await installedHome({ names: ['claude-code', 'codex'] })
     const manifestFile = path.join(s.dir, 'install-manifest.json')
@@ -356,7 +357,7 @@ test('V29: the on receipt after install, in the text and in --json, carries the 
 
 // V10 (1.6 R11, §6, D49): what `status` could not read is `unknown (<reason>)` — the connections still relayed (a daemon whose reply carries no count), the
 // daemon itself (a lock that cannot be read) — and never a confident 0 or none, in the text and in --json
-test('V10: status says unknown with the reason for connections the daemon did not count, and a lock that could not be read — never 0 or none', async () => {
+test('V10: status says unknown with the reason for connections the daemon did not count, and a lock that could not be read — never 0 or none', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   // the daemon answers, but its reply has no `relayed`
   let r = await runStatus(s, [], { request: asDaemon(reply({ relayed: undefined })) })
@@ -433,7 +434,7 @@ test('uninstall text: a file is one row of Removed, however its entries spell it
 
 // 1.6 §1.4「只问一次」· §1.1 ④ rules 4 and 6: an interactive uninstall shows its plan and asks — nothing before the question says nothing was changed
 // or to run it with --yes (the question is the way on); with no terminal the plan is followed by the one way on, --yes
-test('§1.4: interactive uninstall asks with no "Nothing was changed" or --yes before Proceed; without a terminal it says --yes', async () => {
+test('§1.4: interactive uninstall asks with no "Nothing was changed" or --yes before Proceed; without a terminal it says --yes', { skip: POSIX_WORLD }, async () => {
   for (const flags of [[], ['--details']]) {
     const s = await installedHome({ names: ['codex'] })
     const io = fakeIo({ tty: true, answers: ['n'] })

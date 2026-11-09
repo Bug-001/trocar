@@ -13,6 +13,7 @@ import { readManifest } from '../../src/off/manifest.mjs'
 import { userUnit } from '../../src/collector/arch/linux/unit.mjs'
 import { sevenHomes } from '../off/fixtures/seven-homes.mjs'
 import { snapshot, fakeSystem, ROOTS } from '../cli/fixtures/on-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const OS = 'linux'
 const REAL = (await loadHarnesses()).filter((d) => typeof d.inject === 'function')
@@ -41,7 +42,7 @@ const injectPaths = (b, d) => {
 const itemsOf = (m, name) => [...m.entries, ...m.files].filter((x) => x.harness === name)
 const harnessesOf = (b) => readManifest(b.dir).install.harnesses
 
-test('4.6 targets: a harness is a target iff it is present with items from inject, or the manifest has its items; otherwise skipped names it', async () => {
+test('4.6 targets: a harness is a target iff it is present with items from inject, or the manifest has its items; otherwise skipped names it', { skip: POSIX_WORLD }, async () => {
   for (const d of FP) {
     for (const cell of ['none', 'installed', ...(STRIP[d.name] ? ['q5'] : [])]) for (const present of [true, false]) {
       const b = box()
@@ -113,7 +114,7 @@ test('4.6 Q5: present, inject gives nothing — install writes no byte for it, s
   }
 })
 
-test('4.6 absent after install: install again keeps its manifest items and carrier bytes, it stays a target, setup is ready', async () => {
+test('4.6 absent after install: install again keeps its manifest items and carrier bytes, it stays a target, setup is ready', { skip: POSIX_WORLD }, async () => {
   for (const d of FP) {
     const b = box()
     place(b, d, true)
@@ -131,7 +132,7 @@ test('4.6 absent after install: install again keeps its manifest items and carri
   }
 })
 
-test('4.6 arrives later: absent at install, its footprint made, install again places its carriers, it joins install.harnesses, the rest is byte-identical', async () => {
+test('4.6 arrives later: absent at install, its footprint made, install again places its carriers, it joins install.harnesses, the rest is byte-identical', { skip: POSIX_WORLD }, async () => {
   for (const [i, d] of FP.entries()) {
     const other = FP[(i + 1) % FP.length]
     const b = box()
@@ -147,7 +148,7 @@ test('4.6 arrives later: absent at install, its footprint made, install again pl
   }
 })
 
-test('4.6 on <absent, never installed> by name: exit 1, it is skipped, no desired on for it', async () => {
+test('4.6 on <absent, never installed> by name: exit 1, it is skipped, no desired on for it', { skip: POSIX_WORLD }, async () => {
   for (const [i, d] of FP.entries()) {
     const other = FP[(i + 1) % FP.length]
     const b = box()
