@@ -5,7 +5,7 @@
 // the bottom sheet. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot, layoutFaults, stepKey } from './harness.mjs'
+import { probe, withBoard, shoot, layoutFaults, stepKey, settle } from './harness.mjs'
 import { typeFaults } from './type-inventory.mjs'
 import { CACHE_POPOVER_LABEL } from '../../../web/legacy/labels/replay.mjs'
 import { CT_ORDER } from '../../../web/legacy/replay/analysis.mjs'
@@ -18,7 +18,7 @@ const BYTES = 5e6
 async function openSession(b, r) {
   await b.page.evaluate((h) => { location.hash = h }, `#/replay/${encodeURIComponent(r.project_slug)}/${encodeURIComponent(r.session_id)}`)
   await b.page.waitForFunction((id) => location.hash.includes(encodeURIComponent(id)) && !!document.querySelector('#stepbar .sb-no') && !!document.querySelector('#ctxwin') && !document.querySelector('#ctxwin .cwload'), r.session_id, { timeout: 15000 })
-  await b.page.waitForLoadState('networkidle')
+  await settle(b.page)
 }
 // the sessions with calls, most calls first
 const byCalls = async (b) => (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0).sort((x, y) => (y.calls || 0) - (x.calls || 0))

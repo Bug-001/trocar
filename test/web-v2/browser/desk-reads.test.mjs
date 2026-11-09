@@ -5,7 +5,7 @@
 // keeps the drawn window (2.3 §读失败); the anchor lane's ledger chain (3.5 §手里车道的页). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld } from './harness.mjs'
+import { probe, withBoard, serveWorld, settle } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { QUERIES } from '../../../src/query/named/index.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
@@ -41,10 +41,10 @@ test('2.3 #25: scrubbing the desk reads nothing before a 100 ms rest, keeps ≤ 
     await page.waitForFunction(() => !document.querySelector('#ctxwin [aria-busy="true"]'))
     for (const t0 = Date.now(); !historyIn && Date.now() - t0 < 15000;) await page.waitForTimeout(50) // the drag runs over a history all in hand
     assert.ok(files >= 4 && historyIn, `every pack came in (${got.size} of ${files})`)
-    await page.waitForLoadState('networkidle')
+    await settle(page)
     // from here the page's time moves only when the test moves it
     await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
-    await page.waitForLoadState('networkidle')
+    await settle(page)
     const n = await page.evaluate(() => window.__stepNo().m)
     assert.ok(n >= 6, `the world's main lane has steps to scrub (${n})`)
 
