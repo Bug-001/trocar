@@ -45,6 +45,9 @@ test('status: the summary says no unsaid word for any reason, and --details name
       const lines = statusSummary({ ...doc({ pi: harness() }), daemon, board, autostart: { state: 'absent', reason: 'the daemon login entry is not registered', command: 'trocar install' } }, { now: NOW })
       plain(lines, `status (${JSON.stringify(daemon)})`)
       assert.ok(lines[0].includes("trocar's service"), `the head says the service: ${lines[0]}`)
+      // rule 2: the result is the head line, whole; the step to take (a command) is on a line of its own, never folded into it
+      const top = lines.slice(0, lines.indexOf('')), cmd = (l) => /\btrocar (?:install|on)\b/.test(l)
+      assert.ok(top.filter((l) => !cmd(l)).at(-1).endsWith('.') && top.filter(cmd).every((l) => !l.includes("trocar's service")), `the head is the result alone:\n${lines.join('\n')}`)
     }
   }
 })
