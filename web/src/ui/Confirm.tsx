@@ -34,10 +34,12 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   const done = (ok: boolean) => {
     const resolve = pending.current
     pending.current = null
-    flushSync(() => setOpts(null)) // the dialog is gone when this returns, so the asker can take the focus now
+    // the dialog is gone when this returns (it has no exit animation; with one, the focus would still be inside and React Aria's own
+    // frame-later restore would do it), so the asker can take the focus now, as React Aria would: without scrolling
+    flushSync(() => setOpts(null))
     const back = asker.current
     asker.current = null
-    if (back && back.isConnected && document.activeElement === document.body) back.focus()
+    if (back && back.isConnected && document.activeElement === document.body) back.focus({ preventScroll: true })
     resolve?.(ok)
   }
   const { q, impact = '', lines = [], confirmLabel = '', cancelLabel = 'Cancel' } = opts ?? { q: '', confirmLabel: '' }
