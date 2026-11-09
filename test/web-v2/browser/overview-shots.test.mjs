@@ -6,7 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { probe, withBoard, shoot } from './harness.mjs'
+import { probe, withBoard, shoot, settle } from './harness.mjs'
 import { ALIASES, HARNESS_ORDER, harnessKey } from '../../../web/legacy/core/chips.mjs'
 import { CARD } from '../../../web/legacy/labels/overview.mjs'
 import { CTL } from '../../../web/legacy/labels/capture.mjs'
@@ -49,20 +49,20 @@ for (const width of [1280, 1024]) {
     test(`the overview and its first-use page at ${width} in ${theme}`, { skip }, async () => {
       const b = await withBoard({ bytes: 2e6, width, theme, chromium: gate.chromium })
       try {
-        await go(b.page, '#/overview', recentLinks); await b.page.waitForLoadState('networkidle')
+        await go(b.page, '#/overview', recentLinks); await settle(b.page)
         if (width === 1280) assert.deepEqual(await recentFit(b.page), [])
         assert.equal(await hscroll(b.page), false)
         await shoot(b.page, 'overview', { width, theme })
         await b.page.route('**/api/sessions?**', (r) => r.fulfill({ json: EMPTY }))
         await go(b.page, '#/settings/appearance', themePage); await go(b.page, '#/overview', (p) => card(p, CARD.start))
-        await b.page.waitForLoadState('networkidle')
+        await settle(b.page)
         for (const name of [CARD.items, CARD.stats, CARD.recent]) assert.equal(await card(b.page, name).count(), 0, name)
         assert.equal(await hscroll(b.page), false)
         await shoot(b.page, 'overview-first-use', { width, theme })
         await b.page.route('**/api/status*', (r) => r.fulfill({ json: twoAgents() }))
         await b.page.route('**/control/status*', (r) => r.fulfill({ json: { control: true } }))
         await go(b.page, '#/settings/appearance', themePage); await go(b.page, '#/overview', controls)
-        await b.page.waitForLoadState('networkidle')
+        await settle(b.page)
         assert.deepEqual((await controls(b.page).evaluateAll((xs) => xs.map((x) => x.closest('[data-hctl]').dataset.hctl))).sort(), ['setup', 'switch'])
         assert.equal(await hscroll(b.page), false)
         await shoot(b.page, 'overview-first-use-agents', { width, theme })

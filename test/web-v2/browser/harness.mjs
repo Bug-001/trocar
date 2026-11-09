@@ -165,6 +165,7 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
   try {
     browser = await launchChrome(chromium, pids)
     context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
+    trackRequests(context)
     page = await context.newPage()
     page.on('pageerror', (e) => errors.push(String(e)))
     // TROCAR_CPU_RATE=<n>: the page's CPU slowed n times (CDP), for report-only runs on a slower machine's footing
@@ -219,6 +220,29 @@ export function gapInPage() {
   return { gap: Math.max(gap, end - at), pitch }
 }
 export const windowGap = (page) => page.evaluate(gapInPage)
+
+// every page's requests in flight and the time the last one started or ended, from its context's events (a page withBoard's context opens)
+const NET = new WeakMap()
+function trackRequests(context) {
+  const net = (r) => { let p; try { p = r.frame().page() } catch { return null } if (!NET.has(p)) NET.set(p, { open: 0, last: Date.now() }); return NET.get(p) }
+  const end = (r) => { const n = net(r); if (n) { n.open = Math.max(0, n.open - 1); n.last = Date.now() } }
+  context.on('request', (r) => { const n = net(r); if (n) { n.open++; n.last = Date.now() } })
+  context.on('requestfinished', end)
+  context.on('requestfailed', end)
+}
+/** Until `page` has had no request in flight, and none started or ended, for `ms`: the board's own reads after an action are over (an
+ *  opened desk's 100 ms rest and its body reads, 2.3 §正文预取; a screen's first reads). Playwright's waitForLoadState('networkidle')
+ *  cannot say this after the page's load: the page reached that state once, and moving the hash does not reset it, so it returns at once.
+ *  Rejects after `deadline` ms with what is still open. A page made in a withBoard context only. */
+export async function settle(page, ms = 500, deadline = 30_000) {
+  const t0 = Date.now()
+  for (;;) {
+    const n = NET.get(page) || { open: 0, last: t0 }, wait = n.open ? ms : n.last + ms - Date.now()
+    if (!n.open && wait <= 0) return
+    if (Date.now() - t0 > deadline) throw new Error(`the page did not settle in ${deadline / 1000} s: ${n.open} request(s) in flight`)
+    await page.waitForTimeout(Math.max(20, Math.min(wait, ms)))
+  }
+}
 
 /** ms from the input `act` makes (its first pointerdown / keydown, marked by a listener armed and awaited before it, so the input can
  *  never outrun it) until `cond` holds and that frame has painted: 'replay' (a session's window drawn), 'step' (the step head no longer
