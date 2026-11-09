@@ -23,7 +23,7 @@ export const DEFAULT_PRICING = {
   'haiku-5': [0.1, 0.5, 0.125, 0.01], // Haiku 5.5
 };
 
-export const DEFAULT_PRICING_PATH = process.env.TROCAR_PRICING || path.join(os.homedir(), '.atrace', 'pricing.json');
+const DEFAULT_PRICING_PATH = process.env.TROCAR_PRICING || path.join(os.homedir(), '.atrace', 'pricing.json');
 
 const isRow = (v) => Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === 'number' && n >= 0);
 

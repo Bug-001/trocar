@@ -33,7 +33,7 @@ export function readState(file, onError = () => {}, { installed = [] } = {}) {
   try { return withDefaults(readStateFile(file, { installed }).state) } catch (e) { onError(e); return allOff(installed) }
 }
 
-export function writeState(file, state) { writeStateAtomic(file, state) }
+function writeState(file, state) { writeStateAtomic(file, state) }
 
 export function createSwitch({ redirector, stateFile, known, installed = () => [], ensureReady = async () => {}, reconcile = null, onEvent = () => {} }) {
   const unreadable = (e) => onEvent({ event: 'failure', where: 'state', code: e.code || 'state-unparsable', reason: `${stateFile} is unreadable (${String((e && e.message) || e)}); the desired state reads as off until on/off rewrites it` })

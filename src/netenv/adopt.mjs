@@ -154,7 +154,7 @@ export function readAdopted(home, { fs = nodeFs } = {}) {
 // ── what `on` found and drew, and the drift from it (§9.5) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** The facts as they will be once `on` has turned `ids` on: wanted on, a daemon that answers, a helper and the links there, the entry in place, and no process of it yet. The chain `on` prints and records is the
  *  topology of these facts: where a new connection of the agent will go. Driver mode only: another routing's chain depends on what its platform starts (proxy mode: the kernel), so it is drawn from the facts after `on`. */
-export function projectedOn(facts, ids) {
+function projectedOn(facts, ids) {
   const harnesses = { ...facts.harnesses }
   for (const h of ids) if (harnesses[h]) harnesses[h] = { ...harnesses[h], entry: { state: 'intact' }, installedAt: facts.at, procs: [], negatives: [] }
   return { ...facts, desired: { ...facts.desired, ...Object.fromEntries(ids.map((h) => [h, 'on'])) }, daemon: { ...facts.daemon, state: 'running' }, link: { ...facts.link, attached: true, helper: 'ok' }, harnesses }

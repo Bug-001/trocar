@@ -14,6 +14,7 @@ import { readHead } from '../../../src/query/ctx-files.mjs'
 import { bigSession } from '../../query/big-session.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { stripLayout } from '../../../web/src/screens/replay/strip-layout.mjs'
+import { listed } from '../../helpers/head-done.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -34,7 +35,7 @@ async function folded(ms) {
   for (;;) {
     const r = await b.get('session', { id: s.id, head: '1' })
     const file = readHead(home, s.id)
-    if (file && file.tier === 1 && !file.pending && file.packs.length >= 3 && file.mark === r.doc.mark) { head = file; break }
+    if (file && file.tier === 1 && !file.pending && listed(file) && file.packs.length >= 3 && file.mark === r.doc.mark) { head = file; break }
     assert.ok(Date.now() < until, 'the session was folded with its files in 240 s')
     await new Promise((ok) => setTimeout(ok, 500))
   }

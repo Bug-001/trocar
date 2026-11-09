@@ -19,6 +19,7 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, rng } from './big-session.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
@@ -227,7 +228,7 @@ test('3.5 #35, files missing: a session folded before the answer files (fold log
     }
     const w = workerFork(m.home)
     try {
-      await until(() => { const h = tryHead(m); return h && h.tier === 1 && h.pending == null && fs.existsSync(path.join(dirOf(m), 'open.rest.ndjson')) }, 120_000, `${layout}: the upgrade wrote a tier-1 head and the tails`)
+      await until(() => { const h = tryHead(m); return h && h.tier === 1 && h.pending == null && listed(h) && fs.existsSync(path.join(dirOf(m), 'open.rest.ndjson')) }, 120_000, `${layout}: the upgrade wrote a tier-1 head and the tails`)
     } finally { w.kill() }
     assert.equal(fileText(m, 'head.json.gz'), fileText(x, 'head.json.gz'), layout)
     assert.deepEqual(packNames(m), packNames(x), layout)

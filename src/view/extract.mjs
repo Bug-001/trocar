@@ -10,7 +10,8 @@
 // depends on the block's place in a call (a turn boundary, a volatile block, the links between a file's tool_use and its result) is
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
-import { admitted, flatBlockText, blockFacts, callFacts, normResp, linearContext } from './analyze.mjs';
+import { admitted, flatBlockText, blockFacts, callFacts, linearContext } from './analyze.mjs';
+import { normResp } from '../dissect/record-fields.mjs';
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { BODY, readsOf } from './render-kind.mjs';
 import { blockSpans } from '../dissect/cc-spans.mjs';
@@ -33,14 +34,14 @@ import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, res
 const SEP = '\x1F';
 const b64 = (s) => createHash('sha256').update(s, 'utf8').digest().subarray(0, 16).toString('base64url');
 /** bidOf(sec, role, exactText) → the block id: sha256(sec 0x1F role 0x1F exact text, as UTF-8), first 16 bytes, base64url (22 chars). */
-export const bidOf = (sec, role, text) => b64(sec + SEP + role + SEP + text);
+const bidOf = (sec, role, text) => b64(sec + SEP + role + SEP + text);
 /** canonical JSON: object keys sorted, recursively (an unaddressable block's identity). */
 const canonicalJson = (v) => JSON.stringify(v, (k, x) => (x && typeof x === 'object' && !Array.isArray(x)
   ? Object.fromEntries(Object.keys(x).sort().map((key) => [key, x[key]])) : x));
 /** The id of a block with no span: 'u' 0x1F sec 0x1F role 0x1F its canonical JSON. */
-export const unaddressableBid = (sec, role, value) => b64('u' + SEP + sec + SEP + role + SEP + (canonicalJson(value) ?? 'null'));
+const unaddressableBid = (sec, role, value) => b64('u' + SEP + sec + SEP + role + SEP + (canonicalJson(value) ?? 'null'));
 /** fh: sha256 hex of the block's length-prefixed frame (cache_control is not in it). */
-export const fhOf = (b) => { const t = flatBlockText(b); return createHash('sha256').update(String(t.length) + ':' + t, 'utf8').digest('hex'); };
+const fhOf = (b) => { const t = flatBlockText(b); return createHash('sha256').update(String(t.length) + ':' + t, 'utf8').digest('hex'); };
 const CC = '"cache_control"';
 /**
  * vhOf(exact) → the SHA-256 (base64url) of a block's verbatim slice with its own `cache_control` member cut out by byte span: the
@@ -48,7 +49,7 @@ const CC = '"cache_control"';
  * byte-identical" flag compares. null when the cut cannot be placed for sure (the slice does not scan, the member's key is not
  * spelled plainly): no proof rather than a wrong one.
  */
-export function vhOf(exact) {
+function vhOf(exact) {
   let t = exact;
   if (t.includes(CC)) {
     let root = null;
@@ -108,7 +109,7 @@ export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact
 // ── what a record's own bytes hold ──────────────────────────────────────────────────────────────────────────────────────────────
 // The wire a call is read on: its board dissector (a flat-lane wire or the tree-folded Anthropic wire), or null (no call: counted,
 // never guessed at).
-export function callWireOf(r) {
+function callWireOf(r) {
   if (!r || !r.is_llm_call || isLogOnly(r)) return null; // D40: a call kept as a log line is no step (the session's `logged`)
   let d = boardDissectorFor(r);
   if (d && d.admits && !d.admits(r)) d = null;
@@ -162,7 +163,7 @@ const FOLD_PATHS = {
 };
 const readCall = (rec, wire) => FOLD_PATHS[wire.d.fold].read(rec, wire.d);
 /** requestBlocks(rec, wire, read?) → { flat, at: [{ref, exact, why}] } — the request's blocks, each with the exact text its ref names. */
-export function requestBlocks(rec, wire, read = readCall(rec, wire), paths = pathContext(rec)) {
+function requestBlocks(rec, wire, read = readCall(rec, wire), paths = pathContext(rec)) {
   return FOLD_PATHS[wire.d.fold].blocks(rec, wire, read, rawRefOf(rec), spanBody(rec), paths);
 }
 const locate = (base, text, span, field = null) => {
@@ -642,7 +643,7 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
 // wire req_body, so AC-1 holds MORE directly for D10 than v0. No-op for records already in v0 shape.
 // A context the dissector stitched across records (ctx, D37 ②) stands in for the call's own body, and rides on the
 // copy as the non-enumerable `_ctx` (state, lineage) for the lane segmentation in analyze().
-export function hydrateForBoard(r, ctx = null) {
+function hydrateForBoard(r, ctx = null) {
   if (!r || r.request !== undefined || typeof r.req_body !== 'string') return r; // already v0 / not a D10 body
   const body = ctx ? ctx.req : parsedRequestBody(r); // parsed once per record (src/dissect/request-body.mjs)
   if (!body || typeof body !== 'object') return r; // unparseable → leave (analyze filters it)
@@ -670,12 +671,12 @@ export function hydrateForBoard(r, ctx = null) {
 
 // Session key per harness (RFC 3.4 table, D37): read from the ONE table the ETL and sharder also use; else the
 // synthesized key extractMembers stamped on a keyless Hermes / Kimi call (3.4 合成键, gate G11).
-export function sessionIdOf(rec) {
+function sessionIdOf(rec) {
   return sessionKeyOf(rec).key ?? (rec && rec._synthKey) ?? null;
 }
 
 // What the evidence block for records no dissector claims (reduce.mjs unknownSummary) keeps of one such record (the fold lets the record go): endpoint, user-agent, model.
-export function unknownFacts(r) {
+function unknownFacts(r) {
   const b = parsedRequestBody(r);
   return { endpoint: String((r && r.endpoint) || '').split('?')[0], ua: (headersOf(r) || {})['user-agent'], model: b && typeof b.model === 'string' ? b.model : null };
 }
@@ -685,7 +686,7 @@ export function unknownFacts(r) {
 // null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) is no body at all: such a call
 // has no request, and its labels say why (wsIncomplete); it must not take /api/session down either.
 // Side effect, as the board's callComp / cost need it: `r.request` is the parsed request, with the dissector's counts.
-export function flatRequest(d, r, ctx) {
+function flatRequest(d, r, ctx) {
   let req = ctx ? ctx.req : null, unparsed = false;
   if (!ctx) {
     const v = storedRequestBody(r); // the record's one parse, READ-ONLY: the counts below go on a copy
@@ -712,7 +713,7 @@ export function flatRequest(d, r, ctx) {
 // The body is not lost, it is where it always was: in the raw NDJSON, addressed by the same ref its
 // blocks carry.
 const REQ_KEEP = ['model', 'context_chars', 'message_count', 'tool_count', 'system_chars'];
-export function slimRec(rec) {
+function slimRec(rec) {
   if (!rec) return rec;
   const rq = rec.request || {};
   const request = {};
@@ -722,7 +723,7 @@ export function slimRec(rec) {
 
 // The request text spans are cut from: the captured string. A converted v0 record's is re-serialized, not the wire's, so nothing is
 // addressed into it: its blocks ship inline and say why, and it has no non-block keys (2.3 §窗口行 · 2.6 §A v0 记录).
-export const spanBody = (rec) => (rec && typeof rec.req_body === 'string' && rec.capture !== V0_CONVERTED ? rec.req_body : null);
+const spanBody = (rec) => (rec && typeof rec.req_body === 'string' && rec.capture !== V0_CONVERTED ? rec.req_body : null);
 // A record's raw_ref (4.2:40), or null when it cannot be addressed: no id, or no stream it was read from.
 export const rawRefOf = (rec) => (rec && rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null);
 
@@ -745,7 +746,7 @@ function cacheSemanticsKnown(vendor, wireFormat) {
 // incompleteness labels (4.6 §记录 「不完整的标注」 — shown on the call, never dropped). Cheap: no body parse.
 // A cross-record context (ctx, from the dissector) brings its own state and, when partial, what is missing;
 // `norm.unread` counts reply messages the dissector could not read (D38: never skipped without a trace).
-export function wireOf(rec, format, ctx = null, norm = null, closed = false) {
+function wireOf(rec, format, ctx = null, norm = null, closed = false) {
   const labels = captureLabelsOf(rec, closed);
   const unread = norm && norm.unread;
   if (unread) labels.push({ id: 'reply-unread', label: `${unread} reply message${unread > 1 ? 's' : ''} not read`,
@@ -760,7 +761,7 @@ export function wireOf(rec, format, ctx = null, norm = null, closed = false) {
 // 3.1:37: client messages that arrived while the call was open (req_extra_messages, e.g. an interrupt) belong to
 // the call and MUST be visible — listed one by one with a locator to their verbatim text (4.2:40 字段段), or with
 // what is stored instead. Cheap meta: no parse.
-export function extraMessagesOf(rec) {
+function extraMessagesOf(rec) {
   const xs = rec && Array.isArray(rec.req_extra_messages) ? rec.req_extra_messages : [];
   if (!xs.length) return null;
   const base = rawRefOf(rec);
@@ -777,7 +778,7 @@ export function extraMessagesOf(rec) {
 // message. Joining an HTTP call's resolved pieces gives the whole decoded reply. A piece that cannot be addressed is
 // listed with why (invariant 4), never dropped. Envelope fields only (record-fields.mjs): no wire knowledge.
 // → [{ label, ref: string|null, chars: number|null, why? }]
-export function respRefsOf(rec) {
+function respRefsOf(rec) {
   const r = respOf(rec);
   if (!r) return [{ label: 'reply', ref: null, chars: null, why: 'no response is recorded for this call' }];
   const part = r.kind === 'error' && r.partial && typeof r.partial === 'object' ? r.partial : r;
@@ -808,7 +809,7 @@ function scalarOf(text, node) {
   try { v = JSON.parse(text.slice(node.start, node.end)); } catch { return undefined; }
   return typeof v === 'number' || typeof v === 'boolean' || (typeof v === 'string' && v.length <= SHORT_STRING) ? v : undefined;
 }
-export function nonBlockKeysOf(rec, format) {
+function nonBlockKeysOf(rec, format) {
   if (spanBody(rec) == null) return [];
   const root = scannedRequestBody(rec);   // the record's one scan (src/dissect/request-body.mjs)
   if (!root || root.kind !== 'object') return [];

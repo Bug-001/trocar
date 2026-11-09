@@ -114,7 +114,7 @@ test('ease: rows and a rebuilt index are what they are without it, whatever the 
     if (index === 'missing') fs.rmSync(indexDir(home), { recursive: true })
     if (index === 'other version') for (const segment of segments) {
       const f = path.join(indexDir(home), `${segment}.json`)
-      fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/"v":\d+\}\n/g, '"v":1}\n'))
+      fs.writeFileSync(f, fs.readFileSync(f, 'utf8').split('\n').map((l) => { const o = l && JSON.parse(l); return o && o.m ? JSON.stringify({ ...o, v: 1, fv: 0 }) : l }).join('\n')) // of no version read now: rebuilt whole
     }
     const copy = path.join(dir, 'b', '.trocar')
     fs.cpSync(home, copy, { recursive: true, preserveTimestamps: true })

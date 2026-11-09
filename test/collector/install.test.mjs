@@ -2,6 +2,7 @@
 // HOME (acceptance S10 collector part, T10 + T11 for the CC entry). No root, no daemon (stop is injected).
 import { PHASES } from '../../src/off/manifest.mjs' // install's items are phase install, which off spares (D55①): these cases drive the undo rules over both phases, as uninstall runs them
 import test from 'node:test'
+import { lockWrites } from '../helpers/lock-probe.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -1254,3 +1255,16 @@ for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earl
   })
 }
 
+
+test('R12: turnOn asks op.lock\'s question about itself of the identity reader it was handed, and the lock records that answer', async () => {
+  const b = box()
+  try {
+    await installCollector({ ...onBase(b), unit: null })
+    const asked = [], lw = lockWrites()
+    const identity = (pid) => { asked.push(pid); return { start_time: '4242', boot_id: 'b-1' } }
+    await turnOn(onBase(b, { socketPath: path.join(b.home, 'run', 'c.sock'), request: async () => ({ desired: 'on', actual: 'on' }), unit: null, identity, fs: lw.fs }))
+    assert.ok(asked.includes(process.pid))
+    assert.ok(lw.held.length > 0)
+    for (const h of lw.held) assert.deepEqual([h.pid, h.start_time, h.boot_id], [process.pid, '4242', 'b-1'])
+  } finally { b.done() }
+})

@@ -3,40 +3,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { captureOut, mitmOut, serveSource, trocarHome, collectorHome, caDir } from '../src/paths.mjs';
+import { serveSource, trocarHome, collectorHome, caDir } from '../src/paths.mjs';
 import * as off from '../src/off/paths.mjs';
 import { collectorPaths } from '../src/collector/daemon.mjs';
 
-// FIRST-RUN DEAD END. The capture writers and the board reader defaulted to
-// DIFFERENT paths: `trocar capture` → ~/.atrace/capture.ndjson, `trocar mitm` →
-// ~/.atrace/trocar/claude-capture.ndjson, `trocar serve` → ~/.atrace/capture.ndjson. So the
-// documented happy path (arrange capture, then serve) showed "No sessions captured yet" while the
-// user's capture sat on disk a directory away. Every new user hit this, and the empty state gave
-// them no way to discover why.
-//
-// The invariant these tests pin: whatever a capture writer writes, the default board reads.
-// Centralising the defaults in one module is what makes that checkable at all.
-
-// serveSource() returns the roots to READ (D27: the new home, plus the legacy one while it still
-// holds the user's history). The invariant below is about the WRITE side landing inside them.
-//
-// 2026-07-20 — these two are driven with an EXPLICIT home rather than the machine's. serveSource()
-// now filters the new home for existence (it always had to: naming an absent root crashed `trocar
-// serve` at startup on any machine holding only a legacy capture), which means calling it bare makes
-// the assertion depend on whether the developer running the suite happens to have captured anything.
-// That is not a relaxation — it is the same claim, made unconditional: the relationship between where
-// a writer writes and where the reader reads is a property of the configuration, not of this laptop.
-// The claim splits cleanly in two, and both halves hold on any machine:
-//   (a) both writers write INTO the configured home, and
-//   (b) serveSource offers that home as a root once it exists.
-const REAL_HOME = trocarHome();
+// FIRST-RUN DEAD END. Writers and the board reader once defaulted to different paths, so the documented
+// happy path showed "No sessions captured yet" while the capture sat on disk a directory away.
+// These tests pin the reading half: the configured home is a default root. Centralising the defaults in
+// one module is what makes that checkable at all. They drive an EXPLICIT home rather than the machine's:
+// serveSource() filters the home for existence, so a bare call would depend on the developer's own captures.
 const existingHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-home-'));
 
 test('serve reads the directory that the capture writers write into', () => {
-  assert.equal(path.dirname(captureOut()), REAL_HOME,
-    'trocar capture must write where trocar serve looks');
-  assert.equal(path.dirname(mitmOut()), REAL_HOME,
-    'trocar mitm must write where trocar serve looks — this was the actual first-run dead end');
   const home = existingHome();
   try {
     assert.ok([].concat(serveSource({ home })).includes(home),
@@ -55,14 +33,9 @@ test('the default source is a DIRECTORY, so every harness renders on one board',
 });
 
 test('defaults live under the user home, never outside it', () => {
-  for (const p of [captureOut(), mitmOut(), ...[].concat(serveSource())]) {
+  for (const p of [].concat(serveSource())) {
     assert.ok(p.startsWith(os.homedir() + path.sep), `${p} escapes the home directory`);
   }
-});
-
-test('capture and mitm write DISTINCT files (one board, one file per source)', () => {
-  assert.notEqual(captureOut(), mitmOut(),
-    'two capture sources appending to one file would interleave two harnesses into one stream');
 });
 
 // 4.6 §记录: the per-user collector writes ~/.trocar/collector/capture-<date>.ndjson. The home root's

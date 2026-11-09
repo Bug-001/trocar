@@ -114,7 +114,7 @@ function ownedLikeDir(dir, chown) {
 // What status reports beside the live state: capture health read from disk by the reader the board uses
 // (src/health/read.mjs, D38) — failures by kind, current conditions, what could not be read (D-2: never "none").
 // `dir` is <trocar home>/collector; `harnesses` is the daemon's own table (4.11 §3 ㉓): the switch is read for those ids only.
-export function healthOnDisk(dir, harnesses) {
+function healthOnDisk(dir, harnesses) {
   try { return captureHealth({ home: path.dirname(dir), harnesses }) } catch (e) { return { error: `capture health could not be read: ${errText(e)}` } }
 }
 
@@ -484,7 +484,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       const report = { rebuilt: [], failed: [], lost: [] }
       let held = null
       try {
-        held = tryOpLock({ file: path.join(P.dir, 'op.lock') })
+        held = tryOpLock({ file: path.join(P.dir, 'op.lock'), identity })
         if (!held.lock) {
           if (bundleBusy++ < BUNDLE_BUSY_RETRIES) { bundleRetry = setTimeout(refreshBundles, BUNDLE_BUSY_MS); bundleRetry.unref() }
           return

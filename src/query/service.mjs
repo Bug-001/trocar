@@ -57,7 +57,7 @@ const keyOf = (name, params = {}, skip = []) => `${name} ${JSON.stringify(Object
 const subjectOf = (name, params = {}) => keyOf(name, params, WINDOW_PARAMS)
 /** A worker asked nothing this long leaves and gives its memory back: the board polls every 1.5 s while it is open, so it stays
  *  warm while anyone is looking; the next query after an idle exit forks a new one (3.5 谁执行它). */
-export const QUERY_IDLE_MS = 120_000
+const QUERY_IDLE_MS = 120_000
 // A dying worker's stderr (D38): its cause is read off the lines as they stream, never off a bounded head or tail (V8 prints its FATAL ERROR line
 // after a few GC lines and before kilobytes of native stack, and a long-lived worker's earlier output can fill any head); the last
 // STDERR_LINES lines go to the daemon's log with the record. A worker's own report of work it handled ('trocar query worker: …', worker.mjs say)

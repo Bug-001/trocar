@@ -30,12 +30,12 @@
 // ranges' bytes in order.
 import { createHash } from 'node:crypto';
 
-export const MAGIC = Buffer.from('ASGTSEAL');
-export const END_MAGIC = Buffer.from('ASGTSEND');
+const MAGIC = Buffer.from('ASGTSEAL');
+const END_MAGIC = Buffer.from('ASGTSEND');
 export const VERSION = 2;          // the version the sealer writes
-export const VERSIONS = [1, 2];    // the versions a reader accepts
+const VERSIONS = [1, 2];    // the versions a reader accepts
 export const HEADER_LEN = 16;
-export const TRAILER_LEN = 24;
+const TRAILER_LEN = 24;
 export const FLAG_NL = 1;
 export const FLAG_UNPARSEABLE = 2;
 export const R = { id: 0, stream: 1, frame: 2, off: 3, enc: 4, len: 5, kind: 6, back: 7, sha: 8, flags: 9, shard: 10, lineNo: 11 };

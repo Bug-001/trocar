@@ -32,7 +32,6 @@ const USAGE = 'usage: trocar doctor [<harness>...] [--details] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 const errText = (e) => String((e && (e.code || e.message)) || e)
-const indent = (s) => String(s).split('\n').map((l) => `  ${l}`).join('\n')
 
 /** Is `bin` an executable on PATH? Looked up in the files (no `which`: no process to start), `PATHEXT` on Windows. */
 export function onPath(bin, { env = process.env, platform = process.platform, fs = nodeFs } = {}) {

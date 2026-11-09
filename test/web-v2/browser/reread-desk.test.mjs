@@ -11,6 +11,7 @@ import { tmpDir } from '../../helpers/tmp.mjs'
 import { bigSession } from '../../query/big-session.mjs'
 import { headFile, readHead, rereadFile } from '../../../src/query/ctx-files.mjs'
 import { projectionFile, sessionDir, PROJ_V } from '../../../src/query/projection.mjs'
+import { listed } from '../../helpers/head-done.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -38,7 +39,7 @@ test('3.5 重读 #43: through a re-read and past the switch the desk keeps its s
   try {
     const { page, face } = b
     await face.get('session', { id })
-    await until(() => { const d = readHead(home, id); return d?.tier === 1 && d.pending === null }, 'the first read reached its end')
+    await until(() => { const d = readHead(home, id); return d?.tier === 1 && d.pending === null && listed(d) }, 'the first read reached its end')
     await page.evaluate(([i, n]) => { location.hash = `#/replay/p/${i}?step=${n}` }, [id, STEP])
     await page.waitForFunction((n) => document.querySelector('#stepbar .sb-no')?.dataset.n === String(n) && !!document.querySelector('#ctxwin .cblk[data-bi] > .cbh'), STEP, { timeout: BOUND })
     // a block the window has to be scrolled to, opened, and the window left on it
