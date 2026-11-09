@@ -10,7 +10,8 @@
 // depends on the block's place in a call (a turn boundary, a volatile block, the links between a file's tool_use and its result) is
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
-import { admitted, flatBlockText, blockFacts, callFacts, normResp, linearContext } from './analyze.mjs';
+import { admitted, flatBlockText, blockFacts, callFacts, linearContext } from './analyze.mjs';
+import { normResp } from '../dissect/record-fields.mjs';
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { BODY, readsOf } from './render-kind.mjs';
 import { blockSpans } from '../dissect/cc-spans.mjs';
