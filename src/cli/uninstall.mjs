@@ -9,39 +9,42 @@
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { newReceipt, EXIT, UNDO_LINE } from '../off/schema.mjs'
-import { offWorld, desiredOff, drainDaemon, undoSide, harnessIdsOf, flowWriter, OFF_LOCK_WAIT_MS } from '../off/orchestrate.mjs'
+import { offWorld, desiredOff, drainDaemon, undoSide, harnessIdsOf, flowWriter, marksNotListed, markRows, OFF_LOCK_WAIT_MS } from '../off/orchestrate.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { readManifest, saveManifest, manifestPath, refuseOldManifest } from '../off/manifest.mjs'
+import { readManifest, saveManifest, manifestPath, refuseOldManifest, undoByHand } from '../off/manifest.mjs'
+import { rootName, rootStore, sameRoot, strayRoots as strayRootsOf } from '../off/root-store.mjs'
+import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
-import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
+import { undoAutostart, plistFilePath, AGENT_LABEL } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
-import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES } from '../off/paths.mjs'
+import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES, compileCacheDir, homeMismatch, accountHomeOf } from '../off/paths.mjs'
 import { rawHome, indexHome, classesLog, collectorHome } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
-import { dropBackup, orphanBackups } from '../off/backup.mjs'
+import { backupsOf, dropBackup, orphanBackups } from '../off/backup.mjs'
 import { removeOwnedFile } from '../off/journal.mjs'
 import { flowFile } from '../off/events.mjs'
-import { removeEmptyDirs, sweepTemps, strictlyInside } from '../off/fsutil.mjs'
+import { removeEmptyDirs, sweepTemps, strictlyInside, writeDurable } from '../off/fsutil.mjs'
 import { execTool, spawnDetached } from '../off/exec.mjs'
 import { removePathItem } from '../off/path-item.mjs'
 import { channelOf, packageRoot, setupHelperCommand } from '../version.mjs'
 import { DEFAULT_REDIRECTOR_BIN } from '../collector/arch/linux/redirector-client.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
-import { formatUninstallReceipt } from './receipt.mjs'
+import { formatUninstallReceipt, fit } from './receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
-import { refuseElevatedByWhoami, disableScheduledTask, TASK_NAME } from '../off/win32.mjs'
+import { refuseElevatedByWhoami, disableScheduledTask, undoScheduledTask, TASK_NAME, TASK_FILE, RUN_KEY } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { readDoorSeen, msOf } from '../off/door-seen.mjs'
 import { readStateFile } from '../off/state.mjs'
-import { SUPERVISOR_START_TOLERANCE_MS as START_AGREE_MS } from '../off/daemon-stop.mjs' // two readers of one process's start agree to within this (4.8 §7)
+import { SUPERVISOR_START_TOLERANCE_MS as START_AGREE_MS, stopByHand } from '../off/daemon-stop.mjs' // two readers of one process's start agree to within this (4.8 §7)
 import { readAgentList } from '../off/identity.mjs'
-import { signHelperPath } from '../collector/arch/model-backends.mjs'
+import { signHelperPath, carrierPlacesFor } from '../collector/arch/model-backends.mjs'
 import { NATIVE } from '../collector/arch/darwin/native.mjs'
 import { daemonLogPaths } from '../collector/arch/daemon-logs.mjs'
-import { isModelOs } from '../collector/model-install.mjs' // macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
+import { isModelOs, STORE } from '../collector/model-install.mjs' // macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
 import { printJson } from './json.mjs'
+import { size } from './text.mjs'
 
 /** Is the daemon's holder (its `start`) the life `p` of a fresh table? The daemon's start and this CLI's may come from different readers (on Windows its
  *  resident helper, here the one PowerShell question when the daemon's helper is not asked): they agree to within START_AGREE_MS (4.8 §7), or the
@@ -61,7 +64,8 @@ async function captureOnline(w, m, notes = []) {
   try {
     if (!w.socketPath) throw Object.assign(new Error('no endpoint'), { code: 'ENOENT' })
     const r = await w.request({ socketPath: w.socketPath, method: 'GET', path: '/holders', timeoutMs: 2000 })
-    if (r && Array.isArray(r.holders)) holders = r.holders; else unknown = 'the daemon does not know its holders yet'
+    // a holder's pid and name reach a printed command: an integer pid of a harness this copy knows, nothing else
+    if (r && Array.isArray(r.holders)) holders = r.holders.filter((h) => h && Number.isInteger(h.pid) && h.pid > 0 && [...((m && m.install && m.install.harnesses) || []), ...Object.keys((m && m.liveness) || {})].includes(h.harness)); else unknown = 'the daemon does not know its holders yet'
     // the daemon's answer is its last poll's (every 10 s, HOLDER_POLL_MS): a holder that has quit since is no holder. The table is read afresh
     // (src/off/proc.mjs); a life still in it — the same pid with a start within what two readers of one process's start differ by, or the same pid
     // when either start is not known (D50: one holder too many, never one too few) — still holds (4.11 §1 uninstall)
@@ -90,23 +94,54 @@ const bytesUnder = (p, fs) => { // the size of a directory (or of a file), for t
 }
 /** 附录 C.2 `kept`: what is still on disk under the home now, named, with its size. */
 const keptOf = (home, fs) => KEEPS.map(([dir, what]) => ({ what, path: dir(trocarHome(home)), bytes: 0 })).filter((k) => fs.existsSync(k.path)).map((k) => ({ ...k, bytes: bytesUnder(k.path, fs) }))
+// 1.6 §3.6: while a shared helper keeps the code the install manifest goes (root's `setup-helper --remove` reads a manifest as an install in use), so
+// the PATH item's record, which the next uninstall takes it out by, is kept on its own here
+const pathItemFile = (w) => path.join(w.dir, 'path-item.json')
+/** The PATH item's own record (kept beside the helper's code) → the item, null when there is none; one that cannot be read throws (D38: never taken as none). */
+const readPathItem = (w) => {
+  let t
+  try { t = w.fs.readFileSync(pathItemFile(w), 'utf8') } catch (e) { if (e.code === 'ENOENT') return null; return { unread: `${pathItemFile(w)} could not be read (${errText(e)})` } }
+  try { const j = JSON.parse(t); if (j && typeof j.path === 'string') return j } catch { /* said below */ }
+  return { unread: `${pathItemFile(w)} is not a record of a PATH item; take trocar's line out of your start file by hand, then delete it` }
+}
+/** The PATH item this run would take out: the manifest's, else the record kept beside the helper's code (both read the same way by the plan and the run). */
+const pathItemOf = (w, m) => (m && !m.unsupported && m.path_item) || readPathItem(w)
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const errText = (e) => String((e && e.message) || e)
 
+/** 1.6 §3.6 「封最后一段」: the plaintext segments in raw/ before the daemon is asked to go (what an uninstall stop seals). */
+const plaintextIn = (raw, fs) => { try { return fs.readdirSync(raw).filter((n) => /\.ndjson$/.test(n)).sort() } catch { return [] } }
+/** What came of each of them: sealed now (its last ok journal line gives the sizes: `sealed[]`), or still plaintext, which stays so until a daemon
+ *  starts again (a note, D38); a file gone without a seal line is nothing to say. */
+function sealedOf(names, raw, fs, receipt) {
+  const ok = new Map()
+  let lines = []
+  try { lines = fs.readFileSync(path.join(raw, 'journal.jsonl'), 'utf8').trim().split('\n') } catch { /* no journal: nothing was sealed */ }
+  for (const l of lines) { try { const e = JSON.parse(l); if (e && e.op === 'seal' && e.outcome === 'ok') ok.set(e.segment, e) } catch { /* a torn line */ } }
+  for (const n of names) {
+    const segment = n.replace(/\.ndjson$/, ''), e = ok.get(segment)
+    if (fs.existsSync(path.join(raw, n))) receipt.notes.push(`${segment} stays unsealed until trocar runs again`)
+    else if (e) (receipt.sealed ||= []).push({ segment, bytes: e.bytes, sealed_bytes: e.sealedBytes })
+  }
+}
+
 /** What `uninstall --dry-run` would do (and what is printed when a yes is missing), read and written nowhere → the receipt fields. */
-function planUninstall(w, m, purgeData = false, root = packageRoot()) {
+function planUninstall(w, m, purgeData = false, root = packageRoot(), places = []) {
   const usable = m && !m.unsupported
-  const heldRow = helperHoldsCode(w, root), held = !!heldRow // the code, the PATH item and the records stay (see below); the plan says so, as the run will
+  const heldRow = helperHoldsCode(w, root), held = !!heldRow // the code and the PATH item stay (see below); the plan says so, as the run will
   const script = !held && channelOf(root, { home: w.home, fs: w.fs }) === 'script'
+  const found = pathItemOf(w, m), item = found && !found.unread ? found : null
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
+  // the files the run undoes by trocar's marks: those the record does not list (all of them when there is no record); none for a record it does not read
+  const marks = markRows(m && m.unsupported ? [] : marksNotListed(w, usable ? [...m.entries, ...m.files].map((e) => e && e.path).filter(Boolean) : [], places))
   return {
     changed: [...entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "trocar's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
-      ...(usable && m.path_item && !held ? [{ path: m.path_item.path, change: 'the PATH item taken out', backup: m.path_item.backup ?? null }] : [])],
-    removed: [...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), ...standaloneFiles(w.home, w.platform), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData && !held ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m && !held ? [manifestPath(w.dir)] : []), ...(script ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
-    kept: purgeData && !held ? [] : keptOf(w.home, w.fs),
+      ...(item && !held ? [{ path: item.path, change: 'the PATH item taken out', backup: item.backup ?? null }] : []), ...marks.changed],
+    removed: [...(usable ? m.files.map((f) => f.path) : []), ...marks.removed, ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), ...(held && item ? [] : [backupDir(w.home)]), ...standaloneFiles(w.home, w.platform), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : []), ...(!held && w.fs.existsSync(pathItemFile(w)) ? [pathItemFile(w)] : []), ...(script ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
+    kept: purgeData ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
-    ...(heldRow ? { left: [heldRow] } : {}),
+    ...(heldRow || (found && found.unread) ? { left: [...(heldRow ? [heldRow] : []), ...(found && found.unread ? [{ path: pathItemFile(w), result: 'error', reason: found.unread }] : [])] } : {}),
   }
 }
 
@@ -132,12 +167,19 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   receipt.harnesses = harnessIdsOf(m)
   // §1.4 / appendix C: the plan itself is a key of the JSON document — every file by its full path and what would happen to it
   const plannedItems = (p) => [...p.changed.map((c) => ({ path: c.path, change: c.change, harness: c.harness ?? null })), ...p.removed.map((x) => ({ path: x, change: 'removed' }))]
-  const plan = () => { const p = planUninstall(w, m, purgeData, deps.root); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
+  const stray = dryRun || !yes ? await strayPlan(w, m) : null // 4.11 §3 ㉔: the roots the run would sweep, read once, so the plan the user agrees to names them (1.6 §1.4)
+  // the places install's certificate carriers are at by the harness descriptors (macOS / Windows), looked at beside trocar's marks: with no record (1.6 R3)
+  // and with one, for the carriers it does not list (§3.6 「记录没列的标记」); a record this build does not read is not undone at all
+  const found = isModelOs(w.platform) && !(m && m.unsupported) ? await carrierPlacesFor({ os: w.platform, home, env, harnesses: deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses(), renderHook: (await import('../collector/harness/templates/index.mjs')).renderHook, run: w.exec, fs }) : { places: [], unseen: [] }
+  const places = found.places
+  const lost = unseenNote(m ? [] : found.unseen, w.platform) // D38: a block trocar may have put in a file nothing names now is said, with the way to take it out
+  const planOf = () => { const p = planUninstall(w, m, purgeData, deps.root, places); return { ...p, changed: [...p.changed, ...stray.changed], removed: [...p.removed, ...stray.removed], notes: [...p.notes, ...stray.notes, ...lost] } }
+  const plan = () => { const p = planOf(); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
   if (dryRun) { plan(); return { receipt, exit: EXIT.ok } }
   // §3.6: uninstall always prints its plan and asks — it takes certificates out of your trust settings and removes files of yours. Not a terminal
   // and no --yes: the plan only, nothing changed, exit 2 (§1.4).
   if (!yes) {
-    if (say) say(formatUninstallReceipt({ ...receipt, ...planUninstall(w, m, purgeData, deps.root), notes: [] }, { home, platform: w.platform, tense: 'future' }))
+    if (say) say(formatUninstallReceipt({ ...receipt, ...planOf(), notes: stray.notes }, { home, platform: w.platform, tense: 'future' }))
     const ok = interactive && io ? await confirm(io, purgeData ? 'This also deletes every captured record, for good. Proceed?' : 'Proceed?') : null
     if (ok !== true) {
       plan()
@@ -146,6 +188,24 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       else { receipt.declined = true; receipt.notes.push('You said no: nothing was changed') }
       return { receipt, exit: ok === null ? EXIT.usage : EXIT.incomplete }
     }
+  }
+  const refuse = (why, online = null) => {
+    // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints
+    receipt.ok = false; receipt.error = { code: 'collectors-online', message: why }; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
+    // the doctor's own steps for the code (1.6 附录 B), each command on a line of its own (§1.1⑥); a step to do in an application is prose at the
+    // margin, only a command to copy sits in the command column
+    const steps = findingFor('collectors-online', { platform: w.platform, ...(online && online.on.length ? { online: online.on.join(', ') } : {}), ...(online ? { holders: online.holders } : {}) }).commands
+    receipt.problems.push([why, steps.some((c) => c.shell === 'gui') ? 'In order:' : 'Run, in order:', ...steps.map((c) => (c.shell === 'gui' ? c.run : `${COMMAND_INDENT}${c.run}`))].join('\n'))
+    put({ event: 'failure', code: 'collectors-online', reason: why })
+    put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${why}` })
+    return { receipt, exit: EXIT.incomplete }
+  }
+  // 1.6 §3.6: a daemon alive that does not answer (stuck, or still starting) is not off: the agents' entries may still point at its doors, so
+  // it is not stopped (invariant 5) — refused before anything is written, the desired-off a waiting lock writes included (a refusal changes nothing); `trocar off` stops it and confirms the routing off
+  const ds = await w.daemonState()
+  if (ds.state === 'unresponsive' || ds.state === 'starting') {
+    receipt.daemon = { pid: ds.lock ? ds.lock.pid : null, state: 'left-running' } // 附录 C: left on purpose, its next step `trocar off`
+    return refuse(`the daemon (pid ${ds.lock && ds.lock.pid}) is running but does not answer (${ds.reason}), so capture is not known to be off. Nothing was changed`)
   }
   const tryOff = () => { try { return { r: desiredOff(w, null, harnessIdsOf(m)), error: null } } catch (e) { return { r: null, error: e } } }
   let early = null, lock = null
@@ -159,6 +219,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     }
   }
   const failed = [] // failure events, written after any purge so they survive it
+  const undone = () => receipt.left.filter((l) => !l.shared).length // a shared row (1.6 §3.6) is not an item left undone
   const rm = (p) => { sweepTemps(p, fs); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); receipt.removed.push(p) } }
   try {
     ;({ m, merr } = read()) // read AGAIN under the lock: an `on` that held it has written to the manifest since
@@ -167,13 +228,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m, receipt.notes) : null
     if (online) {
       const why = [online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have trocar in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}${online.stale ? ` (trocar's last check, which may be out of date: the process table could not be read just now: ${online.stale})` : ''}` : null, online.unknown ? `whether any process still has trocar in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed' // the next step is the doctor's line below, said once (1.6 §1.1③)
-      // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints
-      receipt.ok = false; receipt.error = { code: 'collectors-online', message: why }; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
-      receipt.problems.push(why)
-      receipt.problems.push(`Run: ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(', then: ')}`) // the doctor's own steps for the code (1.6 附录 B)
-      put({ event: 'failure', code: 'collectors-online', reason: receipt.problems.at(-2) })
-      put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${receipt.problems.at(-2)}` })
-      return { receipt, exit: EXIT.incomplete }
+      return refuse(why, online)
     }
     // 1 · the desired state
     const again = tryOff()
@@ -183,25 +238,46 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (wrote) put({ kind: 'desired-off', harnesses: wrote.ids, reason: `desired state off for ${wrote.ids.join(', ')}${wrote.unreadable ? ` (the state file could not be read: ${wrote.unreadable}; it was written again with everything off)` : ''}` })
     if (w.deps.releaseHeld) await w.deps.releaseHeld(null) // 5.1: held requests are released unchanged (a seam; 5.1 is not built)
 
-    // 2 · 3 · 4: the daemon is asked to go and drains, the autostart is disabled, the daemon is stopped, the link is confirmed gone
-    const { routing, drained } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'uninstall' }) // the one drain-then-stop path; `update`'s daemon replacement takes it too (D67①)
+    // 2: the daemon is asked to go and drains, the routing confirmed off; 3 · 4, only once it is: the autostart is disabled, the daemon stopped
+    // the one drain-then-stop path; `update`'s daemon replacement takes it too (D67①). The daemon seals the segment it was writing before it exits (not when
+    // the data is purged after), and says how far it is: the wait lasts while it does (1.6 §3.6)
+    const sealing = (x) => `${x.step === 'verify' ? 'checking' : 'sealing'} ${x.segment}: ${Number.isFinite(x.total) ? `${size(x.done)} of ${size(x.total)}` : x.step === 'index' ? 'indexing it' : 'writing it out'}`
+    const raw = rawHome(trocarHome(home)), plain = purgeData ? [] : plaintextIn(raw, fs) // what the daemon is to seal before it exits
+    const { routing, drained } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'uninstall', keepUnanswering: true, seal: !purgeData, onSealing: (x) => { if (say) say(sealing(x)) } })
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
     receipt.daemon = routing.daemon; receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason
     receipt.problems.push(...routing.problems); receipt.notes.push(...routing.notes)
     for (const ev of routing.events) put(ev)
     for (const f of routing.failures) failed.push(f)
+    // not confirmed off: the agents' entries still point at the daemon, so its autostart and the daemon itself stay (invariant 5, 1.6 §3.6)
+    if (!routing.confirmed && !routing.unstoppable) {
+      for (const f of failed) put({ event: 'failure', ...f })
+      put({ kind: 'result', outcome: 'failed', reason: `uninstall stopped: ${routing.problems[0] || 'the routing was not confirmed off'}` })
+      receipt.ok = false
+      const silent = routing.failures.find((f) => f.code === 'collectors-online') // the daemon stopped answering at the off request: the same refusal as §3.6's (附录 C.1)
+      if (silent) receipt.error = { code: silent.code, message: silent.reason }
+      return { receipt, exit: EXIT.incomplete }
+    }
     // the platform's own way out: darwin boots the LaunchAgent out and removes the plist (the same arm `off` uses, 4.9 §4 flip checklist ①),
     // Windows' task is DELETED here by the uninstall itself (the registration survives any manifest, so claiming it without asking schtasks left
-    // the task registered at every login while the receipt said otherwise; the Run value stays a ledger entry), Linux disables the systemd unit
+    // the task registered at every login while the receipt said otherwise; a recorded Run value goes with the entries, and trocar's own one
+    // that no entry records goes here, 4.8 §7), Linux disables the systemd unit
     if (w.platform === 'win32') {
-      const t = disableScheduledTask({ uninstall: true, run: w.exec, env })
+      // the task this copy would write: what decides, with no task file, whether the task under trocar's name is trocar's
+      let ours = null
+      try { ours = (deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch('win32')).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: w.exec, env })).text({}) } catch { /* no answer: the task file alone decides */ }
+      const recorded = m && !m.unsupported && m.entries.some((e) => e.kind === 'run-key')
+      const t = (recorded ? disableScheduledTask : undoScheduledTask)({ uninstall: true, run: w.exec, env, file: path.join(collectorHome(path.join(home, '.trocar')), TASK_FILE), ours, fs })
+      if (t.task === 'not-trocars') receipt.notes.push(t.why)
       // what it did, in the keys C.2 names: the task is DELETED here, so the entry belongs in `removed` the way macOS puts its plist there (a Windows test machine 2026-10-19 read `removed: []` as "nothing was taken away")
-      receipt.autostart = { disabled: t.ok, removed: t.task === 'deleted' ? [TASK_NAME] : [], ...(t.ok ? {} : { error: t.reason || `the task is ${t.task}` }) }
+      receipt.autostart = { disabled: t.ok, removed: [...(t.task === 'deleted' ? [TASK_NAME] : []), ...(t.runKey === 'removed' ? [`${RUN_KEY.hive}\\${RUN_KEY.key}\\${RUN_KEY.name}`] : [])], ...(t.ok ? {} : { error: [t.reason, t.runKeyReason].filter(Boolean).join('; ') || `the task is ${t.task}` }) }
     }
     else if (w.platform === 'darwin') {
       const u = undoAutostart({ home, exec: w.exec, env, fs })
       receipt.autostart = { disabled: u.code === 0, removed: u.plist === 'removed' ? [plistFilePath(home)] : [], ...(u.code !== 0 ? { error: u.err || `the LaunchAgent was ${u.agent} and the plist ${u.plist}` } : {}) }
+      // launchctl has no verb that drops the override `install`'s `enable` wrote (4.9 §4): it stays listed, harmless with no plist to load
+      if (u.code === 0 && (u.agent === 'booted-out' || u.plist === 'removed')) receipt.notes.push(`launchctl print-disabled still lists "${AGENT_LABEL}" => enabled. macOS has no command to remove that entry; with no LaunchAgent file it starts nothing`)
     }
     else receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs })
     receipt.removed.push(...(receipt.autostart.removed || []))
@@ -212,27 +288,27 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       stop = await w.stopDaemon({ unitManaged: w.unitManaged() })
       if (stop.signals.length || !stop.stopped) put({ kind: 'daemon-stop', how: stop.how, signals: stop.signals, stopped: stop.stopped, pid: stop.pid, reason: stop.stopped ? `the daemon was stopped (${stop.signals.join(', ') || 'it had exited'})` : `the daemon was NOT stopped${stop.error ? `: ${stop.error}` : ''}` })
       // nothing to stop (no lock, no unit that was running, no pid known from the daemon's own reply) is not "the daemon (pid null) was stopped": the receipt says no daemon was there
-      receipt.daemon = !stop.stopped ? { pid: stop.pid, state: 'unresponsive' } : stop.pid == null && routing.daemon.pid == null && (routing.state === 'none' || routing.state === 'stale') ? { pid: null, state: 'none' } : { pid: stop.pid ?? routing.daemon.pid, state: 'stopped' }
-      if (!stop.stopped) { receipt.problems.push(`the daemon (pid ${stop.pid}) could not be stopped${stop.error ? ` (${stop.error})` : ''}; stop it by hand: kill -9 ${stop.pid}, then run trocar uninstall again`); failed.push({ code: 'stop-failed', reason: receipt.problems.at(-1) }) }
+      receipt.daemon = !stop.stopped ? { pid: stop.pid, state: 'unresponsive' } : (routing.state === 'none' || routing.state === 'stale') ? { pid: null, state: 'none' } : { pid: stop.pid ?? routing.daemon.pid, state: 'stopped' }
+      if (!stop.stopped) { receipt.problems.push([`the daemon (pid ${stop.pid}) could not be stopped${stop.error ? ` (${stop.error})` : ''}. Stop it by hand with this, then run trocar uninstall again:`, ...((h) => [...h.commands.map((c) => `${COMMAND_INDENT}${c}`), ...(h.after ? [h.after] : [])])(stopByHand({ platform: w.platform, dir: w.dir, pid: stop.pid, fs: w.fs, run: w.exec, env }))].join('\n')); failed.push({ code: 'stop-failed', reason: receipt.problems.at(-1) }) }
       else if (routing.relayed !== 'unknown') { // what the daemon was still holding went with it, counted (1.6 §1.1)
         const last = drained && drained.rel ? drained.rel : routing.relayed
         receipt.relayed = { closing: 0, waiting: 0, cut: drained && drained.gone ? 0 : last.closing + last.waiting }
       }
     }
     const gone = routing.confirmed && (!stop || stop.stopped)
-    if (!routing.confirmed && !routing.unstoppable) {
-      for (const f of failed) put({ event: 'failure', ...f })
-      put({ kind: 'result', outcome: 'failed', reason: `uninstall stopped: ${routing.problems[0] || 'the routing was not confirmed off'}` })
-      receipt.ok = false
-      return { receipt, exit: EXIT.incomplete }
-    }
+    sealedOf(plain, raw, fs, receipt) // what came of the seal of each plaintext segment (D38)
 
     // 5 · the entries
-    const u = await undoSide(w, { ids: null, manifest: m, manifestError: merr, yes, interactive, io, say, dropCa: true })
+    // 4.11 §3 ㉔: every trocar root the record does not list goes too — inside the record's undo, before its key; without a record (or one that
+    // stopped before its key), after the undo
+    let swept = false
+    const sweep = async () => { swept = true; await everyTrocarRoot(w, m, receipt, failed) }
+    const u = await undoSide(w, { ids: null, manifest: m, manifestError: merr, yes, interactive, io, say, dropCa: true, beforeKey: isModelOs(w.platform) ? sweep : null, places })
     for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
     Object.assign(receipt, { kept_bundles: u.kept_bundles, still_trusting: u.still_trusting, residue: u.residue, pending: u.pending, entries: u.results || [] })
-    receipt.problems.push(...u.problems); receipt.notes.push(...u.notes)
+    receipt.problems.push(...u.problems); receipt.notes.push(...u.notes, ...lost)
     for (const f of u.failures) failed.push(f)
+    if (isModelOs(w.platform) && !swept && !u.stopped && !u.pending.length && u.mode !== 'unsupported') await sweep()
     const noted = u.events.filter((e) => e.kind !== CODE_OFF.backupKept) // the backup an edited file kept is dropped below, listed in the receipt as non-identical: "kept" would be untrue
     const blocked = !gone || u.mode === 'unsupported' || u.pending.length > 0 || u.stopped // `stopped`: the manifest on disk is not what the entries now are: it and the CA stay
     if (blocked) receipt.problems.push(gone ? 'trocar\'s own files were left in place (the entries above are not all undone): run trocar uninstall again' : 'trocar\'s own files were left in place: the daemon is still running')
@@ -240,18 +316,27 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // 6 · trocar's own files — only when nothing above is still open
     const unitFile = m && !m.unsupported ? m.files.find((f) => f.role === 'unit') : null
     let unitLeft = false
-    const bare = !blocked && !m && u.mode === 'none' // no install record: said after the script copy's last step below, which may still remove trocar itself
-    // 1.6 §3.6: a Linux helper that keeps the script copy's code is known now, so it is a left row before the PATH item, the purge and the result line:
-    // the PATH item stays with the code (the next `trocar uninstall` is found by it; the manifest that names it is kept, as with every left row), no record is deleted
+    const bare = !blocked && !m && u.mode === 'none' && !receipt.changed.length // no install record (and no trocar root found without one, ㉔): said after the script copy's last step below, which may still remove trocar itself
+    // 1.6 §3.6: a Linux helper that keeps the script copy's code is a shared left row: not undone on purpose, so not a failure; the PATH item stays with
+    // the code (the next `trocar uninstall` is found by it), its record on its own (pathItemFile); everything else goes as in any uninstall
     const helperRow = blocked ? null : helperHoldsCode(w, deps.root || packageRoot())
-    if (helperRow) { receipt.left.push(helperRow); failed.push({ code: 'entry-not-undone', path: helperRow.path, reason: `${helperRow.path}: ${helperRow.reason} ${helperRow.command}` }) }
+    if (helperRow) receipt.left.push(helperRow)
+    let itemKept = null // the PATH item's record that stays without a manifest: its backup stays named
     if (!blocked) {
-      // D74⑤: the script channel's PATH item (install recorded it in `path_item`); one that cannot be taken out is left, with the manifest that names it
+      // D74⑤: the script channel's PATH item (install recorded it in `path_item`); one that cannot be taken out is left, with the record that names it
       // and the backup it names (before the sweep below: a taken-out item no longer names its backup, so the sweep drops it)
-      if (m && m.path_item && !helperRow) {
-        const p = removePathItem(m.path_item, { env, fs, run: w.exec })
-        if (p.ok) { if (p.taken) receipt.changed.push({ path: p.path, change: 'the PATH item taken out' }); else receipt.notes.push(`the PATH item was no longer in ${p.path}: nothing to take out`); delete m.path_item }
-        else { receipt.left.push({ path: p.path, result: p.result, reason: p.reason }); failed.push({ code: 'entry-not-undone', path: p.path, reason: p.reason }) }
+      const found = pathItemOf(w, m), item = found && !found.unread ? found : null
+      if (found && found.unread) { receipt.left.push({ path: pathItemFile(w), result: 'error', reason: found.unread }); failed.push({ code: 'entry-not-undone', path: pathItemFile(w), reason: found.unread }) }
+      if (item && helperRow) {
+        itemKept = item
+        if (m && m.path_item) try { writeDurable(pathItemFile(w), `${JSON.stringify(item)}\n`, 0o600, fs) } catch (err) { // the manifest is then kept, for the record in it
+          const reason = `${pathItemFile(w)}, the record the next uninstall takes the PATH item out by, could not be written (${errText(err)})`
+          receipt.left.push({ path: pathItemFile(w), result: 'error', reason }); failed.push({ code: 'entry-not-undone', path: pathItemFile(w), reason })
+        }
+      } else if (item) {
+        const p = removePathItem(item, { env, fs, run: w.exec })
+        if (p.ok) { if (p.taken) receipt.changed.push({ path: p.path, change: 'the PATH item taken out' }); else receipt.notes.push(`the PATH item was no longer in ${p.path}: nothing to take out`); if (m) delete m.path_item; rm(pathItemFile(w)) }
+        else { receipt.left.push({ path: p.path, result: p.result, reason: p.reason }); failed.push({ code: 'entry-not-undone', path: p.path, reason: p.reason }); if (!m) itemKept = item }
       }
       if (m) {
         // every backup goes (zero residue, 1.6 R2): the ones undo dropped, the ones it kept because the user edited the file since — each listed — and any no entry names;
@@ -261,7 +346,9 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
         })
       }
       receipt.dropped_backups.push(...u.dropped_backups)
-      for (const b of orphanBackups({ home, manifest: m, fs })) { try { if (dropBackup(b, fs)) receipt.dropped_backups.push(b) } catch (err) { noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: b, reason: `${b} could not be removed (${errText(err)}); remove it by hand` }) } }
+      // a file left not undone keeps its backups, named or not (with no manifest every backup is an orphan): the receipt points at them for the next run or a hand fix
+      const leftBackups = new Set(u.left.flatMap((l) => (l.path ? backupsOf({ home, file: l.path, fs }) : [])))
+      for (const b of orphanBackups({ home, manifest: itemKept ? { ...(m || {}), path_item: itemKept } : m, fs }).filter((x) => !leftBackups.has(x))) { try { if (dropBackup(b, fs)) receipt.dropped_backups.push(b) } catch (err) { noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: b, reason: `${b} could not be removed (${errText(err)}); remove it by hand` }) } }
       removeEmptyDirs([backupDir(home)], fs)
       // the unit file and its links (4.6 order: after the entries, before the CA key); systemd is told it is gone
       if (unitFile || fs.existsSync(unitFilePath(home))) {
@@ -296,20 +383,23 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       rm(daemonLogPaths(home).dir)
       // the darwin key custody's signing helper (install put it there, 4.11 P1): it goes once no root key is left for it to remove — after undoRootKeys, which needs it
       const helper = w.platform === 'darwin' && !(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) ? signHelperPath(home, NATIVE.signHelper) : null
-      for (const p of [path.join(w.dir, 'run'), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)), w.lockFile, runtime, ...standaloneFiles(home, w.platform), netenvFile(home), helper]) if (p) rm(p) // update.json: an update that never finished is trocar's own note, and goes with the rest of its state (§5.5); door-seen.json: the holder check above has read it
+      for (const p of [path.join(w.dir, 'run'), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)), w.lockFile, runtime, ...standaloneFiles(home, w.platform), netenvFile(home), compileCacheDir(home), helper]) if (p) rm(p) // update.json: an update that never finished is trocar's own note, and goes with the rest of its state (§5.5); door-seen.json: the holder check above has read it
       removeEmptyDirs([path.dirname(standaloneFiles(home)[0])], fs)
       // the door ports and their tokens (decision #16): the next install and on choose them again
       const ing = removeIngressConfig({ dir: w.dir, fs })
       if (!ing.removed) noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: path.join(w.dir, 'ingress.json'), reason: `${path.join(w.dir, 'ingress.json')} could not be removed (${ing.reason}); remove it by hand` })
     }
-    for (const n of noted) if (!receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
+    // a file undone by trocar's mark is already a row of the receipt: one note says how they were found, never the row again (each stays an event)
+    const byMark = noted.filter((n) => n.kind === CODE_OFF.undoneByMarker)
+    if (byMark.length) receipt.notes.push("there was no install record, so the files above were found by trocar's marks")
+    for (const n of noted) if (n.kind !== CODE_OFF.undoneByMarker && !receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
     // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind. `--purge-data` is "nothing of the captures stays", so the
     // collector's own machine goes with it: the kernel's copy (kernel/) and its verified-archive cache (kernel-archive/), the kernel's config and home with the controller
     // secret and tokens (forwarder/) — the endpoint files control.json and ingress.json went above, with every uninstall — a plain uninstall
     // keeps them (a kernel may still be draining; the next on reuses the cache), the purge leaves the collector directory empty of everything trocar can rebuild nothing of.
     // Only when every step above succeeded (invariant 2; 1.6 §1.1): a run that leaves an item, has a problem or a failure keeps every capture
     // and says so — the captures are what nothing brings back, and the next uninstall can still purge them.
-    const purgeHeld = purgeData && (blocked || receipt.left.length > 0 || receipt.problems.length > 0 || failed.length > 0)
+    const purgeHeld = purgeData && (blocked || undone() > 0 || receipt.problems.length > 0 || failed.length > 0)
     if (purgeHeld) { receipt.purge_data = false; receipt.notes.push('This run did not finish, so not one captured record was deleted (--purge-data deletes them only when every other step succeeded). Fix what is above, then run: trocar uninstall --purge-data') }
     if (purgeData && !purgeHeld) {
       for (const n of (() => { try { return fs.readdirSync(w.dir) } catch { return [] } })()) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(w.dir, n))
@@ -318,13 +408,13 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     }
     // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is said in the output, never dropped, and never stops the uninstall
     for (const f of failed) put({ event: 'failure', ...f })
-    const left = receipt.left.length
+    const left = undone()
     // the outcome follows the exit code (as `off`'s does): an item that could not be undone is 'left'; any other problem — a blocked run, a state.json that could not be
     // written — is 'failed'; 'uninstalled' only when the run is clean
     const failedRun = blocked || (receipt.problems.length > 0 && !left)
     if (!(purgeData && !purgeHeld)) { // a purge took flows/ with it: nothing to append to
       for (const n of noted) put(n)
-      put({ kind: 'result', outcome: failedRun ? 'failed' : left ? 'left' : 'uninstalled', counts: { entries: (u.results || []).length, left, still_trusting: u.still_trusting.length, notes: noted.length }, reason: failedRun ? `uninstall did not finish: ${receipt.problems[0]}` : left ? `uninstalled, except ${left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${(u.results || []).length} trust entr${(u.results || []).length === 1 ? 'y' : 'ies'} undone, ${noted.length} note(s)` })
+      put({ kind: 'result', outcome: failedRun ? 'failed' : left ? 'left' : 'uninstalled', counts: { entries: (u.results || []).length, left, ...(receipt.left.length > left ? { shared: receipt.left.length - left } : {}), still_trusting: u.still_trusting.length, notes: noted.length }, reason: failedRun ? `uninstall did not finish: ${receipt.problems[0]}` : left ? `uninstalled, except ${left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${(u.results || []).length} trust entr${(u.results || []).length === 1 ? 'y' : 'ies'} undone, ${noted.length} note(s)` })
     }
     if (!blocked) {
       if (m && (left || receipt.kept_bundles.length)) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
@@ -348,17 +438,82 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     receipt.kept = keptOf(home, fs) // what is still there now this run is done: after a purge, nothing
     const goneCount = () => receipt.removed.length + receipt.scheduled.length // Windows schedules the code instead of removing it (scriptCopyLast)
     const was = goneCount(), wasScheduled = receipt.scheduled.length
-    if (!blocked && !left && !receipt.problems.length) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot(), run })
+    if (!blocked && !left && !receipt.problems.length && !helperRow) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot(), run })
     if (bare && !helperRow) receipt.notes.push(goneCount() > was ? `there was no install record for this user: only trocar's own program was left, and it is removed${receipt.scheduled.length > wasScheduled ? ' once this command exits' : ''}` : 'nothing is installed for this user')
-    receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0
+    receipt.ok = receipt.problems.length === 0 && undone() === 0
     // §3.6: a left row with its own command (the helper's) is the next step itself; only the rows without one need this line
     const bareLeft = receipt.left.filter((l) => !l.command).length
-    if (bareLeft && !receipt.problems.length) receipt.problems.push(`${bareLeft} item(s) could not be undone; the install manifest is kept. Fix them, then run trocar uninstall again`)
+    if (bareLeft && !receipt.problems.length) receipt.problems.push(`${bareLeft} item(s) could not be undone${m ? '; the install manifest is kept' : ''}. Fix them, then run trocar uninstall again`)
     return { receipt, exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
   } catch (e) { // an error that is not a step's own: recorded where status finds it, then thrown (4.6: a failed run ends with outcome 'failed')
     try { if (fs.existsSync(w.dir)) { put({ event: 'failure', code: (e && e.code) || 'uninstall-error', reason: errText(e) }); put({ kind: 'result', outcome: 'failed', reason: `uninstall failed: ${errText(e)}` }) } } catch { /* the original error is the one that matters */ }
     throw e
   } finally { if (lock) lock.release() }
+}
+
+/** 4.11 §3 ㉔ (1.6 §3.6): after the record's own items, every trocar root the user's store still holds that the record did not list (P3 `list`, by
+ *  subject) is removed too — with a record or without — and checked gone by a second listing; then, when the record names no root key any more, the
+ *  custody's one key (P1: one key, under a fixed name). What could not be read, removed or confirmed is a left row and a problem (D38). */
+const storeOf = (w) => w.deps.rootStore || rootStore({ platform: w.platform, run: w.exec, home: w.home, env: w.env, fs: w.fs })
+const storeWhere = (w) => (w.platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(w.home, 'Library', 'Keychains', 'login.keychain-db'))
+const ask = async (fn) => { try { return (await fn()) || { error: 'no answer' } } catch (e) { return { error: errText(e) } } }
+const nameOf = rootName
+// the fingerprint last, a word of its own: too long for any line, it gets one to itself, whole (1.6 §1.1⑥), and no bracket is split from it
+const strayChange = (id) => `a trocar root that no install record listed, taken out of your trust store: ${nameOf(id)}` // no tense: the plan and the receipt say it alike
+const recordKeyed = (m) => !!(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key'))
+const custodyKey = (c) => `${(c && c.kind) || 'custody'}:?`
+const strayRoots = (w, m) => strayRootsOf(storeOf(w), m)
+/** What the sweep below would do, for the plan and --dry-run (1.6 §1.4: the same receipt as the run): one changed row per stray root, the key when the
+ *  record names none; a store that cannot be listed is a note, never an empty plan. Reads the store once and writes nothing. */
+async function strayPlan(w, m) {
+  if (!isModelOs(w.platform) || (m && m.unsupported)) return { changed: [], removed: [], notes: [] }
+  const s = await strayRoots(w, m)
+  if (s.error) return { changed: [], removed: [], notes: [`whether your trust store holds a trocar root no install record lists could not be read (${s.error}); the run reads it again and takes out every one it finds`] }
+  return { changed: s.roots.map((id) => ({ path: storeWhere(w), change: strayChange(id), backup: null })), removed: s.roots.length && !recordKeyed(m) ? [custodyKey(w.deps.custody)] : [], notes: [] }
+}
+
+/** 4.11 §1 uninstall: with no install record, the certificate variables (by the descriptors) that name no file now, here or in the login
+ *  environment → the note that says trocar may have appended its marked block to the user's own certificate file then, and how to take it out:
+ *  this command again with the variable set to that file (one line per variable, in this OS's shell), or the block deleted by hand. [] when none. */
+function unseenNote(names, platform) {
+  if (!names.length) return []
+  const cmd = (n) => (platform === 'win32' ? `cmd /c "set ${n}=<your certificate file>&& trocar uninstall"` : `${n}=<your certificate file> trocar uninstall`)
+  return [[`trocar may have added a marked certificate block to the end of a certificate file of your own, named by ${names.join(' or ')} when trocar was installed. ${names.length === 1 ? 'That variable is not' : 'None of them is'} set now, so trocar could not look in the file. To take the block out, run this with the file the variable named, or delete the block between trocar's marks by hand:`,
+    ...names.map((n) => `${COMMAND_INDENT}${cmd(n)}`)].join('\n')]
+}
+
+async function everyTrocarRoot(w, m, receipt, failed) {
+  const store = storeOf(w), where = storeWhere(w)
+  const leave = (reason, code = 'entry-not-undone') => { receipt.left.push({ path: where, result: 'failed', reason }); receipt.problems.push(reason); failed.push({ code, path: where, reason }) }
+  const notOut = (id, why) => {
+    const command = undoByHand({ kind: 'system-root', store: STORE[w.platform], fp256: id.fp256 ?? null, thumbprint: id.sha1 ?? null })
+    receipt.still_trusting.push({ what: 'root', store: STORE[w.platform], fp256: id.fp256 ?? null, reason: why, command })
+    leave(`a trocar root no install record listed (${nameOf(id)}) was NOT taken out of your trust store: ${why}. By hand: ${command}`, 'root-not-removed')
+  }
+  const first = await strayRoots(w, m)
+  if (first.error) return leave(`whether your trust store holds another trocar root could not be read (${first.error}); run trocar uninstall again once it can be`)
+  const gone = []
+  let out = 0
+  for (const id of first.roots) {
+    const r = await ask(() => store.remove(id))
+    if (r.ok) gone.push(id); else notOut(id, r.reason || r.error)
+  }
+  if (!gone.length) return
+  const after = await ask(() => store.list()) // a removal asks the operator first, and an OS tool's exit is not the answer (1.6 §3.6)
+  for (const id of gone) {
+    if (after.error || !Array.isArray(after.roots)) notOut(id, `whether it is still there could not be read (${after.error})`)
+    else if (after.roots.some((x) => sameRoot(x, id))) notOut(id, 'it is still in your trust store: removing a root asks you first, and that question was not answered with yes')
+    else { out++; receipt.changed.push({ path: where, change: strayChange(id), result: 'restored' }) }
+  }
+  // the key goes only once every stray root is confirmed out: while one is still trusted, the next uninstall sweeps it and the key then
+  if (out < first.roots.length || recordKeyed(m)) return // the record's key: its own removal said what happened
+  const c = w.deps.custody || null, key = custodyKey(c)
+  try {
+    if (!c || typeof c.remove !== 'function') throw new Error('this trocar has no custody backend to remove it with')
+    const k = await c.remove({ kind: c.kind })
+    if (!k || typeof k !== 'object' || typeof k.removed !== 'boolean') throw new Error(k === 'unavailable' ? 'the key custody is not reachable now (macOS: no graphical login session, or the keychain is locked); run trocar uninstall again in a terminal of that session' : `the key custody answered ${JSON.stringify(k)}`)
+    if (k.removed) receipt.removed.push(key)
+  } catch (e) { receipt.left.push({ path: key, result: 'error', reason: `trocar's root key could not be removed (${errText(e)})` }); failed.push({ code: 'entry-not-undone', path: key, reason: `trocar's root key could not be removed (${errText(e)})` }) }
 }
 
 /** 1.6 §3.6 「脚本渠道的最后一步」 (D74⑧): a copy the install script placed goes last — the launcher and ~/.trocar/app (the code and its private Node), also
@@ -420,11 +575,11 @@ function deferredRemoval({ app, launcher, pointer, dirs, env, failure }) {
   return { file: 'cmd.exe', args: ['/d', '/v:on', '/s', '/c', `"${script}"`], env: v }
 }
 
-/** 1.6 §3.6: on a script install, a Linux capability helper still installed needs this code to be removed → the left row that keeps the code (and the
- *  PATH item and the records with it), else null. 1.6 §1.1⑥ / C.2 left[].command: the sudo line is the row's own command, printed whole on its own line. */
+/** 1.6 §3.6: on a script install, a Linux capability helper still installed (machine-wide, D36) needs this code to be removed → the shared left row that
+ *  keeps the code and the PATH item, else null. 1.6 §1.1⑥ / C.2 left[].command: the sudo line is the row's own command, printed whole on its own line. */
 function helperHoldsCode(w, root) {
   if (w.platform !== 'linux' || !w.fs.existsSync(DEFAULT_REDIRECTOR_BIN) || channelOf(root, { home: w.home, fs: w.fs }) !== 'script') return null
-  return { what: 'the capability helper', path: DEFAULT_REDIRECTOR_BIN, reason: `still installed; removing it needs trocar's own code, so ${appDir(w.home)} stays too. Remove the helper with this line, then run trocar uninstall again:`, command: setupHelperCommand(['--remove'], { root }) }
+  return { what: "trocar's code and the PATH item", path: appDir(w.home), shared: true, reason: "the capability helper is machine-wide and stays, and trocar's code and its PATH line stay with it so it can be removed. If no other account on this machine uses trocar, remove it with this line (it checks, and refuses while another account does), then run trocar uninstall once more:", command: setupHelperCommand(['--remove'], { root }) }
 }
 
 const USAGE = 'usage: trocar uninstall [--purge-data] [--dry-run] [--yes] [--json]'
@@ -440,6 +595,9 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
   }
   const json = flags.has('--json')
   if ((deps.getuid || processUid)() === 0) { io.err('trocar uninstall: run this as your own user, not as root.'); return EXIT.usage }
+  // 1.6 §1.5 (V126): under a HOME that is not the account's, this run would undo that home while the login entry and its daemon are the account's
+  const away = homeMismatch({ home, account: deps.accountHome ? deps.accountHome() : accountHomeOf(home, deps.platform || platform), platform: deps.platform || platform, fs: deps.fs })
+  if (away) { if (json) printJson(io, { ...newReceipt('uninstall'), ok: false, error: { code: away.code, message: away.message }, notes: [away.message] }); else io.err(fit([`trocar uninstall: ${away.message}`]).join('\n')); return EXIT.usage }
   try {
     // a platform without a collector reaches runUninstall the same way and finds nothing to undo (D39⑥ executed 2026-10-11: the old capture's own uninstall went with it)
     // the root's key goes last through its custody (4.11 P13): the platform's backend unless a test hands one in

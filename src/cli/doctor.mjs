@@ -4,11 +4,12 @@
 // install noted, the standalone undo copy, and the backups no manifest names. It never changes a thing of the user's and starts nothing: its OS queries are read-only (`ps`, the trust-store
 // lookup, the process table); the files it may write are `status`'s ~/.trocar/netenv.json (the topology) and, when a sealed capture file could only be read in part, one line in ~/.trocar/raw/journal.jsonl.
 //
-// Exit (R4): 1 — a capture file others can read (「采集文件可被他人读取」: the bytes hold live API keys) · 3 — it could not judge: no records examined, no file's permissions examined, a file whose permissions
-// could not be read, a capture file only partly read — never 0 (reading nothing and answering 「过」 is what this command once did, 0.1 §3) · 0 — the rest. The status block is a report and
-// does not change the exit (review B-7). Everything the world gives is a `deps` entry a test replaces (0.1 §3): `has(bin)` (dependency probe), `verify()` (the trust-store check), and the
+// Exit (R4): 1 — a problem: a capture file others can read (「采集文件可被他人读取」: the bytes hold live API keys), a capture failure `status` counts (D38) · 3 — it could not judge: no records examined, no file's permissions examined, a file whose permissions
+// could not be read, a capture file only partly read — never 0 (reading nothing and answering 「过」 is what this command once did, 0.1 §3) · 0 — the rest. The harness table of the status block is a report and
+// does not change the exit (review B-7); the capture failures it counts do (capture-failures). Everything the world gives is a `deps` entry a test replaces (0.1 §3): `has(bin)` (dependency probe), `verify()` (the trust-store check), and the
 // ones `runStatusCli` takes (`request`, `procs`, `lingerRead`, …). With none, `has` looks at PATH, `verify` asks the user trust store of THIS home, everything else is real.
 import nodeFs from 'node:fs'
+import { codeId } from '../version.mjs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { EXIT, newReceipt } from '../off/schema.mjs' // as in status.mjs: the keys and the exit codes, not ./schema.mjs's checker (D62)
@@ -17,9 +18,11 @@ import { resolveHarnesses } from '../off/harness-names.mjs'
 import { statusFacts, statusDocOf } from './status.mjs'
 import { diagnose, renderFindings } from '../netenv/findings.mjs'
 import { serveSource } from '../paths.mjs'
-import { formatInstallNotes } from './status-text.mjs'
+import { formatInstallNotes, windowWords } from './status-text.mjs'
 import { trocarHome, backupDir, collectorDir } from '../off/paths.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
+import { rootName, rootStore as userRootStore, strayRoots } from '../off/root-store.mjs'
+import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 import { printJson } from './json.mjs'
 
@@ -83,7 +86,7 @@ async function collect({ home, env, sourceFlags, deps, capture }) {
       } catch (e) { readErrors.push(`${f}: ${(e && e.message) || e}`) }
     }
   }
-  return { sources, files, extra, records, srcMeta, readErrors }
+  return { sources, files, extra, records, srcMeta, readErrors, backups: backups.files }
 }
 
 /** The things `doctor` looked at and could not judge (附录 C.4 `undetermined`), in English, from the structured result — never a reason string of another module. */
@@ -100,6 +103,14 @@ function undeterminedOf(res, readErrors, { files = 0, records = 0, root = null }
   for (const e of readErrors) out.push({ what: 'a captured file', reason: e })
   return out
 }
+/** 4.11 §3 ㉔ → { roots } (the trocar roots the store holds that the install record does not list) | { why } (not known: the store or the record could not be read). */
+async function strayOf({ home, fs, deps }) {
+  let m
+  try { m = readManifest(collectorDir(home), fs) } catch (e) { rethrowSandbox(e); return { why: `the install record cannot be read (${errText(e)})` } }
+  if (m && m.unsupported) return { why: 'the install record is of a version this trocar does not read' }
+  const r = await strayRoots(deps.rootStore, m)
+  return r.error ? { why: `the root store could not be listed (${r.error})` } : r
+}
 /** Only these keep `doctor` from judging (exit 3). No captured data yet does not. */
 const realUndetermined = (u) => u.filter((x) => x.reason !== 'no captured data yet')
 
@@ -114,8 +125,13 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   const fs = deps.fs || nodeFs
   // the capture half of this command is sixteen modules `status` never touches (D62): start loading it, then ask the OS — it compiles while the daemon answers
   const capture = deps.capture || import('./doctor-deps.mjs')
-  // the capture files and what `status` reads are independent: the disk walk and the OS questions run together (D62 task E)
-  const [c, f] = await Promise.all([collect({ home, env, sourceFlags: [], deps, capture }), statusFacts({ names, home, env, platform, deps })])
+  // 4.11 §3 ㉔: a trocar root no install record lists (macOS / Windows; Linux keeps its root in no trust store). One store for the command: on
+  // Windows `status`'s has and this list read one certutil listing (1.6 §3.7)
+  const listsRoots = platform === 'darwin' || platform === 'win32' // not proxy mode: the OSes whose root sits in a user trust store
+  if (listsRoots && !deps.rootStore) deps = { ...deps, rootStore: (deps.backends && deps.backends.rootStore) || userRootStore({ platform, run: deps.exec || null, home, env, fs, once: true }) }
+  // the capture files and what `status` reads are independent: the disk walk and the OS questions run together (D62 task E). The listing is a
+  // synchronous OS tool, so it is started last, after the daemon request and the file reads are on their way
+  const [c, f, s] = await Promise.all([collect({ home, env, sourceFlags: [], deps, capture }), statusFacts({ names, home, env, platform, deps }), listsRoots ? strayOf({ home, fs, deps }) : null])
   const { checkDeps, runSelfTest, orphanBackups, checkStandalone } = await capture
   const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
   const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors, platform })
@@ -127,19 +143,39 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   else findingsError = f.topology_error || 'the network facts could not be read on this platform'
   // what `doctor` looks at besides the network: the files only you may read, the copy of the undo program, the backups no install record names
   const extra = []
+  if (s && s.roots && s.roots.length) extra.push({ code: 'stray-root', class: 'problem', what: `Your trust store holds a trocar root no install record lists: ${s.roots.map(rootName).join(', ')}.`, why: 'trocar trusts one root per user; trocar uninstall removes every trocar root.', commands: [{ run: 'trocar uninstall', shell: 'sh' }, { run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
   for (const bad of res.q4b.bad) extra.push({ code: 'file-readable-by-others', class: 'problem', what: `${bad.file} (mode ${bad.mode}) can be read by someone else, and captured files hold live credentials.`, why: 'Only you may read what trocar captured.', commands: [{ run: `chmod 600 ${shq(bad.file)}`, shell: 'sh' }], verify: 'trocar doctor' })
   // the copy of the undo program is `install`'s; a machine where nothing was installed has nothing to check (§3.7)
   const installed = !!(status.install && status.install.state)
   const standalone = installed ? (() => { try { return checkStandalone({ home, platform, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })() : { ok: true }
   if (standalone.error) extra.push({ code: 'standalone-unreadable', class: 'problem', what: 'The standalone undo program could not be checked.', why: standalone.error, commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
   else if (!standalone.ok) extra.push({ code: 'standalone-stale', class: 'problem', what: `${standalone.path} ${standalone.missing ? 'is not there' : 'is not the current version'}, so it may not undo everything.`, why: standalone.reason || 'its bytes are not the ones this trocar writes', commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
+  // §3.7: the collector on other code than this trocar (it reports `code`, D67⑤): what this version changed in the collector is not in effect
+  const dc = status.daemon || {}
+  if (dc.runs_this_code === false) extra.push({ code: 'daemon-other-code', class: 'problem', what: `trocar's collector runs other code (${dc.code}) than this trocar (${codeId()}), so what this version changed in the collector is not in effect.`, why: 'The collector was started from other code: another copy of trocar, or this one before its files were replaced.', commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar status' })
+  // D38: the capture failures `status` counts, in its window, from the one health read both documents fold (`status.failures`): doctor never
+  // says no problems while status lists some. One finding with status's count; the way out is status's own list.
+  const fl = status.failures
+  if (fl && fl.problem > 0) extra.push({ code: 'capture-failures', class: 'problem', count: fl.problem, what: `trocar recorded ${fl.problem} capture failure${fl.problem === 1 ? '' : 's'} ${windowWords(fl, Date.now())}.`, why: 'Some of what the agents sent then was not captured, or did not get through.', commands: [{ run: 'trocar status --failures', shell: 'sh' }], verify: 'trocar status --failures' })
   let orphans = [], orphansError = null
   try { const m = readManifest(collectorDir(home), fs); orphans = m && m.unsupported ? null : orphanBackups({ home, manifest: m, fs }); if (orphans === null) orphansError = 'the install record is of a version this trocar does not read, so which backups it names cannot be said' } catch (e) { orphansError = `${manifestPath(collectorDir(home))}: ${errText(e)}` }
   if (orphans && orphans.length) extra.push({ code: 'backup-unclaimed', class: 'note', what: `${orphans.length} backup file(s) belong to no install record.`, why: 'An edit that was interrupted left them behind.', commands: [{ run: `Look at them, then remove them: ${orphans[0]}`, shell: 'sh' }], verify: 'trocar doctor' })
   if (orphansError) extra.push({ code: 'backup-unclaimed', class: 'note', what: `Whether any backup belongs to no install record is ${unknown(orphansError)}.`, why: 'The install record could not be read.', commands: [], verify: 'trocar doctor' })
+  // an earlier trocar's `on` saved its own intermediate copies of a file, each with the door password in it (1.6 §3.7): the path only, never the password; no door file, no password
+  const door = readIngressConfig({ dir: collectorDir(home), fs })
+  if (door.error && c.backups.length) extra.push({ code: 'backup-holds-door-password', class: 'note', what: `Whether a backup holds trocar's local proxy password is ${unknown(door.error)}.`, why: 'The file with the password could not be read.', commands: [], verify: 'trocar doctor' })
+  if (door.listenerToken) {
+    const secret = Buffer.from(door.listenerToken)
+    for (const file of c.backups) {
+      let bytes = null
+      try { bytes = fs.readFileSync(file) } catch (e) { rethrowSandbox(e); continue }
+      if (bytes.includes(secret)) extra.push({ code: 'backup-holds-door-password', class: 'note', what: `${file} holds trocar's local proxy password.`, why: 'An earlier trocar saved its own intermediate copy of a file there.', commands: [{ run: `If you no longer need it: rm ${shq(file)}`, shell: 'sh' }], verify: 'trocar doctor' })
+    }
+  }
   const all = findings === null ? null : [...extra.filter((x) => x.class === 'problem'), ...findings, ...extra.filter((x) => x.class !== 'problem')]
   const summary = all === null ? null : { problem: all.filter((x) => x.class === 'problem').length, expected: all.filter((x) => x.class === 'expected').length, note: all.filter((x) => x.class === 'note').length }
   const undetermined = undeterminedOf(res, c.readErrors, { files: c.files.length, records: c.records.length, root: (status.cert || {}).root || null })
+  if (s && s.why) undetermined.push({ what: 'whether your trust store holds a trocar root no install record lists', reason: s.why })
   const exit = summary && summary.problem ? EXIT.incomplete : realUndetermined(undetermined).length ? EXIT.unknown : EXIT.ok
   let notes = []
   // the capture health `status` already read of the same files (gatherStatus): one command, one read (D62). A read that failed is `null` there and

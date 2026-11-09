@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildTopology } from '../../src/netenv/topology.mjs'
-import { diagnose, FINDINGS, FINDING_CODES, NEG_CAUSES, renderFindings } from '../../src/netenv/findings.mjs'
+import { diagnose, findingFor, FINDINGS, FINDING_CODES, NEG_CAUSES, renderFindings } from '../../src/netenv/findings.mjs'
 import { statusReason } from '../../src/cli/words.mjs'
 import { validateFinding, validateTopology } from '../../src/cli/schema.mjs'
 import { NET_CODES, ROUTE_CODES, ROUTE_TRUST_REASONS, STATUS_REASONS, TRUST_REASONS } from '../../src/health/codes.mjs'
@@ -46,6 +46,7 @@ const SETS = {
   'link-missing': { h: 'claude-code', facts: facts('claude-code', { link: { attached: false, helper: 'ok', ids: [] } }), codes: ['link-missing'] },
   'entry-missing': { h: 'claude-code', facts: facts('claude-code', {}, { entry: { state: 'missing' }, procs: [] }), codes: ['entry-missing'] },
   'entry-changed': { h: 'claude-code', facts: facts('claude-code', {}, { entry: { state: 'changed' }, procs: [] }), codes: ['entry-changed'] },
+  'pac-address-stale': { h: 'claude-code', facts: facts('claude-code', {}, { entry: { state: 'changed', code: 'pac-address-stale' }, procs: [] }), codes: ['pac-address-stale'] },
   'not-routed': { h: 'codex', facts: row(11).facts, codes: row(11).findings },
   'system-proxy-pac': { h: 'codex', facts: row(22).facts, codes: row(22).findings },
   'route-loop': { h: 'codex', facts: pfacts('codex', form('codex.cli', { routeLoop: true, entry: null, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992)), codes: ['route-loop'] },
@@ -64,9 +65,12 @@ const SETS = {
   'cause-unknown': { h: 'claude-code', facts: facts('claude-code'), names: ['claude-code'], codes: ['cause-unknown'] },
   'process-unknown': { h: 'claude-code', facts: facts('claude-code', { identity: idOf('claude-code', { unknown: [{ name: 'claude-canary', wide: false, pid: 7002, door: 'claude-code.settings' }] }) }), codes: ['process-unknown'] },
   // 4.11 §3 ⑱: the issuer from the daemon's /status `cert`, the trust verdicts the proxy-mode verdict gives a process, the window's proxy the door could not recover (the forwarder form's source)
+  'autostart-missing': { h: null, facts: facts('claude-code', { autostart: { entry: 'the systemd user unit trocar-collector.service', state: 'disabled', reason: 'the systemd user unit trocar-collector.service is registered but switched off' } }), codes: ['autostart-missing'] },
   'cert-key-missing': { h: null, facts: facts('claude-code', { cert: { key: 'missing', intermediate: 'key-missing' } }), codes: ['cert-key-missing'] },
   'cert-intermediate-unavailable': { h: null, facts: facts('claude-code', { cert: { key: 'unknown', intermediate: 'unavailable' } }), codes: ['cert-intermediate-unavailable'] },
   'not-users-file': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server', trusted: false, reason: 'not-users-file' })] }), fwForm(17992)), codes: ['not-users-file'] },
+  'bundle-lacks-ca': { h: 'z-code', facts: pfacts('z-code', form('z-code.cli', { certificate: { in_effect: false, carrier: 'config-key', user_file: null, since: null, code: 'bundle-lacks-ca', command: 'trocar install' } }), fwForm(17992)), codes: ['bundle-lacks-ca'] }, // 4.11 P4b: a CA added to a merged source after install
+  'marked-without-record': { h: 'claude-code', facts: pfacts('claude-code', form('claude-code.cli', { certificate: { in_effect: false, carrier: 'config-key', user_file: null, since: null, code: 'marked-without-record', command: 'trocar uninstall' } }), fwForm(17992)), codes: ['marked-without-record'] }, // 4.11 P4b: install skipped its carrier for marked text no record lists
   'local-upstream': { h: 'opencode', facts: localRelay(), codes: ['local-upstream'] }, // 4.11 P6: its config names only hosts on this machine (a local relay)
   'not-verified': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server', trusted: false, reason: 'not-verified' })] }), fwForm(17992)), codes: ['not-verified'] },
   'prior-proxy-unknown': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { source: 'unknown' })), codes: ['prior-proxy-unknown'] },
@@ -74,9 +78,10 @@ const SETS = {
 }
 // D51③⑤ (1.6 附录 B): the name list's two findings — a state event of the door and a failure code of the harness part, both in health/codes.mjs's closed sets
 const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
-const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file'] // 1.6 §9.7's cert group, as findings
+const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file', 'bundle-lacks-ca', 'marked-without-record'] // 1.6 §9.7's cert group, as findings
+const MACHINE_CODES = ['autostart-missing'] // status's read of the login entry (D61), a finding of the machine
 const REFUSAL_CODES = ['collectors-online'] // a command's refusal (uninstall), rendered by findingFor, not by diagnose
-const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache', 'not-seen', 'local-upstream']
+const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'pac-address-stale', 'desired-off', 'negative-cache', 'not-seen', 'local-upstream']
 
 for (const [code, set] of Object.entries(SETS)) {
   test(`V49 ${code}: its facts call for exactly ${JSON.stringify([...set.codes].sort())}`, () => {
@@ -87,7 +92,7 @@ for (const [code, set] of Object.entries(SETS)) {
 }
 
 test('V49 both directions: every code of the closed sets (§9.7 net codes, the status reasons §9.6 uses) has a fact set, and the catalogue defines no code outside them', () => {
-  const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE, ...IDENTITY_CODES, ...CERT_CODES])
+  const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE, ...IDENTITY_CODES, ...CERT_CODES, ...MACHINE_CODES])
   const EVENT_ONLY = ['netenv-changed'] // D49: the system-proxy watcher's event code, not a finding: diagnose never gives it
   for (const code of closed) if (!EVENT_ONLY.includes(code) && !(TRUST_REASONS.includes(code) && !FINDINGS[code])) assert.ok(SETS[code], `${code} has a fact set`)
   for (const code of ['opt-in-needed', 'needs-admin', 'not-via-entry']) assert.ok(!closed.has(code) && !FINDINGS[code] && !FINDINGS_WIN32[code], `${code} went with named items (D57, 4.11 §3 ⑱)`)
@@ -101,7 +106,6 @@ test('V49 both directions: every code of the closed sets (§9.7 net codes, the s
 // schema.mjs checks a finding against, is exactly the union of the two catalogues and the trust reasons (the literal per-row shape of FINDINGS_WIN32 is held by topology-win32.test.mjs, W36).
 test('V49 both directions, the Windows half: FINDINGS_WIN32 defines no code outside the closed sets (net codes, status reasons, route codes, trust reasons), and FINDING_CODES is exactly FINDINGS ∪ FINDINGS_WIN32 ∪ the trust reasons (the Windows collector\'s own trust reasons included)', () => {
   const closed = new Set([...NET_CODES, ...STATUS_REASONS, ...ROUTE_CODES, ...TRUST_REASONS])
-  assert.ok(Object.keys(FINDINGS_WIN32).length === 14, 'the §10.4 rows (held row-by-row by topology-win32.test.mjs; the forwarder-* family retired with the kernel, D47 twin)')
   for (const code of Object.keys(FINDINGS_WIN32)) assert.ok(closed.has(code), `${code} is in a closed set`)
   assert.deepEqual([...FINDING_CODES].sort(), [...new Set([...Object.keys(FINDINGS), ...Object.keys(FINDINGS_WIN32), ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])].sort(), 'the union, nothing defined that the doctor cannot name')
 })
@@ -131,6 +135,24 @@ test('V49 every trust reason is a finding (the restart ones expected, the rest f
     else assert.equal(found[0].class, typeof FINDINGS[reason].cls === 'string' ? FINDINGS[reason].cls : found[0].class, `${reason}: its own catalogue entry decides the class (not-verified is expected, 1.6 附录 B)`)
     assert.deepEqual(validateFinding(found[0]), [], reason)
   }
+})
+
+test('V49 a trust reason with its own way out (statusReason fix / command) gives that as the Fix, with or without the daemon\'s hint, never a pointer back at status (desktop-ca-override)', () => {
+  for (const hint of [undefined, 'the daemon\'s own words']) {
+    const f = facts('z-code', {}, { procs: [proc(4121, { watched: 'no-decrypt', trusted: false, reason: 'desktop-ca-override', hint })] })
+    const [found] = findingsOf(f).filter((x) => x.code === 'desktop-ca-override')
+    const runs = found.commands.map((c) => c.run)
+    const want = statusReason('desktop-ca-override', { harness: 'z-code' })
+    assert.ok(runs.includes(want.command) && runs.includes(want.fix), JSON.stringify(runs))
+    assert.ok(!runs.includes('trocar status z-code'), JSON.stringify(runs))
+  }
+})
+
+// 4.11 P11 rule 2: a host the form lists as forward-only is forwarded by design; the form itself is verified, so it is not `not-verified`
+test('forward-only-host: a Claude Desktop process forwarded for one of its own hosts is an expected finding of its own, never not-verified', () => {
+  const f = pfacts('claude-code', form('claude-code.desktop', { procs: [proc(6100, { name: 'Claude', trusted: false, reason: 'forward-only-host' })] }), fwForm(17993))
+  const got = findingsOf(f).filter((x) => x.harness === 'claude-code' && ['forward-only-host', 'not-verified'].includes(x.code))
+  assert.deepEqual(got.map((x) => [x.code, x.class]), [['forward-only-host', 'expected']])
 })
 
 test('V49 each finding: what, why and verify say something; a problem or an expected finding has a command (a note may have none); the commands are whole lines with no <…> left; trocar\'s own come first where the catalogue says so; it validates', () => {
@@ -424,12 +446,12 @@ test('V49 route-loop names where the setting that loops lives; a harness with no
   assert.match(gui(findingsOf(f), 'route-loop'), /Put the line HTTPS_PROXY=.* in \/h\/\.codex\/\.env/)
   const g = loop(proxyOf('http://127.0.0.1:17992', [SRC_ENV]))
   g.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
-  assert.match(gui(findingsOf(g), 'route-loop'), /export HTTPS_PROXY=/)
+  assert.match(gui(findingsOf(g), 'route-loop'), /\bHTTPS_PROXY\b/)
   assert.doesNotMatch(gui(findingsOf(g), 'route-loop'), /\.codex\/\.env/)
   // a loop with no source of its own: the place comes from the behaviour — the first file it reads, else the variable it reads (not always HTTPS_PROXY)
   const nosrc = loop(proxyOf('http://127.0.0.1:17992', []))
   nosrc.harnesses.codex.behaviour = behaviourOf('codex', [], { measured: 'lab', env: ['ZCODE_HTTP_PROXY'] })
-  assert.match(gui(findingsOf(nosrc), 'route-loop'), /export ZCODE_HTTP_PROXY=/)
+  assert.match(gui(findingsOf(nosrc), 'route-loop'), /\bZCODE_HTTP_PROXY\b/)
   const nosrcFile = loop(proxyOf('http://127.0.0.1:17992', []))
   nosrcFile.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
   assert.match(gui(findingsOf(nosrcFile), 'route-loop'), /Put the line HTTPS_PROXY=.* in \/h\/\.codex\/\.env/)
@@ -502,7 +524,6 @@ test('V66 process-unknown `named` (a preset name whose args missed, e.g. the Z C
 })
 
 test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the route record\'s reason and place), and uninstall\'s collectors-online gives trocar off then trocar uninstall', async () => {
-  const { findingFor } = await import('../../src/netenv/findings.mjs')
   const nr = (reason, at) => findingsOf(pfacts('hermes', form('hermes.cli', { entry: null, route: { code: 'not-routed', reason, ...(at ? { at } : {}) }, procs: [] }), fwForm(17993), { platform: 'darwin' }), ['hermes']).find((f) => f.code === 'not-routed')
   const absent = nr('absent', '/Users/a/.hermes/.env')
   assert.ok(absent.commands.some((c) => c.run.includes('/Users/a/.hermes/.env')) && absent.commands.at(-1).run === 'trocar on hermes', 'Hermes: its own setup first, then trocar on')
@@ -513,6 +534,18 @@ test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the ro
   for (const r of reasons) assert.deepEqual(validateFinding(nr(r, '/x')), [], r)
   const refused = findingFor('collectors-online', { platform: 'darwin', online: 'codex' })
   assert.deepEqual([refused.class, refused.commands.map((c) => c.run)], ['problem', ['trocar off', 'trocar uninstall']])
+  // a holder outlives off: each one gets a step that ends it, the OS's own command by its pid, and off comes only when a harness is on
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const held = findingFor('collectors-online', { platform, holders: [{ harness: 'opencode', pid: 45863 }, { harness: 'opencode', pid: 45847 }] })
+    const runs = held.commands.map((c) => c.run)
+    assert.equal(runs.at(-1), 'trocar uninstall', platform)
+    assert.ok(!runs.includes('trocar off'), `${platform}: nothing is on, so off is no step`)
+    for (const pid of [45863, 45847]) assert.ok(held.commands.some((c) => c.shell !== 'gui' && c.run.includes(String(pid))), `${platform}: an OS command ends pid ${pid}`)
+    assert.ok(held.commands.some((c) => c.shell === 'gui' && c.run.includes('opencode')), `${platform}: quitting the program comes first`)
+    assert.deepEqual(validateFinding(held), [], platform)
+    const both = findingFor('collectors-online', { platform, online: 'codex', holders: [{ harness: 'opencode', pid: 1 }] }).commands.map((c) => c.run)
+    assert.equal(both[0], 'trocar off', `${platform}: a harness on is turned off first`)
+  }
 })
 
 // §1.1⑥ applied to a step in an application (`shell: 'gui'`): it is prose, so it folds inside 80 columns, two deeper than its first line; only a
@@ -528,4 +561,93 @@ test('§1.1⑥ renderFindings: a GUI step folds inside 80 columns, hanging two d
   assert.ok(hosts.every((h) => lines.join(' ').includes(h)), 'nothing of the step is dropped')
   assert.ok(lines[step + 1].startsWith(' '.repeat(at + 2)) && lines[step + 1][at + 2] !== ' ', `the fold hangs two deeper:\n${lines.join('\n')}`)
   assert.ok(lines.some((l) => l.trim() === cmd), 'the command is whole on its own line')
+})
+
+for (const platform of ['darwin', 'win32']) for (const reason of ['blocker', 'blocker-unreadable']) test(`4.11 ⑩ · ${platform} · ${reason}: a form a blocker keeps unwired is never captured and draws no trocar hop, though a sibling form wrote the shared entry; the finding names the place; the sibling stays captured`, () => {
+  const at = '/Users/u/.zcode/v2/setting.json#httpProxyCaCertPath'
+  const entry = { where: '/Users/u/.zcode/cli/config.json#network.httpProxy', trocar: true, opt_in: false, intact: true }
+  const cli = form('codex.cli', { entry, procs: [proc(5530)] })
+  const blocked = form('codex.desktop', { entry, route: { reason, at, code: 'not-routed' }, procs: [proc(5531)] })
+  const F = pfacts('codex', cli, fwForm(17992), { platform })
+  F.harnesses.codex.forms.push(blocked); F.harnesses.codex.procs.push(...blocked.procs); F.forwarder.forms[blocked.id] = fwForm(17992)
+  const t = buildTopology(F).codex
+  const by = (id) => t.branches.find((b) => b.form === id)
+  const b = by('codex.desktop')
+  assert.deepEqual([b.captured, b.reason], [reason === 'blocker' ? false : null, 'not-routed'], JSON.stringify(t.branches.map((x) => [x.form, x.captured, x.reason])))
+  const kinds = (br) => br.path.map((id) => (t.nodes.find((n) => n.id === id) || {}).kind)
+  assert.ok(kinds(by('codex.cli')).some((k) => /^trocar-/.test(k)), 'the sibling goes through trocar')
+  assert.ok(!kinds(b).some((k) => /^trocar-/.test(k)), `no trocar hop on the blocked form's path: ${kinds(b)}`)
+  assert.equal(by('codex.cli').captured, true)
+  const f = findingsOf(F).find((x) => x.code === 'not-routed')
+  assert.ok(f && f.why.includes(at) && f.commands.some((c) => c.run.includes(at)), JSON.stringify(f))
+  assert.equal(/not known/.test(f.what), reason === 'blocker-unreadable', `a blocker not read is not known, never "do not go through": ${f.what}`)
+})
+
+// on's receipt says a route it did not write in these words (1.6 附录 B), on the row that names the place: why, and steps whose last one is the command that writes it then —
+// a refusal never leaves the user with a bare code (own-egress after the user's value outlived an off, mac 2026-11-07)
+test('routeRefusal: own-egress ends in trocar on <harness>, with a step before it; a reason it has no words for is null', async () => {
+  const { routeRefusal } = await import('../../src/netenv/findings.mjs')
+  const at = '~/Library/Application Support/Claude-3p/configLibrary/u1.json#egressProxyPacUrl'
+  const r = routeRefusal({ h: 'claude-code', reason: 'own-egress', at })
+  assert.equal(r.steps.at(-1), 'run: trocar on claude-code')
+  assert.ok(r.steps.length >= 2, 'a step before it: what to do with the value')
+  assert.equal(routeRefusal({ h: 'claude-code', reason: 'system-pac', at }), null)
+})
+
+// a Fix is followed in order: a step that turns a harness off never comes after the one that turns it back on (the way out without trocar is a gui line, not a step)
+const trocarSteps = (f) => f.commands.filter((x) => x.shell !== 'gui').map((x) => x.run)
+test('V49 forwarder-down: the first step is `trocar on <h>`, and no `trocar off` step follows it, on every platform', () => {
+  for (const platform of ['linux', 'darwin', 'win32']) {
+    const f = findingsOf({ ...SETS['forwarder-down'].facts, platform }).find((x) => x.code === 'forwarder-down')
+    assert.equal(f.commands[0].run, 'trocar on codex', platform)
+    assert.ok(!trocarSteps(f).some((r) => /^trocar off\b/.test(r)), `${platform}: off is not a step`)
+  }
+})
+
+// the order a Fix is followed in: an off step never follows an on step, and an off / on pair names the same harness (a bare one turns every harness off or on)
+const offOnOk = (f, at) => {
+  const steps = trocarSteps(f), on = steps.findIndex((r) => /^trocar on\b/.test(r)), off = steps.findIndex((r) => /^trocar off\b/.test(r))
+  if (on >= 0) assert.ok(!steps.slice(on).some((r) => /^trocar off\b/.test(r)), `${at}: an off step after on`)
+  if (on >= 0 && off >= 0) assert.equal(steps[off].replace(/^trocar off/, ''), steps[on].replace(/^trocar on/, ''), `${at}: off and on name the same harness`)
+}
+test('V49 every Fix, on every platform: no `trocar off` step after `trocar on`, and an off / on pair names the same harness', () => {
+  for (const platform of ['linux', 'darwin', 'win32']) {
+    for (const [code, set] of Object.entries(SETS)) for (const f of findingsOf({ ...set.facts, platform }, set.names || null)) offOnOk(f, `${platform} ${code} -> ${f.code}`)
+  }
+  const ctx = { F: {}, h: 'codex', user: 'u', sh: 'powershell', platform: 'win32', enginePort: 17990, protocol: 'socks4', dead: { addr: '127.0.0.1', port: 7890 }, upPort: 7897, setting: { scheme: 'socks4' },
+    hf: { forms: [], behaviour: {}, systemProxy: null } }
+  const whys = [null, 'system-proxy-pac', 'system-proxy-unreadable', 'upstream-unparseable']
+  for (const [code, entry] of Object.entries(FINDINGS_WIN32)) for (const why of whys) offOnOk({ commands: entry.commands({ ...ctx, code, fm: { id: 'codex.app', route: { reason: 'not-routed', why }, entryPlace: null } }) }, `win32 ${code} (${why})`)
+})
+
+test('V49 a setting from a variable, on win32: the step sets or removes the user\'s own variable in PowerShell (no export / unset, which PowerShell does not have)', () => {
+  const loop = pfacts('codex', form('codex.cli', { routeLoop: true, entry: null, setting: proxyOf('http://127.0.0.1:17992', [SRC_ENV]), procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992), {})
+  const setStep = gui(findingsOf(loop), 'route-loop') // pfacts is win32
+  const dead = { ...deadFacts(SRC_ENV), platform: 'win32' }
+  dead.harnesses['claude-code'].proxyPlaces = [{ kind: 'env', name: 'HTTPS_PROXY', scheme: 'http', host: '127.0.0.1', port: 7890 }]
+  const removeStep = gui(findingsOf(dead), 'proxy-dead')
+  const cmds = (fs, code) => fs.find((f) => f.code === code).commands
+  const setCmds = findingFor('route-loop', { platform: 'win32', h: 'codex', hf: { behaviour: { env: ['HTTPS_PROXY'] } }, setting: null, old: 'http://127.0.0.1:7890' }).commands, removeCmds = cmds(findingsOf(dead), 'proxy-dead')
+  for (const t of [setStep, removeStep]) assert.doesNotMatch(t, /\b(export|unset) /)
+  // the variable's command is a line of its own (not inside a sentence), and a line after it names the variable again: where a value that still wins is set
+  const own = (cs, re) => { const i = cs.findIndex((c) => c.shell !== 'gui' && re.test(c.run)); assert.ok(i > 0, cs.map((c) => c.run).join('\n')); assert.ok(cs.slice(i + 1).some((c) => c.shell === 'gui' && /\bHTTPS_PROXY\b/.test(c.run)), 'a line after it names the variable'); return cs[i].run }
+  assert.match(own(setCmds, /^setx HTTPS_PROXY \S/), /^setx HTTPS_PROXY '[^']*'$/, 'set: setx NAME value, one argument')
+  own(removeCmds, /^\[Environment\]::SetEnvironmentVariable\('HTTPS_PROXY',\$null,'User'\)$/)
+  for (const c of [...setCmds, ...removeCmds]) assert.ok(c.shell === 'gui' || c.run.length <= 72, `a command fits 80 columns at doctor's indent: ${c.run}`)
+})
+
+test('setx on win32: the value round-trips through the printed PowerShell literal; an address trocar does not know gives no command line', () => {
+  const hf = { behaviour: { env: ['HTTPS_PROXY'] } }
+  const ctx = { platform: 'win32', h: 'codex', hf, setting: null }
+  const lines = (o) => findingFor('route-loop', { ...ctx, ...o }).commands.filter((c) => c.shell !== 'gui' && /^setx /.test(c.run)).map((c) => c.run)
+  for (const value of ["http://u'ser:p$w;d@a b:1", 'http://127.0.0.1:7890', "''", '`$x,@y']) {
+    const [line, more] = lines({ old: value })
+    assert.equal(more, undefined)
+    const m = /^setx HTTPS_PROXY '((?:[^']|'')*)'$/.exec(line)
+    assert.ok(m, line)
+    assert.equal(m[1].replace(/''/g, "'"), value)
+  }
+  assert.deepEqual(lines({ old: undefined }), [], 'route-loop with no address on record')
+  assert.deepEqual(findingFor('prior-proxy-unknown', ctx).commands.filter((c) => c.shell !== 'gui' && /^setx /.test(c.run)), [], 'prior-proxy-unknown')
+  assert.deepEqual(findingFor('proxy-unsupported', { ...ctx, setting: { scheme: 'socks5', source: [{ kind: 'env', where: 'HTTPS_PROXY' }] } }).commands.filter((c) => c.shell !== 'gui' && /^setx /.test(c.run)), [], 'proxy-unsupported with no host')
 })

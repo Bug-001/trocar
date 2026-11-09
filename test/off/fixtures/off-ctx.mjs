@@ -10,8 +10,10 @@ import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { runOff } from '../../../src/off/orchestrate.mjs'
 import { runUninstall } from '../../../src/cli/uninstall.mjs'
 import { readManifest } from '../../../src/off/manifest.mjs'
+import { switchFileIn } from '../../../src/off/paths.mjs'
 import { HARNESS_IDS } from '../../../src/off/harness-names.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
+import { seedFootprint } from '../../helpers/footprint.mjs'
 import { sevenHomes } from './seven-homes.mjs'
 import { fakeSystem, ROOTS, snapshot } from '../../cli/fixtures/on-ctx.mjs'
 
@@ -26,10 +28,11 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 1))
 export async function installedHome({ names = ['claude-code', 'codex'], seed = null, daemon = {} } = {}) {
   const home = tmpDir('trocar-offc-')
   const sh = sevenHomes(home)
+  const descs = allDescriptors.filter((d) => names.includes(d.name))
+  seedFootprint(home, descs, sh.env) // the named harnesses are installed (4.6: presence is each one's own footprint)
   if (seed) seed(home, sh)
   const dir = path.join(home, '.trocar', 'collector')
   const sys = fakeSystem(daemon)
-  const descs = allDescriptors.filter((d) => names.includes(d.name))
   const unit = () => userUnit({ home, node: '/usr/bin/node', script: '/repo/bin/trocar.mjs', run: sys.exec.run })
   const onOpts = (o = {}) => ({ home, env: sh.env, osName: 'linux', harnesses: descs, freePort: async () => 47011, roots: ROOTS, confirm: async () => true, unit: unit(), request: sys.daemon.request, socketPath: SOCK, sleep: async () => {}, linger: () => true, user: 'alice', ...o })
   const offDeps = (o = {}) => ({ exec: sys.exec.run, request: sys.daemon.request, socketPath: SOCK, procs: async () => [], roots: ROOTS, sleep: tick, platform: 'linux', ...o }) // the sandbox is a Linux user's: a process's identity is read from /proc, not by running `ps` on whatever the tests run on
@@ -50,6 +53,14 @@ export async function installedHome({ names = ['claude-code', 'codex'], seed = n
   const first = await s.on()
   if (first.exit !== 0) throw new Error(`the fixture's first on failed: ${JSON.stringify(first.receipt.notes)}`)
   return s
+}
+
+/** The switch file `on` writes for a harness on macOS / Windows (4.11 P5), put where `on` puts it: the Linux `on` writes nothing `off` finds by a mark
+ *  (Kimi's shim and rc line are install's, 4.6), so a test of `off` by marker in this Linux sandbox gives it this to undo. → its path */
+export function onSwitch(s, harness) {
+  const f = switchFileIn(s.dir, harness)
+  fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, 'http://127.0.0.1:47012\n')
+  return f
 }
 
 /** A lock file as the daemon writes it, for a test that wants a daemon the lock names. */

@@ -3,7 +3,7 @@
 import http from 'node:http'
 import { once } from 'node:events'
 import { createServer } from '../../src/server.mjs'
-import { createQueryService } from '../../src/query/service.mjs'
+import { createQueryRouter } from '../../src/query/router.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 
@@ -14,7 +14,7 @@ export const withToken = (h = {}) => ({ [CONTROL_TOKEN_HEADER]: TOKEN, ...h })
 /** `deps` = the path of a module whose default export is the worker's `deps` (src/query/worker.mjs argv[3]); control lines count as `control:<verb>`. */
 /** `failure` = the service's D38 recorder (src/query/service.mjs), e.g. to see that no worker died. */
 export async function serveFace({ home, query, deps, failure, ...opts }) {
-  const svc = query ? null : createQueryService({ home, failure, fork: (h) => (deps ? workerFork(h, deps) : workerFork(h)) })
+  const svc = query ? null : createQueryRouter({ home, failure, fork: (h, _, role) => workerFork(h, deps ?? '', role) })
   const relays = []
   const q = query || { relay: (a) => (relays.push(a.name), svc.relay(a)), control: (a) => (relays.push(`control:${a.verb}`), svc.control(a)), warm: (a) => svc.warm(a), refresh: (a) => svc.refresh(a) }
   const { server } = createServer({ home, token: TOKEN, query: q, ...opts })

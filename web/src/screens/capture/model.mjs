@@ -7,7 +7,7 @@
 import { fmtStamp, fmtWhen, has } from '../../../legacy/core/fmt.mjs'
 import { harnessName, harnessKey } from '../../../legacy/core/chips.mjs'
 import { mark } from '../../../legacy/core/ui.mjs'
-import { redactUrlCredentials } from '../../../legacy/core/sensitive.mjs'
+import { redactUrlCredentials, redactPair } from '../../../legacy/core/sensitive.mjs'
 import { agentVerdicts, reasonOf, AGENT_TIER } from '../../../legacy/core/capture-verdict.mjs'
 import { controlFor } from '../../../legacy/core/harness-switch.mjs'
 import { failureRows } from './log-model.mjs'
@@ -21,12 +21,13 @@ const list = (x) => (Array.isArray(x) ? x : [])
 const T = (text) => ({ text: String(text) })
 const M = (mono) => ({ mono: String(mono) })
 const P = (...parts) => ({ parts: parts.filter(Boolean) })
-const pair = (k, v) => ({ k, v: typeof v === 'string' ? T(v) : v })
+const pair = (k, v) => redactPair({ k, v: typeof v === 'string' ? T(v) : v }) // every details value hidden once more (1.9 §保真边界)
 const plain = (v) => (v.parts ? v.parts.map(plain).join('') : v.mono ?? v.text)
 const copyOf = (pairs) => pairs.map(({ k, v }) => `${k}: ${plain(v)}`).join('\n')
 const diagOf = (used) => redactUrlCredentials(JSON.stringify(used, null, 2))
 const cap1 = (s) => String(s).replace(/\p{L}/u, (c) => c.toUpperCase()) // a row's sentence starts with a capital
-// a row's gutter: bad / warn lamps; the ok dot for capturing / no problems found; nothing for dim and unknown states (1.5)
+// a row's gutter: bad / warn lamps; the ok dot for capturing / no problems found; else nothing on an agent row (a normal state lights
+// nothing). The service row always has its lamp, the grey unlit dot (`dim`) included, as the overview card head does (1.5 §采集状态)
 const gutOf = (cls, fine) => (cls === 'bad' ? 'bad' : cls === 'warn' ? 'warn' : fine ? 'ok' : null)
 const inferred = mark('inf').replace(/<[^>]*>/g, '')
 // a condition's words: the CLI's failure table when the condition is a (where, code) failure, else the kind's own
@@ -91,10 +92,10 @@ function serviceOf(h, v) {
     const parts = Object.entries(rel).filter(([, n]) => typeof n === 'number' && n > 0).map(([k, n]) => `${n} ${has(RELAYED, k) ? RELAYED[k] : k}`)
     if (parts.length) tech.push(pair('still relayed', parts.join(' · ')))
   }
-  for (const e of list(h && h.errors)) if (e) tech.push(pair('could not be read', M(`${e.where ?? '?'}: ${redactUrlCredentials(String(e.reason ?? ''))}`)))
+  for (const e of list(h && h.errors)) if (e) tech.push(pair('could not be read', M(`${e.where ?? '?'}: ${e.reason ?? ''}`)))
   tech.push(...commandPairs(commandsFor(h, { service: true })))
   return {
-    id: '*service', gut: gutOf(v.cls, v.state === 'ok'),
+    id: '*service', gut: gutOf(v.cls, v.state === 'ok') ?? 'dim',
     lead: { text: v.text, cls: v.cls, toLog: v.state === 'failing' && logged },
     conds, failing, logLink: logged && v.state !== 'failing',
     lingerStop: h && h.linger === false ? 'Capture stops at logout' : null,
@@ -162,10 +163,12 @@ function agentTech(row, h) {
     if (t.routing) tech.push(pair('routing', has(ROUTING, t.routing) ? ROUTING[t.routing] : String(t.routing)))
     const byId = new Map(list(t.nodes).filter((n) => n && n.id != null).map((n) => [n.id, n]))
     const chains = new Map() // one row per distinct chain (adjacent repeats said once), with the forms that take it
+    // a hop is marked inferred when it is, or when the edge that reaches it is (1.6 C.3 `inferred`: the text marks it)
+    const edgeInferred = new Set(list(t.edges).filter((e) => e && e.inferred === true).map((e) => `${e.from}\u0000${e.to}`))
     for (const b of list(t.branches)) {
-      const nodes = list(b && b.path).map((id) => {
-        const n = byId.get(id)
-        return n && n.name != null ? `${redactUrlCredentials(String(n.name))}${n.inferred ? ` ${inferred}` : ''}` : `unknown${n && n.unknown && n.unknown.reason ? ` · ${n.unknown.reason}` : ''}`
+      const nodes = list(b && b.path).map((id, i, path) => {
+        const n = byId.get(id), inf = n && (n.inferred || (i > 0 && edgeInferred.has(`${path[i - 1]}\u0000${id}`)))
+        return n && n.name != null ? `${redactUrlCredentials(String(n.name))}${inf ? ` ${inferred}` : ''}` : `unknown${n && n.unknown && n.unknown.reason ? ` · ${n.unknown.reason}` : ''}`
       }).filter((x, i, a) => i === 0 || x !== a[i - 1])
       if (!nodes.length) continue
       const chain = nodes.join(' → ')
@@ -182,6 +185,9 @@ function agentTech(row, h) {
     }
     if (t.routing === 'proxy') tech.push(pair('VPN', `if your VPN routes by process, it sees trocar as the source, not ${harnessName(row.harness)}`))
   }
+  // 1.9 §保真边界: its routes send loopback direct (status's loopback-direct form note, 1.6 §3.3), so requests to this computer are not captured
+  const forms = list(Object.entries((h && h.harnesses) || {}).find(([k]) => harnessKey(k) === row.harness)?.[1]?.forms)
+  for (const s of new Set(forms.flatMap((f) => list(f && f.notes)).filter((n) => n && n.code === 'loopback-direct').map((n) => String(n.text)))) tech.push(pair('local requests', s))
   const cmds = commandsFor(h, { row })
   const undos = new Set(ownChanges(h, row.harness).filter((e) => e.undo).map((e) => String(e.undo)))
   for (const u of undos) if (!cmds.some(([, c]) => c === u)) tech.push(pair('undo', M(u)))

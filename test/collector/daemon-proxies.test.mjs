@@ -21,6 +21,7 @@ import { toProxyEntry } from '../../src/collector/core/tracker.mjs'
 import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { startMockUpstream } from '../lab/mock-upstream/server.mjs'
 import { startMockProxy } from '../lab/mock-upstream/proxy.mjs'
@@ -57,7 +58,7 @@ test('toProxyEntry: scheme-less is http, credentials are never kept, unknown sch
 
 test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine through describe — outer TLS terminated, CONNECT recorded, the tunnelled call decrypted and recorded (W8 through the daemon)', { timeout: 20000 }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'as-dp-')) // short: unix socket paths are length-limited
-  const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   const dir = path.join(home, '.trocar', 'collector'), sock = path.join(root, 'run', 'c.sock')
   const p = fakeProc()
   const labCa = makeLabCa(path.join(root, 'lab-ca'))
@@ -110,7 +111,7 @@ test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine th
 
 test('daemon: describe that throws costs the connection nothing — it goes on without the proxy table (spliced, policy) and the failure is recorded under describe-error', { timeout: 20000 }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'as-dp-'))
-  const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   const dir = path.join(home, '.trocar', 'collector'), sock = path.join(root, 'run', 'c.sock')
   const p = fakeProc()
   const labCa = makeLabCa(path.join(root, 'lab-ca'))

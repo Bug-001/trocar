@@ -22,6 +22,10 @@ const REJECT_WINDOW_MS = 10_000
 // destroys its socket before its Finished leaves), so it still counts toward the negative entry (D31 fail-open) but never writes
 // trust-rejected (D38) (RFC 4.6 §引擎 5). Tests shorten it through timing.slowEngineMs.
 export const SLOW_ENGINE_MS = 2_000
+// A zero-data close on a fast engine by a (pid, host) that has sent data on our leaf before is held this long before it is judged: a process
+// that exits closes its unused pooled sockets on the way out, and those are no answer about our leaf. Gone by then → nothing is counted;
+// still alive (or the engine stops first) → judged as any other close (RFC 4.6 §引擎 5). Tests shorten it through timing.holdCloseMs.
+export const HOLD_CLOSE_MS = 1_000
 // host of a CONNECT authority or a SOCKS target: "[::1]:443" → "::1", "a.test:443" → "a.test". An IPv6 literal is
 // written compressed whatever form the client sent ("[0:0:0:0:0:0:0:1]:443" → "::1"), as SOCKS5 targets are (RFC 4.6
 // §记录 代理前导): one spelling per host on the row and in the negative-cache key.
@@ -41,6 +45,11 @@ const IDLE = { boundary: () => ({ idle: true, headPending: false, seq: null, bli
 // reported keeps its code. wait = {phase, t0} | null; phase 'tls' | 'proxy-reply' | 'connect' (the upstream's TCP connection not made yet).
 const synthetic = (e) => !(e instanceof Error) || (e.code === 'ECONNRESET' && !e.syscall)
 const WAITED = { tls: ['closed_before_handshake', "the upstream's TLS handshake"], 'proxy-reply': ['closed_before_reply', "the proxy's reply"], connect: ['closed_before_reply', 'the upstream connection'] }
+// One wait on the upstream said once (RFC 4.6 §记录), by the flow and by the door's dial, which has no flow yet. `ms`: the threshold (a timer can fire a ms early)
+export function slowEvent(host, phase, t0, ms) {
+  const waited_ms = Math.max(ms, Date.now() - t0)
+  return { code: 'upstream-slow', host, phase, waited_ms, reason: `${host}: still waiting for ${WAITED[phase][1]} after ${waited_ms} ms` }
+}
 export function wentBy(side, err = null, wait = null, now = Date.now()) {
   const w = wait ? { phase: wait.phase, ms: Math.max(0, now - wait.t0) } : null
   if (!synthetic(err)) return { type: err.code || `${side}_error`, message: msgOf(err), side, ...(w ? { wait: w } : {}) }
@@ -106,6 +115,7 @@ export function handleFlow(client, meta, ctx) {
 
   let activeTee = null
   let finished = false
+  let pending = null // a judgment waiting on whether its process exits (HOLD_CLOSE_MS): the row is written once it is settled
   let handedOff = false     // true once a routing decision hands the sockets to relay()
   let relaying = false      // relay() owns teardown (armPre's handlers on a decrypted pair go quiet)
   let tunnelAsked = false   // the client sent CONNECT inside a TLS connection we terminated (an https:// proxy)
@@ -131,21 +141,28 @@ export function handleFlow(client, meta, ctx) {
   let reached = false       // that connection was made (Node clears `connecting` before it emits a failed connect's error, so it is kept here)
   let firstByteTimer = null
   let slowTimer = null      // the upstream-slow watch while the engine waits on the upstream (RFC 4.6 §记录)
-  let wait = null           // {phase, t0} while the engine waits on the upstream: what a side going then is written with (wentBy)
+  let wait = null           // {phase, t0, host} while the engine waits on the upstream: what a side going then is written with (wentBy)
+  let after = null          // [phase, host]: the wait that starts once the upstream's TCP connection is made
   let planned = null        // the decision already made while the engine waits on the upstream: kept on the row if a side goes then
-  // a TLS wait whose upstream TCP connection has not been made yet (transparent mode dials and handshakes at once) is a wait on the connect
-  const went = (side, err) => wentBy(side, err, wait && wait.phase === 'tls' && !reached ? { ...wait, phase: 'connect' } : wait)
-  // Waiting on the upstream (our TLS handshake to it, a proxy's reply) has no time limit: cutting the
+  // a dial nothing has been decided on yet (transparent mode dials at accept) is no wait a side's going is written with: that is closed_before_decision
+  const went = (side, err) => wentBy(side, err, wait && (wait.phase !== 'connect' || after) ? wait : null)
+  // Waiting on the upstream (the TCP dial, our TLS handshake to it, a proxy's reply) has no time limit: cutting the
   // agent because its upstream or proxy is slow would break it (D31). Past `upstreamSlowMs` (5 s) the
   // wait is recorded once as an upstream-slow event (D38), and the connection goes on.
   function waitFor(phase, host) {
+    // a handshake or a reply cannot begin before the TCP connection is made (transparent mode dials and handshakes at once): the dial's wait runs on, this one starts at the connect
+    if (!reached && phase !== 'connect') { after = [phase, host]; if (wait) wait.host = host; return }
     waitDone()
     const ms = ctx.upstreamSlowMs ?? 5000, t0w = Date.now()
-    wait = { phase, t0: t0w }
-    slowTimer = setTimeout(() => { slowTimer = null; ctx.failure({ code: 'upstream-slow', flow_id: rec.flow_id, host, phase, waited_ms: Math.max(ms, Date.now() - t0w), reason: `${host} has not answered the ${phase === 'proxy-reply' ? 'proxy request' : 'TLS handshake'} for ${Math.max(ms, Date.now() - t0w)} ms; still waiting` }) }, ms) // a timer can fire a ms early
+    wait = { phase, t0: t0w, host }
+    slowTimer = setTimeout(() => { slowTimer = null; ctx.failure({ ...slowEvent(wait.host, phase, t0w, ms), flow_id: rec.flow_id }) }, ms)
     if (slowTimer.unref) slowTimer.unref()
   }
-  function waitDone() { wait = null; if (slowTimer) { clearTimeout(slowTimer); slowTimer = null } }
+  function waitDone() { wait = null; after = null; if (slowTimer) { clearTimeout(slowTimer); slowTimer = null } }
+  function watchDial(sock, host) {
+    waitFor('connect', host)
+    sock.once('connect', () => { reached = true; const next = after; waitDone(); if (next) waitFor(...next) })
+  }
   // the row's not_captured code (closed set, codes.mjs) and why (RFC 4.6 §记录 连接行怎么落码)
   function notCaptured(code, reason) { rec.not_captured = code; if (reason != null) rec.reason = reason }
   // policy(meta, host): true = decrypt; false = outside the decrypt policy; or the daemon's own code
@@ -189,6 +206,7 @@ export function handleFlow(client, meta, ctx) {
     // the flow ended) count on every path. A client that never closes its half gets written after 2 s.
     let written = false, cap = null
     const write = () => {
+      if (pending) return pending.then(write)
       if (written) return
       written = true
       if (cap) clearTimeout(cap)
@@ -241,7 +259,7 @@ export function handleFlow(client, meta, ctx) {
   // a synchronous throw (e.g. net.connect on a bad port) ends this flow with a record (D38)
   try { upstream = ctx.connectUpstream(meta.dst) } catch (e) { internalError(e); return flowDone }
   track(client); track(upstream)
-  reached = !upstream.connecting; if (!reached) upstream.once('connect', () => { reached = true })
+  reached = !upstream.connecting; if (!reached) watchDial(upstream, meta.dst.address)
   // What the engine's drain() asks of this flow (RFC 1.6 §1.3). start() → 'closing' | 'waiting' | 'closed' | 'cut';
   // state() → 'open' (not asked) | 'closing' | 'waiting' | 'closed' | 'cut' | 'done'.
   if (ctx.register) ctx.register({
@@ -459,6 +477,7 @@ export function handleFlow(client, meta, ctx) {
         finish(null, { error })
       })
     }
+    if (fresh.connecting) watchDial(fresh, host)
     fresh.write(buf)                                    // the ClientHello, byte for byte
     cSock.resume(); relay(cSock, fresh)
   }
@@ -469,9 +488,9 @@ export function handleFlow(client, meta, ctx) {
   // step-aside and the D37 rejection rule live here, so every path that terminates TLS gets both.
   function terminate(buf, cSock, uSock, sni, host, isTunnel, key, onSecure) {
     // the OS store ∪ Node's roots ∪ NODE_EXTRA_CA_CERTS (+ upstreamCa), one context (tls/roots.mjs)
-    if (!ctx.upstreamTrust) ctx.upstreamTrust = createUpstreamTrust({ extra: ctx.upstreamCa })
-    // a proxy-mode door hands the agent's own set (4.11 §3 ⑭, proxymode/upstream-trust.mjs) on the connection's meta; else the union above
-    const trust = (meta && meta.upstreamTrust) || ctx.upstreamTrust
+    // — the engine's is a function that reads it at the first handshake that needs it (engine.mjs); a proxy-mode door hands the agent's own
+    // set (4.11 §3 ⑭, proxymode/upstream-trust.mjs) on the connection's meta, and then the union is not read for this connection
+    const trust = (meta && meta.upstreamTrust) || (typeof ctx.upstreamTrust === 'function' ? ctx.upstreamTrust() : (ctx.upstreamTrust ||= createUpstreamTrust({ extra: ctx.upstreamCa })))
     // rejectUnauthorized:false only so the two upstream failures can be told apart: an 'error' before
     // 'secureConnect' is a network / protocol failure (the client is closed); a 'secureConnect' that is
     // not `authorized` (Node still checks chain and hostname) is a certificate that did not verify
@@ -536,13 +555,24 @@ export function handleFlow(client, meta, ctx) {
         // A certificate alert is an answer whoever sends it. A zero-data close while the engine was the slow side and before our handshake
         // completed may be a give-up or a Node refusal (whose Finished never leaves): by a (who, host) that has sent data on our leaf it is a
         // give-up and counts for nothing; otherwise it counts toward the entry but never writes trust-rejected. A close on a fast engine is
-        // judged as a rejection, trusted before or not: another client of the same process may refuse our leaf there (§引擎 5)
-        const alert = certAlert(e), gaveUp = !alert && slow && !secured
-        if (gaveUp && ctx.negCache.trusts(key)) { notCaptured('client-closed-no-data', 'trusted-before'); if (!rec.error) rec.error = how; return }
-        if (gaveUp) notCaptured('client-closed-no-data', 'engine-slow')
-        else notCaptured('client-rejected-leaf', 'client-rejected-leaf')
+        // judged as a rejection. By a (who, host) that has sent data it is most likely a spare closed unused (a process exit closes them all at once), so
+        // it takes TRUSTED_THRESHOLD in a row, not an exemption: another client of the same process may refuse our leaf there (§引擎 5). Before such a
+        // close counts, it is held until it is known whether the process is going (its unused sockets close as it exits): a process gone counts nothing
+        const alert = certAlert(e), gaveUp = !alert && slow && !secured, proven = !alert && ctx.negCache.trusts(key)
+        if (gaveUp && proven) { notCaptured('client-closed-no-data', 'trusted-before'); if (!rec.error) rec.error = how; return }
+        if (!gaveUp && proven && meta.pid != null && ctx.holdClose) {
+          let held = false
+          const p = new Promise((settle) => { held = ctx.holdClose(meta.pid, (gone) => { pending = null; try { if (!gone) rejected(how, alert, gaveUp, proven, e) } finally { settle() } }) !== false })
+          if (held) { pending = p; return }
+        }
+        rejected(how, alert, gaveUp, proven, e)
+      }
+      const rejected = (how, alert, gaveUp, proven, e) => {
         if (!rec.error) rec.error = how
         const made = alert ? ctx.negCache.mark(key, { cause: 'client-rejected-leaf', meta, host, alert: e.code }) : ctx.negCache.observe(key, { rejected: true, meta, host })
+        if (proven && !made) return notCaptured('client-closed-no-data', 'trusted-before')
+        if (gaveUp) notCaptured('client-closed-no-data', 'engine-slow')
+        else notCaptured('client-rejected-leaf', 'client-rejected-leaf')
         if (gaveUp) return
         // D51④: the process was judged trusting trocar and is not — a critical failure when this rejection makes the (pid, host) negative
         // for the first time in its life (4.6 §事件与码 #9): a renewal after retry_at is the same answer again, so once per (pid, host)

@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { api } from '../../../legacy/core/api.mjs'
+import { LIST_WAIT_MS } from '../../../legacy/library/logic.mjs'
 import { INTERVAL } from '../../../legacy/core/poll.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { initKeys } from '../../../legacy/core/keys.mjs'
@@ -105,6 +106,87 @@ const growing = (n: number) => [
   ...base.map((i) => sess(`s${i}`, 10 + i + n, 1 + i)),
 ]
 
+// 1.8 §载入: until `sessions` answers there is nothing to conclude. A worker's `102` never reaches the browser: the daemon asks again and
+// the fetch stays open (3.5 §行表先读), so a parked read looks here like one held for many polls.
+test('1.8 载入: a held answer is Loading, across polls, and No sessions yet only follows an empty answer', async () => {
+  let answer: (r: unknown) => void = () => {}
+  vi.mocked(api.get).mockImplementation((name: string) => (name === 'sessions'
+    ? new Promise((res) => { answer = res }) as never : Promise.resolve({ ok: false, status: 404, data: null, error: 'HTTP 404' }) as never))
+  const p = await mount()
+  for (let i = 0; i < 2; i++) {
+    expect(p.container.textContent).not.toContain(W.NO_SESSIONS)
+    await poll()
+  }
+  await act(async () => { answer({ ok: true, status: 200, data: { schema: 2, command: 'sessions', ok: true, errors: [], as_of: iso(0), next: null, sessions: [] } }) })
+  await settle()
+  expect(p.list.textContent).toContain(W.NO_SESSIONS)
+})
+
+// 1.8 #18: only the sessions read differs, so the other names answer as in beforeEach
+const onlySessions = (read: () => Promise<unknown>) => vi.mocked(api.get).mockImplementation((name: string) => (name === 'sessions'
+  ? read() : Promise.resolve({ ok: false, status: 404, data: null, error: 'HTTP 404' })) as never)
+
+test('1.8 #18: a read that fails with status 0 is the failure state at once, not the wait', async () => {
+  onlySessions(async () => ({ ok: false, status: 0, error: 'cut' }))
+  const p = await mount()
+  expect(p.list.querySelector('[data-read-fail]')).not.toBeNull()
+  await tick(LIST_WAIT_MS)
+  expect(p.list.querySelector('[data-list-wait]')).toBeNull()
+})
+
+test('1.8 #18: a read still out says what is going on from 3 s until the rows come, and is never the no-sessions state', async () => {
+  let answer: (r: unknown) => void = () => {}
+  onlySessions(() => new Promise((res) => { answer = res }))
+  const p = await mount() // settle() has run 4 ms of the wait
+  const noSessions = () => p.list.querySelector('.libempty .dimline')
+  await tick(LIST_WAIT_MS - 104)
+  expect(p.list.querySelector('[data-list-wait]')).toBeNull()
+  expect(noSessions()).toBeNull()
+  await tick(100)
+  expect(p.list.querySelector('[data-list-wait]')).not.toBeNull()
+  await poll()
+  expect(p.list.querySelector('[data-list-wait]')).not.toBeNull()
+  expect(noSessions()).toBeNull()
+  await act(async () => { answer({ ok: true, status: 200, data: { schema: 2, command: 'sessions', ok: true, errors: [], as_of: iso(0), next: null, sessions: [sess('s1', 1, 1)] } }) })
+  await settle()
+  expect(p.list.querySelector('[data-list-wait]')).toBeNull()
+  expect(p.row(key(sess('s1', 1, 1)))).not.toBeNull()
+})
+
+test('1.8 #18: a page that answers 503 still-reading and then 200 is never a failure: the wait stays until the rows come', async () => {
+  const pending: Array<(r: unknown) => void> = []
+  onlySessions(() => new Promise((res) => { pending.push(res) }))
+  const p = await mount()
+  await tick(LIST_WAIT_MS)
+  for (let i = 0; i < 2; i++) { // the daemon's 503 after its own wait: the same page is asked again at once
+    await act(async () => { pending.shift()!({ ok: false, status: 503, error: 'still reading', code: 'still-reading' }) })
+    await settle()
+    expect(p.list.querySelector('[data-read-fail]')).toBeNull()
+    expect(p.list.querySelector('[data-list-wait]')).not.toBeNull()
+  }
+  await act(async () => { pending.shift()!({ ok: true, status: 200, data: { schema: 2, command: 'sessions', ok: true, errors: [], as_of: iso(0), next: null, sessions: [sess('s1', 1, 1)] } }) })
+  await settle()
+  expect(p.list.querySelector('[data-read-fail]')).toBeNull()
+  expect(p.row(key(sess('s1', 1, 1)))).not.toBeNull()
+})
+
+test('1.8 只有后台调用的会话: the list ends with how many background-only sessions are hidden; Show writes bg=1 and lists them; a list of only those is not the no-match state', async () => {
+  for (const [list, n] of [[[sess('m1', 3, 1), sess('b1', 1, 2, { background_only: true }), sess('b2', 1, 3, { background_only: true })], 2], [[sess('b1', 1, 2, { background_only: true })], 1]] as const) {
+    lists = [() => [...list]]
+    const p = await mount()
+    const foot = () => p.list.querySelector<HTMLElement>('[data-bg-hidden]')
+    expect(foot()?.getAttribute('data-bg-hidden')).toBe(String(n))
+    expect(p.row(key(sess('b1', 1, 2)))).toBeNull()
+    expect(p.list.textContent).not.toContain(W.FILTERED_EMPTY)
+    await act(async () => { fireEvent.click(foot()!.querySelector('button')!) })
+    await settle()
+    expect(p.sets.at(-1)).toEqual({ bg: '1' })
+    expect(p.row(key(sess('b1', 1, 2)))).not.toBeNull()
+    expect(foot()).toBeNull()
+    cleanup()
+  }
+})
+
 test('V1: across polls that add sessions above and change counts, a session keeps its row node, the highlight and the scroll', async () => {
   lists = [growing]
   const selKey = key(sess('s3', 0, 0))
@@ -149,16 +231,6 @@ test('V3: a drag-select inside a row opens nothing, and the selection outlives a
   expect(p.gos).toEqual([])
 })
 
-// 1.8 §标题规则 2: a title not read yet is drawn muted as not read yet, never 「未命名会话」; the refill's answer puts the title in
-test('a pending title reads as not read yet with its own hover, and the next answer that carries the title replaces it', async () => {
-  lists = [() => [sess('a', 5, 1, { title: null, title_source: 'pending' })], () => [sess('a', 5, 1)]]
-  const p = await mount()
-  const cell = () => p.row(key(sess('a', 0, 0)))!.querySelector('.lt')!
-  expect([cell().className, cell().textContent, cell().getAttribute('title')]).toEqual(['lt pend', W.TITLE_PENDING, W.titlePending('a')])
-  await poll()
-  expect([cell().className, cell().textContent, cell().getAttribute('title')]).toEqual(['lt', 'title a', W.titleFromWire('a')])
-})
-
 test('V3b: while a selection holds the rows, the head\'s read-at time stays with them; once it is gone, the next poll moves it', async () => {
   lists = [(n) => [sess('a', 5 + n, 1)]]
   const p = await mount()
@@ -177,6 +249,13 @@ test('V3b: while a selection holds the rows, the head\'s read-at time stays with
   document.dispatchEvent(new Event('selectionchange'))
   await poll()
   expect(head(), 'moves once nothing is held').not.toBe(first)
+})
+
+test('1.8 §标题规则: a row with no title is muted, read failed or not; a row with one is not', async () => {
+  lists = [() => [sess('said', 3, 1), sess('none', 3, 2, { title: null, title_source: null }), sess('lost', 3, 3, { title: null, title_source: 'unread' })]]
+  const p = await mount()
+  const muted = (id: string) => p.row(`p1::${id}`)!.querySelector('.lt')!.classList.contains('none')
+  expect(['said', 'none', 'lost'].map(muted)).toEqual([false, true, true])
 })
 
 test('V8: each row is one link with no focusable inside, and its href reads back as the replay route of that session (id escaped)', async () => {

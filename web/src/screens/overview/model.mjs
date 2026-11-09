@@ -19,7 +19,8 @@ import { unpricedModels } from '../../../legacy/settings/prices.mjs'
 import { controlFor } from '../../../legacy/core/harness-switch.mjs'
 import { failureBrief, failureWord } from '../../../../src/cli/words.mjs'
 import * as W from '../../../legacy/labels/overview.mjs'
-import { WINDOW_LABEL, UNTITLED, READ_FAIL, TITLE_PENDING, TITLE_PENDING_TIP } from '../../../legacy/labels/common.mjs'
+import { redactUrlCredentials as hide } from '../../../legacy/core/sensitive.mjs'
+import { WINDOW_LABEL, UNTITLED, READ_FAIL, PROMPT_UNREAD, PROMPT_UNREAD_TIP, TITLE_PENDING, TITLE_PENDING_TIP } from '../../../legacy/labels/common.mjs'
 
 const DAY = 24 * 3600e3
 
@@ -44,7 +45,8 @@ const QUIET = ['ok', 'off', 'not-installed'] // the capture states that need no 
 export function overviewItems(s, now) {
   const all = []
   const H = s.caph && s.caph.data ? s.caph.data : null
-  const push = (cls, key, o) => all.push({ cls, key, ...o })
+  // a reason may carry a proxy address: its user and password never reach the board (1.9 §保真边界)
+  const push = (cls, key, o) => all.push({ cls, key, ...o, ...(o.text != null ? { text: hide(o.text) } : {}), ...(o.subject != null ? { subject: hide(o.subject) } : {}) })
 
   // ── O1 · an agent with a problem, worded as its 采集 page row (agentVerdicts); the net-blocked ones lead the table ──
   if (H) {
@@ -197,7 +199,7 @@ export function recentRows(sessionsData) {
   if (!sessionsData || !Array.isArray(sessionsData.sessions)) return null
   return [...sessionsData.sessions].filter(Boolean).sort((a, b) => (parseTs(b.last_ts) ?? -1) - (parseTs(a.last_ts) ?? -1)).slice(0, 5).map((m) => ({
     key: `${m.project_slug}::${m.session_id}`, id: m.session_id, harness: m.harness, inferred: !!m.harness_inferred,
-    title: m.title ?? null, titleSource: m.title_source ?? null, calls: m.calls ?? 0, probes: m.probes ?? 0, last: m.last_ts || null,
+    title: m.title ?? null, titleSource: m.title_source, calls: m.calls ?? 0, probes: m.probes ?? 0, last: m.last_ts || null,
     href: `#/replay/${encodeURIComponent(m.project_slug || '')}/${encodeURIComponent(m.session_id || '')}`,
   }))
 }
@@ -233,7 +235,7 @@ export function readFail(what, answer) {
   const obj = answer != null && typeof answer === 'object'
   const status = obj && typeof answer.status === 'number' ? answer.status : null
   const why = obj ? answer.error : answer
-  return { line: READ_FAIL(what, status), pairs: [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : String(why)]] }
+  return { line: READ_FAIL(what, status, obj && answer.timedOut === true), pairs: [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : hide(String(why))]] }
 }
 
 // the page head's window links (the window is a route param, 1.2 §路由)
@@ -247,7 +249,7 @@ export function capCard(caph, now) {
   const subs = []
   if (v.readErrors > 0) subs.push(W.READ_FILES_FAIL(v.readErrors))
   if (hs && hs.length) subs.push(W.AGENTS_ON(hs.filter((x) => x && x.desired === 'on').length, hs.length))
-  return { cls: v.cls, text: v.text, subs, tech: v.state === 'unreadable' ? [['reason', v.reason]] : null }
+  return { cls: v.cls, text: hide(v.text), subs, tech: v.state === 'unreadable' ? [['reason', hide(v.reason)]] : null }
 }
 
 const MORE_HREF = { O3: '#/capture/log', O4: '#/capture/log', O6: '#/settings/storage', O9: '#/traffic' } // the rest: #/capture
@@ -315,7 +317,8 @@ export function statsCard(s, now) {
   return {
     ...card,
     sessions: { text: W.SESSIONS_N(m.sessions ?? 0), href: `#/sessions?window=${s.w}` }, calls: W.CALLS_N(m.calls ?? 0),
-    cost: costOfModel(m, priceFail), unpriced: !priceFail && m.unpriced > 0 ? { text: W.UNPRICED(m.unpriced), href: '#/settings/prices' } : null,
+    cost: costOfModel(m, priceFail), unpriced: s.pricing && s.pricing.ok !== false && s.pricing.data && m.unpriced > 0 ? // no table yet: nothing is "unpriced"
+      { text: W.UNPRICED(m.unpriced), href: '#/settings/prices' } : null,
     hit: hitOf({ hit: m.hit, uncertain: m.hitUncertain, main: m.main }), agents,
   }
 }
@@ -328,11 +331,11 @@ export function recentCard(s, now) {
   return {
     kind: 'shown',
     rows: rows.map((r) => {
-      const probe = r.calls === 0 && r.probes > 0
-      const pending = r.title == null && r.titleSource === 'pending' // not known yet, not "untitled" (1.8 §标题规则)
+      // 1.8 §标题规则, as the library: unread → the read failed; null → 没有采到提问; any other value or none → not read yet
+      const probe = r.calls === 0 && r.probes > 0, unread = r.title == null && r.titleSource === 'unread', pending = r.title == null && !unread && r.titleSource !== null
       return {
-        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? (pending ? TITLE_PENDING : UNTITLED), pending,
-        titleTip: [r.title != null ? TITLE_FROM_WIRE : pending ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · '),
+        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? (unread ? PROMPT_UNREAD : pending ? TITLE_PENDING : UNTITLED), untitled: r.title == null,
+        titleTip: [r.title != null ? TITLE_FROM_WIRE : unread ? PROMPT_UNREAD_TIP : pending ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · '),
         calls: { text: probe ? W.PROBE_ONLY : W.CALLS_N(r.calls), tip: probe ? W.PROBE_ONLY_TIP : null }, when: when(r.last, now), href: r.href,
       }
     }),

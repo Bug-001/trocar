@@ -37,8 +37,16 @@ export const LLM_ENDPOINT_PATHS = pathsOf('llm')
 export const TOKEN_COUNT_ENDPOINT_PATHS = pathsOf('token-count')
 
 /**
- * THE failed rule (3.5 §访问模式, both rules): a call failed when it errored, or — unless it is a WebSocket logical call, which
- * has no HTTP status and fails inside its reply — when its HTTP status is absent or ≥ 400. The index row passes only
- * {status, ws}; the call row adds `error` = the record's error, an unparsed request, or the dissector's failed(norm, rec).
+ * THE failed rule (3.5 §访问模式, both rules): a call failed when its reply's own terminal says so (`ended` 'failed'), when it errored
+ * and its reply did not end in a named success (`ended` not 'ok'), or — unless it is a WebSocket logical call, which has no HTTP
+ * status and fails inside its reply — when its HTTP status is absent or ≥ 400. The index row passes only {status, ws}; the call row
+ * adds `error` = the record's error or an unparsed request, and `ended` = the dissector's hook (3.1 `ended`; null keeps the rest).
  */
-export const failedOf = ({ status, ws = false, error = false }) => !!error || (!ws && (status == null || status >= 400))
+// A record the collector wrote as cut (an error envelope), or the reply of one read as itself (registry.mjs closedAfterEnd): the
+// only records whose `error` a named success ending can lift.
+export const cutOf = (rec) => !!rec && (((rec.resp || rec.response) || {}).kind === 'error' || rec._closed === true);
+export const failedOf = ({ status, ws = false, error = false, ended = null, cut = false }) =>
+  ended === 'failed' || (!!error && !(cut && ended === 'ok')) || (!ws && (status == null || status >= 400))
+// A reply's own terminal from the endings it names (`seen`), over a wire's closed lists (data in each dissector): any named failure →
+// 'failed', else any named success → 'ok', else null.
+export const endOf = (ends, seen) => (seen.some((v) => ends.failed.includes(v)) ? 'failed' : seen.some((v) => ends.ok.includes(v)) ? 'ok' : null)

@@ -7,15 +7,18 @@ import type { Virtualizer } from '@tanstack/react-virtual'
 import { fmtStamp, fmtTime, relTime } from '../../../legacy/core/fmt.mjs'
 import { formatHash } from '../../../legacy/core/router.mjs'
 import { readFailure } from '../../../legacy/core/ui.mjs'
+import { LIST_WAIT, READING } from '../../../legacy/labels/common.mjs'
 import * as W from '../../../legacy/labels/library.mjs'
+import { LIST_WAIT_MS } from '../../../legacy/library/logic.mjs'
 import { HALF } from '../../../legacy/core/icons.mjs'
 import { HarnessIcon } from '../../ui/HarnessIcon'
 import { Svg } from '../../ui/Svg'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
+import { useAfter } from '../../ui/useAfter'
 import { rowModel, dayHead, captionFacts as captionFactsJs, emptyBoardState, filteredAgentLine } from './model.mjs'
 import type { Failed, Session, SessionsData } from './useSessions'
 
-export type Entry = { key: string, g?: string, s?: Session }
+export type Entry = { key: string, g?: string, s?: Session, n?: number }
 type Pairs = Array<[string, TechValue]>
 type Fact = { kind: 'not-all', n: number } | { kind: 'stored', at: string }
 const captionFacts = captionFactsJs as (errors: unknown, stored: string | null) => { facts: Fact[], tech: string[] }
@@ -42,7 +45,7 @@ export const Row = memo(function Row({ s, on, now, onOpen }: { s: Session, on: b
         <span className="lhn" title={m.harnessRaw ? `${m.harnessName} · ${m.harnessRaw}` : m.harnessName}>{m.harnessName}</span>
       </span>
       <span className="lmain">
-        <span className={m.titlePending ? 'lt pend' : 'lt'} title={m.titleTip}>{m.titleText}</span>
+        <span className={m.untitled ? 'lt none' : 'lt'} title={m.titleTip}>{m.titleText}</span>
         <span className="lsub" title={m.subTip}>{m.marks.map((k) => k.kind === 'inferred'
           ? <span key={k.kind} className="lmark" data-mark={k.kind}><span className="mk mk-inf" title={k.tip}>{k.text}</span></span>
           : <span key={k.kind} className="lmark" data-mark={k.kind} title={k.tip || undefined}>{k.text}</span>)}</span>
@@ -58,8 +61,8 @@ const DayHead = ({ g, now }: { g: string, now: number }) => {
   return <div className="lgroup"><span className="lday">{h.word}</span>{h.date ? <span className="ldate">{h.date}</span> : null}</div>
 }
 
-export function VRows({ v, entries, sel, now, onOpen }:
-  { v: Virtualizer<HTMLDivElement, Element>, entries: Entry[], sel: string | null, now: number, onOpen: (s: Session) => void }) {
+export function VRows({ v, entries, sel, now, onOpen, onShowBg }:
+  { v: Virtualizer<HTMLDivElement, Element>, entries: Entry[], sel: string | null, now: number, onOpen: (s: Session) => void, onShowBg: () => void }) {
   return (
     <div style={{ position: 'relative', width: '100%', height: v.getTotalSize() }}>
       {v.getVirtualItems().map((it) => {
@@ -68,7 +71,9 @@ export function VRows({ v, entries, sel, now, onOpen }:
         return (
           // a row is as tall as its content (one line or two); the virtualizer measures it
           <div key={it.key as string} className="vrow" data-index={it.index} ref={v.measureElement} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${it.start}px)` }}>
-            {e.s ? <Row s={e.s} on={e.key === sel} now={now} onOpen={onOpen} /> : <DayHead g={e.g!} now={now} />}
+            {e.s ? <Row s={e.s} on={e.key === sel} now={now} onOpen={onOpen} />
+              : e.n != null ? <div className="libbg dimline" data-bg-hidden={e.n}>{`${W.bgHidden(e.n)} · `}<button type="button" className="linkbtn" aria-label={W.showBg(e.n)} onClick={onShowBg}>{W.SHOW}</button></div>
+              : <DayHead g={e.g!} now={now} />}
           </div>
         )
       })}
@@ -102,12 +107,16 @@ type Shot = Parameters<typeof emptyBoardState>[0]
 const asOf = (t: number | null | undefined) => (t != null ? ` · ${W.AS_OF} ${fmtTime(t)}` : '')
 const Empty = ({ children }: { children: ReactNode }) => <div className="libempty">{children}</div>
 
-export const LoadingState = () => <Empty>{W.LOADING}</Empty>
+// no list yet and none stored: `sessions` has not answered, which says nothing about whether there are sessions (1.8 §载入)
+export function LoadingState() {
+  const long = useAfter(LIST_WAIT_MS)
+  return long ? <div className="libempty" data-list-wait="">{LIST_WAIT}</div> : <Empty>{READING}</Empty>
+}
 
 // the read failed and there is no older list: the failure IS the content, never worded as 「还没有会话」
 export const ReadFailState = ({ err, onRetry }: { err: Failed, onRetry: () => void }) => (
-  <Empty>{readFailure(W.SESSION_LIST, err).line}<br />
-    <button type="button" className="linkbtn" onClick={onRetry}>{W.RETRY}</button><Tech pairs={failPairs(err)} /></Empty>
+  <div className="libempty" data-read-fail="">{readFailure(W.SESSION_LIST, err).line}<br />
+    <button type="button" className="linkbtn" onClick={onRetry}>{W.RETRY}</button><Tech pairs={failPairs(err)} /></div>
 )
 
 // the empty board: 还没有会话, then the capture service's own sentence (read once) with 「截至」, then the way out

@@ -1,6 +1,6 @@
 // schema.mjs — what `--json` prints (RFC 1.6 R5), and the check V9 runs over every command's output. The keys and the exit codes
 // are src/off/schema.mjs (the undo side prints receipts too and may import nothing outside src/off); this adds validateReceipt.
-import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt } from '../off/schema.mjs'
+import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt, VERDICT_COMMANDS } from '../off/schema.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
 import { STATUS_REASONS } from '../health/codes.mjs'
 import { FINDING_CODES } from '../netenv/findings.mjs' // the finding codes' own closed list: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — one list, one place
@@ -13,8 +13,8 @@ export { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt }
 export const COMMAND_KEYS = Object.freeze({
   install: Object.freeze(['fp256', 'items', 'carriers', 'harnesses', 'pending', 'standalone', 'commands', 'residual_risk', 'daemon', 'autostart', 'left', 'notes']),
   on: Object.freeze(['harnesses', 'refused', 'routes', 'user', 'standalone', 'commands', 'unchanged', 'capture', 'daemon', 'linger', 'linger_reason', 'adopted', 'notes']),
-  off: Object.freeze(['harnesses', 'all', 'outcome', 'daemon', 'daemon_stop', 'holders', 'left', 'kept_backups', 'orphan_backups', 'kept_bundles', 'still_trusting', 'residue', 'undone_by_marker', 'routing', 'install_items', 'pending', 'user_processes', 'nothing_installed', 'relayed_reason', 'notes']),
-  uninstall: Object.freeze(['harnesses', 'all', 'purge_data', 'kept', 'kept_bundles', 'still_trusting', 'residue', 'dropped_backups', 'non_identical', 'entries', 'left', 'pending', 'scheduled', 'autostart', 'daemon', 'relayed_reason', 'routing', 'user_processes', 'declined', 'notes']),
+  off: Object.freeze(['harnesses', 'all', 'still_on', 'outcome', 'daemon', 'daemon_stop', 'holders', 'left', 'kept_backups', 'orphan_backups', 'kept_bundles', 'still_trusting', 'residue', 'undone_by_marker', 'routing', 'install_items', 'pending', 'user_processes', 'nothing_installed', 'relayed_reason', 'notes']),
+  uninstall: Object.freeze(['harnesses', 'all', 'purge_data', 'kept', 'kept_bundles', 'still_trusting', 'residue', 'dropped_backups', 'non_identical', 'entries', 'left', 'pending', 'scheduled', 'autostart', 'daemon', 'relayed_reason', 'routing', 'sealed', 'user_processes', 'declined', 'notes']),
   update: Object.freeze(['from', 'to', 'harnesses', 'restarted', 'install', 'on', 'notes']),
   classes: Object.freeze(['class', 'before', 'after']),
 })
@@ -72,6 +72,7 @@ export function validateReceipt(r) {
     }
     if (!isString(c.change)) bad.push(`${at}.change: not a string`)
     if (!(c.backup === null || isString(c.backup))) bad.push(`${at}.backup: neither a path nor null`)
+    if ('why_no_backup' in c && !(c.backup === null && isString(c.why_no_backup))) bad.push(`${at}.why_no_backup: a string, only beside a null backup`)
   })
   listOf(r, 'created', bad, stringOrObject(bad))
   listOf(r, 'removed', bad, stringOrObject(bad))
@@ -166,7 +167,11 @@ function validateInstallCert({ install: i, cert: c }) {
 }
 
 const CARRIERS = Object.freeze(['root', 'config-key', 'wrapper', 'plugin', null])
-const USER_FILE_STATES = Object.freeze(['intact', 'changed', 'not-users-file'])
+const USER_FILE_STATES = Object.freeze(['intact', 'changed', 'not-users-file', 'without-root', 'unknown'])
+// `user_file`: null, or { path, state } — `unknown` (the file or a setting naming it not read) with its reason, its path null when the setting was the one
+const userFileOk = (u) => u === null || (isObject(u) && USER_FILE_STATES.includes(u.state) && (u.state === 'unknown' ? isString(u.reason) && u.reason !== '' && (u.path === null || isString(u.path)) : isString(u.path)))
+// `in_effect`: true · false (with its code and command) · null = not known (D38), with the code saying why (null only when a root carrier's store could not be read) and no command
+const inEffectOk = (c) => c.in_effect === true || (c.in_effect === false && isId(c.code) && isId(c.command)) || (c.in_effect === null && c.command === null && (isId(c.code) || (c.code === null && c.carrier === 'root')))
 const UPSTREAM_SOURCES = Object.freeze(['hook', 'config-prior', 'process-env', 'system-proxy', 'direct', 'unknown'])
 const redacted = (v) => v === null || (typeof v === 'string' && !/\/\/[^/@]*:(?!\*\*\*@)[^/@]*@/.test(v) && !/\/\/(?!\*\*\*@)[^/:@]+@/.test(v)) // no user or password left in a URL
 /** status --json `forms` (1.6 §9.4): per harness, per form, `certificate` and `proxy` with their closed sets; every URL redacted. */
@@ -176,8 +181,9 @@ function validateForms(forms) {
   for (const [h, list] of Object.entries(forms)) (Array.isArray(list) ? list : [null]).forEach((x, i) => {
     const at = `forms.${h}[${i}]`, c = x && x.certificate, p = x && x.proxy, u = p && p.upstream
     if (!isObject(x) || !isId(x.form)) return bad.push(`${at}: not {form, certificate, proxy}`)
-    if (!isObject(c) || typeof c.in_effect !== 'boolean' || !CARRIERS.includes(c.carrier) || !isCodeOrNull(c.code) || (c.in_effect === false && !isId(c.command)) || !(c.user_file === null || (isObject(c.user_file) && USER_FILE_STATES.includes(c.user_file.state)))) bad.push(`${at}.certificate: not in the closed sets`)
+    if (!isObject(c) || !inEffectOk(c) || !CARRIERS.includes(c.carrier) || !isCodeOrNull(c.code) || !userFileOk(c.user_file)) bad.push(`${at}.certificate: not in the closed sets`)
     if (!isObject(p) || !['connected', 'entry_intact', 'door_up'].every((k) => typeof p[k] === 'boolean') || !isObject(u) || !UPSTREAM_SOURCES.includes(u.source) || ![u.url_redacted, p.written, p.prior].every(redacted)) bad.push(`${at}.proxy: not in the closed sets, or a URL not redacted`)
+    if ('route' in x && !(isObject(x.route) && ['blocker', 'blocker-unreadable'].includes(x.route.reason) && (x.route.at === null || typeof x.route.at === 'string') && (!('form' in x.route) || isId(x.route.form)))) bad.push(`${at}.route: not {reason: blocker | blocker-unreadable, at, form?}`)
   })
   return bad
 }
@@ -296,7 +302,7 @@ export function validateFinding(f) {
 
 /** `status` and `doctor`: `ok` is the command's own verdict (1.6 §3.5, §3.7 — nothing is wrong), not 「everything was read」. For every
  *  other name a thing it could not read (an `errors` entry without `level`; a `level:'note'` one is not that, C.5) is the only reason a document is not ok. */
-const VERDICT = Object.freeze(['status', 'doctor'])
+const VERDICT = VERDICT_COMMANDS
 
 /** Problems with a `query` document against 附录 C.5 (`[]` = valid): every document, whatever the name, has
  *  `schema` · `command` · `ok` · `errors:[{where, reason}]`, and one paged by `--after` (it says `has_more`) has `next` agreeing with it;

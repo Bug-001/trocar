@@ -1,4 +1,4 @@
-// trocar plugin for DeepSeek dsh (spec 4.11 P9 `cordis-plugin`; lab W8 dsh-switch, R3-M6 / R3-W3). Written once by `trocar install` and
+// trocar collector: plugin for DeepSeek dsh (spec 4.11 P9 `cordis-plugin`). Written once by `trocar install` and
 // loaded by one line of cordis.patch.yml; inert while the switch file is absent. What it does, and nothing else:
 //   trust — adds the trocar root to Node's default roots in this process (appended; nothing taken away). Not under --use-openssl-ca, not
 //           when tls.setDefaultCACertificates is missing, not when the root file is unreadable — and then it never routes either (§3 ⑦):
@@ -8,8 +8,17 @@
 //           whose CONNECT carries X-Trocar-Upstream = the proxy dsh itself would use for this origin (its environment, after dsh read its
 //           .env), or `none` when dsh would go direct (no proxy set, its bypass list matches, or a scheme dsh does not take); absent → the
 //           prior dispatcher, exactly what dsh would have done. A changed door closes the old agent, so a switch takes effect on the next request.
+//           node:http / node:https (not undici: dsh's telemetry exporter, any node:https client) the same way, per connection: createConnection
+//           on the http and https Agent prototypes, so every agent (the default one, one of the caller's own, agent:false) takes it. Switch
+//           present and the host not loopback → a socket to the door, CONNECT host:port with the door's credentials and X-Trocar-Upstream (the
+//           proxy node:http itself would use, by Node's rules: nodeProxy), then the original connection on that tunnel (TLS for https); absent →
+//           Node's own connection. A kept-alive socket follows the switch. A request with its own createConnection option, or an Agent subclass
+//           with its own createConnection, is not seen.
 // It reads and changes no request or response bytes, connects nowhere but the door, writes no file and no agent config, never throws.
 import tls from 'node:tls'
+import net from 'node:net'
+import http from 'node:http'
+import https from 'node:https'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
@@ -18,7 +27,8 @@ const CA_FILE = __TROCAR_CA_FILE__
 const SWITCH = __TROCAR_SWITCH__
 const PROXY_ENV = __TROCAR_PROXY_ENV__
 const NO_PROXY_ENV = __TROCAR_NO_PROXY_ENV__
-const LOOPBACK = /^(localhost|127(\.\d+){3}|\[::1\]|::1|0\.0\.0\.0)$/i
+const LOOPBACK = /^(localhost|127(\.\d+){3}|::1|0\.0\.0\.0|::ffff:127(\.\d+){3}|::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4})$/i // IPv4-mapped too
+const loopback = (host) => LOOPBACK.test(String(host).replace(/^\[|\]$/g, ''))
 const SCHEMES = new Set(['http:', 'https:'])
 
 function addRoot() {
@@ -33,8 +43,8 @@ function addRoot() {
 // dsh's own undici, found from its entry script (npm lib/bin.js, the desktop core's index.js or cli.js).
 function hostUndici() {
   try { return createRequire(process.argv[1])('undici') } catch { /* look up the tree */ }
-  let d = path.dirname(fs.realpathSync(process.argv[1]))
-  for (let i = 0; i < 8; i++, d = path.dirname(d)) { const f = path.join(d, 'node_modules', 'undici', 'index.js'); if (fs.existsSync(f)) return createRequire(f)(f) }
+  let dir = path.dirname(fs.realpathSync(process.argv[1]))
+  for (let i = 0; i < 8; i++, dir = path.dirname(dir)) { const f = path.join(dir, 'node_modules', 'undici', 'index.js'); if (fs.existsSync(f)) return createRequire(f)(f) }
   throw new Error(`undici not found from ${process.argv[1]}`)
 }
 
@@ -81,7 +91,7 @@ if (rooted) try {
     dispatch(opts, handler) {
       let origin = null
       try { origin = new URL(String(opts.origin)) } catch { origin = null }
-      const d = origin && !LOOPBACK.test(origin.hostname) ? doorNow() : null
+      const d = origin && !loopback(origin.hostname) ? doorNow() : null
       return (d ? agentFor(d, ownProxy(origin)) : prior).dispatch(opts, handler)
     }
     close() { return Promise.all([prior.close(), ...[...agents.values()].map((a) => a.close())]) }
@@ -89,6 +99,89 @@ if (rooted) try {
   }
   u.setGlobalDispatcher(new TrocarSwitch())
 } catch { /* a plugin never stops its host: dsh keeps its own dispatcher */ }
+
+// node:http(s): one connection through the door, by the switch file the undici path reads (the same door, the same header)
+function readDoor() { try { return fs.readFileSync(SWITCH, 'utf8').split(/\r?\n/)[0] || null } catch { return null } }
+// The tunnel is Node's own CONNECT client (the 'connect' event): trocar writes and reads no byte of it. The door is on loopback, so the wrapped
+// createConnection below leaves this request's own connection to Node. A door that closes, refuses or stays quiet ends it with an error.
+function tunnel(door, host, port, upstream, timeout, done) {
+  let d
+  try { d = new URL(door) } catch (e) { done(e); return }
+  if (!loopback(d.hostname)) { done(new Error('the door is not on this machine')); return } // the door is trocar's loopback listener, never anything else
+  const target = net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`
+  const headers = { Host: target, 'X-Trocar-Upstream': upstream, ...(d.username ? { 'Proxy-Authorization': `Basic ${Buffer.from(`${decodeURIComponent(d.username)}:${decodeURIComponent(d.password)}`).toString('base64')}` } : {}) }
+  let settled = false
+  const end = (e, sock) => { if (settled) return; settled = true; done(e, sock) }
+  const req = http.request({ host: d.hostname, port: d.port, method: 'CONNECT', path: target, headers, agent: false, ...(timeout > 0 ? { timeout } : {}) })
+  req.once('connect', (res, sock, head) => {
+    if (!(res.statusCode >= 200 && res.statusCode < 300)) { sock.destroy(); end(new Error(`the door answered CONNECT ${target} with ${res.statusCode}`)); return }
+    sock.setTimeout(0)
+    if (head && head.length) sock.unshift(head)
+    end(null, sock)
+  })
+  req.once('timeout', () => req.destroy(new Error('the door did not answer CONNECT in time')))
+  req.once('error', (e) => end(e))
+  req.once('close', () => end(new Error('the door closed before it answered CONNECT')))
+  req.end()
+}
+// The proxy node:http itself would use for this connection, by Node's own rules: only an agent with a proxy configuration (the global agents
+// under NODE_USE_ENV_PROXY / --use-env-proxy, an Agent made with proxyEnv), the lower-case name first, https_proxy for https and http_proxy for
+// http, no ALL_PROXY, its no_proxy list → the proxy URL, or 'none'
+function nodeProxy(agent, secure, host) {
+  const env = agent && agent.options && agent.options.proxyEnv
+  if (!env || typeof env !== 'object') return 'none'
+  if (bypassed(host.toLowerCase(), env.no_proxy || env.NO_PROXY)) return 'none'
+  const v = secure ? env.https_proxy || env.HTTPS_PROXY : env.http_proxy || env.HTTP_PROXY
+  try { return v && SCHEMES.has(new URL(v).protocol) ? v : 'none' } catch { return 'none' }
+}
+const ROUTE = Symbol('trocar.route') // on a socket whose way was chosen here: the door it went through, or null for Node's own
+if (rooted) try {
+  const wrap = (proto, secure) => {
+    const own = proto.createConnection
+    proto.createConnection = function trocarConnection(...args) {
+      const o = (args[0] && typeof args[0] === 'object') ? args[0] : {}
+      const host = String(o.host || o.hostname || 'localhost').replace(/^\[|\]$/g, ''), port = Number(o.port) || (secure ? 443 : 80)
+      const cb = typeof args.at(-1) === 'function' ? args.at(-1) : null
+      const judged = !o.socketPath && !loopback(host)
+      const d = judged ? readDoor() : null
+      if (!d || !cb) {
+        if (!judged) return own.apply(this, args)
+        const tag = (sk) => { if (sk && typeof sk === 'object') sk[ROUTE] = null; return sk }
+        if (cb) args[args.length - 1] = (e, sk) => cb(e, tag(sk))
+        return tag(own.apply(this, args))
+      }
+      // plain http through the user's proxy: Node writes the request for that proxy (absolute form, its credentials), so the tunnel goes to the
+      // proxy itself and the door dials no further — the proxy gets exactly the bytes it would have. Otherwise the origin, the proxy in the header
+      const up = nodeProxy(this, secure, host)
+      let to = { host, port, upstream: up }
+      if (!secure && up !== 'none') { const p = new URL(up); to = { host: p.hostname.replace(/^\[|\]$/g, ''), port: Number(p.port) || (p.protocol === 'https:' ? 443 : 80), upstream: 'none' } }
+      tunnel(d, to.host, to.port, to.upstream, Number(o.timeout) || 0, (e, sock) => {
+        if (e) { cb(e); return }
+        sock[ROUTE] = d
+        if (!secure) { cb(null, sock); return }
+        // TLS on the tunnel socket, with the caller's options (servername, ca, rejectUnauthorized); not Node's https connection, which would
+        // tunnel again through a proxy the agent is configured with
+        let secured
+        try { secured = tls.connect({ ...o, socket: sock, servername: o.servername || (net.isIP(host) ? undefined : host) }) } catch (err) { cb(err); return }
+        secured[ROUTE] = d
+        secured.once('secureConnect', () => cb(null, secured)); secured.once('error', (err) => cb(err))
+      })
+      return undefined
+    }
+  }
+  wrap(http.Agent.prototype, false)
+  wrap(https.Agent.prototype, true)
+  // a kept-alive socket follows the switch too: before an agent picks a free socket, one opened under another switch state is closed, so the
+  // request opens a new one the way the switch says now (https.Agent takes addRequest from http.Agent)
+  const add = http.Agent.prototype.addRequest
+  http.Agent.prototype.addRequest = function trocarAddRequest(...args) {
+    try {
+      const now = readDoor()
+      for (const list of Object.values(this.freeSockets || {})) for (const sk of list) if (sk && ROUTE in sk && sk[ROUTE] !== now) sk.destroy()
+    } catch { /* never in the way of the request */ }
+    return add.apply(this, args)
+  }
+} catch { /* a plugin never stops its host: node:http keeps its own connections */ }
 
 // a cordis plugin must export apply (lab round 1, mac finding 4)
 export const name = 'trocar'

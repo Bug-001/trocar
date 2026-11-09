@@ -12,6 +12,11 @@ import { createStaticRedirector } from '../../../src/collector/core/redirector.m
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { closeWithin } from '../../helpers/bounded.mjs'
+import { isFailure } from '../../../src/health/codes.mjs'
+import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 const T = { timeout: 20_000 }
 const TOKEN = '0123456789abcdef0123456789abcdef' // a fixture token, never a real one
@@ -32,7 +37,7 @@ async function rig(t, { delayMs = 0, timing = {} } = {}) {
   redirector.setIngress(USER, async () => { await sleep(delayMs); return { ...meta, dst: undefined, capture: 'proxy', upstream: { kind: 'direct' } } })
   const fails = [], flows = []
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: upCa.certPem, systemCa: { certs: [], sources: ['test'], errors: [] },
-    store: { envelope() {}, flow: (f) => flows.push(structuredClone(f)) }, onFailure: (f) => fails.push(f), timing, ingressToken: TOKEN })
+    store: { envelope() {}, flow: (f) => flows.push(structuredClone(f)) }, onFailure: (f) => fails.push(f), timing, ingressToken: TOKEN, alive: () => true }) // the client process keeps running
   const { port, ingressPort } = await engine.listen({ ingress: { port: 0 } })
   t.after(async () => { await closeWithin(engine); up.close() })
   const settled = async (n) => { for (let i = 0; i < 800 && flows.length < n; i++) await sleep(10); assert.ok(flows.length >= n, `${n} rows`) }
@@ -52,6 +57,10 @@ async function rig(t, { delayMs = 0, timing = {} } = {}) {
     return new Promise((resolve) => { const c = tls.connect({ socket, servername, ca }, () => resolve(c)); c.on('error', () => resolve(null)) })
   }
   const rejecting = async (door = 'transparent', servername = 'h.test') => { const c = await hello(door, { ca: upCa.certPem, servername }); if (c) c.destroy() }
+  // a client that accepts our leaf, keeps the connection unused and closes it: what a process exit does to a spare in its pool
+  const spare = async (door = 'transparent') => { const c = await hello(door, { ca: trocarCa.certPem }); c.destroy(); await new Promise((r) => c.once('close', r)) }
+  // a Node client capped at TLS 1.2 that refuses our leaf: its Finished reaches the engine, then it closes
+  const refuses12 = async (door = 'transparent') => { const socket = await open(door); await new Promise((r) => { const c = tls.connect({ socket, servername: 'h.test', ca: upCa.certPem, maxVersion: 'TLSv1.2' }, () => { c.destroy(); r() }); c.on('error', () => r()) }) }
   const used = async (door = 'transparent') => {
     const c = await hello(door, { ca: trocarCa.certPem }); c.write('GET / HTTP/1.1\r\nHost: h.test\r\n\r\n')
     await new Promise((r) => c.once('data', r)); c.end(); await new Promise((r) => c.once('close', r))
@@ -69,7 +78,7 @@ async function rig(t, { delayMs = 0, timing = {} } = {}) {
     await new Promise((r) => s.once('close', r))
   }
   const critical = () => fails.filter((f) => f.code === 'trust-rejected')
-  return { engine, fails, flows, settled, rejecting, used, alert, critical }
+  return { engine, fails, flows, settled, rejecting, used, alert, critical, spare, refuses12, port }
 }
 
 // a give-up (the raw client hangs up on our first flight) and a Node refusal (it destroys its socket before its Finished leaves) look the
@@ -123,14 +132,69 @@ test('4.6 W21(a): under a slow engine, a (pid, host) that sent data on our leaf 
   assert.deepEqual(s.engine.negatives().map((e) => [e.host, e.cause]).sort(), [['other.test', 'client-rejected-leaf'], ['pinned.test', 'client-rejected-leaf']])
 })
 
-test('4.6 W21(b): a fast engine — a client of a trusted (pid, host) that refuses our leaf there is client-rejected-leaf, negative after two, one trust-rejected', T, async (t) => {
+test('4.6 W21(b): a fast engine — a client of a trusted (pid, host) that refuses our leaf there counts: the fifth in a row is client-rejected-leaf, negative, one trust-rejected; data in between starts the count again', T, async (t) => {
   const s = await rig(t)
-  await s.used(); await s.settled(1)
-  await s.rejecting(); await s.settled(2)
-  assert.deepEqual(s.engine.negatives(), [])
-  await s.rejecting(); await s.settled(3)
-  assert.deepEqual(s.flows.slice(1).map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
+  let n = 0
+  const refuse = async (times) => { for (let i = 0; i < times; i++) { await s.rejecting(); await s.settled(++n) } }
+  await s.used(); await s.settled(++n)
+  await refuse(4)
+  await s.used(); await s.settled(++n)
+  await refuse(4)
+  assert.deepEqual(s.engine.negatives(), [], 'four, data, four: never five in a row')
+  assert.deepEqual(s.critical(), [])
+  await refuse(1)
+  assert.deepEqual(s.flows.slice(1).filter((f) => f.not_captured).map((f) => f.reason), [...Array(8).fill('trusted-before'), 'client-rejected-leaf'])
   assert.deepEqual(s.engine.negatives().map((e) => [e.host, e.cause]), [['h.test', 'client-rejected-leaf']])
+  assert.equal(s.critical().length, 1)
+})
+
+test('4.6 W21(b): a client refusing our leaf beside a busy one, data before every refusal → the tenth is client-rejected-leaf, negative, one trust-rejected', T, async (t) => {
+  const s = await rig(t)
+  let n = 0
+  for (let i = 0; i < 10; i++) { await s.used(); await s.settled(++n); assert.deepEqual(s.engine.negatives(), [], `before refusal ${i + 1}`); await s.rejecting(); await s.settled(++n) }
+  assert.deepEqual(s.flows.filter((f) => f.not_captured).map((f) => f.reason), [...Array(9).fill('trusted-before'), 'client-rejected-leaf'])
+  assert.deepEqual(s.engine.negatives().map((e) => [e.host, e.cause]), [['h.test', 'client-rejected-leaf']])
+  assert.equal(s.critical().length, 1)
+})
+
+// 4.6 §引擎 5: a process exit closes its idle connections in one instant; a process that already sent data on our leaf has answered for it
+for (const door of ['transparent', 'ingress']) {
+  test(`4.6 W21(c) (${door}): a process that sent data closes two unused connections → trusted-before, no entry, no critical, not a failure`, T, async (t) => {
+    const s = await rig(t)
+    await s.used(door); await s.settled(1)
+    await Promise.all([s.spare(door), s.spare(door)]); await s.settled(3)
+    assert.deepEqual(s.flows.slice(1).map((f) => [f.not_captured, f.reason]), Array(2).fill(['client-closed-no-data', 'trusted-before']))
+    assert.deepEqual(s.engine.negatives(), [])
+    assert.deepEqual(s.critical(), [])
+    assert.ok(s.flows.every((f) => !isFailure(f)), 'nothing was lost, so nothing turns the indicator')
+  })
+}
+
+// 4.6 §引擎 5: with no data sent, a completed handshake proves nothing: these refusers' Finished reaches the engine
+test('4.6 W21(d): no data sent, Node on TLS 1.2 refuses our leaf → client-rejected-leaf, negative after two, one trust-rejected', T, async (t) => {
+  const s = await rig(t)
+  await s.refuses12(); await s.settled(1)
+  assert.deepEqual(s.engine.negatives(), [])
+  await s.refuses12(); await s.settled(2)
+  assert.deepEqual(s.flows.map((f) => f.not_captured), Array(2).fill('client-rejected-leaf'))
+  assert.deepEqual(s.engine.negatives().map((e) => e.cause), ['client-rejected-leaf'])
+  assert.equal(s.critical().length, 1)
+})
+
+const bun = [...(process.env.PATH || '').split(path.delimiter), path.join(process.env.HOME || '', '.bun', 'bin')].map((d) => path.join(d, 'bun')).find((f) => fs.existsSync(f))
+test('4.6 W21(d): no data sent, Bun on TLS 1.3 refuses our leaf → client-rejected-leaf, negative after two, one trust-rejected', { ...T, skip: bun ? false : 'no bun on this machine, and its refusal differs from Node\'s' }, async (t) => {
+  const s = await rig(t)
+  const dir = tmpDir(), script = path.join(dir, 'refuse.mjs')
+  fs.writeFileSync(script, `import tls from 'node:tls'
+const c = tls.connect({ port: ${s.port}, host: '127.0.0.1', servername: 'h.test', ca: ${JSON.stringify(upCa.certPem)} })
+c.on('error', () => process.exit(0)); c.on('secureConnect', () => process.exit(1))`)
+  for (let i = 1; i <= 2; i++) {
+    const code = await new Promise((r) => spawn(bun, [script], { stdio: 'ignore' }).on('close', r))
+    assert.equal(code, 0, 'it refused')
+    await s.settled(i)
+  }
+  assert.deepEqual(s.flows.map((f) => f.not_captured), Array(2).fill('client-rejected-leaf'))
+  assert.deepEqual(s.engine.negatives().map((e) => e.cause), ['client-rejected-leaf'])
   assert.equal(s.critical().length, 1)
 })
 

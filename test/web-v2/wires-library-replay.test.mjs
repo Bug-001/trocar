@@ -8,7 +8,8 @@ import path from 'node:path'
 import { loadSessions } from '../../web/legacy/library/logic.mjs'
 import { rowModel } from '../../web/src/screens/library/model.mjs'
 import { harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
-import { captureGap, fidelityFacts } from '../../web/legacy/replay/header.mjs'
+import { captureGap } from '../../web/legacy/replay/header.mjs'
+import { sessionHeadModel } from '../../web/src/screens/replay/models.mjs'
 import { bodyCache, loadBody } from '../../web/legacy/replay/blocks.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { deskFrom } from './desk-world.mjs'
@@ -21,7 +22,7 @@ const apiOf = (face) => ({ get: async (name, params) => {
 // deskFrom's get over the real face: the answer document
 const getOf = (face) => async (name, params) => (await face.get(name, params)).doc
 
-test('(1)(2) the library reads every page of `sessions`; a row\'s title fields are title / title_source, null → untitled, pending → not known yet', async () => {
+test('(1)(2) the library reads every page of `sessions`; a row\'s title fields are title / title_source, null → untitled', async () => {
   const face = await serveBoard(boardHome({ bytes: 200000 }))
   try {
     const whole = (await face.get('sessions')).doc
@@ -32,13 +33,13 @@ test('(1)(2) the library reads every page of `sessions`; a row\'s title fields a
     assert.equal(r.data.sessions.length, whole.sessions.length)
     for (const s of whole.sessions) {
       const m = rowModel(s, Date.now())
-      assert.equal(m.title, s.title); assert.equal(m.titleSource, s.title_source); assert.equal(m.untitled, s.title == null && s.title_source !== 'pending')
+      assert.equal(m.title, s.title); assert.equal(m.untitled, s.title == null)
       // the agent is the read side's id, named by the one chips table (1.8 #1); the call count is the answer's, absent → 0
       assert.equal(m.harnessId, s.harness); assert.equal(m.harnessName, harnessName(harnessKey(s.harness))); assert.equal(m.calls, s.calls || 0)
-      for (const [title, title_source] of [['t', 'wire'], [null, null], [null, 'pending']]) {
+      for (const [title, title_source] of [['t', 'wire'], [null, null]]) {
         const v = rowModel({ ...s, title, title_source }, Date.now())
-        assert.equal(v.title, title); assert.equal(v.titleSource, title_source)
-        assert.equal(v.untitled, title == null && title_source !== 'pending'); assert.equal(v.titlePending, title_source === 'pending')
+        assert.equal(v.title, title)
+        assert.equal(v.untitled, title == null)
       }
     }
   } finally { await face.close() }
@@ -108,7 +109,7 @@ test('K-20: a record no dissector reads → `unknown.records` ≥ 1 and the head
     try {
       const id = (await face.get('sessions')).doc.sessions[0].session_id // the demo session, the home's only one
       const desk = await deskFrom(getOf(face), id)
-      const { tech } = fidelityFacts(desk)
+      const { tech } = sessionHeadModel({ meta: desk.meta, desk, lanes: [] }).facts
       const endpoints = tech.find(([k]) => k === 'endpoints')
       if (!odd) { assert.equal(desk.unknown, null, 'no `unknown`'); assert.equal(endpoints, undefined, 'no K-20 fact'); continue }
       assert.ok(desk.unknown.records >= 1, '`unknown.records` ≥ 1')

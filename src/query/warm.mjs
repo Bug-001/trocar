@@ -44,6 +44,25 @@ export function rowsKey(rows) {
  *  side's budget is derived from it: every process that answers a query cuts at the same place, so the worker and the local path
  *  give the same document (3.5 §内存有界). */
 export const WORKER_MEMORY_MB = 384
+/** The light role's heap (3.5 §内存有界): it holds no rows and no spine, so what it needs is one `block`'s segment index and record. Set from measurement:
+ *  deploy-check's lightHeapPeakMb on a real capture. A read that does not fit is a crash, and the router hands that request to the main role. */
+export const LIGHT_MEMORY_MB = 128
+/** The control role's heap (3.5 §内存有界): it holds no rows, but a control verb reads and rewrites whole agent config files. Measured 2026-11-06 on
+ *  Set up (one harness, a 16.3 MB config.json) then `on` (a 15.9 MB .env), plan then confirm each: the used heap sampled every 50 ms peaked at 91-92 MB
+ *  under a 384 MB heap, and the same run died of the heap under 128 MB, so the peak a sample misses is past 128 MB. The status verb also parses
+ *  configs that grow by themselves (an agent's own state file can pass 16 MB) and that run is not measured, so the role keeps the 384 MB the verbs had on
+ *  the main role: no verb gets less room than before. */
+export const CONTROL_MEMORY_MB = 384
+/** Every query role (3.5 §内存有界 · §谁执行它「三个角色」): its heap cap and whether it writes answer files. forkOptions (and the tests' fork)
+ *  take every cap from here, the worker passes `writer` as `ROLES[role].writes`, and the writer's heap bound is asserted against every cap
+ *  whose role writes. A new writing role still needs worker.mjs: it reads the rows, and so runs the background slices that write, only
+ *  for `main`. No prototype: a role named like an Object method is unknown, and throws. */
+export const ROLES = Object.freeze({
+  __proto__: null,
+  main: { capMb: WORKER_MEMORY_MB, writes: true },
+  light: { capMb: LIGHT_MEMORY_MB, writes: false },
+  control: { capMb: CONTROL_MEMORY_MB, writes: false },
+});
 /** The flags that give a process a heap of `mb` MB: V8's `--max-heap-size`, the young generation inside it, so V8's heap_size_limit
  *  is `mb` and the used heap (both generations) is measured against the heap it can use. `--max-old-space-size` adds the young
  *  generation on top (3 × its semi-space, 48 MB at V8's default): a process started with it reckons its budget and ceiling past its
@@ -66,6 +85,7 @@ export const HEAP_PER_STORED = 2
 // recency order across all caches (a hit moves it to the end); `held` is what queries in flight have reserved with hold().
 const lru = new Set()
 let total = 0, held = 0, steady = 0
+let reader = null // the entry a reader is on (pin): the ledger lets every other go first, and this one never
 let limit = null
 const heapLimit = () => (limit == null ? (limit = Math.min(v8.getHeapStatistics().heap_size_limit, WORKER_MEMORY_MB * 1048576)) : limit)
 
@@ -93,12 +113,14 @@ export function liveHeap() {
 /** The heap allocated, garbage included: cheap, an upper bound of liveHeap(). */
 export const usedHeap = () => v8.getHeapStatistics().used_heap_size
 
-const forget = (e) => { if (lru.delete(e)) { e.cache.delete(e.id); total -= e.size; if (e.steady) steady -= e.size } }
+const forget = (e) => { if (e === reader) reader = null; if (lru.delete(e)) { e.cache.delete(e.id); total -= e.size; if (e.steady) steady -= e.size } }
+// the ledger's own letting go: the only way a kept entry leaves without its cache's caller asking, so its `drop` is told
+const evict = (e) => { forget(e); if (e.drop) e.drop(e.value) }
 /** Make room for `need` more bytes: the least recently used entries of ANY cache go first; `keep` never. */
 function room(need, keep = null) {
   for (const e of lru) {
     if (total + need <= heapBudget()) return
-    if (e !== keep) forget(e)
+    if (e !== keep && e !== reader) evict(e)
   }
 }
 
@@ -114,25 +136,28 @@ export function hold(bytes) {
 /** Every kept entry but the steady ones let go (src/query/named/session.mjs: a fold about to be stopped by the measured bound, 3.5
  *  §内存有界). A steady entry is never let go here: the plan of every session read holds the rows it is made of, so letting it go
  *  frees nothing and the next read builds the rows a second time beside the ones the plan holds. */
-export function yieldCaches() { for (const e of lru) if (!e.steady) forget(e) }
+export function yieldCaches() { for (const e of lru) if (!e.steady && e !== reader) evict(e) }
 
 /**
  * warmCache({max, cost}) → { get(id, stamp, compute, estimate), peek(id, stamp) }: `compute(previous)` runs when this `id` was never
  * seen or its `stamp` moved (`previous` = the value it held, if any, which the cache lets go of); otherwise the remembered value comes back untouched. `cost(value)` is what the value costs in the HEAP (an
  * estimate from stored bytes, never a count of entries or a serialized size); `estimate` is the same, known BEFORE computing, so
  * the room is made first and the peak never passes the budget. A value whose cost is past the whole budget is returned but never
- * kept. `max` bounds this cache's entries. `steady`: every query reads these entries again (steadyBytes).
+ * kept. `max` bounds this cache's entries. `steady`: every query reads these entries again (steadyBytes). `drop(value)`: the ledger let
+ * this entry go (making room, yieldCaches, past `max`) or did not keep it, and whatever else holds the value must let it go too; never
+ * for take() or a stale entry `get` replaces: their caller has the value in hand. `pin(id)`: the one entry the ledger
+ * does not let go until the next pin, of any cache (null: none) → whether there is such an entry.
  */
-export function warmCache({ max = Infinity, cost = () => 0, steady: isSteady = false } = {}) {
+export function warmCache({ max = Infinity, cost = () => 0, steady: isSteady = false, drop = null } = {}) {
   const m = new Map()
   const keep = (id, e, size) => {
-    e.size = size
-    if (size > heapBudget()) return // answered this once, never kept, and nothing else is pushed out for it
+    e.size = size; e.drop = drop
+    if (size > heapBudget()) { if (drop) drop(e.value); return } // answered this once, never kept, and nothing else is pushed out for it
     room(size)
-    if (total + size > heapBudget()) return // past what the budget can give it (a query in flight holds the rest): answered, never kept
+    if (total + size > heapBudget()) { if (drop) drop(e.value); return } // past what the budget can give it (a query in flight holds the rest): answered, never kept
     m.set(id, e); lru.add(e); total += size
     if (isSteady) { e.steady = true; steady += size }
-    if (m.size > max) for (const old of m.values()) { if (m.size <= max) break; if (old !== e) forget(old) }
+    if (m.size > max) for (const old of m.values()) { if (m.size <= max) break; if (old !== e) evict(old) }
   }
   const fresh = (id, stamp) => { const hit = m.get(id); return hit && hit.stamp === stamp ? hit : null }
   const touch = (e) => { if (lru.delete(e)) lru.add(e); return e.value } // a promise still in flight is in no ledger yet
@@ -158,6 +183,7 @@ export function warmCache({ max = Infinity, cost = () => 0, steady: isSteady = f
      *  when it is absent (src/query/named/session.mjs renders the window only), and the caller that decides AFTER computing whether
      *  the answer may be remembered (src/query/records.mjs: never a failed read). */
     peek: (id, stamp) => { const hit = fresh(id, stamp); return hit ? touch(hit) : undefined },
+    pin(id) { reader = m.get(id) ?? null; return !!reader },
     /** The value this `id` holds, whatever its stamp, taken out of the cache and the ledger: a caller that grows it — or lets it go
      *  BEFORE building another — holds the only reference (src/query/named/session.mjs: never two spines in the heap at once). */
     take(id) {

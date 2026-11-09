@@ -114,8 +114,8 @@ export function joinDotenvBlock(text, vars, { quote = false, neutralize = [], fo
   return { text: applyOps(text, ops), ops, prior: Object.keys(prior).length ? prior : null }
 }
 
-// One line after the last line matching `after` (a shell rc: the Kimi shim's PATH line goes after the kimi installer's
-// own PATH line), or appended to a block-style YAML list (`format: 'yaml-list'`: a missing file is created holding
+// One line at the end of the file, where `after` must match a line above it (a shell rc: the Kimi shim's PATH line needs the kimi installer's own PATH
+// line before it, and the end is at the top level wherever that line sits), or appended to a block-style YAML list (`format: 'yaml-list'`: a missing file is created holding
 // only this line; a file whose only content is `[]` has the `[]` replaced; anything else that is not a block list is
 // refused, since dsh refuses to start on a patch file it cannot parse).
 export function insertLine(text, { line, after = null, format = 'lines' }) {
@@ -135,14 +135,10 @@ export function insertLine(text, { line, after = null, format = 'lines' }) {
     return one(src, src.length, `${openLine(src.length) ? eol : ''}${line}${eol}`)
   }
   const re = after ? new RegExp(after) : null
-  let at = -1
-  for (const s of lineStarts(src)) {
-    const e = src.indexOf('\n', s)
-    if (re && re.test(src.slice(s === 0 ? mark : s, e < 0 ? src.length : e).replace(/\r$/, ''))) at = e < 0 ? src.length : e + 1 // the line without its own \r (or the mark)
-  }
-  if (re && at < 0) throw new Error(`no line matches ${after}`)
-  if (!re) at = src.length
-  return one(src, at, `${openLine(at) ? eol : ''}${line}${eol}`)
+  const lineOf = (s) => { const e = src.indexOf('\n', s); return src.slice(s === 0 ? mark : s, e < 0 ? src.length : e).replace(/\r$/, '') } // without its own \r (or the mark)
+  if (re && !lineStarts(src).some((s) => re.test(lineOf(s)))) throw new Error(`no line matches ${after}`)
+  // the file's end, also with an anchor: after every line that matches, and at the shell's top level wherever the anchor sits (an if, a case, a function)
+  return one(src, src.length, `${openLine(src.length) ? eol : ''}${line}${eol}`)
 }
 const one = (src, offset, inserted) => ({ text: applyOps(src, [{ offset, removed: '', inserted }]), ops: [{ offset, removed: '', inserted }] })
 

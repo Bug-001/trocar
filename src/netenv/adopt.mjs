@@ -10,6 +10,7 @@ import { redactProxyUrl, settingSha, parseProxyUrl } from './redact.mjs'
 import { readNetenvFile } from './index.mjs'
 import { buildTopology } from './topology.mjs'
 import { renderCompact, BRANCH_SEP } from './topology-text.mjs'
+import { errnoReason } from '../cli/words.mjs'
 
 const errCode = (e) => (e && e.code) || String((e && e.message) || e)
 const unknown = (reason, detail) => ({ unknown: { reason, detail } })
@@ -20,7 +21,7 @@ const present = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : nu
  *  `last` = the key's last segment) | { unknown }. A file that is not there holds none. */
 function valuesOf(file, f, fs) {
   let text, mtimeMs
-  try { text = fs.readFileSync(file, 'utf8'); mtimeMs = fs.statSync(file).mtimeMs } catch (e) { return e && e.code === 'ENOENT' ? { values: [] } : unknown(e && e.code === 'EACCES' ? 'denied' : 'absent', `${file}: ${errCode(e)}`) }
+  try { text = fs.readFileSync(file, 'utf8'); mtimeMs = fs.statSync(file).mtimeMs } catch (e) { return e && e.code === 'ENOENT' ? { values: [] } : unknown(errnoReason(e) || 'absent', `${file}: ${errCode(e)}`) }
   if (f.format === 'json') {
     const { data, error } = parseJsonc(text)
     if (error) return unknown('unparseable', `${file} does not parse as JSON`)

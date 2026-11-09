@@ -28,6 +28,15 @@ export function certBlocks(text) {
   return pemBlocks(String(text)).filter((b) => b.type === 'CERTIFICATE' && b.pem != null).map((b) => ({ pem: b.pem, fp: fpOf(b.pem) })).filter((b) => b.fp)
 }
 
+/** The certificate of a text whose fingerprint is `fp` (the form certBlocks gives), as `{ pem, fp }`, or null. Hashes each block's DER instead of parsing it: looking one certificate up
+ *  in a keychain's listing parsed all of them (D62①), and a block that does not parse cannot have the bytes of one that does. */
+export function findCert(text, fp) {
+  const der = (pem) => Buffer.from(pem.replace(/-----[A-Z ]+-----/g, ''), 'base64')
+  const fpOfDer = (b) => crypto.createHash('sha256').update(b).digest('hex').toUpperCase().match(/../g).join(':')
+  const hit = pemBlocks(String(text)).find((b) => b.type === 'CERTIFICATE' && b.pem != null && fpOfDer(der(b.pem)) === fp)
+  return hit ? { pem: hit.pem, fp } : null
+}
+
 /** `text` without every certificate block whose fingerprint is `fp`, each with the one newline that ends it; every other byte unchanged (a
  *  comment, a blank line, another block, the line endings). `removed`: false when there was none (the same text back). */
 export function stripCert(text, fp) {
@@ -101,7 +110,7 @@ export function osBundle({ files = SYSTEM_BUNDLES, read = (f) => nodeFs.readFile
       if (!(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR'))) failed.push({ file, error: e })
       continue
     }
-    if (certBlocks(text).length) return { file, text, failed }
+    if (pemBlocks(text).some((b) => b.type === 'CERTIFICATE' && b.pem != null && fpOf(b.pem))) return { file, text, failed }
   }
   return { file: null, text: '', failed }
 }

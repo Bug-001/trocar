@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { QUERIES } from '../src/query/named/index.mjs'
+import { isMain } from './is-main.mjs'
 
 export const DEFAULT_RUNS = 5
 const CLI = path.join(import.meta.dirname, '..', 'bin', 'trocar.mjs')
@@ -139,4 +140,4 @@ async function main(argv) {
   console.log(`disk  .trocar ${out.disk.trocar_bytes}  plaintext ${out.disk.plaintext_bytes}  sealed ${out.disk.sealed_bytes}  index ${out.disk.index_bytes}${out.disk.compare ? `  ${out.disk.compare.dir} ${out.disk.compare.bytes}` : ''}`)
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) await main(process.argv.slice(2))
+if (isMain(import.meta.url)) await main(process.argv.slice(2))

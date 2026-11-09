@@ -15,9 +15,9 @@ export const READ_FILES_FAIL = (n) => `${n} record file${n === 1 ? '' : 's'} cou
 export const AGENTS_ON = (on, total) => `${on} / ${total} agents on`
 
 // ── 要处理的事 ─────────────────────────────────────────────────────────────────────────────────────────────────────
-// the caption row of the items card: the failure groups cover the last 24 h (`status` failures.since)
+// the caption row of the items card: the failure groups cover `status` failures.since onward (the last 24 h, or this install's start when later, 1.6 C.3)
 export const FAIL_LIST = 'Failure list'
-export const FAIL_WINDOW = (since) => `Only the last 24 hours are listed${since ? ` (since ${since})` : ''}`
+export const FAIL_WINDOW = (since) => (since ? `Only failures since ${since} are listed` : 'Only the latest failures are listed; since when could not be read')
 export const NO_ITEMS = 'Nothing needs a look'
 // which sources this round could not read (1.7 事项目录 · 不全说明): 「采集状态、价表没读到,下面可能不全」
 export const SRC_NAME = Object.freeze({ health: 'capture health', sessions: 'session list', classes: 'storage', pricing: 'price table', stats: 'stats', traffic: 'traffic', segments: 'raw segments' })

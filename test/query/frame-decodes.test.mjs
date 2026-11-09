@@ -12,6 +12,7 @@ import '../../src/query/named/index.mjs' // the named queries load the session m
 import { extendSession } from '../../src/query/named/session.mjs'
 import { openSealed } from '../../src/raw/reader.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
+import { drain } from '../helpers/bounded.mjs'
 
 test('decodes per frame ≤ 1.1 over a full fold of a multi-segment sealed session', { timeout: 300_000 }, async () => {
   const home = path.join(tmpDir('trocar-decodes-'), '.trocar')
@@ -29,7 +30,7 @@ test('decodes per frame ≤ 1.1 over a full fold of a multi-segment sealed sessi
   let decodes = 0, slices = 0
   zlib.brotliDecompressSync = (...a) => { decodes++; return real(...a) }
   try {
-    while (await extendSession({ home, fs, writer: true }, s.id, 2)) { slices++; await new Promise((r) => setImmediate(r)) }
+    slices = await drain(async () => { const more = await extendSession({ home, fs, writer: true }, s.id, 2); await new Promise((r) => setImmediate(r)); return more }) - 1
   } finally { zlib.brotliDecompressSync = real }
   assert.ok(slices > 3, `the fold took several slices (${slices})`)
   assert.ok(decodes <= 1.1 * frames, `${decodes} decodes for ${frames} frames over ${slices} slices`)

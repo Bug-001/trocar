@@ -4,6 +4,7 @@
 import { stepOrder } from './analyze.mjs';
 import { endpointClass } from '../dissect/endpoints.mjs';
 import { isLogOnly } from '../dissect/capture-labels.mjs';
+import { projectFields } from '../dissect/project.mjs';
 
 const isProbe = (r) => endpointClass(r.endpoint) === 'token-count';
 // D40 (3.2 §D40, K7): an inference call the operator set to 「只记日志」 kept its headers and sizes but no body. It is neither a call the board can
@@ -13,13 +14,13 @@ const isLogged = (r) => !!r.is_llm_call && isLogOnly(r);
 // The ONE place the session document's shape lives (附录 C.5): `trocar query sessions` derives the same facts from the segment
 // index (src/query/rows.mjs sessionFactsOf) and hands them to this function, so the list the board draws and the list the CLI prints
 // are one document, however they were counted. The title is the main lane's task — the first prompt of the captured request (4.4
-// §人类标题的来源) — so where it came from is always the wire. No project is known from the capture: '_unresolved', no path.
+// §人类标题的来源) — so where it came from is the wire, unless `title_source` says otherwise. The project is the working directory the request states (`project_path`, from the title
+// table, src/query/titles.mjs); none stated: '_unresolved', no path.
 function sessionDoc(base) {
   const title = base.title ?? null;
   return {
     session_id: base.session_id,
-    project_slug: '_unresolved',
-    project_path: null,
+    ...projectFields(base.project_path ?? null),
     entrypoint: base.entrypoint ?? null,
     harness: base.harness ?? null,
     // a meta.json written before D37 has no flag: that fold read only the UA, so its harness was inferred
@@ -28,17 +29,20 @@ function sessionDoc(base) {
     session_synthesized: !!base.session_synthesized,
     provider: base.provider ?? null,
     title,
-    title_source: title != null ? 'wire' : base.title_pending ? 'pending' : null, // pending: not known yet (4.4 §人类标题的来源)
+    title_source: base.title_source !== undefined ? base.title_source : (title != null ? 'wire' : null),
     calls: base.calls || 0,
     logged: base.logged || 0, // D40: inference calls kept as a log line only (a meta.json written before D40 has none)
     probes: base.probes || 0,
     other: base.other || 0,
     has_subagent: !!base.has_subagent,
+    // declared lineage (3.4 §血缘, src/query/titles.mjs): the id keys exist only when the first call was read; not known is never "none"
+    lineage_source: base.lineage_source ?? 'unread',
+    ...(base.lineage_source === 'wire' ? { parent_session_id: base.parent_session_id ?? null, fork_of_session_id: base.fork_of_session_id ?? null } : null),
     last_ts: base.last_ts || '',
   };
 }
 
-/** One session meta from facts counted elsewhere (the segment index; `title` from the usage sidecar), in the one document shape. */
+/** One session meta from facts counted elsewhere (the segment index; `title` from the title table or the session's own fold), in the one document shape. */
 export const sessionMetaOfFacts = (facts) => sessionDoc(facts);
 
 // D40: the calls of a session that were kept as a log line only — how many, which setting did it, and the newest few with what is still

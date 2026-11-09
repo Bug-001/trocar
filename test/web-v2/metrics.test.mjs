@@ -21,7 +21,8 @@ test('every state of the predicate, on constructed steps', () => {
     ['ttl-rebuild', step('append', U(0, 100, 0), { gt: 'ttl-rebuild' })],
     ['provider-contradiction', step('append', U(0, 0, 100), { gt: 'provider-contradiction' })],
     ['changed', step('content-changed', U(0, 100, 0))],
-    ['changed', step('compaction', U(90, 0, 10))], // a hit above 30% does not hide a changed prefix
+    ['changed', step('compaction', U(10, 0, 90))],
+    ['changed-hit', step('compaction', U(90, 0, 10))], // usage wins (3.3): a changed prefix still mostly read is not a break
     ['low-hit', step('append', U(10, 0, 90))],
     ['reused', step('append', U(90, 0, 10))],
     ['reused', step('volatile-nonce-only', U(95, 0, 5))],
@@ -34,11 +35,11 @@ test('every state of the predicate, on constructed steps', () => {
   assert.equal(cacheState(step('first-call', U(500, 100, 0))).warm, true, 'a first call that already read from a warm prefix says so')
   assert.equal(cacheState(step('first-call', U(0, 100, 0))).warm, false)
 })
-test('isBreak is exactly the four break states; failed, no-usage, first, reused and unjudged are not breaks', () => {
+test('isBreak is exactly the four break states; failed, no-usage, first, changed-hit, reused and unjudged are not breaks', () => {
   const brk = { 'ttl-rebuild': step('append', U(0, 100, 0), { gt: 'ttl-rebuild' }), 'provider-contradiction': step('append', U(0, 0, 100), { gt: 'provider-contradiction' }),
-    changed: step('content-changed'), 'low-hit': step('append', U(10, 0, 90)) }
+    changed: step('content-changed', U(10, 0, 90)), 'low-hit': step('append', U(10, 0, 90)) }
   for (const [state, s] of Object.entries(brk)) { assert.equal(cacheState(s).state, state); assert.equal(isBreak(s), true, state) }
-  for (const s of [step('append', null, { error: true }), step('append', null), step('first-call'), step('append'), { cacheBreak: null, usage: U(1, 1, 1) }]) assert.equal(isBreak(s), false, cacheState(s).state)
+  for (const s of [step('append', null, { error: true }), step('append', null), step('first-call'), step('append'), step('content-changed', U(90, 0, 10)), { cacheBreak: null, usage: U(1, 1, 1) }]) assert.equal(isBreak(s), false, cacheState(s).state)
 })
 test('the order of the rules: the first match wins', () => {
   // failed beats everything, including a ground-truth claim and a changed prefix
@@ -62,8 +63,19 @@ test('a failed step carrying gt:provider-contradiction is failed, not a break; a
 })
 test('the quiet causes are one list, and any other cause is a change', () => {
   assert.deepEqual([...QUIET_CAUSES].sort(), ['append', 'first-call', 'volatile-nonce-only'])
-  for (const cause of QUIET_CAUSES) assert.notEqual(cacheState(step(cause, U(90, 0, 10))).state, 'changed', cause)
-  for (const cause of ['content-changed', 'compaction', 'tool-array-reorder', 'json-key-reorder', 'a-cause-this-board-has-never-seen']) assert.equal(cacheState(step(cause)).state, 'changed', cause)
+  for (const cause of QUIET_CAUSES) assert.ok(!['changed', 'changed-hit'].includes(cacheState(step(cause, U(90, 0, 10))).state), cause)
+  for (const cause of ['content-changed', 'compaction', 'tool-array-reorder', 'json-key-reorder', 'a-cause-this-board-has-never-seen']) {
+    assert.equal(cacheState(step(cause, U(10, 0, 90))).state, 'changed', cause)
+    assert.equal(cacheState(step(cause, U(90, 0, 10))).state, 'changed-hit', cause)
+  }
+})
+test('2.2 rows 6 and 6′: a changed prefix is a break below LOW_HIT and not at or above it; the same line as a quiet cause\'s low hit', () => {
+  for (const [u, changed, quiet] of [[U(29, 0, 71), 'changed', 'low-hit'], [U(30, 0, 70), 'changed-hit', 'reused'], [U(0, 0, 100), 'changed', 'low-hit'], [U(100, 0, 0), 'changed-hit', 'reused']]) {
+    const c = cacheState(step('content-changed', u)), q = cacheState(step('append', u))
+    assert.equal(c.state, changed, JSON.stringify(u)); assert.equal(q.state, quiet, JSON.stringify(u))
+    assert.equal(c.isBreak, q.isBreak, `one line for both: ${JSON.stringify(u)}`)
+  }
+  assert.deepEqual(breakSteps([step('first-call'), step('content-changed', U(90, 0, 10)), step('content-changed', U(10, 0, 90))]), [2], 'a changed step still mostly read is not counted')
 })
 test('usageOf: usage:null and an empty raw usage are none; create:null stays null; nothing becomes a zero', () => {
   assert.equal(usageOf(step('append', null)), null); assert.equal(usageOf(null), null); assert.equal(usageOf({}), null)

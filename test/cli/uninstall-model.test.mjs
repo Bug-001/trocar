@@ -15,6 +15,7 @@ import { startControlServer } from '../../src/collector/core/control.mjs'
 import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { recordingExec } from './fixtures/on-ctx.mjs'
 import { DOOR_SEEN_FILE } from '../../src/off/door-seen.mjs'
+import { flowEvents } from '../off/fixtures/off-ctx.mjs'
 import { USER_PATH_FILE } from '../../src/off/paths.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3, 4])
@@ -39,6 +40,21 @@ function uninstall(w, deps = {}, opts = {}) {
   const exec = recordingExec({ onRun: (cmd) => seq.push(`exec:${cmd.split(' ').slice(0, 2).join(' ')}`) })
   return runUninstall({ home: w.home, env: w.env, yes: true, ...opts, deps: { platform: 'darwin', exec: exec.run, custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, ...deps } })
 }
+// 4.11 P4 rule U: a setting that matches several places (Hermes's ssl_ca_cert, one per provider route) has a block in each file; uninstall takes each
+// out by its marks and leaves the user's bytes as they were.
+test('CM24 · offline: two routes, each its own ssl_ca_cert file — uninstall takes the block out of both, the user\'s bytes as they were', async () => {
+  const w = await modelWorld({ commands: ['hermes'] })
+  const files = ['a.pem', 'b.pem'].map((n) => path.join(w.home, 'certs', n))
+  fs.mkdirSync(path.dirname(files[0]), { recursive: true }); for (const f of files) fs.writeFileSync(f, USER_PEM)
+  fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true })
+  fs.writeFileSync(path.join(w.home, '.hermes', 'config.yaml'), `providers:\n  one:\n    ssl_ca_cert: ${files[0]}\n  two:\n    ssl_ca_cert: ~/certs/b.pem\n`)
+  assert.equal((await w.install()).exit, 0)
+  for (const f of files) assert.notEqual(fs.readFileSync(f, 'utf8'), USER_PEM, `${f} holds install's block`)
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  for (const f of files) assert.equal(fs.readFileSync(f, 'utf8'), USER_PEM, `${f}: the block is gone, the user's file byte for byte`)
+})
+
 async function daemonAnswering(w, holders) {
   const sock = path.join(w.home, 'c.sock')
   fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token: TOKEN }))
@@ -53,7 +69,12 @@ test('CM24 · daemon up: a holder the daemon names (GET /holders over its real e
     const before = tree(w.home)
     const { receipt, exit } = await uninstall(w, running)
     assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
-    assert.ok(receipt.problems.some((p) => p.includes('trocar off') && p.includes('trocar uninstall')), 'the refusal gives the steps: trocar off, then trocar uninstall (1.6 §9.6 collectors-online)')
+    // nothing is on, so off is no step: the holder is ended (quit it, then its pid by the OS's own command), then uninstall (1.6 附录 B collectors-online)
+    const lines = formatUninstallReceipt(receipt, { home: w.home }).split('\n')
+    const steps = lines.filter((l) => /^\s+(trocar|kill) /.test(l)).map((l) => l.trim())
+    assert.deepEqual(steps, ['kill 4242', 'trocar uninstall'], `1.6 §1.1⑥: each command whole on a line of its own: ${lines.join(' | ')}`)
+    assert.ok(lines.some((l) => /^Quit codex/.test(l)), `a step in an application is prose at the margin, not in the command column: ${lines.join(' | ')}`)
+    assert.ok(!lines.some((l) => l.startsWith('Problem:') && /trocar (off|uninstall)/.test(l)), 'not inside a Problem line')
     assert.match(receipt.problems.join('\n'), /codex \(pid 4242\)/)
     assert.deepEqual(tree(w.home), before, 'not one file changed')
     const purged = await uninstall(w, running, { purgeData: true }) // the receipt of a refused --purge-data says the captures stay (it said 「采集数据已删」)
@@ -81,7 +102,7 @@ for (const table of [...Object.keys(TABLES), 'unreadable']) {
       if (!holds) { assert.notEqual(code, 'collectors-online', JSON.stringify(receipt.problems)); return }
       assert.deepEqual([exit, code], [1, 'collectors-online'])
       assert.match(receipt.problems.join('\n'), /codex \(pid 4242\)/)
-      assert.equal(receipt.problems.filter((p) => /trocar off/.test(p)).length, 1, `the next step is given once (1.6 §1.1③): ${JSON.stringify(receipt.problems)}`)
+      assert.equal(receipt.problems.filter((p) => /trocar uninstall/.test(p)).length, 1, `the next step is given once (1.6 §1.1③): ${JSON.stringify(receipt.problems)}`)
       if (table === 'unreadable') assert.match([...receipt.problems, ...receipt.notes].join('\n'), /the table broke/, 'the failed read is said with its reason (D38)')
     } finally { await server.close() }
   })
@@ -163,6 +184,9 @@ test('CM24 · offline: LIFO — the wrapper back, the plugin and its loader line
   assert.deepEqual(fs.readFileSync(w.kimi), MACHO, 'the real kimi is back in place')
   assert.equal(fs.existsSync(path.join(w.home, '.kimi-code', 'bin', '.trocar-real')), false)
   assert.equal(fs.readFileSync(w.env.SSL_CERT_FILE, 'utf8'), USER_PEM, 'the pem-block is gone, the user\'s file byte for byte')
+  const block = receipt.changed.filter((c) => c.path === w.env.SSL_CERT_FILE)
+  assert.deepEqual(block.map((c) => c.result), ['restored'], `the receipt says the block left that file, once: ${JSON.stringify(receipt.changed)}`)
+  assert.ok(block[0].change, 'with what was taken out')
   assert.deepEqual(fs.readdirSync(path.join(w.home, '.dsh')).filter((n) => n.startsWith('trocar-')), [], 'the plugin is gone')
   assert.ok(!fs.existsSync(path.join(w.home, '.dsh', 'cordis.patch.yml')) || !/trocar/.test(fs.readFileSync(path.join(w.home, '.dsh', 'cordis.patch.yml'), 'utf8')), 'and its loader line')
   const zc = path.join(w.home, '.zcode', 'cli', 'config.json')
@@ -190,7 +214,7 @@ for (const [what, make] of Object.entries(ANSWERS)) {
     assert.deepEqual([r.exit, r.pending.map((p) => p.item)], [1, ['root-store']])
     assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'system-root').map((e) => e.fp256), [r.fp256], 'one system-root record, this root')
     const removed = []
-    const { receipt } = await uninstall(w, { rootStore: { remove: (id) => { removed.push(id.fp256); return { ok: true } }, has: () => ({ present: false }) } })
+    const { receipt } = await uninstall(w, { rootStore: { remove: (id) => { removed.push(id.fp256); return { ok: true } }, has: () => ({ present: false }), list: () => ({ roots: [] }) } })
     assert.deepEqual(removed, [r.fp256], JSON.stringify({ p: receipt.problems, l: receipt.left }))
   })
 }
@@ -216,6 +240,7 @@ test('invariant 5 · offline uninstall: ~/.trocar keeps only the captures — th
   fs.writeFileSync(helper, MACHO, { mode: 0o755 })
   fs.writeFileSync(path.join(w.dir, 'board.token'), 'A'.repeat(43), { mode: 0o600 }) // the daemon's board token (4.4: it goes with uninstall)
   fs.writeFileSync(path.join(w.dir, USER_PATH_FILE), '{"PATH":"/usr/bin"}\n', { mode: 0o600 }) // the PATH a terminal command recorded (1.6 §3.6: it goes with uninstall)
+  fs.mkdirSync(path.join(w.home, '.trocar', 'compile-cache', 'v22'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.trocar', 'compile-cache', 'v22', 'x'), 'c') // Node's compile cache (1.6 §uninstall: it goes)
   const { receipt, exit } = await uninstall(w)
   assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
   assert.deepEqual(leftUnder(w.home), [], 'nothing of trocar\'s but the captures')
@@ -299,10 +324,10 @@ test('invariant 2 · --purge-data on a clean run deletes the captures (the negat
 // must not read as "removed" — uninstall exited 1 with nothing naming the certificate, and the manifest went anyway, so the machine kept trusting
 // trocar and the next uninstall said nothing was installed. Generated along the ways the store can keep the root.
 const KEPT_ROOT = {
-  'the removal reports success, the store still holds it': { remove: () => ({ ok: true }), has: () => ({ present: true }) },
-  'the removal fails': { remove: () => ({ ok: false, reason: 'certutil -user -delstore failed (exit none)' }), has: () => ({ present: true }) },
-  'the removal throws': { remove: () => { throw new Error('the prompt was not answered') }, has: () => ({ present: true }) },
-  'the store cannot be read back': { remove: () => ({ ok: true }), has: () => ({ error: 'certutil -user -store failed (exit 1)' }) },
+  'the removal reports success, the store still holds it': { remove: () => ({ ok: true }), has: () => ({ present: true }), list: () => ({ roots: [] }) },
+  'the removal fails': { remove: () => ({ ok: false, reason: 'certutil -user -delstore failed (exit none)' }), has: () => ({ present: true }), list: () => ({ roots: [] }) },
+  'the removal throws': { remove: () => { throw new Error('the prompt was not answered') }, has: () => ({ present: true }), list: () => ({ roots: [] }) },
+  'the store cannot be read back': { remove: () => ({ ok: true }), has: () => ({ error: 'certutil -user -store failed (exit 1)' }), list: () => ({ roots: [] }) },
 }
 for (const [what, store] of Object.entries(KEPT_ROOT)) {
   test(`D38 · ${what}: exit 1, the receipt names the root and the command, the manifest keeps the record for the next run`, async () => {
@@ -324,3 +349,138 @@ for (const [what, store] of Object.entries(KEPT_ROOT)) {
     assert.match(formatUninstallReceipt(receipt, { home: w.home }), /trust store/)
   })
 }
+
+// invariant 5 (1.6 §3.6 「活着却不应答的,算作没关,拒绝」, §3.4 次序): the daemon does not confirm its doors shut (state-mismatch, or a refused request),
+// so the agents' entries still point at its doors: the autostart stays registered and the daemon is not stopped, exit 1, the code says why
+for (const os of ['darwin', 'win32']) {
+  for (const [why, off] of [['state-mismatch', async () => ({ desired: 'off', actual: 'on', confirmed: false, pid: 4242 })], ['control-error', async () => { throw Object.assign(new Error('busy'), { status: 503 }) }], ['collectors-online', async () => { throw Object.assign(new Error('control request timed out'), { code: 'ETIMEDOUT' }) }]]) {
+    test(`invariant 5 · ${os} · ${why}: the routing not confirmed off leaves the autostart and the daemon, exit 1`, async () => {
+      const w = await modelWorld({ os, commands: ['codex'] })
+      assert.equal((await w.install()).exit, 0)
+      const sock = os === 'win32' ? '\\\\.\\pipe\\trocar-test' : path.join(w.home, 'c.sock')
+      const request = async (q) => (q.path === '/holders' ? { count: 0, holders: [] } : q.path === '/off' ? off() : {})
+      const exec = recordingExec()
+      let stopped = 0
+      const plist = path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist'), had = fs.existsSync(plist)
+      const { receipt, exit } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: exec.run, request, socketPath: sock, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, stopDaemon: async () => { stopped++; return { stopped: true, how: 'test', pid: 4242, signals: [] } } } })
+      assert.equal(exit, 1)
+      assert.deepEqual(exec.calls.filter((c) => /launchctl (?!getenv)|schtasks|reg(\.exe)? delete/i.test(c)), [], 'the autostart is not touched')
+      assert.deepEqual([stopped, fs.existsSync(plist)], [0, had], 'the daemon is not stopped')
+      assert.ok(receipt.routing && receipt.routing.confirmed === false)
+      assert.ok(fs.existsSync(path.join(w.dir, 'install-manifest.json')), 'the install stays for the next run')
+      assert.ok(!receipt.autostart || receipt.autostart.disabled !== true)
+      assert.ok(flowEvents(w.dir).some((e) => e.event === 'failure' && e.code === why), 'the record names why (D38)')
+      if (why === 'collectors-online') {
+        assert.equal(receipt.error && receipt.error.code, why, 'a daemon that stops answering at the off request is refused with the code (appendix C.1)')
+        assert.equal(receipt.daemon && receipt.daemon.state, 'left-running', 'left running on purpose, not one that could not be stopped (appendix C)')
+        assert.doesNotMatch(formatUninstallReceipt(receipt, { home: w.home, platform: os }), /kill -9/, 'the next step is trocar off, not a kill that leaves the entries at a dead door')
+      }
+    })
+  }
+}
+
+// 1.6 §3.6 「活着却不应答的,算作没关,拒绝」: the lock names a live daemon and its control endpoint times out (stuck) or refuses (still starting):
+// uninstall refuses before it writes anything — no autostart call, no stop — the manifest and every file stay, exit 1, a failure record with the code
+for (const os of ['darwin', 'win32']) {
+  for (const [why, fail] of [['times out', () => Object.assign(new Error('control request timed out'), { code: 'ETIMEDOUT' })], ['refuses', () => Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })]]) {
+    test(`1.6 §3.6 · ${os}: a daemon alive whose control endpoint ${why} is not off: uninstall refuses, stops nothing, changes nothing, exit 1`, async () => {
+      const w = await modelWorld({ os, commands: ['codex'] })
+      assert.equal((await w.install()).exit, 0)
+      const sock = os === 'win32' ? '\\\\.\\pipe\\trocar-test' : path.join(w.home, 'c.sock')
+      fs.writeFileSync(path.join(w.dir, 'lock'), JSON.stringify({ pid: 4242, start_time: '111', boot_id: 'boot-1', socket: sock }) + '\n')
+      const exec = recordingExec()
+      let stopped = 0
+      const before = tree(w.home)
+      const { receipt, exit } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: exec.run, socketPath: sock, request: async () => { throw fail() }, alive: (pid) => pid === 4242, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, stopDaemon: async () => { stopped++; return { stopped: true, how: 'test', pid: 4242, signals: [] } } } })
+      assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
+      assert.deepEqual([stopped, exec.calls.filter((c) => /launchctl (?!getenv)|schtasks|reg(\.exe)? delete|taskkill/i.test(c))], [0, []], 'no stop, the autostart is not touched')
+      assert.deepEqual(receipt.daemon, { pid: 4242, state: 'left-running' }, 'left running on purpose (appendix C)')
+      assert.doesNotMatch(formatUninstallReceipt(receipt, { home: w.home, platform: os }), /kill -9/, 'the next step is trocar off')
+      assert.deepEqual(tree(w.home), before, 'not one file changed')
+      assert.ok(flowEvents(w.dir).some((e) => e.event === 'failure' && e.code === 'collectors-online'), 'the record names why (D38)')
+    })
+  }
+}
+
+// 4.9 §4 uninstall: launchctl has no verb that drops a job's enable/disable override, so the `enable` install ran stays listed by
+// `launchctl print-disabled` after uninstall. The receipt says so on macOS once trocar's LaunchAgent was there, and never on Windows.
+const overrideNote = (receipt) => receipt.notes.filter((n) => n.includes('com.trocar.collector'))
+test('4.9 §4 · uninstall on macOS notes the launchd override it cannot remove; Windows has no such note', async () => {
+  const mac = await installed()
+  const plist = path.join(mac.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')
+  fs.mkdirSync(path.dirname(plist), { recursive: true }); fs.writeFileSync(plist, '<plist/>')
+  const m = await uninstall(mac)
+  assert.equal(m.exit, 0, JSON.stringify(m.receipt.problems))
+  assert.equal(overrideNote(m.receipt).length, 1, JSON.stringify(m.receipt.notes))
+  const never = await modelWorld({ commands: ['codex'] }) // no LaunchAgent was ever there: launchd answers "not loaded", no plist
+  const n = await uninstall(never, { exec: recordingExec({ fail: (cmd) => (cmd.startsWith('launchctl print') ? { status: 113 } : null) }).run })
+  assert.deepEqual(overrideNote(n.receipt), [], JSON.stringify(n.receipt.notes))
+  const win = await modelWorld({ os: 'win32', commands: ['codex'] })
+  assert.equal((await win.install()).exit, 0)
+  const r = await uninstall(win, { platform: 'win32' })
+  assert.deepEqual(overrideNote(r.receipt), [], JSON.stringify(r.receipt.notes))
+})
+
+// 1.6 §3.6 「记录没列的标记」 on macOS, in the shape of a real run: Claude Code and Kimi Code under NODE_EXTRA_CA_CERTS (rule U's one user file), dsh,
+// pi, Z-Code. A record that does not list some of install's carriers still gets them taken out by trocar's marks, at the places the descriptors name —
+// planned by --dry-run and done by the run: the user's certificate file byte for byte, dsh's loader row gone, the real kimi back under its name
+async function macShape() {
+  const w = await modelWorld({ commands: ['claude', 'kimi', 'dsh', 'pi'], env: (home) => ({ CLAUDE_CODE_CERT_STORE: 'bundled', NODE_EXTRA_CA_CERTS: path.join(home, 'certs', 'user-ca.pem') }) })
+  fs.mkdirSync(path.dirname(w.env.NODE_EXTRA_CA_CERTS), { recursive: true }); fs.writeFileSync(w.env.NODE_EXTRA_CA_CERTS, USER_PEM)
+  const kimi = path.join(w.home, '.kimi-code', 'bin', 'kimi')
+  fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, MACHO)
+  for (const d of ['.dsh', '.zcode']) fs.mkdirSync(path.join(w.home, d), { recursive: true })
+  const patch = path.join(w.home, '.dsh', 'cordis.patch.yml')
+  const r = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r.exit, 0, JSON.stringify(r.carriers))
+  return { ...w, kimi, patch, file: w.env.NODE_EXTRA_CA_CERTS }
+}
+const noTrocarRow = (f) => !fs.existsSync(f) || !fs.readFileSync(f, 'utf8').includes('trocar collector')
+test('1.6 §3.6 · darwin: a record that lacks Claude Code\'s items — the dry run plans rule U\'s block by its mark, the run takes it out', async () => {
+  const w = await macShape()
+  const m = readManifest(w.dir)
+  saveManifest(w.dir, { ...m, entries: m.entries.filter((e) => e.harness !== 'claude-code'), files: m.files.filter((f) => f.harness !== 'claude-code') })
+  assert.ok(!readManifest(w.dir).entries.some((e) => e.path === w.file), 'the record no longer lists the certificate file')
+  const dry = await uninstall(w, {}, { dryRun: true })
+  assert.ok(dry.receipt.changed.some((c) => c.path === w.file), `the plan names ${w.file}: ${JSON.stringify(dry.receipt.changed)}`)
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.equal(fs.readFileSync(w.file, 'utf8'), USER_PEM, 'the user\'s certificate file byte for byte')
+  assert.ok(receipt.changed.some((c) => c.path === w.file), JSON.stringify(receipt.changed))
+})
+test('1.6 §3.6 · darwin: the record lost, then install again — one uninstall takes out the block, the loader row and the wrapper the new record does not list', async () => {
+  const w = await macShape()
+  fs.rmSync(path.join(w.dir, 'install-manifest.json')); w.store.held.clear() // the record lost and the root taken out by hand: only trocar's text is left
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 1, 'install skips the carriers whose files hold trocar\'s text')
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.equal(fs.readFileSync(w.file, 'utf8'), USER_PEM, 'the user\'s certificate file byte for byte')
+  assert.ok(noTrocarRow(w.patch), 'dsh\'s loader row is gone')
+  assert.ok(fs.readFileSync(w.kimi).equals(MACHO), 'the real kimi is back under its own name')
+})
+test('4.11 ㉔ · darwin: the record lost while its root is still trusted — install makes no second root, and uninstall with no record takes out the root and every carrier', async () => {
+  const w = await macShape()
+  fs.rmSync(path.join(w.dir, 'install-manifest.json'))
+  const roots = [...w.store.held]
+  assert.equal(roots.length, 1)
+  const again = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(again.exit, 1, 'install stops at the root its record does not list')
+  assert.deepEqual([...w.store.held], roots, 'no second root is made or trusted')
+  const { receipt, exit } = await uninstall(w, { rootStore: w.store }) // the user trust store the run sweeps for trocar's roots
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.deepEqual([...w.store.held], [], 'the root is out of the trust store')
+  assert.equal(fs.readFileSync(w.file, 'utf8'), USER_PEM, 'the user\'s certificate file byte for byte')
+  assert.ok(noTrocarRow(w.patch), 'dsh\'s loader row is gone')
+  assert.ok(fs.readFileSync(w.kimi).equals(MACHO), 'the real kimi is back under its own name')
+})
+
+test('1.6 §3.6 · uninstall deletes a backup no entry names, and its receipt does not offer it to the user to keep', async () => {
+  const { writeBackup } = await import('../../src/off/backup.mjs')
+  const w = await installed()
+  const orphan = writeBackup({ home: w.home, file: path.join(w.home, 'gone.json'), data: Buffer.from('{}\n') })
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.equal(fs.existsSync(orphan), false, 'the backup is gone')
+  assert.ok(receipt.dropped_backups.includes(orphan), 'the receipt lists it as dropped')
+  assert.ok(!receipt.notes.some((n) => n.includes(orphan)), `no note names a backup this run deleted: ${receipt.notes.join(' | ')}`)
+})

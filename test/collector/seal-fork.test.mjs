@@ -7,7 +7,7 @@ import path from 'node:path'
 import { fork } from 'node:child_process'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
-import { createSealQueue, WORKER_GONE_EXIT } from '../../src/collector/seal-queue.mjs'
+import { createSealQueue, WORKER_GONE_EXIT, forkSealer } from '../../src/collector/seal-queue.mjs'
 import { openSealed } from '../../src/raw/reader.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -46,4 +46,23 @@ test('a worker whose parent disconnects exits, and leaves the plaintext whole', 
   const [code] = await once(child, 'exit')
   assert.equal(code, WORKER_GONE_EXIT, 'the sealer does not outlive the daemon that owns the queue, and says so with its own exit code (never counted as seal-failed)')
   assert.deepEqual(fs.readFileSync(b.file), before, 'the plaintext is byte for byte what it was')
+})
+
+// 4.2 §自动封存: the uninstall stop's seal is the same worker in a real child, at normal priority, reporting its progress over IPC as it goes
+// ({step, done, total} in bytes). No phase is silent for long: the check of a big segment reports as it goes (an uninstall stops a daemon that
+// says nothing for its exit wait, and a sealer cut mid-check leaves the plaintext and a temp file), and this seal does not reindex.
+test('the sealer forked at normal priority reports every phase, the check included, and seals the segment', { timeout: 60_000 }, async () => {
+  const b = box({ lines: 1 })
+  const line = (i) => Buffer.from(JSON.stringify({ id: `req_${i}`, ts: '2026-10-05T10:00:00.000Z', req_body: `${i} `.repeat(400) }) + '\n')
+  const ls = Array.from({ length: 9000 }, (_, i) => line(i)) // ~ 2 × the 8 MB between two reports of the check
+  fs.writeFileSync(b.file, Buffer.concat(ls))
+  const size = fs.statSync(b.file).size
+  const seen = []
+  const r = await forkSealer(b.file, { lockFile: b.lock, journal: b.journal, normal: true, onProgress: (p) => seen.push(p) })
+  assert.equal(r.code, 0, r.reason)
+  assert.equal(fs.existsSync(b.file), false, 'the plaintext is gone')
+  assert.ok(seen.some((p) => p.step === 'encode' && p.done === size && p.total === size), JSON.stringify(seen.slice(-5)))
+  assert.deepEqual([...new Set(seen.map((p) => p.step))], ['encode', 'finish', 'fsync', 'verify'])
+  const checks = seen.filter((p) => p.step === 'verify')
+  assert.ok(checks.length >= 2 && checks.every((p) => p.total === size && p.done <= size), JSON.stringify(checks))
 })

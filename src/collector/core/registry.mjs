@@ -9,7 +9,8 @@
 //   match          exactly one harness claims it and none of its exclude items holds
 //   excluded       a name of `harness` and one of its exclude items holds (a helper of that harness)
 //   pending        a command line not known yet (win32 cmdlineState pending / cim-backoff) and the name is on a list: its args, its exclusions and
-//                  its Chromium role read the command line, so it is never `match` before it came (review R17; not cached, 4.8 W78)
+//                  its Chromium role read the command line, so it is never `match` before it came (review R17; not cached, 4.8 W78); an
+//                  exclusion that reads only `exe` still answers `excluded`: no argument changes what that file is
 //   args-mismatch  the name is on some list, but none of those items' `args` holds
 //   no-match       the name is on no list
 //   ambiguous      two harnesses claim it (`candidates`)
@@ -27,8 +28,8 @@ const PENDING = new Set(['pending', 'cim-backoff'])
 const anyOf = (patterns, facts) => (patterns || []).some((p) => matchPattern(p, facts))
 // an item's argument patterns: `rest` over the whole argument string, `entry` over the program an interpreter runs (identity.mjs entryOf)
 const argsHold = (p, view) => (!p.rest || holds(p.rest, view.rest)) && (!p.entry || holds(p.entry, view.entry))
-// an exclude item that reads the command line (its `rest`, argv[0]'s `name0`)
-const READS_ARGV = (x) => x.rest != null || x.name0 != null || x.entry != null
+// an exclude item that reads only the exe (beside its names): it holds or not before the command line is known (4.6 §识别进程)
+const EXE_ONLY = (x) => x.exe != null && x.rest == null && x.name0 == null && x.entry == null && x.env == null
 const compileOf = (d) => compileIdentity({ harness: d.name, ...d.processes })
 
 export function validateDescriptor(d) {
@@ -128,8 +129,8 @@ export function createRegistry(descriptors, { agentList = [] } = {}) {
       if (unknownArgs) {
         // the command line is not known yet: whether an item's args hold, whether an exclusion (args, name0) holds and which Chromium process it is
         // (core/trust/confirm.mjs chromium-child, every harness) all read it, so a name on this list is not yet an answer — only an exclusion that
-        // reads no argv (env) may already hold (review R17; 4.8 W78: not cached, the next connection asks again)
-        if (anyOf(sig.exclude.filter((x) => !READS_ARGV(x)), view)) excludedBy = excludedBy || h
+        // reads the exe alone may already hold (review R17; 4.8 W78: not cached, the next connection asks again)
+        if (anyOf(sig.exclude.filter(EXE_ONLY), view)) excludedBy = excludedBy || h
         else pending = true
         continue
       }

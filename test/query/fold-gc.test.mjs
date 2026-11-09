@@ -10,6 +10,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { extendSession } from '../../src/query/named/session.mjs'
+import { drain } from '../helpers/bounded.mjs'
 
 // liveHeap() takes globalThis.gc when there is one: count what it forces
 v8.setFlagsFromString('--expose-gc')
@@ -26,8 +27,7 @@ test('forced collections do not scale with the number of background slices (3.5 
   const once = forced
   const b = grown('trocar-foldgc-bg-')
   forced = 0
-  let slices = 0
-  while (await extendSession({ home: b.home, fs, writer: true }, b.s.id, 1)) slices++
+  const slices = await drain(() => extendSession({ home: b.home, fs, writer: true }, b.s.id, 1)) - 1
   assert.ok(slices > 10, `many slices (${slices})`)
   // one state each way, made at the same heap base
   assert.ok(forced <= once + 1, `background ${forced} forced collections over ${slices} slices; one request ${once}`)

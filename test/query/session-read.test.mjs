@@ -20,6 +20,7 @@ import { extendSession, markOn, sinceAt, version } from '../../src/query/named/s
 import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { apply, canon, byStep } from '../helpers/session-apply.mjs'
 import { BLOCK_PROBLEMS, SESSION_PROBLEMS } from '../../src/health/codes.mjs'
+import { drain } from '../helpers/bounded.mjs'
 
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
 const session = (home, params, ctx = {}) => runQuery('session', params, { home, fs, ...ctx })
@@ -174,7 +175,7 @@ test('records no dissector reads as a call are counted with their endpoints in `
 test('3.5 #19 unknown: over sessions whose `unknown` records come before, among and after the first rows, and members that are no call written after a call they step before, apply(full(M), since(M)) is full(now) with `unknown`, on the local path and the worker\'s shared log', async () => {
   for (const writer of [false, true]) for (const seed of [1, 5]) for (const by of [1, 4]) for (const lead of [0, 3]) for (const unknown of [0, 4]) for (const late of [false, true]) {
     const home = homeOf('trocar-sread-unkd-'), m = mixed(home, { calls: 12, unknown, lead, late, seed }), ctx = { fs: { ...fs }, writer }
-    const q = async (params) => { if (writer) while (await extendSession({ home, ...ctx }, m.id, Infinity)); return session(home, { id: m.id, ...params }, ctx) }
+    const q = async (params) => { if (writer) await drain(() => extendSession({ home, ...ctx }, m.id, Infinity)); return session(home, { id: m.id, ...params }, ctx) }
     assert.equal(m.back > 0, late, 'late: some members that are no call step before the call written before them')
     let upTo = 1, step = seed
     fs.writeFileSync(m.file, m.lines.slice(0, upTo).join('\n') + '\n')
@@ -246,7 +247,7 @@ test('3.5 #4: a block the reduction cannot read back fails its member with a clo
   const members = sessionGroups(await indexRows({ home, fs, errors: [] })).get(s.id)
   const { rfs, lost } = lostOnReread(members)
   const worker = { fs: rfs, writer: true }
-  while (await extendSession({ home, ...worker }, s.id, Infinity));
+  await drain(() => extendSession({ home, ...worker }, s.id, Infinity))
   assert.ok(lost.rid != null, 'the fold read a block\'s text back')
   const full = await session(home, { id: s.id }, worker)
   const failed = full.errors.filter((e) => BLOCK_PROBLEMS.includes(e.code) && members.some((r) => String(r.id) === e.where)).map((e) => e.where)
@@ -264,7 +265,7 @@ test('3.5 #4: a block the reduction cannot read back fails its member with a clo
   for (const h of full.lanes) assert.equal((await runQuery('lane', { id: s.id, lane: h.lane }, { home, ...worker })).command, 'lane')
   // a call appended later is folded and answered; another process answers from the fold log with the same bytes
   s.append(1)
-  while (await extendSession({ home, ...worker }, s.id, Infinity));
+  await drain(() => extendSession({ home, ...worker }, s.id, Infinity))
   const after = await session(home, { id: s.id }, worker)
   const last = sessionGroups(await indexRows({ home, fs, errors: [] })).get(s.id).at(-1)
   assert.ok(after.calls.some((r) => r.rid === String(last.id)), 'the call appended later is a row')
@@ -273,7 +274,7 @@ test('3.5 #4: a block the reduction cannot read back fails its member with a clo
   // to the log's frontier for a call past it, and its answer still has the failed members out of every row and every lane count
   s.append(1)
   const healed = { fs: { ...fs }, writer: true }
-  while (await extendSession({ home, ...healed }, s.id, Infinity));
+  await drain(() => extendSession({ home, ...healed }, s.id, Infinity))
   const later = await session(home, { id: s.id, limit: '1000' }, healed)
   assert.equal(later.lanes.reduce((a, h) => a + h.count, 0), later.calls.length, 'the lanes count the rows')
   assert.equal(later.stats.calls, later.calls.length, 'the stats count the rows')
@@ -291,7 +292,7 @@ test('3.5:42 background: extraction and the fold each get half of a slice, so th
   const ctx = { home, fs, writer: true }
   const frontier = async () => JSON.parse((await version({ ...ctx, params: { id: s.id } })).key)[1]
   const seen = [await frontier()]
-  while (await extendSession({ ...ctx }, s.id, 10)) seen.push(await frontier())
+  await drain(async () => { const more = await extendSession({ ...ctx }, s.id, 10); if (more) seen.push(await frontier()); return more })
   seen.push(await frontier())
   const end = seen.at(-1), folding = seen.findIndex((f) => f === end)
   assert.ok(end != null && folding > 2, `the fold took more than two slices (${folding})`)
@@ -304,7 +305,7 @@ test('3.5:42 local: over a fold log the worker finished, the local path answers 
   s.append(40)
   const worker = { writer: true }
   await session(home, { id: s.id }, worker)
-  while (await extendSession({ home, fs, ...worker }, s.id, Infinity));
+  await drain(() => extendSession({ home, fs, ...worker }, s.id, Infinity))
   const w = await session(home, { id: s.id }, worker)
   assert.equal(w.pending, undefined)
   const file = foldLogFile(home, s.id), bytes = fs.readFileSync(file)
@@ -323,7 +324,7 @@ test('3.5 #30 local hand-off: over what the worker wrote, the hand-off read answ
     const members = sessionGroups(await indexRows({ home, fs, errors: [] })).get(s.id)
     const worker = { fs: failed ? failingAt(members[Math.floor(members.length / 2)]) : { ...fs }, writer: true }
     await session(home, { id: s.id }, worker)
-    while (await extendSession({ home, ...worker }, s.id, Infinity));
+    await drain(() => extendSession({ home, ...worker }, s.id, Infinity))
     const w = await session(home, { id: s.id }, worker)
     assert.equal(w.pending, undefined)
     const handOff = () => session(home, { id: s.id }, { fs: { ...fs }, handOff: true })

@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { daemonState, stopDaemon, helperGone, readDaemonLock, DAEMON_LOCK_FRESH_MS } from '../../src/off/daemon-stop.mjs'
+import { daemonState, stopDaemon, helperGone, readDaemonLock, stopByHand, DAEMON_LOCK_FRESH_MS } from '../../src/off/daemon-stop.mjs'
 import { lockState, LOCK_FRESH_MS } from '../../src/health/read.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { psIdentity, identityFor } from '../../src/off/proc.mjs'
@@ -225,3 +225,7 @@ for (const [platform, managerStop] of [['darwin', 'launchctl-bootout'], ['linux'
     assert.ok(sentAt[1][1] - sentAt[0][1] >= 10_000, `SIGKILL ${sentAt[1][1] - sentAt[0][1]} ms after SIGTERM`)
   })
 }
+
+test('stopByHand off Windows: kill -9 the daemon, nothing after', () => {
+  for (const platform of ['darwin', 'linux']) assert.deepEqual(stopByHand({ platform, dir: tmpDir(), pid: 4242 }), { commands: ['kill -9 4242'], after: null })
+})

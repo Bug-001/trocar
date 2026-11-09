@@ -14,6 +14,8 @@ import path from 'node:path'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { OSES, TROCAR, invariants, casesFor, seedCasesFor, run, editKept, fileOf, diff, label } from '../../helpers/switch-kit.mjs'
+import { isPipePath } from '../../../src/off/control-client.mjs'
+import { formsHere } from '../../../src/collector/core/proxymode/sources.mjs'
 
 const harnesses = await loadHarnesses()
 // a win32 control endpoint is a pipe name, served on this host as a socket path relative to the cwd: one scratch cwd for this file's process (each
@@ -23,6 +25,14 @@ describe('switch contract', { concurrency: 1 }, () => {
 for (const spec of [...OSES.flatMap((os) => casesFor(os, harnesses)), ...seedCasesFor(harnesses)]) {
   it(label(spec), async () => {
     const r = await run(spec, harnesses)
+    // the platform seam: off and uninstall find the daemon through the product's own resolver, whose answer has the OS's native shape (a win32
+    // pipe name, never a path a unix host would make); only the transport under it is this host's. A resolution gone Linux-shaped is red here
+    assert.ok(spec.os === 'win32' ? isPipePath(r.endpoint.socketPath) : path.isAbsolute(r.endpoint.socketPath || ''), JSON.stringify(r.endpoint))
+    // a harness refused (its setup, or no covered form here: CM43) is refused before anyone asks the daemon; a resolution gone wrong is not that refusal
+    if (r.on.refused.length) assert.deepEqual(diff(r.s1, r.s2).filter(({ p }) => !TROCAR.test(p)), [], 'a refused harness has no entry')
+    if (r.on.refused.some((x) => x.reason === 'not-routed')) assert.deepEqual(formsHere(harnesses.find((d) => d.name === spec.h).proxyMode, spec.os, r.w.ctx), [], 'only a harness with no covered form here')
+    if (spec.form && !r.on.refused.length) assert.ok(r.askedOn.includes('POST /on'), `on reached the daemon through that endpoint: ${r.askedOn}`)
+    assert.ok(r.askedOff.includes('POST /off'), `off reached the daemon through that endpoint: ${r.askedOff}`)
     const snaps = [r.s0, r.s1, r.s2, r.s3, r.sE, r.s4, r.s5, r.s6]
     const wrote = diff(r.s1, r.s2).some(({ p }) => !TROCAR.test(p) || /switch/.test(p))
     if (spec.form && r.on.routes.some((x) => x.ok)) assert.ok(wrote, `on routed ${spec.form} but wrote no entry: the contract would hold vacuously`)

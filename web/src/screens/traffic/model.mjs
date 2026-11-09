@@ -159,5 +159,5 @@ export function failOf(what, r) {
   const why = obj ? r.error : r
   /** @type {[string, {text: string}][]} */
   const pairs = [...(status != null ? [['status', { text: String(status) }]] : []), ['error', { text: why == null || why === '' ? '—' : String(why) }]]
-  return { line: READ_FAIL(what, status), pairs, copy: pairs.map(([k, v]) => `${k}: ${v.text}`).join('\n') }
+  return { line: READ_FAIL(what, status, obj && r.timedOut === true), pairs, copy: pairs.map(([k, v]) => `${k}: ${v.text}`).join('\n') }
 }

@@ -1,4 +1,4 @@
-// web/src/screens/replay/StepHead.tsx — the step head (2.2 §步头) in the new desk: it renders stepHeadModel (models.mjs), recomputed on
+// web/src/screens/replay/StepHead.tsx — the step head (2.2 §步头) in the desk: it renders stepHeadModel (models.mjs), recomputed on
 // each `step`, `rough` and `empty` paint (the model reads the state: an emptied desk has none, a rough page has its label, a drawn
 // step its head). One row: ‹ [N / M over model · time] › · ◐ · Compare ▾ · three read-outs (Context / Cache / Estimate), each an
 // InfoButton whose face is two lines, the name over the value; their rows are worked out when the layer opens. The rough page's
@@ -27,12 +27,14 @@ export function StepHead({ desk }: { desk: DeskView }) {
   useLayoutEffect(() => { if (vr > 0 && (!m || m.rough)) desk.roughDrawn('step') }, [desk, vr, m])
   if (!m) return <div id="stepbar" />
   if (m.rough) {
-    return <div id="stepbar"><span className="sb-nav"><b className="sb-at" data-n={m.n} data-m={m.m} title={m.label}><No n={m.n} m={m.m} /></b></span></div>
+    return <div id="stepbar"><span className="sb-nav"><b className="sb-at" data-n={m.n} data-m={m.m} title={m.label}><No n={m.n} m={m.m} read={m.read} /></b></span></div>
   }
   return <Drawn m={m} s={desk.s} />
 }
 
-const No = ({ n, m }: { n: number, m: number }) => <><span className="sb-n">{n}</span> <span className="sb-m">/ {m}</span></>
+type Read = { done: number, total: number } | null
+// 1.2 §编号: N / M, or during a first read N · done of total calls read (M is then only the snapshot's)
+const No = ({ n, m, read }: { n: number, m: number, read: Read }) => <><span className="sb-n">{n}</span> <span className="sb-m">{read ? `· ${W.callsRead(read.done, read.total)}` : `/ ${m}`}</span></>
 
 function Drawn({ m, s }: { m: Drawn, s: DeskState }) {
   const no = (m.n ?? m.k)!
@@ -44,7 +46,7 @@ function Drawn({ m, s }: { m: Drawn, s: DeskState }) {
         <span className="sb-id">
           <span className="sb-line">
             {m.laneWord && <span className="sb-lane">{m.laneWord} ·</span>}
-            <b className="sb-no" data-n={no} title={m.label}><No n={no} m={m.m} /></b>
+            <b className="sb-no" data-n={no} data-m={m.m} title={m.label}><No n={no} m={m.m} read={m.read} /></b>
           </span>
           <span className="sb-meta">
             <span className="sb-model" title={m.model ?? undefined} style={{ '--mn': Math.min(8, (m.model || '—').length) } as CSSProperties}>{m.model || '—'}</span>

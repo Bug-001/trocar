@@ -13,6 +13,7 @@ import { HARNESS_IDS, resolveHarnesses } from '../off/harness-names.mjs'
 import { collectorDir, stateFile, trocarHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest, itemsOfPhase, daemonMayStart } from '../off/manifest.mjs'
+import { statKey } from '../query/warm.mjs'
 import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { holdersOf, judgeLife } from '../off/holders.mjs'
 import { readDoorSeen, validRow } from '../off/door-seen.mjs'
@@ -28,17 +29,22 @@ import { hostsProcess } from '../collector/core/host-agent.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeTrocarText, SENTINEL } from '../off/text-edit.mjs'
+import { unseal } from '../off/seal.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs' // its own small file on purpose: through ./orchestrate.mjs this one function pulled the whole undo machinery into `status`'s module load (D62)
 
-import { judgeHarness, certOfForms } from '../netenv/verdict.mjs'
+import { judgeHarness, certOfForms, routeOfForms } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
 import { buildTopology } from '../netenv/topology.mjs'
 import { diagnose } from '../netenv/findings.mjs'
+import { codeId } from '../version.mjs'
 import { captureHealth } from '../health/read.mjs'
+import { CODE } from '../collector/core/codes.mjs'
+import { pacStale } from '../collector/core/proxymode/entries.mjs'
 import { failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
-import { colors } from './text.mjs'
+import { colors, tildeText } from './text.mjs'
 import { squashed } from './words.mjs'
+import { routeReadsEnv } from '../off/loc.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
 import { printJson } from './json.mjs'
 
@@ -66,6 +72,7 @@ function entryState(e, fs = nodeFs) {
     if (e.post_sha256 == null) return { state: 'missing', why: `${file}: the install of this entry did not finish` }
     if (sha256(cur) === e.post_sha256) return { state: 'intact' }
     const text = cur.toString('utf8')
+    e = unseal(e, text)
     if (e.kind === 'text') return removeTrocarText(text, e.ops || []).found ? { state: 'intact' } : text.includes(SENTINEL) ? { state: 'changed', why: `trocar's block in ${file} is not what trocar wrote` } : { state: 'missing', why: `trocar's text is gone from ${file}` }
     let value
     try { value = JSON.parse(text) } catch { return { state: 'changed', why: `${file} no longer parses as JSON` } }
@@ -120,7 +127,13 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   try { f.manifest = { value: readManifest(dir, fs), error: null } } catch (e) { f.manifest = { value: null, error: `${path.join(dir, 'install-manifest.json')}: ${errText(e)}` } }
   if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this trocar does not read`; f.manifest.value = null }
   const m = f.manifest.value
-  f.boardPort = readIngressConfig({ dir, fs }).boardPort ?? null // the board's url (C.3 `board`): install's record, read only
+  const ing = readIngressConfig({ dir, fs })
+  f.boardPort = ing.boardPort ?? null // the board's url (C.3 `board`): install's record, read only
+  const token = typeof ing.listenerToken === 'string' ? ing.listenerToken : null // the PAC key's source (P10): read only, never printed
+  const hd0 = (id) => (desc.value ? desc.value.find((d) => d.name === id) : null)
+  // D61 / 1.6 §3.5: the login entry, asked as `on` asks it (the arch unit's registered()); only of an install — with none there is nothing to ask.
+  // `deps.loginCache`: the query worker's (src/query/worker.mjs) — it keeps the answer while the files trocar's own commands write are unchanged
+  const autostartP = daemonMayStart(m) ? import('../collector/net-deps.mjs').then((nd) => nd.loginEntry({ platform, home, env, run: deps.exec || null, script: deps.script || process.argv[1], unit: deps.unit, now: ms, stamp: deps.loginCache ? `${statKey(path.join(dir, 'install-manifest.json'), fs)}|${statKey(stateF, fs)}` : null })).catch((e) => { rethrowSandbox(e); return { entry: null, state: 'unknown', reason: `the login entry could not be read (${errMessage(e)})` } }) : null
   const certP = installCertOf({ f, m, dir, fs, platform, home, env, deps }) // the certificate axis: its root-store read and its own import run while the harnesses are judged
   const installedIds = m ? [...new Set([...(m.entries || []), ...(m.files || [])].map((x) => x.harness).filter((h) => typeof h === 'string'))] : []
   let state = null
@@ -170,19 +183,20 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     negatives.get(n.pid).push({ host: n.host ?? null, cause: n.cause ?? null, retry_at: Number.isFinite(n.retry_at) ? new Date(n.retry_at).toISOString() : null })
   }
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
-  // proxy mode: which forms of each harness are on this machine (4.11 `present`); null = it could not be read. A harness with none is not captured (4.11 P5)
+  // which forms of each harness are on this machine (4.11 `present`, 4.6); null = it could not be read. A harness with none is not captured (4.11 P5)
   let here = null, hereError = null, programs = null
-  if (isProxyMode(platform) && desc.value) {
+  if (desc.value) {
     try { here = await (deps.presentForms || (await import('../collector/net-deps.mjs')).presentForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); hereError = `which harnesses are on this machine could not be read (${errMessage(e)})` }
-    try { programs = await (deps.formPrograms || (await import('../collector/net-deps.mjs')).formPrograms)({ os: platform, home, env, harnesses: desc.value }) } catch (e) { rethrowSandbox(e); programs = null }
+    if (isProxyMode(platform)) try { programs = await (deps.formPrograms || (await import('../collector/net-deps.mjs')).formPrograms)({ os: platform, home, env, harnesses: desc.value }) } catch (e) { rethrowSandbox(e); programs = null }
+    if (daemonMayStart(m)) try { f.outOfScope = await (deps.outOfScopeForms || (await import('../collector/net-deps.mjs')).outOfScopeForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); f.outOfScope = [] } // it only says more: not knowing it changes no verdict
   }
   // a form a process can be on: of a host-program form only the host's own processes (its `hosts.processes`, D51 names); of a form carried by the
   // install-folder wrapper only its program, at its place or moved aside (4.11 P8). An exe not known, or programs not known, rules nothing out
   const fileKey = (x) => (platform === 'win32' ? String(x).replace(/\\/g, '/').toLowerCase() : String(x))
   const holds = (x, p) => (x.hosts && x.hosts.processes ? hostsProcess(x, p) : !programs || !programs[x.id] || !p.exe || programs[x.id].some((file) => fileKey(file) === fileKey(p.exe)))
   // with no names, every harness with a form present on this machine gets a row too, besides the ones trocar's records know (1.6 §3.5, D65④):
-  // the row is where Set up and the board's on / off appear for a harness installed after trocar. Proxy mode only; `on` / `off` do not read this list.
-  if (!names && isProxyMode(platform) && desc.value && daemonMayStart(m)) { // with trocar not installed there is nothing to set up or turn on: the summary says so
+  // the row is where Set up and the board's on / off appear for a harness installed after trocar. Every mode; `on` / `off` do not read this list.
+  if (!names && desc.value && daemonMayStart(m)) { // with trocar not installed there is nothing to set up or turn on: the summary says so
     if (here) wanted = [...new Set([...wanted, ...Object.keys(here).filter((h) => here[h].length)])].sort((a, b) => order(a) - order(b) || a.localeCompare(b))
     else f.identity_error = f.identity_error || hereError
   }
@@ -190,9 +204,12 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const why = []
     const desired = fromReply && fromReply[id] ? (fromReply[id].desired === 'on' ? 'on' : 'off') : state ? (state.harnesses[id] && state.harnesses[id].desired === 'on' ? 'on' : 'off') : null
     if (desired === null) why.push(f.state.error)
-    const items = m ? entriesOf(m, id).map((e) => ({ item: e, ...entryState(e, fs) })) : []
+    const routes = (hd0(id) || {}).proxyMode ? hd0(id).proxyMode.routes || {} : {}
+    // trocar's stale PAC address, still in the entry: the app's fetch of it is refused (P10) until on writes the current one
+    const stale = (e) => pacStale(e, routes[e.route], token)
+    const items = m ? entriesOf(m, id).map((e) => { const s = entryState(e, fs); return { item: e, ...(s.state === 'intact' && stale(e) ? { state: 'changed', code: CODE.pacAddressStale, why: `${e.path}#${e.keys.join('.')} holds trocar's proxy settings address from before this install's key` } : s) } }) : []
     const bad = items.filter((x) => x.state === 'missing' || x.state === 'changed')
-    const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of trocar\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; ') } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
+    const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of trocar\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; '), ...(bad.every((x) => x.code) ? { code: bad[0].code } : {}) } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
     if (entry.state === 'unknown') why.push(entry.why)
     let procs
     // a process the daemon has not judged (proxy mode): the door's own rule (4.11 P11 status) — started after its forms' carriers, and inside an on
@@ -201,9 +218,11 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const forms = dsc ? judgedForms(dsc, platform) : []
     const present = forms.length ? (here ? here[id] || [] : null) : undefined // undefined: no form on this OS to be present (Linux; a harness with none here)
     if (present === null && hereError) why.push(hereError)
-    const formsOf = (p) => (present ? forms.filter((x) => present.includes(x.id) && holds(x, p)) : forms) // the forms a process can be on: those that are here and can hold it
+    // the forms a process can be on: those its program file and command line may be (the door's rule, judgedForms with its exe and argv), here, and able to hold it
+    const formsOf = (p) => { const may = new Set(judgedForms(dsc, platform, null, p.exe ?? null, p.argv ?? null).map((x) => x.id)); return (present ? forms.filter((x) => present.includes(x.id) && holds(x, p)) : forms).filter((x) => may.has(x.id)) }
     // the forms each process can be on, by the one predicate (formsOf): carried on its row, so the topology draws it on the same forms (status-facts netFormsOf)
     const onForms = (p) => (forms.length ? { forms: formsOf(p).map((x) => x.id) } : {})
+    const routeOf = Object.fromEntries(forms.map((x) => [x.id, x.route])) // the route each form is on: the door judges a process on the route it came in by
     const startOf = (p) => {
       if (!forms.length) return {}
       const mine = formsOf(p)
@@ -215,6 +234,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
       if (j.state === 'door') return j.row.kind === 'accept' && 'decrypt' in j.row ? { trusted: j.row.decrypt === true, reason: j.row.decrypt === true ? null : j.row.reason ?? null } : { start: null }
       const certain = startVerdict(p.startedAt, carrier)
       if (certain) return { start: certain }
+      // 4.11 P11 status step 4: an on-window start read the entry only where `on` wrote it; a place that reads an env var depends on the process's own
+      // environment, which this OS's process table never shows, so the door judges it at its first connection
+      if (j.state === 'read' && mine.some((x) => routeReadsEnv(dsc.proxyMode.routes[x.route] || {}, platform))) return { start: 'not-seen' }
       return { start: { door: null, read: null, maybe: 'not-seen', 'not-read': 'config-after-start', 'start-unknown': 'start-time-unknown' }[j.state] }
     }
     if (reply) {
@@ -235,18 +257,19 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     // the API hosts its own config names (4.11 configHosts: files only, the same for every asker): the direct hop is drawn from them, never from the descriptor's list.
     // All loopback (a relay on this machine) = its model calls never reach the door (P6), proxy mode only; a config not read says nothing
     const hd = desc.value ? desc.value.find((d) => d.name === id) : null
+    const ownHere = here ? (here[id] || []).some((x) => !((hd && hd.uncaptured) || []).some((u) => u.form === x)) : null // a form of its own, not one trocar does not capture (4.6 「不采的形态」)
     const read = hd ? configuredHosts(hd, { home, os: platform, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p) }) : { hosts: [], errors: [] }
     const hosts = read.errors.length ? [] : read.hosts
     const localUpstream = isProxyMode(platform) && hosts.length > 0 && hosts.every(isLoopbackHost)
-    const judge = (cert = true) => {
-      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream })
+    const judge = (cert = true, blocked = {}) => {
+      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.code || (entry.state === 'changed' ? 'entry-changed' : 'entry-missing'), attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert, localUpstream, blocked, routeOf })
       if (merged) j.rows = j.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
       return j
     }
     const judged = judge()
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
     if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && att.attached === null) why.push(att.reason) // the path in is what the verdict waits for, and the daemon could not say
-    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, formsHere, hosts, localUpstream, judged, judge, why: [...new Set(why.filter(Boolean))] })
+    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, formsHere, ownHere, hosts, localUpstream, judged, judge, why: [...new Set(why.filter(Boolean))] })
   }
   // how many connections are still relayed after an off (§1.3): the daemon says; with no daemon there is no engine, so none; with one that does not answer or does not say, not known
   const rc = reply && reply.relayed
@@ -261,13 +284,14 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   if (platform === 'linux') {
     let read
     try {
-      read = deps.lingerRead ? await deps.lingerRead() : deps.linger ? { state: await deps.linger() } : (await (deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env }))).lingerRead()
+      read = deps.lingerRead ? await deps.lingerRead() : deps.linger ? { state: await deps.linger() } : (await (deps.parts || await (await (deps.daemon || import('../collector/net-deps.mjs'))).loadParts({ env }))).lingerRead()
     } catch (e) { rethrowSandbox(e); read = { state: null, error: errMessage(e) } }
     f.linger = read.state === true || read.state === false ? { linger: read.state } : { linger: 'unknown', linger_reason: read.error || 'the linger state could not be read' }
   }
   try { f.health = deps.captureHealth ? deps.captureHealth({ home: trocarHome(home), harnesses: HARNESS_IDS }) : captureHealth({ home: trocarHome(home), harnesses: HARNESS_IDS, fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   if (merged) f.identity = identityBlocks({ ids: f.harnesses.map((h) => h.id), merged, health: effectiveHealth(f).health })
   Object.assign(f, await certP)
+  f.autostart = autostartP ? await autostartP : null
   return f
 }
 
@@ -276,7 +300,15 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
 function judgeCertificates(f) {
   for (const h of f.harnesses) {
     const forms = f.facts && f.facts.harnesses && f.facts.harnesses[h.id] && f.facts.harnesses[h.id].forms
-    if (forms && forms.length && h.judge) h.judged = h.judge(certOfForms(forms))
+    if (!(forms && forms.length && h.judge)) continue
+    const cert = certOfForms(forms)
+    h.judged = h.judge(cert, routeOfForms(forms)) // the route verdict too: a form a blocker keeps off the route is not captured (4.11 ⑩)
+    // a certificate not known (D38) says what could not be read, once
+    // a blocker not read (4.11 ⑩) says which setting, once
+    if (h.judged.captured === null && Array.isArray(h.why)) for (const x of forms) { const w = x.route && x.route.reason === 'blocker-unreadable' && `could not read ${x.route.at}`; if (w && !h.why.includes(w)) h.why.push(w) }
+    // a process whose routes disagree (verdict.mjs byRoute) says which of its forms is captured and which forwarded only, once
+    if (Array.isArray(h.why)) for (const r of h.judged.rows) { const w = r.split && `trocar cannot tell whether pid ${r.pid} is ${r.split.decrypted.join(' or ')}, which it captures, or ${r.split.forwarded.join(' or ')}, which it only forwards`; if (w && !h.why.includes(w)) h.why.push(w) }
+    if (cert === null && Array.isArray(h.why)) for (const x of forms) { const u = x.certificate && x.certificate.in_effect === null && x.certificate.user_file, w = u && u.reason && `could not read ${u.reason}`; if (w && !h.why.includes(w)) h.why.push(w) }
   }
 }
 
@@ -307,7 +339,7 @@ async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
         : has && has.error ? { store, ...unknown(`the root store could not be read (${has.error})`) } : { store, ...notInstalled }
   }
   const down = reply && reply.cert ? null : f.daemon.state === 'running' ? 'the daemon\'s reply has no issuer block' : `the daemon is ${f.daemon.state}${f.daemon.reason ? ` (${f.daemon.reason})` : ''}: only it holds the issuer`
-  const custody = model ? ((items.find((e) => e.kind === 'root-key') || {}).custody || {}).kind || null : 'file'
+  const custody = model ? ((items.find((e) => e.kind === 'root-key') || {}).custody || {}).kind || null : null // Linux has no custody: it reads its CA files (4.11 P1)
   const keyFile = !model && items.find((e) => e.role === 'ca-key'), keyThere = !!keyFile && (() => { try { return fs.statSync(keyFile.path).isFile() } catch (e) { rethrowSandbox(e); return false } })()
   const key = !model ? { custody, state: keyThere ? 'present' : 'missing', code: keyThere ? null : 'cert-key-missing' }
     : down ? { custody, state: 'unknown', code: null, reason: down }
@@ -364,7 +396,7 @@ async function gatherTopology(f, { home, env, platform, deps = {} }) {
     // command starts no PowerShell of its own for the process snapshot, the socket table and Internet Settings (4.8 §1; D62). Without a daemon
     // the platform's part starts and closes one itself, as it did.
     const warm = deps.daemonReader && f.daemon && f.daemon.state === 'running' ? deps.daemonReader : null
-    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(warm ? { helper: warm } : {}), ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
+    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, fs /* the platform's facts read the files status reads: one fs */, ...(warm ? { helper: warm } : {}), ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
     const topology = buildTopology(facts)
     // the codes `doctor` would give, on the topology of each harness (the board reads them there); the commands and the text are `doctor`'s
     let diagnosed = null
@@ -394,7 +426,7 @@ function formsOf(f) {
   const out = {}
   for (const [h, hf] of Object.entries((f.facts && f.facts.harnesses) || {})) {
     const l = (hf.forms || []).filter((x) => x.certificate && x.proxy)
-    if (l.length) out[h] = l.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy, ...(x.notes && x.notes.length ? { notes: x.notes } : {}) }))
+    if (l.length) out[h] = l.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy, ...(x.route ? { route: { reason: x.route.reason, at: x.route.at ?? null, ...(x.route.via ? { form: x.route.via } : {}) } } : {}), ...(x.notes && x.notes.length ? { notes: x.notes } : {}) }))
   }
   return Object.keys(out).length ? out : null
 }
@@ -428,13 +460,12 @@ function failuresOf(f) {
   ]
   const by = new Map()
   for (const p of parts) {
-    const k = `${p.level}\u0000${p.where}\u0000${p.code}`, g = by.get(k)
     const harness = HARNESS_IDS.includes(p.agent) ? p.agent : null
+    const k = `${p.level}\u0000${p.where}\u0000${p.code}\u0000${harness}`, g = by.get(k)
     if (!g) { by.set(k, { level: p.level, where: p.where, code: p.code, count: p.count, first_ts: p.first_ts, last_ts: p.last_ts, harness, ...procOf(p), reason: p.reason }); continue }
     g.count += p.count
     if (String(p.first_ts) < String(g.first_ts)) g.first_ts = p.first_ts
     if (String(p.last_ts) >= String(g.last_ts)) { g.last_ts = p.last_ts; g.reason = p.reason; delete g.process; delete g.pid; Object.assign(g, procOf(p)) }
-    if (g.harness !== harness) g.harness = null // one group from more than one harness: the group names none
   }
   const all = [...by.values()].map(({ harness, ...g }) => (harness ? { ...g, harness } : g)).sort((a, b) => (String(a.last_ts) < String(b.last_ts) ? 1 : String(a.last_ts) > String(b.last_ts) ? -1 : 0))
   // C.3: the three counts are one unit, records — a note is the sum of the note groups' counts (a standing condition is one record)
@@ -454,8 +485,8 @@ function changedOf(f) {
 /** The exit code of `status` (§3.5): 0 every harness that is on is captured · 1 some are not · 3 that cannot be judged. A stale record never decides it: the daemon's own answer does. */
 export function statusExit(f) {
   if (f.health_error) return EXIT.unknown // the capture health could not be read: it cannot be judged, and that is never a pass (D-2, R4)
-  if (f.harnesses.some((h) => h.judged.captured === null)) return EXIT.unknown
-  const failing = f.harnesses.some((h) => h.desired === 'on' && h.judged.captured === false) || certNeedsUser(f)
+  if (f.harnesses.some((h) => h.judged.captured === null) || (f.autostart && f.autostart.state === 'unknown')) return EXIT.unknown
+  const failing = f.harnesses.some((h) => h.desired === 'on' && h.judged.captured === false) || certNeedsUser(f) || (!!f.autostart && f.autostart.state !== 'present')
   return failing ? EXIT.incomplete : EXIT.ok
 }
 
@@ -473,14 +504,14 @@ function boardOf(f) {
   return say(b.state === 'port-taken' ? 'port-taken' : 'not-running', b.reason || `the daemon says the board is ${b.state}`)
 }
 
-/** C.3 `harnesses[h].setup` (4.11 P4b, D65④): the model's one judgement, read with the forms; driver mode (Linux) does not judge it, and what was not read is
- *  `unknown` with its reason, never `ready` (D38). */
+/** C.3 `autostart` (D61): the login entry as registered() answered; null when trocar is not installed or the platform has no autostart unit. */
+const autostartOf = (f) => { const a = f.autostart; if (!a) return null; return { entry: a.entry, state: a.state, code: a.code || null, command: a.state === 'present' ? null : 'trocar install', reason: a.reason } }
+
+/** C.3 `harnesses[h].setup` (4.11 P4b, 4.6, D65④): the one judgement, read with the network facts; what was not read is `unknown` with its reason, never `ready` (D38). */
 function setupDocOf(f, id) {
   const hf = f.facts && f.facts.harnesses && f.facts.harnesses[id]
   if (hf && hf.setup) return hf.setup
-  const why = f.platform === 'linux' || (f.facts && f.facts.routing === 'driver') ? 'driver mode (Linux) does not judge setup per form; trocar on works as before'
-    : `the setup of ${id} could not be read${f.topology_error ? ` (${f.topology_error})` : ''}`
-  return { state: 'unknown', missing: [], reason: why }
+  return { state: 'unknown', missing: [], reason: `the setup of ${id} could not be read${f.topology_error ? ` (${f.topology_error})` : ''}` }
 }
 
 /** C.3 `health`: captureHealth's verdict over the collector and the raw layer, with only the keys C.3 names that have a value; absent when the health could not be read (1.5 K-28). */
@@ -509,15 +540,16 @@ export function statusDocOf(f) {
   const health = healthDocOf(f)
   const doc = {
     ...newReceipt('status'), ok: statusExit(f) === EXIT.ok, ...(health ? { health } : {}), changed: changedOf(f),
-    daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, code: (d.state === 'running' && d.reply && typeof d.reply.code === 'string' && d.reply.code) || null, error: d.reason || null }, // code: the daemon's own answer (C.3, D67⑤)
+    daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.state === 'running' && d.reply && typeof d.reply.since === 'string' && d.reply.since) || null, code: (d.state === 'running' && d.reply && typeof d.reply.code === 'string' && d.reply.code) || null, runs_this_code: d.state === 'running' && d.reply && typeof d.reply.code === 'string' && d.reply.code ? d.reply.code === codeId() : null, error: d.reason || null }, // code: the daemon's own answer (C.3, D67⑤)
     harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
-      desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why,
+      desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why, present: h.ownHere ?? null,
       setup: setupDocOf(f, h.id), forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null, ...(r.cause ? { cause: r.cause } : {}), ...(r.negatives ? { negatives: r.negatives } : {}) })),
       ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}),
     }])),
     // a harness's topology says its verdict, the one `harnesses[h]` says (1.6 C.3), never one branch's
     ...(f.topology ? { topology: Object.fromEntries(Object.entries(f.topology).map(([h, x]) => { const j = f.harnesses.find((y) => y.id === h); return [h, j ? { ...x, captured: j.judged.captured, reason: reasonOf(j.judged) } : x] })) } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
-    board: boardOf(f),
+    board: boardOf(f), autostart: autostartOf(f),
+    ...(f.outOfScope && f.outOfScope.length ? { out_of_scope: f.outOfScope } : {}),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
     connections: f.connections, ...(f.connections === 'unknown' ? { connections_reason: f.connections_reason } : {}),
     ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures, errors,
@@ -574,14 +606,16 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   const c = colors(io) // zero ANSI bytes when stdout is not a TTY or NO_COLOR is set (src/cli/text.mjs)
   const now = (deps.ms || Date.now)()
   const detail = named.ids || []
+  // HOME paths as ~ in every string BEFORE the text is laid out, so a line wraps at the width it is printed with (1.6 §1.1⑤⑥); the JSON keeps them whole
+  const tildeAll = (x) => (typeof x === 'string' ? tildeText(x, home) : Array.isArray(x) ? x.map(tildeAll) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, tildeAll(v)])) : x)
   if (detail.length) {
-    const found = findingsFor(f, detail)
+    const found = tildeAll(findingsFor(f, detail)), shown = tildeAll(doc)
     detail.forEach((h, i) => {
       if (i) io.out('')
       const finding = found.find((x) => x.harness === h && x.class !== 'note') || null
-      for (const l of statusDetail(doc, h, { finding, now, colors: c })) io.out(l)
+      for (const l of statusDetail(shown, h, { finding, now, colors: c, home })) io.out(l)
     })
-  } else for (const l of statusSummary(doc, { now, colors: c })) io.out(l)
+  } else for (const l of statusSummary(tildeAll(doc), { now, colors: c, home })) io.out(l)
   if (failures) { io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now })) io.out(l) }
   return { exit, f }
 }

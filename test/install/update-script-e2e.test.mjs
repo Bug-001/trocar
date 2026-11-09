@@ -96,7 +96,8 @@ test('script channel: update stages the new version before anything changes, pla
     assert.equal(updated.code, 0, updated.err + updated.out)
     assert.equal(pointer(), `${V2} ${nv}-${target}\n`)
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(work, 'started'), 'utf8')), ['update', '--yes', '--json'], 'the new code was started through the launcher, to finish')
-    assert.deepEqual(JSON.parse(fs.readFileSync(handover, 'utf8')), { from: V, on: [] }, 'the handover the new code finishes from')
+    const h = JSON.parse(fs.readFileSync(handover, 'utf8'))
+    assert.deepEqual([h.from.split('+')[0], h.on], [V, []], 'the handover the new code finishes from: the old copy\'s --version (its version, then which code it is)')
     assert.ok(fs.existsSync(path.join(app, V, 'bin', 'trocar.mjs')), 'the previous version is kept')
   } finally { up.close() }
 })

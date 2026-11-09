@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url'
 
 /** Path of the preload that ends a process when its parent is gone. */
 export const EXIT_WITH_PARENT = fileURLToPath(new URL('./exit-with-parent.mjs', import.meta.url))
-/** The node arguments that load it: `spawn(process.execPath, [...WITH_PARENT, script, …])`. */
-export const WITH_PARENT = Object.freeze(['--import', EXIT_WITH_PARENT])
+/** The node arguments that load it and the no-real-os preload, which a child does not inherit: `spawn(process.execPath, [...WITH_PARENT, script, …])`. */
+export const WITH_PARENT = Object.freeze(['--require', fileURLToPath(new URL('./no-real-os.cjs', import.meta.url)), '--import', EXIT_WITH_PARENT])
 
 /** `env` plus the pid the watch is to follow: this process. Without it the watch follows the parent it finds at start (a child that is orphaned before it got that far is not caught). */
 export const watchEnv = (env = process.env) => ({ ...env, TROCAR_WATCH_PID: String(process.pid) })

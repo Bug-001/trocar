@@ -1,13 +1,14 @@
 // test/web-v2/resources.test.mjs — the resource explorer's own suite (2.4): bad data degrades instead of throwing
 // (#10: unknown kinds land in 「其他资源」 with the kind on hover, undated rows carry no step), the six display groups
-// and the 「其他 N 项」 wrapper count their own entries (#1), the fidelity annotations of 只见到名字 (#3: no data-view,
-// 「推测」 on the group, the ⓘ text), an empty ledger with the compaction group still drawn (#7), and the < 1200 px fold
+// and the 「其他 N 项」 wrapper count their own entries, compactions leaving the group on the chapter axis (#1), the fidelity annotations of 只见到名字
+// (#3: no data-view, 「推测」 on the group, the ⓘ text), and the < 1200 px fold
 // line's N is the 读过的文件 group's own count — never a "0" standing in for absent records (1.2 §窄屏, invariant 4).
 // String level over desk-model states: the ledger is the anchor lane's `lane` answer as the desk holds it (desk-world.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resourcesHtml, renderResources } from '../../web/legacy/replay/resources.mjs'
+import { resourcesHtml, resourceUnits, renderResources, wireResources } from '../../web/legacy/replay/resources.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
+import { esc, kf } from '../../web/legacy/core/fmt.mjs'
 import { relPath } from '../../web/legacy/replay/analysis.mjs'
 import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
@@ -23,6 +24,8 @@ const stateOf = (lane, extra = {}) => {
   return { desk, lanes, anchor, anchorTs: anchor.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: anchor.calls.length }, playhead: 0, sawView: 'ctx', collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false, meta: { project_path: '/w/p' }, navOpen: new Set(ALL_OPEN), navSeenExpanded: false, ...extra }
 }
 // a group header's count, the way navGroup writes it: <span class="navlbl">label</span><span class="navct">N</span>
+// the desk with the head's chapter axis on `axis` (the main lane's key R0-0 = the anchor here; another key = an off-axis anchor)
+const axisDesk = (lane, axis = R(0)) => { const s = stateOf(lane); s.desk.head = { axis, chapters: [{ k: 0, s0: 0, s1: 6 }] }; return s }
 const grpCount = (h, label) => { const m = h.match(new RegExp(`navlbl">${label}</span><span class="navct">(\\d+)</span>`)); return m ? +m[1] : null }
 
 test('#10 bad data degrades, never throws: unknown kinds land in 其他资源 with the kind on hover; undated rows carry no step', () => {
@@ -43,27 +46,26 @@ test('#10 bad data degrades, never throws: unknown kinds land in 其他资源 wi
   assert.ok(dated && /data-navstep="2"/.test(dated[0]), 'a dated unknown row locates its enter step')
 })
 
-test('the < 1200 px fold line: N is the file group\'s own count; no ledger or nothing countable → no number', () => {
-  const barOf = (anchor) => {
-    const bar = { textContent: '' }
-    const el = { innerHTML: '' }
-    renderResources(el, stateOf(anchor, { root: { querySelector: (sel) => (sel === '#rpbar' ? bar : null) } }))
-    return { bar, h: el.innerHTML }
+test('2.4 还在读: a lane answer with pending stands where the empty line would: updating on a re-read, still reading on a first; held rows take no line', () => {
+  const pending = { done: 1, total: 4, calls: 0 }
+  const ledger = (o) => ({ base: null, resources: [], seen: [], events: [], ledger_next: null, ...o })
+  for (const [head, word] of [[{ ...pending, seen: true, read: 1 }, W.FILES_UPDATING], [pending, W.FILES_READING]]) {
+    const s = stateOf(anchorOf())
+    s.desk.pending = head
+    applyLedger(s.desk, s.anchor.id, null, ledger({ pending }))
+    const units = resourceUnits(s), html = resourcesHtml(s)
+    assert.ok(!units.some((u) => u.key === 'empty'), 'no empty line while pending')
+    assert.ok(html.includes(word) && !html.includes(W.NO_RESOURCES), html)
+    applyLedger(s.desk, s.anchor.id, null, ledger())
+    assert.ok(resourceUnits(s).some((u) => u.key === 'empty') && !resourcesHtml(s).includes(word), 'the answer without pending says the ledger is empty')
   }
-  for (const a of [{}, { resources: [] }]) {
-    assert.ok(!/\d/.test(barOf(anchorOf(a)).bar.textContent), 'nothing countable: no number, never a 0 standing in')
-  }
-  const mixed = barOf(anchorOf({ resources: [
-    { kind: 'file', label: '/w/a.mjs', segments: [{ enter: R(0), evict: null }] },
-    { kind: 'file', label: '/w/b.mjs', segments: [{ enter: R(1), evict: R(2) }] },
-    { kind: 'file', label: '/w/c.mjs' },                                        // unusable segments: neither the group nor the bar counts it
-    { kind: 'capability', label: 'srv', segments: [{ enter: R(0), evict: null }] },
-  ] }))
-  assert.match(mixed.bar.textContent, /\b2\b/)
-  assert.equal(grpCount(mixed.h, W.RES_GRP.file), 2, 'the fold line and the group header count the same hasSeg-filtered set')
+  const s = stateOf(anchorOf())
+  s.desk.pending = { ...pending, seen: true, read: 1 }
+  applyLedger(s.desk, s.anchor.id, null, ledger({ pending, resources: [{ key: 'file:/a', kind: 'file', label: '/a', segments: [{ enter: R(0), evict: null }] }] }))
+  assert.ok(!resourcesHtml(s).includes(W.FILES_UPDATING), 'the line stands in for an empty list only')
 })
 
-test('#1 the six groups count their own entries (one constructed lane)', () => {
+test('#1 the six groups count their own entries; on the chapter axis compactions leave the group (one constructed lane)', () => {
   const anchor = anchorOf({
     resources: [
       { kind: 'file', label: '/w/p/a.mjs', segments: [{ enter: R(0), evict: null }] },
@@ -84,8 +86,20 @@ test('#1 the six groups count their own entries (one constructed lane)', () => {
   assert.equal(grpCount(h, `${W.RES_GRP.seen} · ${W.GUESS}`), 3)
   assert.equal(grpCount(h, W.RES_GRP.cap), 2, 'skill + capability together')
   assert.equal(grpCount(h, W.RES_GRP.dl), 2, 'dir + link together')
-  assert.equal(grpCount(h, W.RES_GRP.comp), 2, 'compaction + summarize events')
   assert.equal(grpCount(h, W.RES_GRP.other), 1)
+  assert.equal(grpCount(h, W.RES_GRP.comp), 2, 'no chapter table: compaction + summarize events')
+  assert.ok(h.includes(`navlbl">${W.OTHERS_ROW(3 + 2 + 2 + 2 + 1)}</span>`), 'N more sums the folded groups')
+  // on the chapter axis: the Overview's chapter heads carry the compaction, so only the summary stays and N drops one
+  const d = resourcesHtml(axisDesk(anchor))
+  assert.equal(grpCount(d, W.RES_GRP.comp), 1, 'the summary stays: the Overview does not show it')
+  assert.ok(d.includes(esc(W.summarizeRow('', kf(1200)))), 'the summary row')
+  assert.ok(!d.includes(esc(W.compactRow('', '10', '—'))), 'no compaction row on the axis')
+  assert.ok(d.includes(`navlbl">${W.OTHERS_ROW(3 + 2 + 2 + 1 + 1)}</span>`), 'N more leaves the compaction event out')
+  // an anchor off the chapter axis has no chapter heads: its compaction numbers live only here
+  const off = resourcesHtml(axisDesk(anchor, 'R9-0'))
+  assert.equal(grpCount(off, W.RES_GRP.comp), 2, 'off the axis both rows stay')
+  assert.ok(off.includes(esc(W.compactRow('', '10', '—'))), 'the compaction row with its numbers')
+  for (const g of [W.RES_GRP.file, W.RES_GRP.load, W.RES_GRP.cap, W.RES_GRP.dl, W.RES_GRP.other]) assert.equal(grpCount(d, g), grpCount(h, g), g)
 })
 
 test('#3 a names-only chip never opens content and locates its first step', () => {
@@ -101,6 +115,17 @@ test('#7 the compaction group still draws with an empty ledger', () => {
   const empty = resourcesHtml(stateOf(anchorOf({ resources: [], events: comps })))
   assert.equal(grpCount(empty, W.RES_GRP.comp), 1, 'compaction events still draw with an empty ledger')
   assert.equal(grpCount(empty, W.RES_GRP.file), null, 'no empty groups are drawn')
+  const desk = resourcesHtml(axisDesk(anchorOf({ resources: [], events: comps })))
+  assert.equal(grpCount(desk, W.RES_GRP.comp), null, 'on the chapter axis no compaction group is drawn')
+  assert.equal(grpCount(resourcesHtml(axisDesk(anchorOf({ resources: [], events: comps }), 'R9-0')), W.RES_GRP.comp), 1, 'off the axis it does')
+  assert.ok(desk.includes(esc(W.NO_RESOURCES)), 'the empty ledger still says so')
+})
+
+test('2.4 压缩行: a marked compaction shows its landing\'s numbers, and the landing is no row of its own', () => {
+  const events = [{ type: 'compaction', rid: R(2), from: 10, to: 11, inferred: false }, { type: 'compaction-landed', rid: R(4), from: 12, to: 3 }]
+  const h = resourcesHtml(stateOf(anchorOf({ events })))
+  assert.equal(grpCount(h, W.RES_GRP.comp), 1)
+  assert.ok(h.includes(W.compactRow('', 12, 3)))
 })
 
 // 2.4 element table: a long path is cut in the middle — the base name stays whole, the length fits unless the base
@@ -155,8 +180,8 @@ test('resource state on rids: pending / live / evicted at every playhead', () =>
 })
 
 // 2.4 #1, 2.4:67 · :148: 只见到名字 leaves out every opened file under either spelling; while the anchor lane's
-// `ledger_next` chain is unread, each count the ledger gives is an empty busy box (no digit, never a 0); the compaction
-// count (lane events) is exact once the lane is held; the chain read to its end → the counts are the ledger's.
+// `ledger_next` chain is unread, each count the ledger gives is an empty busy box (no digit, never a 0); the chain read to
+// its end → the counts are the ledger's.
 test('2.4 #1: seen minus opened files; ledger counts busy until the ledger chain is read, then the ledger\'s', () => {
   const key = R(0), cwd = '/w/p'
   const res = [
@@ -181,7 +206,6 @@ test('2.4 #1: seen minus opened files; ledger counts busy until the ledger chain
     assert.match(inner, /<span class="navct" aria-busy="true"><\/span>/, `${k}: the count is a busy box`)
     assert.ok(!/\d/.test(inner.replace(/<[^>]*>/g, '')), `${k}: no digit while not known`)
   }
-  assert.equal(grpCount(resourcesHtml(s), W.RES_GRP.comp), events.length, 'the compaction count is exact once the lane is held')
   applyLedger(s.desk, key, 'c1', { resources: res.slice(2), seen: seen.slice(3), ledger_next: null })
   const h = resourcesHtml(s)
   assert.ok(!/aria-busy/.test(h), 'the chain is read: nothing is busy')
@@ -193,5 +217,92 @@ test('2.4 #1: seen minus opened files; ledger counts busy until the ledger chain
   for (const r of res.filter((x) => x.kind === 'file')) {
     const base = r.label.split('/').pop()
     assert.ok(!chips.some((t) => t.includes(base)), `${r.label}: an opened file is not a name-only chip under any spelling`)
+  }
+})
+
+// a click on a resource's name, through the panel's own listener; every hand the click can reach out with is a recorder
+function clickName(lane, { playhead = 0, step, resKey = 'file:a' }) {
+  const s = stateOf(lane, { playhead }), got = { reveal: [], jumpTo: [], noBlock: 0, playhead: [] }
+  Object.assign(s, { reveal: (x) => got.reveal.push(x), jumpTo: (t, j) => got.jumpTo.push([t, j]), noBlock: () => { got.noBlock++ }, setPlayhead: (t) => got.playhead.push(t) })
+  let onClick = null
+  wireResources({ addEventListener: (_, f) => { onClick = f }, removeEventListener() {} }, s)
+  const name = { dataset: { view: resKey, viewstep: String(step) } }
+  onClick({ target: { closest: (q) => (q === '[data-view]' ? name : null) }, stopPropagation() {} })
+  return { s, got }
+}
+const blkOf = (o) => ({ sec: 'messages', role: 'user', kind: 'text', head: { role: 'user', tag: 'user', label: 'b' }, preview: 'p', chars: 5, bytes: 5, ref: 's/m#R::0-5', ...o })
+const carrying = () => [blkOf({}), blkOf({ kind: 'tool_use', resKey: 'file:a' }), blkOf({ kind: 'tool_result', resKey: 'file:a' })]
+const laneOf = (rows, blocks) => ({ kind: 'main', rows, blocks })
+
+test('2.4 #3: the name reveals the block in this step, the content over the call that asked for it, and the playhead stays', () => {
+  const { got } = clickName(laneOf([{}, {}], [[], carrying()]), { playhead: 1, step: 0 })
+  assert.deepEqual(got.reveal.map((x) => x.fi), [2])
+  assert.deepEqual([got.jumpTo, got.playhead, got.noBlock], [[], [], 0])
+})
+
+test('2.4 #3: a resource this step does not carry moves to its step and lands by resKey', () => {
+  const { got } = clickName(laneOf([{}, {}], [[], carrying()]), { playhead: 0, step: 1 })
+  assert.deepEqual(got.jumpTo, [[1, { kind: 'block', resKey: 'file:a' }]])
+  assert.deepEqual(got.reveal, [])
+})
+
+test('2.4 #4: a name is never a dead click: a target step with no list says so, and a list left over from another step does not count', () => {
+  for (const row of [{ unparsed: true }, { rec: null }]) {
+    const { got } = clickName(laneOf([{}, row], [[], []]), { playhead: 0, step: 1 })
+    assert.deepEqual([got.noBlock, got.jumpTo, got.reveal], [1, [], []])
+  }
+  const stale = clickName(laneOf([{ unparsed: true }, {}], [carrying(), []]), { playhead: 0, step: 1 })
+  assert.deepEqual([stale.got.reveal, stale.got.jumpTo.length], [[], 1])
+})
+
+test('2.4 #13: a resource with a runtime code sits in its own group, never in the files read, with its code\'s reason', () => {
+  const codes = Object.keys(W.RUNTIME_WHY)
+  const anchor = anchorOf({ resources: [
+    { kind: 'file', label: '/w/p/a.mjs', segments: [{ enter: R(0), evict: null }] },
+    ...codes.map((c, i) => ({ kind: 'file', label: `x${i}/$f`, runtime: c, segments: [{ enter: R(i), evict: null }] })),
+  ] })
+  const h = resourcesHtml(stateOf(anchor, { navOpen: new Set([...ALL_OPEN, 'life-runtime']) }))
+  assert.equal(grpCount(h, W.RES_GRP.file), 1, 'only the settled path is a file read')
+  assert.equal(grpCount(h, W.RES_GRP.runtime), codes.length)
+  codes.forEach((c, i) => {
+    const row = h.match(new RegExp(`<div class="navsub[^"]*"[^>]*data-navres="file:x${i}/\\$f">[\\s\\S]*?</div>`))
+    assert.ok(row && row[0].includes(esc(W.RUNTIME_WHY[c])), c)
+  })
+})
+
+test('2.4 #14: a ledger that cannot be known says so alone, and a --from null clears what was held; a partial ledger says so on top', () => {
+  const key = R(0)
+  const steps = Array.from({ length: 6 }, (_, i) => ({ rid: R(i), parent: null, ops: [[1]], reply: [], attrs: {}, detail: null }))
+  const res = [{ kind: 'file', label: 'src/a.mjs', segments: [{ enter: R(0), evict: null }] }].map((r) => ({ key: `${r.kind}:${r.label}`, ...r }))
+  const seen = [{ path: 'docs/x.md', count: 1, firstRid: R(1) }]
+  const page = (o) => ({ lane: key, base: null, prev: null, next: null, steps, defs: [], events: [], ledger_next: null, resources: res, seen, ...o })
+  const text = (h) => h.replace(/<[^>]*>/g, ' ')
+  const s = stateOf(anchorOf({}))
+  // a list, then a --from page whose lane has no ledger: nothing of the list stays
+  applyLane(s.desk, page({}))
+  assert.ok(text(resourcesHtml(s)).includes('a.mjs'))
+  applyLane(s.desk, page({ base: R(5), steps: [], resources: null, seen: null, resources_note: 'no-ledger' }))
+  let h = resourcesHtml(s)
+  assert.ok(h.includes(esc(W.NO_LEDGER)))
+  assert.ok(!text(h).includes('a.mjs') && !text(h).includes('x.md'), 'no earlier entry lingers')
+  assert.ok(!h.includes(esc(W.NO_RESOURCES)) && grpCount(h, W.RES_GRP.file) == null, 'no group, not the empty-list sentence')
+  // a tail page that is only part of the lane: the line on top, the groups as usual; a later page without the code drops the line
+  applyLane(s.desk, page({ resources_note: 'partial-ledger' }))
+  h = resourcesHtml(s)
+  assert.equal(resourceUnits(s)[0].key, 'partial', 'the partial line sits on top')
+  assert.equal(grpCount(h, W.RES_GRP.file), 1)
+  assert.ok(!h.includes(esc(W.NO_LEDGER)))
+  // only quiet groups kept (names seen, no file): they still stand on their own, not behind 「N more」
+  applyLane(s.desk, page({ resources: [], resources_note: 'partial-ledger' }))
+  assert.equal(grpCount(resourcesHtml(s), `${W.RES_GRP.seen} · ${W.GUESS}`), 1)
+  assert.ok(!resourceUnits(s).some((u) => u.key === 'h:life-others'), 'no 「N more」 row hides the only groups')
+  applyLane(s.desk, page({}))
+  assert.ok(!resourcesHtml(s).includes(esc(W.PARTIAL_LEDGER)))
+  // the live path: the ledger head read (applyLedger) and a whole no-ledger page say the same
+  for (const read of [(x) => applyLedger(s.desk, key, null, { base: R(5), ...x }), (x) => applyLane(s.desk, page(x))]) {
+    applyLane(s.desk, page({}))
+    read({ resources: null, seen: null, resources_note: 'no-ledger' })
+    const h = resourcesHtml(s)
+    assert.ok(h.includes(esc(W.NO_LEDGER)) && !text(h).includes('a.mjs'))
   }
 })

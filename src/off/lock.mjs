@@ -6,6 +6,7 @@
 // free soon after. Nothing here knows what a command does with it. Imports only node:* and src/off (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
+import { NotRegularFile, readBounded } from './fsutil.mjs'
 import { procIdentity, pidAlive } from './proc.mjs'
 
 /** The `code` of the error `acquireOpLock` throws when the wait ran out (an Error's code, not a `flows/` record's). */
@@ -14,13 +15,24 @@ export const LOCK_BUSY = 'locked'
 const LOCK_POLL_MS = 25
 const LOCK_WRITE_GRACE_MS = 2000 // a lock file with no pid in it that is younger than this is a holder still writing it, not a crash
 const LOCK_UNVERIFIABLE_STALE_MS = 10 * 60_000 // a lock whose pid is alive but that recorded no start time to tell it from a later process by: older than any command takes, it is a crash's
+const LOCK_BYTES = 4096 // one line of JSON; past this it does not parse, and it reads as a lock that names no pid
 
 const lockSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // The lock file as it is now → null (there is none) | { holder, stale, why }. `holder` is what it names (null when it names no pid).
 function readLockHolder({ file, fs, alive, identity, now }) {
+  // Only an exclusive create makes this file, so anything else on the path is nobody's lock (1.6 §3.1). It is not read: a read of a FIFO does not return, and the daemon asks on its main thread.
+  const nobodys = { holder: null, stale: true, why: `${file} is not a regular file` }
   let text, mtimeMs
-  try { text = fs.readFileSync(file, 'utf8'); mtimeMs = fs.statSync(file).mtimeMs } catch (e) { if (e && e.code === 'ENOENT') return null; throw e }
+  try {
+    const seen = fs.lstatSync(file)
+    if (!seen.isFile()) return nobodys
+    text = readBounded(fs, file, LOCK_BYTES).toString('utf8'); mtimeMs = seen.mtimeMs
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return null
+    if (e instanceof NotRegularFile) return nobodys // swapped since the lstat
+    throw e
+  }
   let holder = null
   try { holder = JSON.parse(text) } catch { /* below */ }
   if (!holder || !Number.isInteger(holder.pid)) return { holder: null, stale: now() - mtimeMs > LOCK_WRITE_GRACE_MS, why: `${file} names no pid` }
@@ -45,7 +57,7 @@ function takeOutStale({ file, fs, alive, identity, now, pid }) {
   if (grabbed && !grabbed.stale) { // somebody's live (or still being written) lock: put it back
     try { fs.linkSync(aside, file) } catch (e) { if (!e || e.code !== 'EEXIST') { try { if (!fs.existsSync(file)) fs.renameSync(aside, file) } catch { /* below */ } } }
   }
-  fs.rmSync(aside, { force: true })
+  fs.rmSync(aside, { force: true, recursive: true })
 }
 
 /** One try, no wait → `{ lock: { release() }, holder: null }` when it is ours, or `{ lock: null, holder }` when someone else's live command holds it
@@ -55,22 +67,24 @@ export function tryOpLock({ file, identity = procIdentity, alive = pidAlive, fs 
   const me = identity(pid) || {}
   const mine = { pid, start_time: me.start_time ?? null, boot_id: me.boot_id ?? null }
   for (let tries = 0; tries < 5; tries++) {
+    // Judged before the create: Windows writes through a link to nothing where POSIX says EEXIST, and a link to itself is ELOOP there.
+    const at = now() // one reading of the clock for the judgement and the check after the rename (the file's mtime does not change by being renamed)
+    const seen = readLockHolder({ file, fs, alive, identity, now: () => at })
+    if (seen && !seen.stale) return { lock: null, holder: seen.holder }
+    if (seen) { takeOutStale({ file, fs, alive, identity, now: () => at, pid }); continue }
     let fd
     try { fd = fs.openSync(file, 'wx', 0o600) } catch (e) {
       if (!e || e.code !== 'EEXIST') throw e
-      const at = now() // one reading of the clock for the judgement and the check after the rename (the file's mtime does not change by being renamed)
-      const seen = readLockHolder({ file, fs, alive, identity, now: () => at })
-      if (seen === null) continue // released between the two calls
-      if (!seen.stale) return { lock: null, holder: seen.holder }
-      takeOutStale({ file, fs, alive, identity, now: () => at, pid })
-      continue
+      continue // created between the two calls
     }
-    try { fs.writeSync(fd, JSON.stringify(mine) + '\n'); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+    // no fsync (D62①): a lock only says who runs now. A process that dies leaves its bytes in the page cache, where the next reader sees them; a power
+    // loss ends every holder, and what it leaves (the old bytes, or a file that names no pid and is older than the grace) is judged stale above.
+    try { fs.writeSync(fd, JSON.stringify(mine) + '\n') } finally { fs.closeSync(fd) }
     let released = false
     return { lock: { release() {
       if (released) return
       released = true
-      try { const h = JSON.parse(fs.readFileSync(file, 'utf8')); if (h && h.pid === mine.pid && (h.start_time ?? null) === mine.start_time) fs.rmSync(file, { force: true }) } catch { /* gone, or not ours any more */ }
+      try { const h = JSON.parse(readBounded(fs, file, LOCK_BYTES).toString('utf8')); if (h && h.pid === mine.pid && (h.start_time ?? null) === mine.start_time) fs.rmSync(file, { force: true }) } catch { /* gone, or not ours any more */ }
     } }, holder: null }
   }
   return { lock: null, holder: null }

@@ -1,7 +1,7 @@
 # custody.ps1 - trocar's Windows key custody (RFC 4.11 P1 `cng`), one-shot: one verb per run, then exit.
 # The root's P-256 private key is a CNG key with ExportPolicy None, on the Microsoft Platform Crypto Provider (the TPM) when one takes it,
-# else the Software KSP (R3-W1). It signs nothing a caller hands it: it BUILDS both certificates itself (CM3) and signs them through
-# X509SignatureGenerator (R3-W2) - the root (CA pathLen 1, KU keyCertSign|cRLSign, EKU serverAuth, SKI) and the 7-day intermediate
+# else the Software KSP. It signs nothing a caller hands it: it BUILDS both certificates itself (CM3) and signs them through
+# X509SignatureGenerator - the root (CA pathLen 1, KU keyCertSign|cRLSign, EKU serverAuth, SKI) and the 7-day intermediate
 # (CA pathLen 0, same KU/EKU, SKI, AKI = the root's key, issuer = the root's encoded subject). The key holds nothing but itself: no
 # custom property (the TPM provider keeps only its own fixed set, so a persisted property would push every TPM machine onto the
 # software KSP). `issue` takes the issuer name from the root certificate itself, found read-only in Cert:\CurrentUser\Root (where

@@ -68,37 +68,37 @@ function rowStatus(c, t) {
   return `restored${c.backup_dropped ? ' (its backup is no longer needed and was deleted)' : ''}`
 }
 
-// one changed file: `  <harness>  <path> <status>`, and the status on its own lines when that would run past 80 columns
-function rowLines(c, t, past, width) {
-  const label = String(c.harness || 'trocar').padEnd(width)
-  const where = t(c.path)
-  const status = past ? rowStatus(c, t) : c.backup ? `will be undone. A copy of the file as it is: ${t(c.backup)}` : 'will be undone'
-  const head = `  ${label}  ${where}`
+// one changed file, however many entries of it were undone: `  <harness>  <path> <status>`, each different status once, and the status on its own
+// lines when that would run past 80 columns. Its backup goes with its last entry, so "no longer needed" is the file's, not one entry's.
+const labelOf = (group) => [...new Set(group.map((c) => c.harness || 'trocar'))].join(', ')
+function rowLines(group, t, past, width) {
+  const dropped = group.some((c) => c.backup_dropped), backup = (group.find((c) => c.backup) || {}).backup
+  const status = past ? [...new Set(group.map((c) => rowStatus({ ...c, backup_dropped: dropped }, t)))].join('; ') : backup ? `will be undone. A copy of the file as it is: ${t(backup)}` : 'will be undone'
+  const head = `  ${labelOf(group).padEnd(width)}  ${t(group[0].path)}`
   const one = `${head}${/ /.test(status) ? ': ' : ' '}${status}`
-  return [...(one.length <= WIDTH ? [one] : [head, ...fit(`    ${status}`)]), ...priorLeftLines(c)]
+  return [...(one.length <= WIDTH ? [one] : [head, ...fit(`    ${status}`)]), ...group.flatMap(priorLeftLines)]
 }
 
 // a program still connected through trocar when the doors closed: the door it uses stays open, passing its traffic on and recording nothing (P12)
 const heldOpen = (r) => (r.holders || []).length > 0
 
-// the daemon and the connections still going through trocar (§3.4's sample: 「The daemon (pid 4012) exits after 2 open responses finish.」)
+// the daemon and the connections still going through trocar (§3.4's sample: 「The daemon (pid 4012) keeps running.」)
 function daemonLines(r, past, cutNote) {
   const lines = []
   const d = r.daemon || {}
   const rel = r.relayed && r.relayed !== 'unknown' ? r.relayed : null
   const pid = d.pid == null ? '' : ` (pid ${d.pid})`
-  if (d.state === 'draining') lines.push(rel && rel.closing > 0 ? `The daemon${pid} exits after ${rel.closing} open response${rel.closing === 1 ? '' : 's'} finish${rel.closing === 1 ? 'es' : ''}.` : `The daemon${pid} exits once it has drained.`)
-  else if (d.state === 'stopped') lines.push(`The daemon${pid} was stopped.`)
-  // D62 ⑥: an off with no names closes the doors and leaves the daemon idling, so the next `on` just asks it. A holder keeps one door open, passing its
-  // traffic on and recording nothing of it (P12), until it exits: the receipt says which of the two it is, and never both. The pid is missing in a
-  // `--dry-run` (nothing was asked of any daemon), so this line is said without it rather than left out (item 5).
-  else if (d.state === 'running') lines.push(...fit(!r.all ? `The daemon${pid} ${past ? 'keeps' : 'will keep'} serving the other harnesses.`
+  if (d.state === 'stopped') lines.push(`The daemon${pid} was stopped.`)
+  // D62 ⑥: off never asks the daemon to exit, so it idles on and the next `on` just asks it. A holder keeps one door open, passing its traffic on and
+  // recording nothing of it (P12), until it exits: the receipt says which of the two it is, and never both. The pid is missing in a `--dry-run`
+  // (nothing was asked of any daemon), so this line is said without it rather than left out (item 5).
+  else if (d.state === 'running') lines.push(...fit((r.still_on || []).length ? `The daemon${pid} ${past ? 'keeps' : 'will keep'} serving ${r.still_on.join(', ')}.`
     : heldOpen(r) ? `The daemon${pid} ${past ? 'keeps' : 'will keep'} running, with one door still open for the connections below.`
-    : `The daemon${pid} ${past ? 'keeps' : 'will keep'} running, with no door open.`))
-  else if (d.state === 'unresponsive') lines.push(`The daemon${pid} does not answer and could not be stopped.`, `Stop it by hand: kill -9 ${d.pid}`)
+    : `The daemon${pid} ${past ? 'keeps' : 'will keep'} running.`))
+  else if (d.state === 'unresponsive') lines.push(`The daemon${pid} does not answer and could not be stopped.`) // how to stop it is the stop-failed problem's, with this OS's commands on their own lines
   if (r.relayed === 'unknown') lines.push(...fit(`Connections still going through trocar: unknown (${r.relayed_reason || 'they could not be read'}).`))
   else if (rel) {
-    if (rel.closing > 0 && d.state !== 'draining') lines.push(`${rel.closing} connection${rel.closing === 1 ? ' is' : 's are'} still going through trocar; ${rel.closing === 1 ? 'it closes' : 'they close'} when the response in flight is through.`)
+    if (rel.closing > 0) lines.push(...fit(`${rel.closing} connection${rel.closing === 1 ? ' is' : 's are'} still going through trocar; ${rel.closing === 1 ? 'it closes' : 'they close'} when the response in flight is through.`))
     if (rel.waiting > 0) {
       lines.push(...fit(`${rel.waiting} connection${rel.waiting === 1 ? '' : 's'} trocar cannot see the end of; ${rel.waiting === 1 ? 'it stays' : 'they stay'} open until the other side closes.`))
       if (!(r.holders || []).length) lines.push(`Cut ${rel.waiting === 1 ? 'it' : 'them'} now: trocar off --now`) // the holders below say it for themselves: one output gives one or two next steps (§1.1 版式 3)
@@ -126,16 +126,18 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     const out = [header || 'Nothing to turn off. trocar is not installed on this machine.']
     if ((r.skipped || []).length) for (const s of r.skipped) out.push(...fit(`  ${t(s.what)}: ${s.reason}`))
     if ((r.user_processes || []).length) for (const p of r.user_processes) out.push(...fit(`Still running, started by you: ${p.command} (pid ${p.pid}, ${p.note}).`))
-    for (const n of r.notes || []) out.push(...fit(n))
+    for (const n of r.notes || []) out.push(...textLines(n, home))
     out.push(...extra, footer || 'Turn capture on: trocar install, then trocar on') // `on` refuses with no certificates installed (§3.3 前提), so the next step is install first
     return out.join('\n')
   }
   const changed = r.changed || [], removed = r.removed || []
   if (changed.length) {
     lines.push('')
-    const width = Math.max(...changed.map((c) => String(c.harness || 'trocar').length))
-    // a file is said once, as a removed one is below: several entries of one file (json keys) that ended the same way are one row
-    for (const row of new Set(changed.map((c) => rowLines(c, t, past, width).join('\n')))) lines.push(...row.split('\n'))
+    // a file is said once, as a removed one is below: the entries of one file (json keys, a block two harnesses share) are one row
+    const files = new Map()
+    for (const c of changed) files.set(c.path, [...(files.get(c.path) || []), c])
+    const width = Math.max(...[...files.values()].map((g) => labelOf(g).length))
+    for (const group of files.values()) lines.push(...rowLines(group, t, past, width))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours would be changed.')
   // a file is said once: several entries of one file (json keys) are one removal
   for (const p of [...new Set(removed.map((x) => t(typeof x === 'string' ? x : x.path)))]) lines.push(...fit(`  ${past ? 'Deleted' : 'Will delete'}, trocar created it: ${p}`))
@@ -148,10 +150,8 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   else if ((r.holders || []).length) {
     const who = [...new Map(r.holders.map((x) => [x.pid, x])).values()]
     lines.push(...fit(`Still connected through trocar, which only passes their traffic on and records nothing of it: ${who.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}.`))
-    // driver mode drains and exits (the daemon IS the detach there); proxy mode's daemon stays and closes that one door when they go (D62 ⑥)
-    lines.push((r.daemon || {}).state === 'draining'
-      ? `trocar exits when ${who.length === 1 ? 'it does' : 'they do'}.`
-      : `That door closes when ${who.length === 1 ? 'it exits' : 'they exit'}; the daemon keeps running.`, 'Cut them now: trocar off --now')
+    // the daemon stays and closes that one door when they go (D62 ⑥)
+    lines.push(`That door closes when ${who.length === 1 ? 'it exits' : 'they exit'}; the daemon keeps running.`, 'Cut them now: trocar off --now')
   }
   if ((r.still_trusting || []).length) {
     const roots = r.still_trusting.filter((p) => p.what === 'root')
@@ -174,7 +174,10 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   }
   const shown = new Set(changed.map((c) => c.backup).filter(Boolean))
   for (const k of (r.kept_backups || []).filter((x) => !shown.has(x.backup))) lines.push(...fit(`A copy of ${t(k.path)} as it was is kept at ${t(k.backup)} (${k.reason}).`))
-  for (const x of r.residue || []) lines.push(...fit(`Left in place, written by an agent while capture was on: ${t(x.path)}`))
+  if ((r.residue || []).length) { // what an agent wrote because of trocar's plugin, after install: said once, then each file (why each appeared is in --json and the log)
+    lines.push(...fit('Left in place: an agent wrote these after install because of trocar\'s plugin, and they may serve your own plugins too:'))
+    for (const x of r.residue) lines.push(...fit(`  ${t(x.path)}`))
+  }
   for (const p of r.user_processes || []) lines.push(...fit(`Still running, started by you: ${p.command} (pid ${p.pid}, ${p.note}).`))
   if ((r.pending || []).length) {
     lines.push(past ? 'Found by trocar\'s own marks and not undone yet:' : 'Will be undone by trocar\'s own marks:')
@@ -182,7 +185,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   }
   for (const l of r.left || []) lines.push(...fit(`Not undone: ${t(l.path)} (${l.reason || l.result})`))
   for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(n)))
-  for (const n of r.notes || []) lines.push(...fit(n))
+  for (const n of r.notes || []) lines.push(...textLines(n, home)) // HOME as ~ (1.6 §1.1⑤), a note's command on its own line
   lines.push(...extra, footer || (past ? 'Certificates stay installed. To remove them: trocar uninstall' : 'Nothing was changed. Run it without --dry-run to do it.'))
   return lines.join('\n')
 }

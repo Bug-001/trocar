@@ -8,7 +8,8 @@
 // ETL projections stay put. "唯有 block 是统一的" — block is the only cross-provider unit (D25).
 
 import { parsedRequestBody } from './request-body.mjs';
-import { endpointOf } from './endpoints.mjs';
+import { endpointOf, endOf } from './endpoints.mjs';
+import { parseBashReads } from './shell-reads.mjs';
 
 // ── declarative block categories + layout ───────────────────────────────────────────────────
 // Assembly order = what the model reads top-to-bottom = the Anthropic prompt-cache prefix order:
@@ -21,39 +22,6 @@ export const CC_SECTIONS = [
 
 // ── shared leaf classifiers (single source; both projections import these) ───────────────────
 
-const BASH_READ = /^(cat|bat|head|tail|tac|nl|less|more|xxd|od|strings)$/;
-// A Bash command's READ targets (cat/head/tail/sed -n …) — the files it makes resident in context.
-// Skips output redirects (writing), flags, URLs, and globs. (Ported verbatim from the twin parsers.)
-export function parseBashReads(command) {
-  if (!command || typeof command !== 'string') return [];
-  const out = [];
-  for (const seg of command.split(/\||&&|;|\n/)) {
-    if (/>/.test(seg)) continue; // an output redirect → writing, not reading into context
-    const toks = seg.match(/"[^"]*"|'[^']*'|\S+/g);
-    if (!toks || !toks.length) continue;
-    const cmd = toks[0].replace(/^['"]|['"]$/g, '').split('/').pop();
-    const isSed = cmd === 'sed';
-    if (!BASH_READ.test(cmd) && !isSed) continue;
-    let range = 'full file';
-    if (isSed) {
-      const sm = seg.match(/-n\s*['"]?(\d+),(\d+)\s*p/);
-      if (sm) range = `L${sm[1]}–${sm[2]}`;
-      else continue;
-    } else {
-      const hn = seg.match(/-n?\s*(\d+)\b/);
-      if (cmd === 'head' && hn) range = `L1–${hn[1]}`;
-      else if (cmd === 'tail' && hn) range = `tail ${hn[1]}`;
-    }
-    for (const t0 of toks.slice(1)) {
-      const t = t0.replace(/^['"]|['"]$/g, '');
-      if (t.startsWith('-') || /^[|&;<>]/.test(t) || /^https?:/i.test(t)) continue;
-      if (!/[./]/.test(t) || /[*?{}]/.test(t)) continue; // needs a dot or slash; skip globs
-      out.push({ path: t, range });
-    }
-  }
-  return out;
-}
-
 // The billing-header system block carries a per-request nonce (cch=…, cc_prev_req=…) so its bytes
 // change every call — yet cache-hit stays ~100%, i.e. the provider EXCLUDES it from the cache key.
 // Only system blocks are ever volatile; flagging it keeps cache-break analysis from falsely tripping.
@@ -63,37 +31,43 @@ export function isVolatile(section, block) {
   return /^x-anthropic-billing-header/.test(text);
 }
 
-// Link a message block to a resource-ledger id (file / skill / mcp / scaffold), or '' when none.
+// Link a message block to its resource-ledger ids (file / skill / mcp / scaffold): resourceRefs all of them, resourceRef the first or ''.
 // The board uses '' inline; the ETL maps '' → null. Labels MUST match extractResources'/addRes' keys
 // so the ledger join works. (Unifies the twin msgResKey [board] / resourceRefOf [ETL].)
-// Memo by the parsed block: a stitched context hands the same block to every call of its chain (parsed bodies are read-only).
+// `ctx`: what a shell read's path resolves against (harnesses.mjs pathContext); the key and the ledger label come from the one parse.
+// Memo by the parsed block and the home it resolved against: a stitched context hands the same block to every call of its chain
+// (parsed bodies are read-only), and the home is the one part of `ctx` a key depends on.
 const refMemo = new WeakMap();
-export function resourceRef(b) {
-  if (!b || typeof b !== 'object') return '';
-  let r = refMemo.get(b);
-  if (r === undefined) refMemo.set(b, (r = resourceRefOf(b)));
-  return r;
+export function resourceRefs(b, ctx = {}) {
+  if (!b || typeof b !== 'object') return [];
+  let m = refMemo.get(b);
+  if (!m || m.home !== ctx.home) refMemo.set(b, (m = { home: ctx.home, r: resourceRefOf(b, ctx) }));
+  return m.r;
 }
-function resourceRefOf(b) {
+export const resourceRef = (b, ctx) => resourceRefs(b, ctx)[0] || '';
+// a spine entry's keys: `resourceRefs` only when a block has more than one (a shell read of several files)
+const refsOf = (b, ctx) => { const r = resourceRefs(b, ctx); return r.length > 1 ? { resourceRef: r[0], resourceRefs: r } : { resourceRef: r[0] || '' }; };
+function resourceRefOf(b, ctx) {
   if (b.type === 'text' && typeof b.text === 'string') {
     // the resident SKILL.md body block → link to its skill (basename of "Base directory" === skill)
     const sk = b.text.match(/^Base directory for this skill: (\S+)/);
-    if (sk) return 'skill::' + sk[1].split('/').pop();
+    if (sk) return ['skill::' + sk[1].split('/').pop()];
     // scaffold (auto-loaded context) → link the verbatim system-reminder block to its ledger resource
     if (/<system-reminder>/.test(b.text)) {
-      if (/CLAUDE\.md/i.test(b.text)) return 'scaffold::CLAUDE.md';
-      if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text)) return 'scaffold::memory (MEMORY.md)';
+      if (/CLAUDE\.md/i.test(b.text)) return ['scaffold::CLAUDE.md'];
+      if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text)) return ['scaffold::memory (MEMORY.md)'];
     }
-    return '';
+    return [];
   }
-  if (b.type !== 'tool_use') return '';
+  if (b.type !== 'tool_use') return [];
+  if (Array.isArray(b.resKeys)) return b.resKeys; // a tool_use of an earlier record, standing in for its keys (extract.mjs linkStub)
   const p = b.input?.file_path || b.input?.path || b.input?.notebook_path;
-  if (p) return 'file::' + p;
-  // a Bash read (cat/head/…) makes its first dumped file resident — key the block to that file
-  if (b.name === 'Bash' && b.input?.command) { const rd = parseBashReads(b.input.command); if (rd.length) return 'file::' + rd[0].path; }
-  if (b.name === 'Skill') return 'skill::' + (b.input?.skill || b.input?.command || '');
-  if ((b.name || '').startsWith('mcp__')) return 'mcp::' + (String(b.name).split('__')[1] || '');
-  return '';
+  if (p) return ['file::' + p];
+  // a Bash read (cat/head/…) makes the files it dumps resident: every one, in command order, once each
+  if (b.name === 'Bash' && b.input?.command) { const rd = parseBashReads(b.input.command, ctx); if (rd.length) return [...new Set(rd.map((r) => 'file::' + r.path))]; }
+  if (b.name === 'Skill') return ['skill::' + (b.input?.skill || b.input?.command || '')];
+  if ((b.name || '').startsWith('mcp__')) return ['mcp::' + (String(b.name).split('__')[1] || '')];
+  return [];
 }
 
 // Short structural label for a system block (Claude Code stacks several). Anchored on the opening
@@ -119,7 +93,7 @@ export function sysLabel(text) {
 // node via scanJson at the same position) + shared classifications. The board / ETL projections map
 // over this spine; neither re-walks. `path`: {i} for tools/system (str:true when system is a bare
 // string), {mi, bi, arrayContent} for messages. Order MUST stay tools→system→messages (cache prefix).
-export function dissectBlocks(req) {
+export function dissectBlocks(req, ctx = {}) {
   const spine = [];
   let seq = 0;
   const tools = Array.isArray(req?.tools) ? req.tools : [];
@@ -137,15 +111,29 @@ export function dissectBlocks(req) {
     if (Array.isArray(m.content)) {
       for (let bi = 0; bi < m.content.length; bi++) {
         const b = m.content[bi]; // raw element (usually an object, rarely a bare string)
-        spine.push({ section: 'messages', seq: seq++, role: m.role, parsed: b, path: { mi, bi, arrayContent: true }, volatile: false, resourceRef: resourceRef(b) });
+        spine.push({ section: 'messages', seq: seq++, role: m.role, parsed: b, path: { mi, bi, arrayContent: true }, volatile: false, ...refsOf(b, ctx) });
       }
     } else {
       // whole content is a string (or missing) → ONE synthesized text block (matches both parsers)
       const parsed = { type: 'text', text: m.content };
-      spine.push({ section: 'messages', seq: seq++, role: m.role, parsed, path: { mi, bi: 0, arrayContent: false }, volatile: false, resourceRef: resourceRef(parsed) });
+      spine.push({ section: 'messages', seq: seq++, role: m.role, parsed, path: { mi, bi: 0, arrayContent: false }, volatile: false, ...refsOf(parsed, ctx) });
     }
   }
   return spine;
+}
+
+// The reply's own terminal (3.1 `ended`) on the Anthropic wire, from a reply (`resp`, or an error envelope's `partial`): the event types
+// of its stream (a JSON reply: its body's type) over a closed list. Its home is this wire's board object once the wire has one.
+const ANTHROPIC_ENDS = Object.freeze({ ok: ['message_stop'], failed: ['error'] });
+// What a reply's own error event says (its message, else its type): the reason a failed call shows. null when it has none.
+export function replyError(resp) {
+  const e = resp && Array.isArray(resp.raw_sse) ? resp.raw_sse.find((x) => x && x.type === 'error') : resp && resp.body && resp.body.type === 'error' ? resp.body : null;
+  return e ? String((e.error && (e.error.message || e.error.type)) || 'error event') : null;
+}
+export function replyEnd(resp) {
+  if (!resp || typeof resp !== 'object') return null;
+  const seen = Array.isArray(resp.raw_sse) ? resp.raw_sse.map((e) => e && e.type) : resp.body && typeof resp.body === 'object' ? [resp.body.type] : [];
+  return endOf(ANTHROPIC_ENDS, seen);
 }
 
 // 3.2:52 context_state 'server_edited': the RESPONSE reports that the server edited the context it was

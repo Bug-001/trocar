@@ -5,8 +5,10 @@
 // query layer.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { blockBodyHtml } from '../../web/legacy/replay/ctxwin.mjs'
-import { DISPLAY_CLIP, bodyFor, clipText } from '../../web/legacy/replay/blocks.mjs'
+import { DISPLAY_CLIP, blockBodyHtml, bodyFor } from '../../web/legacy/replay/blocks.mjs'
+import { clipLine, setDeskMode } from '../../web/legacy/replay/cell.mjs'
+
+setDeskMode('raw', { storage: null }) // these are the claims of the Raw view
 
 const entities = { '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#13;': '\r', '&amp;': '&' }
 const unesc = (s) => s.replace(/&(lt|gt|quot|#39|#13|amp);/g, (m) => entities[m])
@@ -29,31 +31,30 @@ test('hostile text survives the display unchanged: markup, entities, quotes, CRL
 test('a text over DISPLAY_CLIP chars is clipped to a prefix of the source and says the full length', () => {
   assert.equal(DISPLAY_CLIP, 20000) // 1.5 #3 / 2.3: the display clip is 20 000 chars
   const letters = (n) => Array.from({ length: n }, (_, i) => (i % 100 === 99 ? '\n' : String.fromCharCode(97 + (i % 26)))).join('')
-  // the axis: plain lines, one JSON value; every display path: a resolved body, an inline body as an opened row paints it
+  // the axis: plain lines, one JSON value; every display path: a resolved body, and an inline body as an opened row paints it
   for (const src of [letters(30000), JSON.stringify({ a: letters(30000) })]) {
-    for (const html of [blockBodyHtml(ok(src), { text_ref: 'r' }), bodyFor({ sec: 'system', text: src })]) {
-      const cut = cellAttr(html, 'shown')
-      assert.equal(cellAttr(html, 'chars'), src.length, 'the full length N rides on the cell')
-      assert.ok(cut >= DISPLAY_CLIP && cut < src.length, `clipped at the display budget: ${cut}`)
-      assert.equal(shown(html), src.slice(0, cut), 'the first slice is a prefix of the source')
-    }
+    const html = blockBodyHtml(ok(src), { text_ref: 'r' }), cut = cellAttr(html, 'shown')
+    assert.equal(cellAttr(html, 'chars'), src.length, 'the full length N rides on the cell')
+    assert.ok(cut >= DISPLAY_CLIP && cut < src.length, `clipped at the display budget: ${cut}`)
+    assert.equal(shown(html), src.slice(0, cut), 'the first slice is a prefix of the source')
+    const inl = bodyFor({ sec: 'system', text: src }), at = cellAttr(inl, 'shown')
+    assert.equal(cellAttr(inl, 'chars'), src.length, 'an inline body: the full length N rides on the cell')
+    assert.ok(at > 0 && at < src.length, `an inline body is clipped at the display budget: ${at}`)
+    assert.equal(shown(inl), src.slice(0, at), 'an inline body: the first slice is a prefix of its text')
   }
-  // the raw clip of the raw panel and the pinned view
-  const src = letters(30000)
-  assert.ok(clipText(src).startsWith(src.slice(0, DISPLAY_CLIP)) && !src.startsWith(clipText(src)))
-  assert.match(clipText(src).slice(DISPLAY_CLIP), /(^|\D)30000(\D|$)/, 'the full length N is said as a number')
-  // exactly at the cap: shown whole, nothing appended
-  assert.equal(clipText(src.slice(0, 20000)), src.slice(0, 20000))
-  const whole = blockBodyHtml(ok(src.slice(0, 20000)), { text_ref: 'r' })
-  assert.equal(shown(whole), src.slice(0, 20000))
+  // the clip status line (cell.mjs clipLine): the full length N said as a number while clipped; nothing at or under the cap
+  const said = (shown, N) => clipLine(shown, N, 'Copy').replace(/[,\s\u202f]/g, '')
+  assert.match(said(DISPLAY_CLIP, 30000), /(^|\D)30000(\D|$)/, 'the full length N is said as a number')
+  assert.match(said(DISPLAY_CLIP, 20001), /(^|\D)20001(\D|$)/)
+  const whole = blockBodyHtml(ok(letters(30000).slice(0, 20000)), { text_ref: 'r' })
+  assert.equal(shown(whole), letters(30000).slice(0, 20000), 'exactly at the cap: shown whole')
   assert.equal(cellAttr(whole, 'shown'), 20000)
-  assert.match(clipText(src.slice(0, 20001)).slice(20000), /(^|\D)20001(\D|$)/)
+  assert.equal(clipLine(20000, 20000, 'Copy'), '', 'exactly at the cap: no clip status')
 })
 
 test('the clip never splits a surrogate pair', () => {
   const emoji = 'a'.repeat(19999) + '😀' + 'tail'
-  const cut = clipText(emoji)
-  const body = cut.slice(0, cut.indexOf('\n', 19990))
-  assert.ok(emoji.startsWith(body))
+  const body = shown(blockBodyHtml(ok(emoji), { text_ref: 'r' }))
+  assert.ok(emoji.startsWith(body) && body.length < emoji.length, 'a clipped prefix')
   assert.ok(!/[\uD800-\uDBFF]$/.test(body), 'no lone high surrogate at the cut')
 })

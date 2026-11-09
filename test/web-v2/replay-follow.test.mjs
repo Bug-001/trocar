@@ -105,6 +105,27 @@ test('2.3 #25: scrubbing keeps ≤ 1 lane and ≤ 1 block read in flight, asks o
   for (const [k, v] of Object.entries(seen)) assert.ok(v > 0, `the scrubs include ${k} reads`)
 })
 
+// 2.3 #32 at the level of the read policy: the step's own refs go alone, the ±8 read follows their answer whether they came back or
+// not, and a ref whose read failed is not lacking any more: nothing asks twice for one target.
+test('2.3 #32: a step\'s own bodies read first, the near ones after them, and a failed read never loops', async () => {
+  for (const fails of [[], ['own'], ['near1'], ['own', 'near1', 'near2']]) {
+    bodyCache.clear()
+    const clk = clock(), reads = []
+    const get = (name, p) => {
+      reads.push(p.ref)
+      const ok = p.ref.filter((ref) => !fails.includes(ref))
+      return new Promise((res) => clk.setTimer(() => res({ ok: true, data: { blocks: ok.map((ref) => ({ ref, bytes: 'b', encoding: 'utf8' })), errors: [] } }), 10))
+    }
+    const lacks = (tried) => (ref) => !bodyCache.has(ref) && !tried.has(ref)
+    const need = (rid, tried) => { const own = ['own'].filter(lacks(tried)); return { lane: null, refs: own.length ? own : ['near1', 'near2'].filter(lacks(tried)) } }
+    const sr = createStepReads({ get, setTimer: clk.setTimer, clearTimer: clk.clearTimer, need, onLane: () => {}, onBodies: () => {} })
+    sr.target('s1')
+    await clk.advance(5000)
+    assert.deepEqual(reads, [['own'], ['near1', 'near2']], `failing ${fails}`)
+  }
+  bodyCache.clear()
+})
+
 // 1.2 §路由「离开再回来」: a left desk sends no new read. Pause at every point of a step's reads (resting, its lane read out, its block read
 // out, a read queued behind a loader slot another job holds); while paused nothing starts, the reads out finish; resumed, the step
 // rests 100 ms again and then gets what it lacks.
@@ -146,6 +167,31 @@ test('1.2 #23: a step read queued in the loader when the desk leaves does not st
   for (const pauseAt of [120, 150, 199]) await pausedRun({ pauseAt, loader: createLoader({ max: 1 }), hold: 200 })
 })
 
+// 4.4 live-poll (one block read per delta) · 2.3 §读与画: a step read that waits in the loader while the playhead moves on is aborted by the
+// new target before its turn; when its turn comes it is never sent (a read sent and aborted is still a request the server answers)
+test('2.3 · 4.4: a step read queued in the loader and aborted before its turn is never sent', async () => {
+  for (const moveAt of [110, 150, 199]) {
+    bodyCache.clear()
+    const clk = clock(), sent = [], loader = createLoader({ max: 1 })
+    const get = (name, p, { signal }) => {
+      sent.push([name, (p.ref || []).join(), clk.now()])
+      return new Promise((res) => {
+        const id = clk.setTimer(() => res({ ok: true, data: { blocks: p.ref.map((ref) => ({ ref, bytes: 'b', encoding: 'utf8' })), errors: [] } }), 50)
+        signal.addEventListener('abort', () => { clk.clearTimer(id); res({ ok: false, status: 0, error: 'cancelled' }) }, { once: true })
+      })
+    }
+    loader.run(5, () => new Promise((res) => clk.setTimer(res, 200))) // a slow read holds the one slot
+    const refs = { s1: ['a1', 'a2'], s2: ['b1'] }
+    const sr = createStepReads({ get, setTimer: clk.setTimer, clearTimer: clk.clearTimer, loader, need: (rid, tried) => ({ lane: null, refs: refs[rid].filter((r) => !tried.has(r)) }),
+      onLane: () => {}, onBodies: () => {} })
+    sr.target('s1') // rests 100 ms, then queues its block read behind the slow one
+    await clk.advance(moveAt)
+    sr.target('s2') // the playhead moved on before the slot freed
+    await clk.advance(1000)
+    assert.deepEqual(sent.map(([n, r]) => r), ['b1'], `moved at ${moveAt}: only the new step's read went out`)
+  }
+})
+
 test('loadBodies (3.5 block): one read for the refs not held; each item fills by its ref; bytes:null takes its errors entry', async () => {
   bodyCache.clear()
   const [okItem, nullItem] = fx.block_multi.blocks
@@ -158,6 +204,23 @@ test('loadBodies (3.5 block): one read for the refs not held; each item fills by
   assert.equal(a[1].error, fx.block_multi.errors.find((e) => e.where === nullItem.ref).reason)
   assert.deepEqual(b, [a[1]]); assert.deepEqual(again, [a[0]])
   await loadBodies(api, [okItem.ref]); assert.equal(asked.length, 1, 'a held body is not asked again')
+})
+
+// a read aborted before it answers (its step was left) no longer stands for its refs: the next ask of one of them sends a read and gets
+// the body, instead of sharing the cancelled read's answer
+test('loadBodies: refs of a read aborted before it answers are asked again by the next need, not answered as cancelled', async () => {
+  bodyCache.clear()
+  const asked = [], ac = new AbortController()
+  const api = { get: (name, p, { signal } = {}) => { asked.push(p.ref.join()); return new Promise((res) => {
+    if (!signal) return res({ ok: true, data: { blocks: p.ref.map((ref) => ({ ref, bytes: 'b', encoding: 'utf8' })), errors: [] } })
+    signal.addEventListener('abort', () => setTimeout(() => res({ ok: false, status: 0, error: 'cancelled' }), 20), { once: true }) // a queued read answers on its turn
+  }) } }
+  const left = loadBodies(api, ['r1', 'r2'], { signal: ac.signal })
+  ac.abort()
+  const [r2] = await loadBodies(api, ['r2'])
+  assert.deepEqual(asked, ['r1,r2', 'r2'])
+  assert.equal(r2.status, 'ok', 'the body, not the cancelled answer')
+  assert.equal((await left)[0].status, 'error', 'the left read itself still answers as cancelled')
 })
 
 // Hold every lane of `w` at mark M (session, then each lane whole).

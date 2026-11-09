@@ -24,7 +24,19 @@ const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'm
 // querystring; the first entry that matches wins. Nothing matches → the shared third-party hosts (src/dissect/traffic.mjs),
 // then `other`. The class table (src/classes/table.mjs) compiles these entries; the collector applies it when it writes a
 // record. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
-const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [] };
+//
+// `aux` (RFC 2.1 §种类怎么认): which background kind a call of the aux lane is, the first entry that matches. An entry reads one thing:
+// `maxTokens` the reply cap (at or under it), `first` the first user message, `last` the last user message with text, `system` the
+// system text. A kind listed here has a row in the lane kind table (LANE_META, LANE_KIND); no entry matches → `aux`.
+//
+// `cwd` (3.4 §工作目录): where a call states its working directory — rules {in: 'system'|'user', re}, capture 1 the path, read by
+// src/dissect/project.mjs only. [] = this harness states none that is read.
+// main lane: a ` - Primary working directory:` list item in a system-role message; a subagent prompt: a bare line
+const CC_CWD = [{ in: 'system', re: /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }];
+// chainLane: inside a keyed session, the lane of a call whose system text is not the session's main one, one lane per message chain
+// (3.4 带键会话里的消息链); null: the harness's calls take only its declared lane hints
+const ROW = { ua: null, parentKeys: [], forkKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [], entry: [], chainLane: null, aux: [{ kind: 'quota', maxTokens: 1 }] };
+const DESKTOP = { is: 'desktop', re: /desktop/ }, CLI = { is: 'cli', re: /cli/ };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
 // effect to the mode whose entry causes it: 'transparent' is Linux's driver mode, 'proxy' the door of macOS / Windows (D47) — what trocar writes differs (4.11)
@@ -33,10 +45,25 @@ const effect = (id, cause, what, captures = BOTH) => ({ id, captures, cause, wha
 
 const ROWS = [
   { ...ROW, id: 'cc', ua: /claude-cli|claude-code/,
+    entry: [DESKTOP, CLI],
     sessionKeys: [H('x-claude-code-session-id')], // gate G3: body metadata.user_id not added until verified
     // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
     lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
     compaction: [{ header: 'x-cc-compaction-request' }],
+    // Different utilities with different fates for their output. quota: a one-token liveness check, the reply discarded. titlegen: its reply
+    // becomes the session's name. notify: a background summary (a JSON status) that drives Claude Desktop's push notifications. suggest: a
+    // copy of the whole conversation asking for the next prompt, so its marker is only ever the LAST user text, and earlier turns may
+    // quote it. websearch / webfetch: the calls the two web tools make on their own, the page summary with at most one line before the page.
+    aux: [
+      { kind: 'quota', maxTokens: 1 },
+      { kind: 'quota', first: /^\s*quota\s*$/i },
+      { kind: 'titlegen', first: /lowercase label for this job/i },
+      { kind: 'notify', system: /walked away|Read the tail of what the agent/i },
+      { kind: 'suggest', last: /^\s*\[SUGGESTION MODE:/ },
+      { kind: 'websearch', first: /^\s*Perform a web search for the query:/ },
+      { kind: 'webfetch', first: /^(?:[^\n]*\n+)?\s*Web page content:/ },
+    ],
+    cwd: CC_CWD, // main: ` - Primary working directory:` list item; subagent: bare `Working directory:`
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
       'Claude Code sends request bodies uncompressed while a custom CA is set')],
     // the endpoints measured on the live capture (2026-10-07): remote-session sync, telemetry, uploads,
@@ -52,35 +79,47 @@ const ROWS = [
       T('downloads.claude.ai', 'files'),
     ] },
   { ...ROW, id: 'codex', ua: /codex/,
+    entry: [DESKTOP, { is: 'cli', re: /cli|exec/ }],
     sessionKeys: [H('session-id'), H('thread-id')], // over WebSocket these come from the upgrade request (4.6)
-    parentKeys: [H('x-codex-parent-thread-id')],    // a THREAD id; resolved through aliases later (gate G4)
+    // a fork is a new session (3.4 关键区分); the declared thread id is kept verbatim, never resolved to a captured session (3.4 §血缘)
+    forkKeys: [{ ...H('x-codex-turn-metadata'), json: 'forked_from_thread_id' },
+      { ...B(['client_metadata', 'x-codex-turn-metadata'], 'high'), json: 'forked_from_thread_id' }], // the same JSON as the header, in the body
     lane: [{ header: 'x-openai-subagent', lane: 'subagent' }],
+    cwd: [{ in: 'user', re: /<environment_context>[\s\S]*?<cwd>\s*([^\n<]+?)\s*<\/cwd>/ }],
     requestKind: { header: 'x-codex-turn-metadata', jsonKey: 'request_kind', lanes: { prewarm: 'probe' }, compaction: ['compaction'] },
     observerEffects: [effect('codex-rustls-h2', 'SSL_CERT_FILE in $CODEX_HOME/.env',
       'model HTTP switched from native-tls to rustls; ALPN offers [h2, http/1.1]', LINUX)] }, // macOS / Windows trust the root in the store: no .env (4.11 codex forms)
   { ...ROW, id: 'opencode', ua: /opencode/,
+    entry: [DESKTOP],
     sessionKeys: [H('x-opencode-session-id'), H('session-id'), H('x-session-affinity'), H('x-session-id')],
-    parentKeys: [H('x-opencode-parent-session-id')],
+    parentKeys: [H('x-opencode-parent-session-id'), H('x-parent-session-id')],
+    cwd: [{ in: 'system', re: /^[ \t]*Working directory:[ \t]*([^\n]+)$/m }], // indented inside <env>
     observerEffects: [
       effect('opencode-plugin', 'trocar trust plugin',
-        'trocar code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin', LINUX),
+        'trocar code runs inside the agent process; the first run adds an npm registry fetch of @opencode-ai/plugin, repeated at each start until one succeeds', LINUX),
       effect('opencode-route-plugin', 'trocar route plugin',
-        'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds one npm registry fetch of @opencode-ai/plugin', DOOR)] },
+        'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds an npm registry fetch of @opencode-ai/plugin, repeated at each start until one succeeds', DOOR)] },
   { ...ROW, id: 'kimi',
+    entry: [CLI],
+    cwd: [{ in: 'system', re: /urrent working directory is `([^`\n]+)`/ }],
     sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])],
-    synth: true }, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
+    synth: true, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
+    chainLane: 'aux' }, // one key holds the main conversation and the agents it opens, none declared
   { ...ROW, id: 'dsh',
+    cwd: [{ key: ['dsh_session_log', 'session', 'cwd'] }, { in: 'system', re: /^Your working directory is ([^\n]+?)\.?$/m }],
     sessionKeys: [H('x-deepseek-harness-session-id')],
     parentKeys: [B(['dsh_session_log', 'session', 'parentSession'], 'high')],
     lane: [{ body: ['dsh_session_log', 'session', 'origin'], equals: 'subagent', lane: 'subagent' }],
     compaction: [{ header: 'x-deepseek-harness-compact', equals: '1' }],
     observerEffects: [effect('dsh-plugin', 'trocar trust plugin', 'trocar code runs inside the agent process')] },
   { ...ROW, id: 'hermes',
+    cwd: [{ in: 'system', re: /(?:^|\s)Current working directory:[ \t]*([^\n]+)$/m }],
     sessionKeys: [B(['session_id']), B(['prompt_cache_key'])], // custom endpoints carry neither → synthesized
     synth: true, // (src/dissect/synth-key.mjs, gate G11)
     // a text marker (medium). Hermes is Python, so the em dash may arrive JSON-escaped.
     compaction: [{ marker: /\[CONTEXT COMPACTION (?:—|\\u2014) REFERENCE ONLY\]/ }] },
   { ...ROW, id: 'zcode',
+    cwd: CC_CWD,
     sessionKeys: [H('x-session-id')],
     lane: [{ header: 'x-zcode-session-type', equals: 'subagent', lane: 'subagent' }], // values not yet seen live
     observerEffects: [effect('zcode-node-https', 'network.caCertFile in ~/.zcode/cli/config.json',
@@ -91,6 +130,7 @@ const ROWS = [
     // send none → synthesized (src/dissect/synth-key.mjs, gate G11)
     sessionKeys: [H('session_id'), H('session-id'), B(['prompt_cache_key'])],
     synth: true,
+    cwd: [{ in: 'system', re: /^<cwd>[ \t]*\n[ \t]*([^\n<]+?)[ \t]*\n<\/cwd>/m }], // system only: pi's system text also quotes `Working directory:` lines, never read
     // the summary request (same endpoint, no tools, one user message) starts its system prompt with this sentence; a JSON string's start
     compaction: [{ marker: /(?<!\\)"You are a context summarization assistant\./ }],
     observerEffects: [
@@ -149,8 +189,10 @@ export function bodyOf(rec) {
   return v && typeof v === 'object' ? v : null;
 }
 const at = (obj, path) => path.reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), obj);
+// `json`: the value found (a header's, or a body field's) is itself a JSON string; the key is that object's `json` field
 function valueOf(rec, key) {
-  const v = key.from === 'header' ? headerOf(rec, key.name) : at(bodyOf(rec), key.path);
+  let v = key.from === 'header' ? headerOf(rec, key.name) : at(bodyOf(rec), key.path);
+  if (key.json) { try { const j = typeof v === 'string' ? JSON.parse(v) : null; v = j && typeof j === 'object' ? j[key.json] : null; } catch { v = null; } }
   if (typeof v === 'number') return String(v);
   return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
@@ -164,6 +206,15 @@ export function harnessOf(rec) {
   const ua = String(headerOf(rec, 'user-agent') || headerOf(rec, 'originator') || '').toLowerCase();
   if (ua) for (const row of UA_ORDER) if (row.ua.test(ua)) return { id: row.id, row: row.legacy ? null : row, inferred: true, agent: null };
   return { id: null, row: null, inferred: false, agent: null };
+}
+
+/** entrypointOf(rec) → 'cli' | 'desktop' | null: the first of its harness's `entry` rules (3.4) over `x-app` and the user agent. */
+export function entrypointOf(rec) {
+  const { row } = harnessOf(rec);
+  if (!row || !row.entry || !row.entry.length) return null;
+  const text = `${headerOf(rec, 'x-app') || ''} ${headerOf(rec, 'user-agent') || headerOf(rec, 'originator') || ''}`.toLowerCase();
+  const hit = row.entry.find((r) => r.re.test(text));
+  return hit ? hit.is : null;
 }
 
 // headersOnly: only the row's header keys are candidates — the sharder's rule (3.4:21, D35: it never reads a
@@ -191,13 +242,12 @@ export function sessionKeyOf(rec, { headersOnly = false } = {}) {
 }
 
 export function hintsOf(rec) {
-  const out = { lane: null, laneKey: null, compaction: null, compactionMarker: false, parent: null, requestKind: null };
+  const out = { lane: null, laneKey: null, compaction: null, compactionMarker: false, parent: null, fork: null, requestKind: null };
   const { row } = harnessOf(rec);
   if (!row) return out;
   if (row.requestKind) {
     const rk = row.requestKind;
-    let kind = null;
-    try { const j = JSON.parse(headerOf(rec, rk.header)); kind = j && typeof j[rk.jsonKey] === 'string' ? j[rk.jsonKey] : null; } catch { kind = null; }
+    const kind = valueOf(rec, { from: 'header', name: rk.header, json: rk.jsonKey });
     out.requestKind = kind;
     if (kind && rk.lanes[kind]) out.lane = rk.lanes[kind];
     if (kind && rk.compaction.includes(kind)) out.compaction = true;
@@ -219,11 +269,36 @@ export function hintsOf(rec) {
     const v = valueOf(rec, p);
     if (v != null) { out.parent = { id: v, confidence: p.confidence }; break; }
   }
+  for (const f of row.forkKeys) {
+    const v = valueOf(rec, f);
+    if (v != null) { out.fork = { id: v, confidence: f.confidence }; break; }
+  }
   return out;
 }
 
 // D37 ⑤ / 4.6 R5: only calls captured through injected trust carry an effect; legacy MITM / reverse-proxy
 // captures (the control group) never do.
+// the words of a message: its text blocks, none for a tool_result-only turn
+const textOf = (m) => (Array.isArray(m?.content) ? m.content.map((b) => (b?.type === 'text' ? b.text || '' : '')).join('') : typeof m?.content === 'string' ? m.content : '');
+
+const systemOf = (b) => (Array.isArray(b.system) ? b.system.map((s) => s?.text || '').join('\n') : String(b.system || ''));
+
+/** auxKindOf(rec) → the kind of a background call by its harness's `aux` table (2.1); a record with no row reads the neutral row's. */
+export function auxKindOf(rec) {
+  const b = bodyOf(rec) || {}, users = (Array.isArray(b.messages) ? b.messages : []).filter((m) => m?.role === 'user');
+  const cap = typeof b.max_tokens === 'number' ? b.max_tokens : Infinity, first = textOf(users[0]), last = textOf(users.findLast(textOf));
+  const system = systemOf(b);
+  const hit = (harnessOf(rec).row || ROW).aux.find((e) => cap <= e.maxTokens || e.first?.test(first) || e.last?.test(last) || e.system?.test(system));
+  return hit ? hit.kind : 'aux';
+}
+
+const HOME_OF = /^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)[/\\]/;
+/** pathContext(rec) → what a shell read's path resolves against (2.4 §保真边界 item 6): `home` from the process's own path, null when it
+ *  does not live under one. A working directory is not in it: the capture holds no reliable one. */
+export function pathContext(rec) {
+  return { home: HOME_OF.exec(String(rec?.proc?.exe ?? ''))?.[1] ?? null };
+}
+
 export function observerEffectsOf(rec) {
   const { row } = harnessOf(rec);
   if (!row || !rec) return null;

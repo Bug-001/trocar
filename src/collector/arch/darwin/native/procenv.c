@@ -1,4 +1,4 @@
-// procenv.c — the LAUNCH environment of one process (RFC 4.11 P7 `proc.envOf` on macOS, M2)
+// procenv.c — the LAUNCH environment of one process (RFC 4.11 P7 `proc.envOf` on macOS)
 // Read the one way a non-root user can: sysctl {CTL_KERN, KERN_PROCARGS2, pid} (same user only).
 // The buffer: int argc; exec_path NUL; NUL padding; argv[0..argc-1] NUL each; env strings NUL each; an empty string; then the
 // kernel's "apple" strings (executable_path=, ptr_munge=, ...). These are the bytes in the target's memory now: in-place writes
@@ -68,6 +68,8 @@ int main(int argc, char **argv) {
   int nargs;
   memcpy(&nargs, buf, sizeof(nargs));
   char *p = buf + sizeof(nargs), *end = buf + sz;
+  // shortcut: exec_path lives in the process's own argument area (a retitle does not touch it; a process that rewrote it would only be judged as
+  // another of its harness's forms, 4.9 §5.2); switch to proc_pidpath with the next rebuild made for another reason
   if (asked(":exe", argv + 2, argc - 2)) {                 // the exec'd path, resolved (a symlink, a bare word on PATH) → the file
     char real[PATH_MAX];
     record(":exe", realpath(p, real) ? real : p);

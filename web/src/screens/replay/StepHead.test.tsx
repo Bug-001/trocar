@@ -1,4 +1,4 @@
-// web/src/screens/replay/StepHead.test.tsx — the new desk's step head (2.2 §步头) over hand-made desks (desk-world.mjs deskOf): the
+// web/src/screens/replay/StepHead.test.tsx — the desk's step head (2.2 §步头) over hand-made desks (desk-world.mjs deskOf): the
 // step number reads N / M with the model's numbers and the model · time line beside it (not in it), the head is one row of the
 // table's parts with no popover row while closed and no prompt ordinal (2.2 #19), the three read-outs are keyboard popovers (2.2 #17),
 // 上下文 shows its calibre sentence when opened (2.2 #7), 对比 is a menu button whose choice renames it and × resets (2.2 #16), and the
@@ -50,6 +50,30 @@ test('.sb-no reads N / M with the model\'s n and m; the model · time line is be
     expect(no.contains(time)).toBe(false)
     cleanup()
   }
+})
+
+// 1.2 §编号: during a first read the head is the frontier's snapshot, so the step head says how many of the session's calls are read, not
+// the snapshot's step count; a head without pending ends the first read and the step head reads N / M again
+test('1.2 §编号: during a first read .sb-no counts the calls read instead of / M; after it, N / M', () => {
+  const { s, view, bar, model } = step({ at: 1 })
+  s.desk.firstPending = true; s.desk.pending = { done: 1507, total: 1580 }; act(() => view.step())
+  let no = bar().querySelector('.sb-no')!, m = model()
+  expect(no.textContent).not.toMatch(/\/\s*\d/)
+  expect(no.textContent).toContain(W.callsRead(1507, 1580))
+  expect(no.getAttribute('title')).toBe(W.stepRead(m.n, 1507, 1580))
+  expect([no.getAttribute('data-n'), no.getAttribute('data-m')]).toEqual([String(m.n), String(m.m)])
+  s.desk.pending = null; s.desk.firstPending = false; act(() => view.step())
+  no = bar().querySelector('.sb-no')!; m = model()
+  expect(no.textContent).toMatch(new RegExp(`${m.n}\\s*/\\s*${m.m}`))
+  expect(no.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
+})
+
+// a catch-up (a head with pending after a head without it) is not a first read: N / M stays
+test('1.2 §编号: a catch-up after the first read keeps N / M', () => {
+  const { s, view, bar, model } = step({ at: 1 })
+  s.desk.firstPending = false; s.desk.pending = { done: 2, total: 9 }; act(() => view.step())
+  const m = model()
+  expect(bar().querySelector('.sb-no')!.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
 })
 
 // 2.2 §步头's parts: the arrows and the number (with model · time), ◐, 对比, the three read-outs
@@ -141,4 +165,30 @@ test('1.2 #12: ←/→ on an open 对比 menu item and inside its step field are
   }
   expect(screen).not.toHaveBeenCalled()
   expect(s.setPlayhead).not.toHaveBeenCalled()
+})
+
+test('1.2 §会话头 · 2.2 §步头: at the first and the last step the head has one previous and one next control and one position element', () => {
+  for (const at of [0, ROWS.length - 1]) {
+    const { bar } = step({ at })
+    expect(bar().querySelectorAll(`button[aria-label="${W.STEP_PREV}"]`)).toHaveLength(1)
+    expect(bar().querySelectorAll(`button[aria-label="${W.STEP_NEXT}"]`)).toHaveLength(1)
+    expect(bar().querySelectorAll('.sb-no')).toHaveLength(1)
+    cleanup()
+  }
+})
+
+test('2.3 #10 #21 · 1.4 ⑧: held or not, the step head has no load control and nothing to press inside a busy frame, its layers open included', async () => {
+  for (const blocks of [BLOCKS, null]) {
+    const { bar } = step({ blocks })
+    expect(bar().querySelector('[data-load-step]')).toBeNull()
+    for (const label of [W.COMP_POPOVER_LABEL, W.CACHE_POPOVER_LABEL, W.COST_POPOVER_LABEL]) {
+      const b = readout(label)
+      act(() => b.focus())
+      await press(b, 'Enter')
+      for (const busy of document.querySelectorAll('[aria-busy="true"]')) expect(busy.querySelector('button, a, input, [role="button"], [tabindex]')).toBeNull()
+      expect(document.querySelector('[data-load-step]')).toBeNull()
+      await press(document.activeElement!, 'Escape')
+    }
+    cleanup()
+  }
 })

@@ -3,26 +3,23 @@
 // list 1,000–1,400 blocks), for 30 seeded adjacent pairs (→ and ←, and one with a turn card the reader opened) plus a
 // step across a compaction (a generated world whose main lane compacts), a MutationObserver on #ctxwin (subtree, childList) counts the nodes added and removed from the key press
 // until two animation frames after the step is drawn; Δ = the list positions whose key (bid#occurrence) differs between the two
-// steps' lists, as the reference server hands them to the page. Every pair: count ≤ 4Δ + 64 on the legacy desk, 4Δ + 2B + 8 on the new
-// one (B: the closed rows three box heights hold; a landing that moves the box swaps one band for another). Runs only under
+// steps' lists, as the reference server hands them to the page, and also the top-level nodes written into the two
+// steps' open reply rows (a reply is open by default, 2.3 #34). Every pair: count ≤ 4Δ + 2B + 8
+// (B: the closed rows three box heights hold; a landing that moves the box swaps one band for another). Runs only under
 // `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, DESK_NEXT, gapInPage, windowGap } from './harness.mjs'
+import { probe, withBoard, serveWorld, gapInPage, windowGap, stepKey } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
-// which desk a case is about (2.3 rule 4): the legacy desk's groups, or the new desk's virtual list
-const legacyOnly = skip || (DESK_NEXT ? "the legacy desk's groups (2.3 rule 4, 旧台)" : false)
-const nextOnly = skip || (DESK_NEXT ? false : "the new desk's virtual list (2.3 rule 4)")
 const PAIRS = 30
 
 const keysOf = (list) => { const seen = new Map(); return list.map((b) => { const n = seen.get(b) || 0; seen.set(b, n + 1); return `${b}#${n}` }) }
 const delta = (a, b) => { const A = keysOf(a), B = keysOf(b); let d = 0; for (let i = 0; i < Math.max(A.length, B.length); i++) if (A[i] !== B[i]) d++; return d }
 function rng(seed) { let a = seed >>> 0 || 1; return () => ((a = Math.imul(a ^ (a >>> 13), 0x5bd1e995) + 0x9e3779b9 >>> 0) / 4294967296) }
 
-const NO = /(\d+)\s*\/\s*(\d+)/
 // the board serving world `w`, with: go(k) = the main lane's step k by name, drawn and settled; count(key) = the nodes added +
 // removed under #ctxwin from the key press until two frames after the step head changed and the window drew
 async function onBoard(w, fn) {
@@ -30,52 +27,52 @@ async function onBoard(w, fn) {
   try {
     const { page } = b
     await serveWorld(page, w)
-    await page.route('**/api/block?**', (route) => route.fulfill({ status: 200, contentType: 'application/json',
-      body: JSON.stringify({ blocks: new URL(route.request().url()).searchParams.getAll('ref').map((ref) => ({ ref, bytes: 'x', encoding: 'utf8', fidelity: 'verbatim', truncated: false })), errors: [] }) }))
     const go = async (k) => {
       await page.evaluate((k) => { location.hash = `#/replay/p/S?step=${k}` }, k)
-      await page.waitForFunction(([k, re]) => {
-        const x = new RegExp(re).exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-        return !!x && +x[1] === k && !document.querySelector('#ctxwin .cwload')
-      }, [k, NO.source], { timeout: 30000, polling: 'raf' })
+      await page.waitForFunction((k) => {
+        const x = window.__stepNo()
+        return !!x && x.n === k && !document.querySelector('#ctxwin .cwload')
+      }, k, { timeout: 30000, polling: 'raf' })
       await page.waitForTimeout(400)
     }
     const count = async (key) => {
-      const was = await page.evaluate((re) => new RegExp(re).exec(document.querySelector('#stepbar .sb-no')?.textContent || '')?.[1] ?? null, NO.source)
+      const was = await page.evaluate(() => window.__stepNo()?.n ?? null)
       await page.evaluate(() => {
+        window.__written = () => [...document.querySelectorAll('#ctxwin [data-rp] .cellread, #ctxwin [data-rp] .cellraw')].reduce((n, leaf) => n + leaf.childNodes.length, 0)
+        window.__wrote = window.__written()
         window.__mut = 0
         window.__mo = new MutationObserver((rs) => { for (const r of rs) window.__mut += r.addedNodes.length + r.removedNodes.length })
         window.__mo.observe(document.querySelector('#ctxwin'), { subtree: true, childList: true })
       })
       await page.keyboard.press(key)
-      return page.evaluate(([was, re]) => new Promise((resolve, reject) => {
+      return page.evaluate((was) => new Promise((resolve, reject) => {
         const t0 = performance.now(), raf = () => new Promise((r) => requestAnimationFrame(r))
         const tick = async () => {
-          const x = new RegExp(re).exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-          if (x && x[1] !== was && !document.querySelector('#ctxwin .cwload')) {
+          const x = window.__stepNo()
+          if (x && x.n !== was && !document.querySelector('#ctxwin .cwload')) {
             await raf(); await raf()
             for (const r of window.__mo.takeRecords()) window.__mut += r.addedNodes.length + r.removedNodes.length
             window.__mo.disconnect()
-            return resolve({ n: window.__mut, from: +was, to: +x[1], h: document.querySelector('#ctxwin').clientHeight })
+            return resolve({ n: window.__mut, from: +was, to: x.n, written: window.__wrote + window.__written(), h: document.querySelector('#ctxwin').clientHeight })
           }
           if (performance.now() - t0 > 10000) return reject(new Error(`step not drawn in 10 s after ${was}`))
           requestAnimationFrame(tick)
         }
         tick()
-      }), [was, NO.source])
+      }), was)
     }
-    await fn({ page, go, count: async (key) => ({ ...(await count(key)), pitch: DESK_NEXT ? (await windowGap(page)).pitch : 0 }) })
+    await fn({ page, go, count: async (key) => ({ ...(await count(key)), pitch: (await windowGap(page)).pitch }) })
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 }
 const mainRids = (w) => w.laneRidsAt().get(w.full().lanes.find((l) => l.kind === 'main').lane)
 
-test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 64 nodes in #ctxwin (new desk: 4Δ + 2B + 8)', { skip }, async () => {
+test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 2B + 8 nodes in #ctxwin', { skip }, async () => {
   const out = []
   const check = async (label, w, rids, step) => {
-    const { n, from, to, h, pitch } = await step()
-    const d = delta(w.list(rids[from - 1]), w.list(rids[to - 1]))
-    out.push({ label, from, to, n, d, line: 4 * d + (DESK_NEXT ? 2 * Math.ceil(3 * h / pitch) + 8 : 64) })
+    const { n, from, to, written, h, pitch } = await step()
+    const d = delta(w.list(rids[from - 1]), w.list(rids[to - 1])) + written
+    out.push({ label, from, to, n, d, line: 4 * d + 2 * Math.ceil(3 * h / pitch) + 8 })
   }
   // the long conversation: 30 seeded pairs, then a folded turn card the reader opened and a step each way
   const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), rids = mainRids(w), M = rids.length
@@ -110,7 +107,7 @@ test('2.3 #34 · D71②: a ±1 step adds and removes at most 4Δ + 64 nodes in #
 // 1.4 §打开一步时落在哪: what a landing brings to the box's top is what the reader sees there. elementFromPoint a little inside the
 // landed item's top, for steps landing on their first 「新」 row in a window short enough for it to reach the box's top, is inside that
 // item: nothing lies over it. (The newest reply after `f`: replay-shots.test.mjs. The generated worlds draw no change line.)
-test('1.4: the landed item is what is on top at its own top edge', { skip: nextOnly }, async () => {
+test('1.4: the landed item is what is on top at its own top edge', { skip }, async () => {
   const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), M = mainRids(w).length, r = rng(14), rows = []
   await onBoard(w, async ({ page, go }) => {
     await page.setViewportSize({ width: 1440, height: 520 })
@@ -162,41 +159,12 @@ test('1.4: a late 内容对比步 lands the step on its first 「新」 row; a r
     })
   }
 })
-
-// 2.3 §窗口按 bid 打补丁 · rule 4: inside open cards only the groups within one window height above and below the visible box are
-// rows; the rest are sized placeholders. Settled at the newest step (an 800-block open turn) and again after scrolling half way:
-// no drawn group lies wholly outside that band unless it holds an open row or the change line, and no placeholder lies inside the
-// visible box.
-test('2.3 #34 · rule 4: inside open cards only the groups near the visible box are rows', { skip: legacyOnly }, async () => {
-  const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), M = mainRids(w).length
-  await onBoard(w, async ({ page, go }) => {
-    const faults = () => page.evaluate(() => {
-      const el = document.querySelector('#ctxwin'), box = el.getBoundingClientRect(), h = el.clientHeight, out = []
-      for (const g of el.querySelectorAll('.cwgroup')) {
-        const busy = g.hasAttribute('aria-busy'), a = (busy ? g : g.firstElementChild).getBoundingClientRect(), b = (busy ? g : g.lastElementChild).getBoundingClientRect()
-        if (busy && b.bottom > box.top && a.top < box.bottom) out.push('a placeholder in view')
-        if (!busy && (b.bottom < box.top - h - 1 || a.top > box.bottom + h + 1) && !g.querySelector('.cblk:not(.collapsed), #cachebrk')) out.push('a drawn group far from view')
-      }
-      return { out, groups: el.querySelectorAll('.cwgroup').length, rows: el.querySelectorAll('.cblk[data-bi]').length }
-    })
-    await go(M)
-    const top = await faults()
-    await page.evaluate(() => { const el = document.querySelector('#ctxwin'); el.scrollTop = el.scrollHeight / 2 })
-    await page.waitForTimeout(400)
-    const mid = await faults()
-    console.log(`# newest step: ${top.groups} groups, ${top.rows} rows drawn; half way down: ${mid.rows} rows drawn`)
-    assert.ok(top.groups > 4, 'the newest step has many groups (the shape this case is about)')
-    assert.deepEqual(top.out, [])
-    assert.deepEqual(mid.out, [])
-  })
-})
-
-// 2.3 #28 · rule 4 (新台): the virtual list holds only the items within one window height above and below the visible box, and the
+// 2.3 #28 · rule 4: the virtual list holds only the items within one window height above and below the visible box, and the
 // pinned ones (the change line #cachebrk, the reply, the item holding focus, the item holding the selection); no aria-busy group; and
 // the visible box has no gap (harness gapInPage). Settled at the newest step and half way down, and on the first animation frame after
 // each of 20 ←/→ presses: a keydown capture listener arms one requestAnimationFrame, which runs after the step's synchronous commit and
 // before its first paint.
-test('2.3 #28: the rendered window holds only the items within one window height of the view, and the pinned ones; the visible box has no gap', { skip: nextOnly }, async () => {
+test('2.3 #28: the rendered window holds only the items within one window height of the view, and the pinned ones; the visible box has no gap', { skip }, async () => {
   const w = world(7, { calls: 2100, page: 2100, talk: { pre: 90, len: 1200, every: 40, tail: 800 } }), M = mainRids(w).length
   await onBoard(w, async ({ page, go }) => {
     const faults = () => page.evaluate(() => {
@@ -219,12 +187,12 @@ test('2.3 #28: the rendered window holds only the items within one window height
     const mid = await atRest()
     // the first frame after each press
     await page.evaluate(`window.__gaps = []; addEventListener('keydown', () => requestAnimationFrame(() => window.__gaps.push((${gapInPage})())), true)`)
-    const no = () => page.evaluate(() => document.querySelector('#stepbar .sb-no')?.textContent)
+    const no = () => stepKey(page)
     const presses = [...Array(10).fill('ArrowLeft'), ...Array(10).fill('ArrowRight')]
     for (const key of presses) {
       const was = await no()
       await page.keyboard.press(key)
-      await page.waitForFunction((was) => document.querySelector('#stepbar .sb-no')?.textContent !== was, was, { timeout: 10000, polling: 'raf' })
+      await page.waitForFunction((was) => { const x = window.__stepNo(); return (x ? `${x.n}/${x.m}` : null) !== was }, was, { timeout: 10000, polling: 'raf' })
       await page.waitForTimeout(100)
     }
     const first = await page.evaluate(() => window.__gaps)

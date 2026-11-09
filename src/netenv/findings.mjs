@@ -9,6 +9,7 @@ import { trustReasonText } from '../collector/core/codes.mjs'
 import { TRUST_REASONS, ROUTE_TRUST_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { FINDINGS_WIN32 } from './findings-win32.mjs'
 import { ago } from '../cli/text.mjs'
+import { statusReason } from '../cli/words.mjs'
 import { setupHelperCommand } from '../version.mjs'
 
 const BY_CLASS = { problem: 0, expected: 1, note: 2 }
@@ -17,10 +18,14 @@ const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 // ── what a command is ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const trocar = (ctx, run) => ({ run, shell: ctx.sh })
 /** An install item of the form that drifted (proxy mode: the carrier, a wrapper or a plugin; 1.6 §9.3 row 31): the command its `certificate` names, `trocar install`. */
+/** 4.11 P4b: a `setup.missing[].what` → the finding that says it, one mapping for both readers (proxy mode's form certificate, driver mode's setup). */
+export const SETUP_FINDING = Object.freeze({ 'carrier-absent': 'entry-missing', 'carrier-overwritten': 'entry-changed', 'bundle-lacks-ca': 'bundle-lacks-ca', 'marked-without-record': 'marked-without-record' })
 const installFix = (c) => (c.fm && c.fm.certificate && c.fm.certificate.command ? [trocar(c, c.fm.certificate.command)] : null)
 const os = (ctx, byPlatform) => ({ run: byPlatform[ctx.platform] || byPlatform.linux, shell: ctx.platform === 'win32' ? 'powershell' : 'sh' })
 const gui = (run) => ({ run, shell: 'gui' })
 const unknownValue = (what, reason) => `unknown ${what} (${reason})`
+/** The proxy address a step cannot name: a value for `setAt` that is not one a command may carry. */
+const unknownProxy = (reason) => ({ unknown: unknownValue('proxy address', reason) })
 
 /**
  * Where a proxy setting lives, for a command that names the line to edit: the place the facts read it from (`setting.source[0]`: a variable of the shell that starts the agent, or a key of one of its files;
@@ -35,17 +40,24 @@ function placeOf(hf, setting) {
   if (files[0]) return { kind: 'file', ...files[0] }
   return { kind: 'env', name: (b.env && b.env[0]) || 'HTTPS_PROXY' }
 }
-/** The step that puts `value` where the setting lives. One verb for one step (附录 B). */
-function setAt(h, place, value) {
-  if (place.kind === 'env') return `In the terminal that starts ${h}, run: export ${place.name}=${value}`
-  if (place.kind === 'system') return `Set your system proxy to ${value}`
-  return place.format === 'json' ? `Set ${place.key} in ${place.path} to "${value}"` : `Put the line ${place.key}=${value} in ${place.path}`
+// a variable on Windows: the user's own, set for good (PowerShell has no export; a window's own $env: dies with it), read by the programs started after it. The command is its own
+// line, short enough for a console not to wrap it: setx sets it, the value one PowerShell literal (the step names PowerShell; only ' is special inside ''); setx cannot remove one, so removing is the .NET call. A value of the machine's
+// or of a PowerShell profile wins over the user's, and is named as the place to look.
+const psQuote = (v) => `'${String(v).replace(/'/g, "''")}'`
+const winEnv = (h, name, cmd, unknown = null) => [...(unknown ? [gui(`${unknown}: in PowerShell, run setx ${name} followed by your proxy's address, then start ${h} again from a new window`)] : [gui(`In PowerShell, run this, then start ${h} again from a new window; it applies to every program you start from now on, not only this terminal:`), { run: cmd, shell: 'powershell' }]),
+  gui(`If ${name} still has another value in a new window, it is set for the whole machine or in your PowerShell profile; change it there`)]
+/** The steps that put `value` where the setting lives. One verb for one step (附录 B). */
+function setAt(h, place, proxy, platform) {
+  const value = proxy.unknown ?? proxy
+  if (place.kind === 'env') return platform === 'win32' ? winEnv(h, place.name, `setx ${place.name} ${psQuote(value)}`, proxy.unknown) : [gui(`In the terminal that starts ${h}, run: export ${place.name}=${value}`)]
+  if (place.kind === 'system') return [gui(`Set your system proxy to ${value}`)]
+  return [gui(place.format === 'json' ? `Set ${place.key} in ${place.path} to "${value}"` : `Put the line ${place.key}=${value} in ${place.path}`)]
 }
-/** The step that takes the setting away from where it lives. */
-function removeAt(h, place) {
-  if (place.kind === 'env') return `In the terminal that starts ${h}, run: unset ${place.name}`
-  if (place.kind === 'system') return 'Turn off your system proxy'
-  return place.format === 'json' ? `Remove ${place.key} from ${place.path}` : `Remove the ${place.key}= line from ${place.path}`
+/** The steps that take the setting away from where it lives. */
+function removeAt(h, place, platform) {
+  if (place.kind === 'env') return platform === 'win32' ? winEnv(h, place.name, `[Environment]::SetEnvironmentVariable('${place.name}',$null,'User')`) : [gui(`In the terminal that starts ${h}, run: unset ${place.name}`)]
+  if (place.kind === 'system') return [gui('Turn off your system proxy')]
+  return [gui(place.format === 'json' ? `Remove ${place.key} from ${place.path}` : `Remove the ${place.key}= line from ${place.path}`)]
 }
 // darwin: the kernel's own TCP table, the one `status` reads (arch/darwin/netfacts.mjs) — `lsof -nP -iTCP:<port> -sTCP:LISTEN` names only the
 // processes whose fd table this user may open, so a port held by ANOTHER user's program came back empty, which is the case this step is for.
@@ -77,14 +89,17 @@ const deadProxy = (t) => t.nodes.find((n) => n.kind === 'proxy' && n.down === tr
 /** The places of the USER's own that hold the address this finding is about (`diagnose` filtered them: a key trocar wrote is never among them, 1.6 附录 B `places`). */
 const userPlaces = (c) => (Array.isArray(c.places) ? c.places : [])
 /** The steps that take that address out of the user's own settings, one named step per place; with no place known, the one the setting was read from. */
-const removeSteps = (c) => (userPlaces(c).length ? userPlaces(c).map((p) => gui(removeAt(c.h, p))) : [gui(c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('setting', 'absent'))])
+const removeSteps = (c) => (userPlaces(c).length ? userPlaces(c).flatMap((p) => removeAt(c.h, p, c.platform)) : c.setting ? removeAt(c.h, placeOf(c.hf, c.setting), c.platform) : [gui(unknownValue('setting', 'absent'))])
 
 /** not-routed, by the reason the model's route plan gave the form (`fm.route.reason`, src/collector/core/proxymode/entries.mjs; 4.11 §3, 1.6 附录 B): the why, and the steps
  *  (the place the plan named in `at`, else `unknown`). A PAC the facts see and no reason of the plan's is the PAC row; nothing known is the generic row. */
 function notRoutedOf(c) {
   const r = (c.fm && c.fm.route) || {}, at = r.at || unknownValue('place', 'absent'), on = trocar(c, `trocar on ${c.h}`)
   if (!c.fm && c.t && (c.t.branches || []).some((b) => b.form === null && b.reason === 'not-routed')) return { why: c.hf && c.hf.formsHere === false ? `None of the forms of ${c.h} that trocar sets up is on this machine; a copy of it installed another way does not go through trocar.` : `A copy of ${c.h} runs that is none of the forms trocar sets up here (installed another way); it does not go through trocar.`, commands: [gui(`Install ${c.h} with its own installer`), trocar(c, 'trocar install'), on] } // 4.11 P5
-  if (r.reason === 'system-pac' || (!r.reason && c.pac)) return { why: 'The system proxy it follows is a PAC script, which trocar does not run.', commands: [gui(`${setAt(c.h, placeOf(c.hf, c.setting), unknownValue('proxy address', 'pac'))}`), on] }
+  if (r.reason === 'system-pac' || (!r.reason && c.pac)) return { why: 'The system proxy it follows is a PAC script, which trocar does not run.', commands: [...setAt(c.h, placeOf(c.hf, c.setting), unknownProxy('pac'), c.platform), on] }
+  // a form the door cannot tell from the blocked one (r.via): it reaches trocar and is forwarded; the way out is the same setting's
+  if (r.via && r.reason === 'blocker') return { why: `trocar cannot tell ${c.fm.id} from ${r.via}, which a setting of yours (${at}) keeps off any entry trocar can use.`, commands: [gui(`Remove the setting at ${at}`), on] }
+  if (r.via) return { why: `trocar cannot read ${at}, so it cannot tell ${c.fm.id} from ${r.via} and forwards it unread.`, commands: [gui(`Make ${at} readable, or fix it`), on] }
   if (r.reason === 'blocker' || r.reason === 'own-egress') return { why: `A setting of yours (${at}) keeps ${c.h} off any entry trocar can use.`, commands: [gui(`Remove the setting at ${at}`), on] }
   if (r.reason === 'blocker-unreadable' || r.reason === 'unreadable') return { why: `trocar cannot read ${at}, so it did not connect this form.`, commands: [gui(`Make ${at} readable, or fix it`), on] }
   if (r.reason === 'absent') return { why: `${c.h}'s entry file ${at} does not exist, and trocar does not create it.`, commands: [gui(`Run ${c.h}'s own setup so that it creates ${at}`), on] }
@@ -92,6 +107,16 @@ function notRoutedOf(c) {
   if (r.reason === 'no-path' || r.reason === 'no-applied-entry') return { why: `trocar found no entry for this form of ${c.h}${r.at ? ` (${r.at})` : ''}.`, commands: [gui(`Start ${c.h} once so that it writes its own settings`), on] }
   if (r.reason === 'no-carrier') return { why: 'This form has no certificate yet.', commands: [trocar(c, 'trocar install'), on] }
   return { why: 'This form has no entry trocar can use.', commands: [gui(`Use ${c.h}'s CLI form instead`), trocar(c, `trocar status ${c.h}`)] }
+}
+
+/** A route `on` did not write, for its receipt's row (which names the place): `{ why, steps }` in the doctor's words (1.6 附录 B) — the steps as text,
+ *  the last one the command that writes it then. Only the reasons that need no more than the place: any other is null (the receipt keeps its code). */
+export function routeRefusal({ h, reason, at }) {
+  if (!['own-egress', 'blocker', 'unreadable', 'blocker-unreadable', 'absent', 'credentialed-own-leg', 'no-path', 'no-applied-entry'].includes(reason)) return null
+  // the receipt's row already names the place: the setting of the user's is "there", said once
+  if (reason === 'own-egress' || reason === 'blocker') return { why: `It holds a setting of yours, which keeps ${h} off any entry trocar can use.`, steps: ['Remove your value there', `run: trocar on ${h}`] }
+  const r = notRoutedOf({ h, sh: 'sh', fm: { route: { reason, at } } })
+  return { why: r.why, steps: r.commands.map((x) => (x.shell === 'gui' ? x.run : `run: ${x.run}`)) }
 }
 
 /** The catalogue (附录 B). `applies` is `diagnose`'s business; each entry says what it is. `cls` is the class, or a function of the context where it depends (`proxy-changed`). */
@@ -129,30 +154,33 @@ export const NEG_CAUSES = Object.freeze(Object.keys(NEG))
 export const FINDINGS = {
   'desired-off': { cls: 'expected', trocarFirst: true, what: (c) => `Capture is off for ${c.h}.`, why: () => 'trocar is not on its path: it connects directly, or through your own proxy.', commands: (c) => [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   'daemon-not-running': { cls: 'problem', trocarFirst: true, what: () => 'trocar is not running in the background, so nothing is captured.', why: () => 'Without it there is no engine, and new connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
-  'daemon-not-responding': { cls: 'problem', trocarFirst: true, what: () => 'trocar runs in the background but does not answer, so nothing is captured.', why: () => 'Its heartbeat is stale, so new connections already go straight out.', commands: (c) => [trocar(c, 'trocar off'), trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
+  'daemon-not-responding': { cls: 'problem', trocarFirst: true, what: () => 'trocar runs in the background but does not answer, so nothing is captured.', why: () => 'Its heartbeat is stale, so new connections already go straight out.', commands: (c) => [trocar(c, `trocar off${c.h ? ` ${c.h}` : ''}`), trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'helper-missing': { cls: 'problem', trocarFirst: false, what: () => 'trocar\'s capability helper is missing or is the wrong version.', why: () => 'Without it trocar cannot attach to the kernel, so nothing is captured.', commands: (c) => [{ run: setupHelperCommand(), shell: 'sh' }, trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'link-missing': { cls: 'problem', trocarFirst: true, what: () => 'Capture is on, but trocar is not attached, so nothing is captured.', why: () => 'New connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'entry-missing': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar is gone.`, why: () => 'It was removed, or it was never written.', commands: (c) => installFix(c) || [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   'entry-changed': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar holds something else now.`, why: () => 'You, or another program, changed what trocar wrote.', commands: (c) => installFix(c) || [trocar(c, `trocar off ${c.h}`), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
+  // 4.11 P10: trocar's own earlier PAC address, still in the entry; on writes the current one over it
+  'pac-address-stale': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting holds trocar's proxy settings address from before this install's key, so its calls are not captured.`, why: () => 'trocar refuses that address, so the app has no proxy settings from trocar and connects without it.', commands: (c) => [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   // by the engine's cause (1.6 附录 B): an entry ends at its retry time, or now by `trocar on <harness>`; a restart helps only a refused trocar certificate
   'negative-cache': { cls: 'problem', trocarFirst: true, what: (c) => NEG[negCause(c)].what(negOf(c)), why: (c) => NEG[negCause(c)].why(negOf(c)), commands: (c) => NEG[negCause(c)].commands(c), verify: (c) => `trocar status ${c.h}` },
   // 4.11 P11 status 4–5: the door has not seen this life and history cannot tell — a note with no restart step (1.6 附录 B, §2 判词)
-  'not-seen': { cls: 'note', trocarFirst: false, what: (c) => `trocar has not seen ${c.pid ? `pid ${c.pid}` : c.h} use its proxy yet; its next connection is judged.`, why: () => 'It started before trocar kept a full record of when capture was on.', commands: () => [], verify: (c) => `trocar status ${c.h}` },
-  'not-routed': { cls: 'problem', trocarFirst: false, what: (c) => `New connections from ${c.h} do not go through trocar.`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `trocar status ${c.h}` },
-  'route-loop': { cls: 'problem', trocarFirst: true, what: (c) => `trocar's upstream for ${c.h} would be trocar itself.`, why: () => 'The proxy setting trocar read already points at one of trocar\'s own ports, so trocar did not connect this form.', commands: (c) => [trocar(c, `trocar off ${c.h}`), gui(setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('proxy address', 'absent'))), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar doctor ${c.h}` },
+  'not-seen': { cls: 'note', trocarFirst: false, what: (c) => `trocar has not seen ${c.pid ? `pid ${c.pid}` : c.h} use its proxy yet; its next connection is judged.`, why: () => 'When it started does not tell whether it read trocar\'s setting.', commands: () => [], verify: (c) => `trocar status ${c.h}` },
+  'not-routed': { cls: 'problem', trocarFirst: false, what: (c) => (c.fm && c.fm.route && c.fm.route.via ? `New connections from ${c.h} (${c.fm.id}) reach trocar and are forwarded only.` : ['blocker-unreadable', 'unreadable'].includes(((c.fm && c.fm.route) || {}).reason) ? `Whether new connections from ${c.h} (${c.fm.id}) go through trocar is not known.` : `New connections from ${c.h}${c.fm && c.fm.id ? ` (${c.fm.id})` : ''} do not go through trocar.`), why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `trocar status ${c.h}` },
+  'route-loop': { cls: 'problem', trocarFirst: true, what: (c) => `trocar's upstream for ${c.h} would be trocar itself.`, why: () => 'The proxy setting trocar read already points at one of trocar\'s own ports, so trocar did not connect this form.', commands: (c) => [trocar(c, `trocar off ${c.h}`), ...setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownProxy('absent'), c.platform), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar doctor ${c.h}` },
   'proxy-dead': { cls: 'problem', trocarFirst: false, what: (c) => `Nothing is listening on ${c.dead.addr}:${c.dead.port}, the proxy ${c.h} is set to use.`, why: () => 'Your proxy is not running; trocar did not write this setting.',
     places: userPlaces, commands: (c) => [gui(`Start your proxy, so that it listens on ${c.dead.addr}:${c.dead.port}`), ...removeSteps(c), portCheck(c, c.dead.port)], verify: (c) => `trocar status ${c.h}` },
   'proxy-unsupported': { cls: 'problem', trocarFirst: false, what: (c) => `${c.h} does not support the proxy scheme ${c.setting.scheme}.`, why: (c) => (c.silent ? `${c.h} connects directly and says nothing, so that proxy has no effect.` : `${c.h} cannot use a ${c.setting.scheme} proxy.`),
-    commands: (c) => [gui(setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('proxy address', 'absent')))], verify: (c) => `trocar status ${c.h}` },
+    commands: (c) => setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownProxy('absent'), c.platform), verify: (c) => `trocar status ${c.h}` },
   'proxy-changed': { cls: (c) => (c.F.routing === 'proxy' ? 'problem' : 'expected'), trocarFirst: true, what: (c) => `${c.h}'s proxy setting is not the one trocar connected to.`, why: () => 'You changed it.',
-    commands: (c) => (c.F.routing === 'proxy' ? [trocar(c, `trocar on ${c.h}`), trocar(c, `trocar off ${c.h}`)] : [trocar(c, `trocar status ${c.h}`)]), verify: (c) => `trocar status ${c.h}` },
+    commands: (c) => (c.F.routing === 'proxy' ? [trocar(c, `trocar on ${c.h}`), gui(`Or, to stop capturing ${c.h}: trocar off ${c.h}`)] : [trocar(c, `trocar status ${c.h}`)]), verify: (c) => `trocar status ${c.h}` },
   'elevated-agent': { cls: 'problem', trocarFirst: false, what: (c) => `${c.h}${c.pid ? ` (pid ${c.pid})` : ''} runs elevated, so trocar only forwards it.`, why: () => 'trocar never decrypts an elevated process.', commands: () => [gui('Quit it and start it again without administrator rights')], verify: (c) => `trocar status ${c.h}` },
-  'forwarder-down': { cls: 'problem', trocarFirst: true, what: (c) => `trocar is not listening${c.port ? ` on :${c.port}` : ''}, so ${c.h || 'your agents'} cannot connect.`, why: () => 'The port lives with trocar\'s background process, which is not there.', commands: (c) => [trocar(c, 'trocar on'), trocar(c, `trocar off ${c.h}`)], verify: () => 'trocar status' },
+  'forwarder-down': { cls: 'problem', trocarFirst: true, what: (c) => `trocar is not listening${c.port ? ` on :${c.port}` : ''}, so ${c.h || 'your agents'} cannot connect.`, why: () => 'The port lives with trocar\'s background process, which is not there.', // off is the other way out (use it now without trocar), never a step after on
+    commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`), ...(c.h ? [gui(`Or, to use ${c.h} now without trocar: trocar off ${c.h}, then restart ${c.h}`)] : [])], verify: () => 'trocar status' },
   'upstream-unreachable': { cls: 'problem', trocarFirst: false, what: (c) => `trocar cannot reach the proxy${c.upPort ? ` :${c.upPort}` : ''} it uses for ${c.h}.`, why: () => 'Your proxy has quit while a setting still points at it; without trocar it would not connect either.',
     places: userPlaces,
     // trocar's door is on the path, and its upstream is the address nobody answers: the key trocar wrote holds the door, so removing THAT changes nothing
     // (`off` would write the prior value back). What to take away, to get off this proxy for good, are their own keys that still name it.
-    commands: (c) => [gui('Start your proxy, or turn off the system proxy that points at it'), ...(userPlaces(c).length ? [trocar(c, `trocar off ${c.h}`), ...userPlaces(c).map((p) => gui(removeAt(c.h, p))), trocar(c, `trocar on ${c.h}`)] : []),
+    commands: (c) => [gui('Start your proxy, or turn off the system proxy that points at it'), ...(userPlaces(c).length ? [trocar(c, `trocar off ${c.h}`), ...userPlaces(c).flatMap((p) => removeAt(c.h, p, c.platform)), trocar(c, `trocar on ${c.h}`)] : []),
       ...(c.upPort ? [portCheck(c, c.upPort)] : [])], verify: (c) => `trocar status ${c.h}` },
   'shim-not-on-path': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h} does not start through the program trocar installed.`, why: () => 'Another command of the same name comes first on PATH, or it was started another way.',
     commands: (c) => [trocar(c, 'trocar install'), gui(`Quit ${c.h} and start it again from a new terminal`)], verify: (c) => `trocar status ${c.h}` },
@@ -171,28 +199,45 @@ export const FINDINGS = {
       : `Add ${JSON.stringify({ harness: c.h, name: c.u.name })} to the agents list in ${c.listPath} (create it as {"version":1,"agents":[...]} if it is not there); no restart needed`)], verify: (c) => `trocar status ${c.h}` },
   'agent-list-invalid': { cls: 'problem', trocarFirst: false, what: (c) => `${c.file.path} has ${c.file.problems.length} bad entr${c.file.problems.length === 1 ? 'y' : 'ies'}; the rest is still used.`, why: (c) => (c.file.state === 'ok' ? 'A bad entry does not apply; the others do.' : 'The whole file does not apply, so only the built-in names are used.'),
     commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `Fix ${c.file.path}` : `Fix or remove entry ${p.index + 1} of ${c.file.path}`}: ${p.detail}`)), verify: () => 'trocar status' },
+  // D61: the login entry is install's; without it nothing of trocar starts after the next login (status's read of registered(), the question on asks)
+  'autostart-missing': { cls: 'problem', trocarFirst: true, what: (c) => (c.F.autostart.state === 'unknown' ? 'Whether trocar\'s login entry is registered could not be read, so trocar may not start after the next login.' : 'trocar\'s login entry is not registered or is switched off, so trocar does not start after the next login.'),
+    why: (c) => `${c.F.autostart.reason.replace(/^./, (m) => m.toUpperCase())}; without it the agents trocar points at cannot connect after a restart.`, commands: (c) => [trocar(c, 'trocar install')], verify: () => 'trocar status' },
   'cert-key-missing': { cls: 'problem', trocarFirst: true, what: () => 'The key for trocar\'s root is gone, so trocar only forwards.', why: () => 'It was removed from your keychain or key store.', commands: (c) => [trocar(c, 'trocar install')], verify: () => 'trocar status' },
   'cert-intermediate-unavailable': { cls: 'problem', trocarFirst: false, what: () => 'trocar cannot sign certificates right now, so it only forwards.', why: () => 'There is no desktop login session, or your keychain is locked.',
     commands: (c) => [gui('Log in to the desktop session on this machine and unlock your keychain'), trocar(c, 'trocar status')], verify: () => 'trocar status' },
+  'bundle-lacks-ca': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s certificate bundle lacks a CA your settings add now, so it cannot verify hosts signed by that CA.`, why: () => 'trocar merged the CAs your settings named when you ran install; one you added since is not in the bundle.',
+    commands: (c) => installFix(c) || [trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
+  // the steps `on`'s refusal and the form's certificate command read too (4.11 P4b): uninstall refuses while a harness is on, so off comes first
+  'marked-without-record': { cls: 'problem', trocarFirst: true, what: (c) => `A file trocar sets up for ${c.h}'s certificate still holds trocar's text from an earlier install whose record is gone, so install skipped it.`, why: () => 'Install skips it the same way every time. Uninstall takes that text out, and it runs only once capture is off.',
+    commands: (c) => [trocar(c, 'trocar off'), trocar(c, 'trocar uninstall'), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
   'not-users-file': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} points at a certificate file that is not yours; trocar left it alone.`, why: () => 'trocar only appends to files you own.',
     commands: (c) => [gui(`Point ${c.h}'s certificate setting at a file you own`), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
+  'forward-only-host': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} talked to a host trocar forwards by design without reading it.`, why: () => 'trocar does not decrypt the hosts this form lists as forward-only (its own sign-in, update and download hosts).',
+    commands: (c) => [gui(`No action needed: ${c.h} keeps working, and its connections to these hosts are not decrypted`)], verify: (c) => `trocar status ${c.h}` },
   'not-verified': { cls: 'expected', trocarFirst: false, what: (c) => `This form of ${c.h} is not verified on this platform yet; it is forwarded only.`, why: () => 'trocar only decrypts the forms it has verified.',
     commands: (c) => [gui(`No action needed: ${c.h} keeps working, and these connections are not decrypted`)], verify: (c) => `trocar status ${c.h}` },
   // 4.11 P6: the API hosts its config names (status's `hosts`) are all on this machine, and loopback never reaches the door
   'local-upstream': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} sends its model calls to ${localHosts(c)}, a program on this machine, so trocar does not see them.`, why: () => 'Calls to this machine never go through a proxy, so they never reach trocar.',
     commands: (c) => [gui(`No action needed: ${c.h} keeps working, and its calls to ${localHosts(c)} are not recorded`)], verify: (c) => `trocar status ${c.h}` },
   'prior-proxy-unknown': { cls: 'note', trocarFirst: false, what: (c) => `trocar could not recover the proxy ${c.h}${c.pids && c.pids.length ? ` (pid ${c.pids.join(', ')})` : ''} started with.`,
-    why: () => 'The process that set it has quit, so trocar uses the system proxy, or none.', commands: (c) => [gui(setAt(c.h, placeOf(c.hf, null), unknownValue('proxy address', 'env-unreadable'))), trocar(c, `trocar on ${c.h}`), gui(`Restart ${c.h}`)],
+    why: () => 'The process that set it has quit, so trocar uses the system proxy, or none.', commands: (c) => [...setAt(c.h, placeOf(c.hf, null), unknownProxy('env-unreadable'), c.platform), trocar(c, `trocar on ${c.h}`), gui(`Restart ${c.h}`)],
     verify: (c) => `trocar status ${c.h}` },
-  'collectors-online': { cls: 'problem', trocarFirst: true, what: (c) => `Capture is still on${c.online ? ` for ${c.online}` : ''}, so nothing was uninstalled.`, why: () => 'trocar never turns capture off for you.', commands: (c) => [trocar(c, 'trocar off'), trocar(c, 'trocar uninstall')], verify: () => 'trocar status' },
+  'collectors-online': { cls: 'problem', trocarFirst: true, what: (c) => `Capture is still on${c.online ? ` for ${c.online}` : ''}, so nothing was uninstalled.`, why: () => 'trocar never turns capture off for you.', commands: (c) => [...(c.online || !(c.holders || []).length ? [trocar(c, 'trocar off')] : []),
+    // a process started while capture was on keeps trocar in its environment until it exits, and off cannot end it: quit it, and end what outlives that
+    ...[...new Set((c.holders || []).map((x) => x.harness))].flatMap((h) => [gui(`Quit ${h}; if one of these is still running after that, end it:`), ...c.holders.filter((x) => x.harness === h).map((x) => os(c, { linux: `kill ${x.pid}`, darwin: `kill ${x.pid}`, win32: `Stop-Process -Id ${x.pid}` }))]), trocar(c, 'trocar uninstall')], verify: () => 'trocar status' },
   // The user named the harness, and nothing in the facts explains it. trocar has no fact that says an agent cannot connect, so this does not claim it: a condition, a note.
   'cause-unknown': { cls: 'note', trocarFirst: true, what: (c) => `If ${c.h} still cannot connect: trocar found no cause on its side.`, why: () => 'Nothing trocar read explains it.',
     commands: (c) => [trocar(c, `trocar off ${c.h}`), gui(`Try ${c.h} again: if it still fails, trocar is not the cause; if it works, run trocar on ${c.h} and then trocar doctor ${c.h}`)], verify: (c) => `Try ${c.h} again` },
 }
 // the trust reasons not listed above (a variable missing, a file unreadable, …): the daemon's own hint says what to do about this agent
 const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'problem'), trocarFirst: false, what: (c) => `${c.h} is not captured${RESTART_REASONS.includes(c.code) ? `${c.pid ? `: pid ${c.pid} started` : ': it started'} before capture was on.` : `${c.pid ? `: pid ${c.pid}` : ''}.`}`,
-  why: (c) => c.hint || trustReasonText(c.code) || 'Certificates are read when a program starts.',
-  commands: (c) => (RESTART_REASONS.includes(c.code) ? restartSteps(c) : [trocar(c, `trocar status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `Follow ${c.h}'s own instructions`)]), verify: (c) => `trocar status ${c.h}` }
+  why: (c) => c.hint || trustReasonText(c.code) || statusReason(c.code, { harness: c.h })?.text || 'Certificates are read when a program starts.',
+  commands: (c) => {
+    if (RESTART_REASONS.includes(c.code)) return restartSteps(c)
+    const own = statusReason(c.code, { harness: c.h }) // a reason with its own way out (words.mjs) says it, rather than pointing back at status
+    if (own && (own.fix || own.command)) return [...(own.command ? [trocar(c, own.command)] : []), ...(own.fix ? [gui(own.fix)] : [])]
+    return [trocar(c, `trocar status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `Follow ${c.h}'s own instructions`)]
+  }, verify: (c) => `trocar status ${c.h}` }
 
 /** Every code a finding may carry: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — the Windows collector's own trust reasons (ROUTE_TRUST_REASONS, 4.8 §12) included,
  *  for the same reason TRUST_REASONS is: they are the codes of `agent-untrusted` a form's verdict can carry. The schema validates against this list. */
@@ -203,10 +248,12 @@ export const FINDING_CODES = Object.freeze([...new Set([...Object.keys(FINDINGS)
  *  does not have defines every field itself. A code neither catalogue names falls to the trust entry: the reasons the tracker can set are data, not caller bugs (the closed sets live in
  *  health/codes.mjs, held by its tests — a runtime throw here would take `doctor` down with a proxy-mode state like `smart-app-control`). */
 function make(code, ctx) {
-  const w = ctx.platform === 'win32' ? FINDINGS_WIN32[code] : null
+  // not-routed for a reason the route plan gave (a blocker, an absent entry file, …: 4.11 §3) reads the same on every OS; the Windows row words the system-proxy causes (route.why)
+  const planSaid = code === 'not-routed' && ctx.fm && ctx.fm.route && ctx.fm.route.reason && !ctx.fm.route.why
+  const w = ctx.platform === 'win32' && !planSaid ? FINDINGS_WIN32[code] : null
   const def = FINDINGS[code] || TRUST
   const c = { ...ctx, code }
-  c.removeOwn = userPlaces(c).map((p) => gui(removeAt(c.h, p))) // the user's own places, as steps: both catalogues name them (1.6 附录 B)
+  c.removeOwn = userPlaces(c).flatMap((p) => removeAt(c.h, p, c.platform)) // the user's own places, as steps: both catalogues name them (1.6 附录 B)
   const clsOf = (d) => (typeof d.cls === 'function' ? d.cls(c) : d.cls)
   const at = (f) => (w && w[f] ? w[f](c) : def[f](c))
   const pl = def.places ? def.places(c) : null
@@ -267,6 +314,8 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     for (const fm of hf.forms || []) { const fwf = F.forwarder && F.forwarder.forms && F.forwarder.forms[fm.id]; if (fwf && fwf.source === 'unknown') add('prior-proxy-unknown', { pids: fm.procs.map((p) => p.pid) }) }
     // the certificate axis of each form (proxy mode, 1.6 §9.4): one that is not in effect gives its own code, with the form's command (4.11 §3 ⑱)
     for (const fm of hf.forms || []) { const k = fm.certificate; if (k && !k.in_effect && k.code && FINDINGS[k.code]) add(k.code, { fm }) }
+    // driver mode (Linux) has no per-form certificate: the setup `on`'s ⑪ judges says the same codes, whatever the capture state (a bundle that lacks a CA breaks the agent off too)
+    if (F.routing === 'driver' && hf.installed && hf.setup && hf.setup.state === 'needed') for (const x of hf.setup.missing || []) if (SETUP_FINDING[x.what]) add(SETUP_FINDING[x.what], { fm: { certificate: { command: 'trocar install' } } })
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
     const listPath = F.agentList ? F.agentList.path : null
@@ -277,6 +326,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
   if (!named) {
     const host = { F, h: null, hf: null, t: null, user, sh, platform: F.platform }
     if (F.linger === false) out.push(make('linger-off', host))
+    if (F.autostart && F.autostart.state !== 'present') out.push(make('autostart-missing', host))
     if (F.cert && F.cert.key === 'missing') out.push(make('cert-key-missing', host)) // the daemon's issuer (its /status `cert`, 4.11 P2): the key first, it explains the intermediate
     else if (F.cert && F.cert.intermediate === 'unavailable') out.push(make('cert-intermediate-unavailable', host))
     if (F.otherRedirector === true) out.push(make('other-redirector', host))

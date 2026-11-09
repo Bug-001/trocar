@@ -57,13 +57,14 @@ export function parsedRequestBody(rec) {
 export const storedRequestBody = (rec) => (rec && typeof rec === 'object' ? memo(parsedBodies, rec, JSON.parse) : null);
 export const scannedRequestBody = (rec) => (rec && typeof rec === 'object' ? memo(scans, rec, scanJson) : null);
 
-// The wire content-encoding of the request body, or null (no encoding, or `identity`).
-export function requestEncodingOf(rec) {
-  const e = rec && rec.req_content_encoding;
+// A content-encoding header value naming a coding other than `identity` → the value trimmed; else null (also for a non-string).
+export function nonIdentityEncoding(e) {
   if (typeof e !== 'string') return null;
   const codings = e.split(',').map((s) => s.trim().toLowerCase()).filter((s) => s && s !== 'identity');
   return codings.length ? e.trim() : null;
 }
+// The wire content-encoding of the request body, or null (no encoding, or `identity`).
+export const requestEncodingOf = (rec) => nonIdentityEncoding(rec && rec.req_content_encoding);
 
 function decode(buf, encoding, maxBytes) {
   let cur = buf;

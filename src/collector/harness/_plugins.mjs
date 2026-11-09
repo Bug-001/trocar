@@ -12,7 +12,7 @@ const SLOTS = { caFile: "'__TROCAR_CA_FILE__'", markerDir: "'__TROCAR_MARKER_DIR
 export function renderPlugin(rel, { caFile, markerDir }) {
   const src = [rel].flat().map((r) => fs.readFileSync(new URL(r, PLUGIN_SOURCES), 'utf8')).join('')
   for (const [k, slot] of Object.entries(SLOTS)) if (src.split(slot).length !== 2) throw new Error(`plugin ${rel}: expected exactly one ${slot} (${k})`)
-  return src.replace(SLOTS.caFile, JSON.stringify(caFile)).replace(SLOTS.markerDir, JSON.stringify(markerDir))
+  return src.replace(SLOTS.caFile, () => JSON.stringify(caFile)).replace(SLOTS.markerDir, () => JSON.stringify(markerDir)) // functions: a `$` in a path is not a replacement pattern
 }
 
 export const SHIM_SOURCES = new URL('./shims/', import.meta.url)
