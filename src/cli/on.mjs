@@ -24,7 +24,7 @@ import { runModelOn } from './on-model.mjs'
 import { printJson } from './json.mjs'
 
 const USAGE = usageLine(commandNamed('on'))
-const FLAGS = new Set(['--dry-run', '--yes', '--json'])
+const FLAGS = new Set(['--dry-run', '--yes', '--details', '--json']) // --details: today's text is the full one (1.6 §1.1 ④)
 const chainText = (t) => renderCompact(t).join(BRANCH_SEP)
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 

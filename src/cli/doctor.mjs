@@ -26,7 +26,7 @@ import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 import { printJson } from './json.mjs'
 
-const USAGE = 'usage: trocar doctor [<harness>...] [--json]'
+const USAGE = 'usage: trocar doctor [<harness>...] [--details] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 const errText = (e) => String((e && (e.code || e.message)) || e)
@@ -195,6 +195,7 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--json') json = true
+    else if (a === '--details') { /* today's text is the full one (1.6 §1.1 ④) */ }
     else if (a.startsWith('-')) { io.err(`trocar doctor: unknown option '${a}'\n${USAGE}`); return EXIT.usage }
     else names.push(a)
   }

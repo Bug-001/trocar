@@ -35,7 +35,7 @@ import { printJson } from './json.mjs'
 import { isProxyMode } from '../off/mode.mjs'
 
 const USAGE = usageLine(commandNamed('update'))
-const FLAGS = new Set(['--yes', '--dry-run', '--json'])
+const FLAGS = new Set(['--yes', '--dry-run', '--details', '--json']) // --details: today's text is the full one (1.6 §1.1 ④)
 const NOT_GIT = 'this trocar is not a git checkout, so it cannot update itself. Update it the way you installed it.'
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 const AGAIN = 'Fix that, then run trocar update again'

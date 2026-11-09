@@ -583,7 +583,7 @@ function findingsFor(f, ids) {
   try { return diagnose({ facts: f.facts, topology: f.topology, harnesses: ids, user: f.user }) } catch (e) { rethrowSandbox(e); return [] }
 }
 
-const USAGE = 'usage: trocar status [<harness>...] [--failures] [--json]'
+const USAGE = 'usage: trocar status [<harness>...] [--failures] [--details] [--json]'
 
 /** → the exit code (§3.5). `argv` is what follows `status`. `io` = { out, err }. */
 export async function runStatusCli(argv, ctx = {}) { return (await statusRun(argv, ctx)).exit }
@@ -595,6 +595,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   for (const a of argv) {
     if (a === '--json') json = true
     else if (a === '--failures') failures = true
+    else if (a === '--details') { /* today's text is the full one (1.6 §1.1 ④) */ }
     else if (a.startsWith('-')) { io.err(`trocar status: unknown option '${a}'\n${USAGE}`); return { exit: EXIT.usage, f: null } }
     else names.push(a)
   }
