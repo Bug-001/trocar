@@ -39,7 +39,7 @@ function fit(text) {
 
 // a text of several lines (refuseOldManifest's refusal) keeps its lines, with HOME as `~` (§1.1⑤): a line at COMMAND_INDENT is a command to copy,
 // printed whole on its own line (§1.1⑥; `~` only for a POSIX HOME, where the shell expands it), every other line folded by fit
-const tildeWords = (s, home) => s.split(' ').map((w) => offTilde(w, home)).join(' ')
+const tildeWords = (s, home) => s.split(' ').map((w) => (w.startsWith('(') ? `(${offTilde(w.slice(1), home)}` : offTilde(w, home))).join(' ') // a path in parentheses too
 export const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeWords(l, home))))
 /** Rows of [label, value] as a labelled list (§1.1②, cli/text.mjs pairs' layout, written here for the same reason as fit): each label at column 2, padded so every
  *  value starts in one column; a value folds at its own column (never COMMAND_INDENT: that column is at least 2 + 1 + 2), a word longer than the room keeps
@@ -187,5 +187,61 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(n)))
   for (const n of r.notes || []) lines.push(...textLines(n, home)) // HOME as ~ (1.6 §1.1⑤), a note's command on its own line
   lines.push(...extra, footer || (past ? 'Certificates stay installed. To remove them: trocar uninstall' : 'Nothing was changed. Run it without --dry-run to do it.'))
+  return lines.join('\n')
+}
+
+// `5 codex and 13 pi processes`: src/cli/text.mjs countsBy, written here because the standalone trocar-off is made of src/off alone (0.1 §2)
+const counted = (items, keyOf) => {
+  const n = new Map()
+  for (const x of items) n.set(keyOf(x), (n.get(keyOf(x)) || 0) + 1)
+  const parts = [...n].map(([k, c]) => `${c} ${k}`)
+  return `${parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]} process${items.length === 1 ? '' : 'es'}`
+}
+
+/** The default text of `trocar off` (1.6 §3.4, §1.1 ④): the conclusion; the processes still passing through trocar as one line of counts; and
+ *  what the user must act on, each with its own command line — a file not undone (its backup and the line that puts it back), a fact not read
+ *  (D38), routing not confirmed off, a refusal. Every other fact (each file restored, your later keys, backups, the service, certificates,
+ *  `--now`) is formatOffReceipt's, which `--details` prints. `--dry-run` names each file it would undo. */
+// D38: a note that says a fact was not read; such notes are plain strings in the receipt (--json `notes`), so they are known by their words
+const UNREAD = /(cannot|could not) (be read|tell)|is not known|counted as still connected/
+export function formatOffText(r, { home = null, tense = r.dry_run ? 'future' : 'past' } = {}) {
+  if ((r.error && r.error.code === 'older-install') || r.nothing_installed) return formatOffReceipt(r, { home, tense }) // already only the conclusion and the way out
+  const past = tense !== 'future'
+  const t = (x) => offTilde(x, home)
+  const ids = (r.harnesses || []).map((h) => (typeof h === 'string' ? h : h && h.harness)).filter(Boolean)
+  const one = !r.all && ids.length === 1
+  const unread = (r.notes || []).filter((x) => UNREAD.test(x))
+  const lines = fit(!past ? `Capture will be turned off for ${r.all ? 'all your agents' : ids.join(', ')}.`
+    : r.ok === false ? (r.routing && r.routing.confirmed ? 'Capture is not fully off: trocar is off the path, but some files were not undone.' : 'Capture is not fully off. What to do is below.')
+      : unread.length ? 'Capture is off, but trocar could not check everything: what it could not read is below.'
+      : r.all || !ids.length ? "Capture is off. trocar is no longer on your agents' path." : `Capture is off for ${ids.join(', ')}. trocar is no longer on ${one ? 'its' : 'their'} path.`)
+  if (!past) { // the plan names every file of yours it undoes (§1.4)
+    const own = (p) => !!home && p.startsWith(home) && /^[\\/]\.trocar([\\/]|$)/.test(p.slice(home.length)) // trocar's own files (its switch files) are --details facts
+    for (const p of [...new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || []).map((x) => (typeof x === 'string' ? x : x.path))])].filter((p) => !own(p))) lines.push(`  ${t(p)}`) // a path is one value: whole on its own line, never folded at a space in it (§1.1⑥)
+  }
+  if (past && r.routing && !r.routing.confirmed) lines.push(...fit(`trocar could not confirm it is off their path (${r.routing.state || 'reason unknown'}). Run it again:`), `${COMMAND_INDENT}trocar off`)
+  if (r.relayed === 'unknown' && r.relayed_reason) lines.push(...fit(`Connections still going through trocar: unknown (${r.relayed_reason}).`))
+  if ((r.daemon || {}).state === 'unresponsive') lines.push("trocar's service does not answer and could not be stopped.")
+  if (r.holders === null) lines.push(...fit('Whether an agent is still connected through trocar: unknown (the process table could not be read).'))
+  else if ((r.holders || []).length) {
+    const who = [...new Map(r.holders.map((x) => [x.pid, x])).values()]
+    lines.push(...fit(`${counted(who, (x) => x.harness)} started earlier still ${who.length === 1 ? 'passes' : 'pass'} through trocar until ${who.length === 1 ? 'it exits' : 'they exit'}; nothing of ${who.length === 1 ? 'it' : 'theirs'} is recorded.`))
+  }
+  for (const p of (r.still_trusting || []).filter((x) => x.what === 'root')) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out with this line:`), `${COMMAND_INDENT}${p.command}`)
+  for (const k of (r.kept_bundles || []).filter((x) => x.holds_ca)) lines.push(...fit(`${t(k.path)} still holds the trocar certificate: it could not be rewritten (${k.error}). Fix that file, then run trocar off again.`))
+  if ((r.pending || []).length) {
+    lines.push(past ? "Found by trocar's own marks and not undone yet:" : "Will be undone by trocar's own marks:")
+    for (const p of r.pending) lines.push(...fit(`  ${t(p.path)}`))
+  }
+  for (const l of r.left || []) {
+    const reason = String(l.reason || l.result || ''), why = l.restore && reason.includes('; by hand: ') ? reason.slice(0, reason.indexOf('; by hand: ')) : reason
+    const said = why.startsWith(l.path || '\u0000') ? `${t(l.path)}${why.slice(l.path.length)}` : `${t(l.path)}: ${why}`
+    lines.push(...textLines(`Not undone: ${said}${l.restore ? '. To put the whole file back as it was before trocar, losing every change made to it since, run:' : ''}`, home))
+    if (l.restore) lines.push(`${COMMAND_INDENT}${l.restore}`)
+    if (l.command) lines.push(`${COMMAND_INDENT}${l.command}`)
+  }
+  for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(tildeWords(n, home))))
+  for (const n of unread) lines.push(...textLines(n, home)) // D38: a fact not read is never left to --details
+  if (!past) lines.push('Nothing was changed. Run it without --dry-run to do it.')
   return lines.join('\n')
 }

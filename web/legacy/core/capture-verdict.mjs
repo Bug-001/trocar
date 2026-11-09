@@ -123,7 +123,7 @@ export function agentVerdicts(doc, ov = null) {
   for (const g of list(doc && doc.failures && doc.failures.groups)) {
     if (!g || g.harness == null) continue
     const r = row(g.harness)
-    if (g.last_ts && (!r.lastFailure || String(g.last_ts) > String(r.lastFailure))) r.lastFailure = g.last_ts
+    if (g.level === 'problem' && g.last_ts && (!r.lastFailure || String(g.last_ts) > String(r.lastFailure))) r.lastFailure = g.last_ts // a newer note is not a failure (C.3 `latest`)
   }
   for (const c of list(doc && doc.changed)) if (c && c.harness != null) row(c.harness)
   for (const [id, t] of Object.entries(topo)) { const r = row(id); r.topology = t || null; r.findings = t && Array.isArray(t.findings) ? t.findings : null }

@@ -96,3 +96,20 @@ test('D38: a record that cannot be read back is named in errors and the page is 
   assert.ok(doc.errors.some((e) => e.where === victim.id), JSON.stringify(doc.errors))
   assert.ok(Array.isArray(doc.records))
 })
+
+// z-code: its CLI name differs from the harness id its records carry, and x-session-id keys its sessions (src/dissect/harnesses.mjs)
+test('1.6 §4.1 --harness: an agent CLI name and a record id pick the same rows; a name that is no agent is a usage error', async () => {
+  const home = await homeWithIndex([envLine({ ts: at(N), class: 'llm', harness: 'z-code', sessionKey: 's-z' })])
+  const ids = async (name, harness) => {
+    const doc = await runQuery(name, { harness, ...(name === 'calls' ? { class: 'llm,telemetry' } : {}) }, { home })
+    assert.deepEqual(doc.errors, [], `${name} --harness ${harness}`)
+    return name === 'calls' ? doc.records.map((r) => [r.id, r.harness]) : doc.sessions.map((s) => [s.id, s.harness])
+  }
+  for (const name of ['calls', 'sessions']) {
+    const byCli = await ids(name, 'z-code')
+    assert.equal(byCli.length, 1, `${name}: the one z-code row`)
+    assert.notEqual(byCli[0][1], 'z-code', `${name}: the rows carry the record id`)
+    assert.deepEqual(await ids(name, byCli[0][1]), byCli, name)
+    await assert.rejects(() => runQuery(name, { harness: 'z-code,nope' }, { home }), QueryArgError)
+  }
+})
