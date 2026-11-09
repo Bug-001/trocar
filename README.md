@@ -214,7 +214,7 @@ Node), the `trocar` launcher and the PATH item. On Windows the folder goes as so
 helper is one per machine and other accounts may use it, so while it is installed `uninstall` removes everything else
 of yours as usual and keeps only the code, the launcher and the PATH item, which removing the helper needs. It exits 0
 and prints the `sudo ... setup-helper --remove` line with full paths. If no other account uses trocar, run that line,
-then `trocar uninstall` once more: the second run removes the code, the launcher and the PATH item. `--remove` checks
+then `trocar uninstall` once more: the second run removes the code, the launcher and the PATH item (after `--purge-data`, nothing of trocar's is left). `--remove` checks
 every other account's home for a trocar install and removes nothing while it finds one or cannot read a home, naming
 them. Once trocar itself is gone, the receipt names the kept folders to delete by hand.
 
