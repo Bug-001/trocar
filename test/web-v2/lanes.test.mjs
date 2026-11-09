@@ -9,7 +9,8 @@ import { renderTicks, renderRails, railToggles, flipRail, wireRails, hasRails } 
 import { wireDetail } from '../../web/legacy/replay/detail.mjs'
 import { deskOf } from './desk-world.mjs'
 import { applySession } from '../../web/legacy/replay/model.mjs'
-import { LANE_KIND } from '../../web/legacy/labels/replay.mjs'
+import { LANE_KIND, TC_NO_SIZE } from '../../web/legacy/labels/replay.mjs'
+import { esc } from '../../web/legacy/core/fmt.mjs'
 import { laneMeta, eventOnly } from '../../src/view/analyze.mjs'
 import { HARNESSES } from '../../src/dissect/harnesses.mjs'
 
@@ -265,7 +266,7 @@ test('2.1 #20 · a token-count bar is known by its time: a count that gets its s
     const r = rng(seed), n = 1 + Math.floor(r() * 30)
     // times with ties, and some counts with no time at all
     const full = Array.from({ length: n }, (_, i) => ({ ts: r() < 0.15 ? null : new Date(T0 + Math.floor(r() * 8) * 1000).toISOString(), tokens: 100 + i, retention: 'full' }))
-      .sort((a, b) => (a.ts == null || b.ts == null ? 0 : a.ts.localeCompare(b.ts)))
+      .sort((a, b) => (a.ts ?? '~').localeCompare(b.ts ?? '~')) // the server's order: by time, the timeless last
     const sized = full.filter(() => r() < 0.7) // the ones measured so far: the others get their size later
     const row = (series) => buildLanes(deskOf([]), { count: n, series }).find((l) => l.kind === 'token-count')
     const before = row(sized), after = row(full)
@@ -281,4 +282,13 @@ test('2.1 #20 · a token-count bar is known by its time: a count that gets its s
       if (same) assert.equal(now.get(c.rid)?.ctx, c.ctx, `seed ${seed}: ${c.rid} still names the same count`)
     }
   }
+})
+
+test('2.1 §token 计数行: the row\'s "no size" number is probes.count − probes.series.length; a count with a size but no time is not one of them', () => {
+  const series = [{ ts: iso(T0 + 1000), tokens: 10, retention: 'full' }, { ts: null, tokens: 20, retention: 'full' }, { ts: iso(T0 + 2000), tokens: 30, retention: 'full' }]
+  const lanes = buildLanes(deskOf([{ kind: 'main', rows: [{}, {}] }]), { count: 5, series }), main = anchorLane(lanes)
+  const s = { lanes, anchor: main, anchorTs: main.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: main.calls.length }, selTick: null, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false }
+  const el = { innerHTML: '', querySelector: () => null }
+  renderRails(el, s)
+  assert.ok(el.innerHTML.includes(esc(TC_NO_SIZE(2))), 'two of five came back without a size')
 })

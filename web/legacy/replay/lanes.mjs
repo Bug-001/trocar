@@ -17,16 +17,17 @@ export function buildLanes(desk, probes, { prev = null, changed = null } = {}) {
   const old = new Map((prev || []).map((l) => [l.id, l]))
   const ls = [...desk.lanes.values()].map((h) => (changed && !changed.has(h.lane) && old.get(h.lane)) || laneObject(desk, h))
   // a count with no time has no place on the time axis: it is in `count`, never a bar (windowCalls searches the row by time)
-  const series = ((probes && probes.series) || []).filter((p) => p.ts != null)
+  const sized = ((probes && probes.series) || []).length, series = ((probes && probes.series) || []).filter((p) => p.ts != null)
   if (series.length) {
     // a count_tokens measurement is a ruler, not a conversation and not a lane of the server's: its own row key
     // 'token-count' (2.1's table) never collides with the server's `probe` lane (a warm-up request) — 1.3 #16.
     const count = (probes && probes.count) || series.length // the full truth: series only holds the ones with a size
-    // a bar is known by its time (2.1:17), the n-th of a tie by its place: a count that gets its size later moves no other bar's id
+    // a bar is known by its time (2.1:17), the n-th of a tie by its place: a count that gets its size later moves no other bar's id.
+    // shortcut: within one millisecond a late-sized count can still renumber the tie after it; name bars by record id if ties show up
     const tie = new Map()
     const calls = series.map((p) => { const k = tie.get(p.ts) || 0; tie.set(p.ts, k + 1)
       return { rid: `token-count:${p.ts}${k ? `#${k}` : ''}`, ts: p.ts, ctx: p.tokens || 0, probe: true, usage: null, retention: p.retention } })
-    ls.push({ id: 'token-count', kind: 'token-count', label: 'token count', calls, count, base: 0, events: [],
+    ls.push({ id: 'token-count', kind: 'token-count', label: 'token count', calls, count, sized, base: 0, events: [],
       ridLocal: new Map(calls.map((c, i) => [c.rid, i])), peakCtx: calls.reduce((m, c) => Math.max(m, c.ctx), 1), flagged: false })
   }
   return ls
