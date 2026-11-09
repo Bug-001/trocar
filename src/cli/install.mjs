@@ -370,7 +370,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && ((r.entryBefore && r.entryBefore !== 'present') || dmn.started) ? 'Installed. The certificates were in place; the login entry and the collector are up again.' : r.already && !(rep && rep.replaced) ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
     ...(r.already ? [] : changeLines(receipt, { home })),
     ...pairs([...replacedRow(rep, root), ...pathRow(done.path)], { home }),
-    ...[...notes, ...(helperNote ? [helperNote] : [])].map((n) => `Note: ${n}`), // the helper's command is the Next step below, on a line of its own
+    ...[...notes.filter((n) => !why.includes(n)), ...(helperNote ? [helperNote] : [])].map((n) => `Note: ${n}`), // the helper's command is the Next step below, on a line of its own; a bundle's why was said in the plan above
     ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: trocar install`] : []),
     ...problems.map((p) => `Problem: ${p}`),
     ...(problems.length ? [] : sudoHelper ? ['Next: install the capability helper with this line, then run trocar on:', commandLine(sudoHelper)] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3) or the helper (§3.8): neither is a next step until it is there

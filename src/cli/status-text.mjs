@@ -40,6 +40,8 @@ const CAPTURED = (h) => (h.captured === true ? 'yes' : h.desired === 'off' ? 'of
 const needsSetup = (x) => x.setup?.state === 'needed' && (x.setup.missing || []).some((m) => m.what !== 'root-missing')
 // the steps that set it up, from what is missing (4.11 P4b), as `on` gives them (model-on.mjs): the longest list, since install is every list's last step
 const setupFix = (x) => (x.setup.missing || []).filter((m) => m.what !== 'root-missing').map((m) => setupSteps(m.what)).reduce((a, c) => (c.length > a.length ? c : a), [])
+// a harness captured now whose setup is needed (its own update overwrote the carrier; a Linux bundle that lacks a CA): its next start, or the hosts that CA signs, are not
+const setupAgain = (x) => `set up again: ${setupFix(x).join(', then ')}`
 
 /** The one-screen summary of `trocar status` (§3.5). `doc` is the 附录 C.3 document. */
 /** C.3 `out_of_scope` (4.11 CM43): why an app on this machine is not captured. */
@@ -81,7 +83,7 @@ function summaryDetails(doc, { now = Date.now(), colors: c = noColor(), home = n
 }
 
 /** A harness's NOTE: what to set up, what is not seen yet, what is not known, or why it is not captured; `plain` in the default text's words, with no pid (§1.1 ④). */
-const noteOf = (x, h, pid, plain) => (needsSetup(x) && x.captured !== true ? `set up first: ${setupFix(x).join(', then ')}` : x.captured === true ? notSeenYet(x)
+const noteOf = (x, h, pid, plain) => (needsSetup(x) ? (x.captured === true ? setupAgain(x) : `set up first: ${setupFix(x).join(', then ')}`) : x.captured === true ? notSeenYet(x)
   : x.captured === null ? ((x.why || []).length ? openText(x, h, undefined, plain) : notSeenYet(x) || openText(x, h, undefined, plain))
     : noteText(x.reason, { harness: h, pid: plain ? null : pid && pid.pid, cause: pid && pid.cause, plain }))
 
@@ -204,7 +206,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
   if (!x) return [`${h}: ${unknown('it is not set up on this machine')}`, ...outOfScopeLines(doc, h)]
   // here only as forms trocar does not capture, and in no install record: nothing to turn on or fix, only why (4.6 「不采的形态」)
   if (x.present === false && !((doc.install && doc.install.harnesses) || []).includes(h) && uncapturedText(x, home).length) return [c.bold(`${h}: not captured on this machine`), '', ...uncapturedText(x, home).flatMap((s) => wrap(`Note: ${s}`, WIDTH - 2, '      ').map((t) => `  ${t}`))]
-  const verdict = x.captured === true ? ['captured', notSeenYet(x)].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
+  const verdict = x.captured === true ? ['captured', notSeenYet(x), needsSetup(x) && setupAgain(x)].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
   const lines = [c.bold(`${h}: ${DESIRED[x.desired] || unknown('its on/off state could not be read')}, ${verdict}`), ...outOfScopeLines(doc, h), '']
   const rows = []
   if (finding) {

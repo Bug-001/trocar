@@ -386,7 +386,7 @@ for (const [name, seed] of [['codex', codexHome], ['hermes', (home) => { fs.mkdi
     assert.ok((io.json().notes || []).some((n) => n.includes(bundle) && n.includes('it lacks a CA your settings add now')), 'the plan says why')
     io = fakeIo()
     assert.equal(await runInstallCli(['--yes'], ctx(io, shell)), 0, io.text())
-    assert.match(io.text().replace(/\s+/g, ' '), /it lacks a CA your settings add now/) // the receipt says why (folded at 80 columns)
+    assert.equal(io.text().replace(/\s+/g, ' ').split('it lacks a CA your settings add now').length - 1, 1, 'the run says why once: the plan above the receipt says it') // folded at 80 columns
     assert.ok(fps(fs.readFileSync(bundle, 'utf8')).includes(fps(ca)[0]), 'the bundle holds the CA now')
     assert.deepEqual(await setupNow(), { state: 'ready', missing: [], uncaptured: [] })
   })
