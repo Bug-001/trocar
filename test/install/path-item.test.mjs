@@ -53,7 +53,7 @@ test('V112 V113: a script-channel install adds the PATH item once; uninstall tak
   fs.mkdirSync(path.dirname(launcherPath(home, 'linux')), { recursive: true }); fs.writeFileSync(launcherPath(home, 'linux'), '#!/bin/sh\n')
   const rc = path.join(home, '.bashrc'); const mine = 'alias ll="ls -l"\n'; fs.writeFileSync(rc, mine)
   const raw = path.join(home, '.trocar', 'raw', 'r.ndjson'); fs.mkdirSync(path.dirname(raw), { recursive: true }); fs.writeFileSync(raw, '{"keep":1}\n')
-  const ctx = (io) => { const c = onCtx(home, io); return { ...c, platform: 'linux', env: { ...c.env, SHELL: '/bin/bash' }, deps: { ...c.deps, root } } }
+  const ctx = (io) => { const c = onCtx(home, io); return { ...c, platform: 'linux', env: { ...c.env, SHELL: '/bin/bash' }, deps: { ...c.deps, root, fs: helperFs(false) } } }
 
   const io = fakeIo()
   assert.equal(await runInstallCli(['--yes', '--json'], ctx(io)), 0, io.text())
@@ -102,6 +102,8 @@ test('D74⑤: the Windows PATH script finds and takes out the element with or wi
   }
 })
 
+// the helper is there or not as the test says, whatever the machine running it has (a Linux host with trocar's helper installed)
+const helperFs = (on) => ({ ...fs, existsSync: (p) => (p === DEFAULT_REDIRECTOR_BIN ? on : fs.existsSync(p)) })
 // a script install on Linux with records on disk; `helper`: the capability helper is installed (its fixed path exists)
 function scriptLinux({ helper = false } = {}) {
   const home = tmpDir('trocar-path-helper-')
@@ -113,8 +115,7 @@ function scriptLinux({ helper = false } = {}) {
   fs.mkdirSync(path.dirname(launcherPath(home, 'linux')), { recursive: true }); fs.writeFileSync(launcherPath(home, 'linux'), '#!/bin/sh\n')
   const rc = path.join(home, '.bashrc'); fs.writeFileSync(rc, 'alias ll="ls -l"\n')
   const raw = path.join(home, '.trocar', 'raw', 'r.ndjson'); fs.mkdirSync(path.dirname(raw), { recursive: true }); fs.writeFileSync(raw, '{"keep":1}\n')
-  const withHelper = { ...fs, existsSync: (p) => p === DEFAULT_REDIRECTOR_BIN || fs.existsSync(p) }
-  const ctx = (io, h = helper) => { const c = onCtx(home, io); return { ...c, platform: 'linux', env: { ...c.env, SHELL: '/bin/bash' }, deps: { ...c.deps, root, ...(h ? { fs: withHelper } : {}) } } }
+  const ctx = (io, h = helper) => { const c = onCtx(home, io); return { ...c, platform: 'linux', env: { ...c.env, SHELL: '/bin/bash' }, deps: { ...c.deps, root, fs: helperFs(h) } } }
   return { home, rc, raw, ctx, root }
 }
 

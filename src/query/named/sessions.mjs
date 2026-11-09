@@ -15,7 +15,7 @@
 import { sessionMetaOfFacts } from '../../view/board.mjs';
 import { TITLE_BUDGET_MS, titleOf, saveTitles, backgroundOnly } from '../titles.mjs';
 import { asOf, indexRows, sessionGroups, sessionFactsOf } from '../rows.mjs';
-import { listOf, paginate, tsFilter } from './index.mjs';
+import { harnessIds, paginate, tsFilter } from './index.mjs';
 import { HARNESS, PAGE, WINDOW } from './about.mjs';
 
 export const about = Object.freeze({
@@ -30,7 +30,7 @@ export const params = Object.freeze(Object.keys(about.params));
 export const stored = (p) => Object.keys(p).every((k) => k === 'limit' || k === 'after');
 
 export async function run({ home, fs, now, params: p, errors, later = null, progress = null, writer = false }) {
-  const keep = tsFilter(p, now), harness = listOf(p.harness);
+  const keep = tsFilter(p, now), harness = harnessIds(p, 'sessions');
   const index = await indexRows({ home, fs, errors, progress });
   const rows = p.since == null && p.until == null ? index : index.filter((r) => keep(r.ts)); // no window: the list and its session index
   const rowsOf = new Map();

@@ -18,5 +18,5 @@ export const PAGE = Object.freeze({
   limit: `The most rows on one page: a whole number, ${LIMIT_DEFAULT} if not given, ${LIMIT_MAX} at most.`,
   after: 'Where the page starts: the next field of the previous answer. Without it, the first page.',
 });
-/** `--harness` where it picks rows of the answer; `status` and `doctor` take the agents' CLI names instead. */
-export const HARNESS = 'Only these agents: comma-separated values of the harness field of this answer. Without it, every agent.';
+/** `--harness` where it picks rows of the answer: the agents' CLI names, or the harness field's values (named/index.mjs harnessIds). */
+export const HARNESS = 'Only these agents: comma-separated names, such as claude-code,codex, or values of the harness field of this answer. Without it, every agent.';

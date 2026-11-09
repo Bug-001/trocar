@@ -14,7 +14,7 @@ import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
 import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
 import { CODE } from '../codes.mjs'
-import { FINDINGS, findingFor } from '../../../netenv/findings.mjs'
+import { FINDINGS, findingFor, setupSteps } from '../../../netenv/findings.mjs'
 import { checkWrapper } from './hooks/wrapper.mjs'
 import { sha256, readOrNull } from '../../../off/fsutil.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
@@ -89,7 +89,7 @@ function bundleGap(desc, c, inst, ctx, fs) {
 }
 
 /** The commands that fix a `setup.missing[].what`, in order (4.11 P4b): its finding's steps when the catalogue has one (1.6 附录 B), else install writes what is missing. */
-export const setupSteps = (what) => (Object.hasOwn(FINDINGS, what) ? findingFor(what).commands.map((c) => c.run) : [INSTALL])
+export { setupSteps } // its home is the finding catalogue, which needs it too (src/netenv/findings.mjs)
 
 /**
  * setupOf(desc, { os, manifest, ctx, root, fs, forms }) → { state: 'ready' | 'needed' | 'unknown', missing: [{ form, what }], reason? } — 4.11 P4b, the ONE judgement
