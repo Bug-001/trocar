@@ -762,3 +762,22 @@ test('§1.1 ④: the default text of every update says no unsaid word, and --det
     for (const f of facts) assert.ok(details.includes(same(f)), `${what}: --details says ${JSON.stringify(f)}:\n${out['--details']}`)
   }
 })
+
+// 1.6 §5.5 · C.2: what the install and the on an update ran leave to the user (`pending`, with the command to run) is the update's to-do: its default
+// text says each item and each command, whether the finish closed or stopped on that step
+test('§5.5: every pending item of the install and the on an update ran is in the update\'s default text, with its command', async () => {
+  const item = (who) => ({ what: `${who}-thing`, reason: `${who}-${Math.random().toString(36).slice(2, 8)} is yours to do`, command: `sudo /opt/${who}/fix --now` })
+  const doc = (command, pending, ok = true) => async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt(command), ok, problems: [], notes: [], pending })); return ok ? EXIT.ok : EXIT.incomplete }
+  for (const [what, deps, items] of [
+    ['an install that finished', (i) => ({ install: doc('install', i) }), [item('install')]],
+    ['an on that finished', (i) => ({ on: doc('on', i) }), [item('on')]],
+    ['an install that stopped', (i) => ({ install: doc('install', i, false) }), [item('install'), item('install')]],
+  ]) {
+    const s = sandbox()
+    fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+    const t = ctx(s, { deps: deps(items) })
+    await runUpdateCli(['--yes'], t.c)
+    const text = t.io.text().replace(/\s+/g, ' ')
+    for (const p of items) for (const part of [p.reason, p.command]) assert.ok(text.includes(part), `${what}: ${part}\n${t.io.text()}`)
+  }
+})
