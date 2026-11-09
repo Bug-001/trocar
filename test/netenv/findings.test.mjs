@@ -531,6 +531,20 @@ test('4.11 P4b: entry-missing with a needed setup (carrier-absent) says trocar i
   assert.deepEqual(run({}), [['trocar on claude-code']])
 })
 
+// 4.11 P4b (driver mode): while the setup is needed `on` refuses, so every fix of the harness that runs `trocar on` starts with what lets it run,
+// `trocar install` — whatever the finding's code (a verdict `entry-changed` beside setup `carrier-absent`, or capture off)
+test('4.11 P4b: with a needed setup, each of the harness\'s fixes that runs trocar on comes after trocar install', () => {
+  const setup = { state: 'needed', missing: [{ form: 'claude-code', what: 'carrier-absent' }], uncaptured: [] }
+  const fixes = (over, hOver) => findingsOf(facts('claude-code', over, { procs: [], installed: true, setup, ...hOver }), ['claude-code'])
+  const ons = (fs) => fs.filter((f) => f.commands.some((c) => /^trocar on\b/.test(c.run)))
+  for (const fs of [fixes({}, { entry: { state: 'changed' } }), fixes({ desired: { 'claude-code': 'off' } }, {})]) {
+    assert.ok(ons(fs).length, `the shape: a fix that runs trocar on: ${JSON.stringify(fs.map((f) => [f.code, f.commands]))}`)
+    for (const f of ons(fs)) assert.equal(f.commands[0].run, 'trocar install', `${f.code}: ${JSON.stringify(f.commands)}`)
+  }
+  // without the setup, the same fixes are as they were
+  assert.ok(ons(findingsOf(facts('claude-code', {}, { procs: [], installed: true, entry: { state: 'changed' } }), ['claude-code'])).every((f) => f.commands[0].run !== 'trocar install'))
+})
+
 test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the route record\'s reason and place), and uninstall\'s collectors-online gives trocar off then trocar uninstall', async () => {
   const nr = (reason, at) => findingsOf(pfacts('hermes', form('hermes.cli', { entry: null, route: { code: 'not-routed', reason, ...(at ? { at } : {}) }, procs: [] }), fwForm(17993), { platform: 'darwin' }), ['hermes']).find((f) => f.code === 'not-routed')
   const absent = nr('absent', '/Users/a/.hermes/.env')

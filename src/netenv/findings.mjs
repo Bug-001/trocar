@@ -17,9 +17,9 @@ const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 
 // ── what a command is ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const trocar = (ctx, run) => ({ run, shell: ctx.sh })
-/** An install item of the form that drifted (proxy mode: the carrier, a wrapper or a plugin; 1.6 §9.3 row 31): the command its `certificate` names, `trocar install`. */
 /** 4.11 P4b: a `setup.missing[].what` → the finding that says it, one mapping for both readers (proxy mode's form certificate, driver mode's setup). */
 export const SETUP_FINDING = Object.freeze({ 'carrier-absent': 'entry-missing', 'carrier-overwritten': 'entry-changed', 'bundle-lacks-ca': 'bundle-lacks-ca', 'marked-without-record': 'marked-without-record' })
+/** An install item of the form that drifted (proxy mode: the carrier, a wrapper or a plugin; 1.6 §9.3 row 31): the command its `certificate` names, `trocar install`. */
 const installFix = (c) => (c.fm && c.fm.certificate && c.fm.certificate.command ? [trocar(c, c.fm.certificate.command)] : null)
 const os = (ctx, byPlatform) => ({ run: byPlatform[ctx.platform] || byPlatform.linux, shell: ctx.platform === 'win32' ? 'powershell' : 'sh' })
 const gui = (run) => ({ run, shell: 'gui' })
@@ -316,12 +316,15 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     for (const fm of hf.forms || []) { const k = fm.certificate; if (k && !k.in_effect && k.code && FINDINGS[k.code]) add(k.code, { fm }) }
     // driver mode (Linux) has no per-form certificate: the setup `on`'s ⑪ judges says the same codes, whatever the capture state (a bundle that lacks a CA breaks the agent off too).
     // It replaces the verdict's finding of the same code (entry-missing): `on` refuses while the setup is needed, so its fix is install's
-    if (F.routing === 'driver' && hf.installed && hf.setup && hf.setup.state === 'needed') for (const x of hf.setup.missing || []) if (SETUP_FINDING[x.what]) found.set(SETUP_FINDING[x.what], make(SETUP_FINDING[x.what], { ...base, fm: { certificate: { command: 'trocar install' } } }))
+    const setupNeeded = F.routing === 'driver' && hf.installed && hf.setup && hf.setup.state === 'needed' && (hf.setup.missing || []).some((x) => SETUP_FINDING[x.what])
+    if (setupNeeded) for (const x of hf.setup.missing) if (SETUP_FINDING[x.what]) found.set(SETUP_FINDING[x.what], make(SETUP_FINDING[x.what], { ...base, fm: { certificate: { command: 'trocar install' } } }))
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
     const listPath = F.agentList ? F.agentList.path : null
     for (const u of (F.identity && F.identity[h] && F.identity[h].unknown) || []) found.set(`process-unknown\u0000${u.name}`, make('process-unknown', { ...base, u, listPath }))
     if (named && F.desired[h] === 'on' && hf.installed !== false && ![...found.values()].some((f) => f.class !== 'note')) add('cause-unknown') // a failure or an expected finding already says why; only hints (about the data) leave it open
+    // and any other fix of this harness that runs `trocar on`, which refuses until then, starts with what lets it run (one way out that works, 1.6 §1.1)
+    if (setupNeeded) for (const [k, f] of found) if (f.commands.some((c) => /^trocar on\b/.test(c.run)) && f.commands[0].run !== 'trocar install') found.set(k, { ...f, commands: [trocar(base, 'trocar install'), ...f.commands] })
     out.push(...[...found.values()].sort((a, b) => BY_CLASS[a.class] - BY_CLASS[b.class]))
   }
   if (!named) {

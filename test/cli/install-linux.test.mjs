@@ -362,13 +362,12 @@ for (const [name, seed] of [['codex', codexHome], ['hermes', (home) => { fs.mkdi
     const bundle = path.join(home, '.trocar', 'collector', 'ca', `combined-${name}.pem`)
     assert.ok(fs.existsSync(bundle) && !fps(fs.readFileSync(bundle, 'utf8')).includes(fps(ca)[0]), 'built without it')
     const shell = { SSL_CERT_FILE: caFile }
-    const { runStatus } = await import('./fixtures/status-ctx.mjs')
+    const { runStatus, asDaemon, reply } = await import('./fixtures/status-ctx.mjs')
     const { linuxNetFacts } = await import('../../src/collector/arch/linux/netfacts.mjs')
     const s = { home, sh: { env: { HOME: home, ...shell } }, sys: { exec: { run: () => ({ status: 0, stdout: '', stderr: '' }) } } }
     const setupNow = async () => JSON.parse((await runStatus(s, ['--json', name], { deps: { netFactsDeps: async () => ({ harnesses: [desc], archFacts: linuxNetFacts }) } })).text).harnesses[name].setup
     assert.deepEqual(await setupNow(), { state: 'needed', missing: [{ form: name, what: 'bundle-lacks-ca' }], uncaptured: [] })
     // whatever the capture state (the daemon says on): doctor carries the finding and exits 1; `status <harness>` names it with trocar install
-    const { asDaemon, reply } = await import('./fixtures/status-ctx.mjs')
     const { runDoctor } = await import('../../src/cli/doctor.mjs')
     const sdeps = { request: asDaemon(reply({ harnesses: { [name]: { desired: 'on' } } })), deps: { netFactsDeps: async () => ({ harnesses: [desc], archFacts: linuxNetFacts }) } }
     const st = await runStatus(s, ['--json', name], sdeps)
