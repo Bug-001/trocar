@@ -62,6 +62,7 @@ for (const os of ['darwin', 'win32']) {
     const text = (await on(w, os, ['--dry-run', '--details'])).io.text() // what changes in each file is a --details fact (§3.3)
     assert.ok(planned.length >= 2 && planned.every((p) => p.paths.length), JSON.stringify(planned))
     for (const f of planned.flatMap((p) => p.paths)) assert.match(text, new RegExp(`${f.replace(w.home, '~').replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}: \\S`), `${f}: the row says what changes there\n${text}`)
+    for (const k of planned.flatMap((p) => p.keys || [])) assert.ok(text.includes(k), `--details names the key ${k}\n${text}`) // §3.3: the keys are a --details fact
   })
 
   // D61 / 1.6 §3.3 (H-2): the login entry is install's, so an `on` with none would leave the agents pointing at doors nobody opens
@@ -479,5 +480,27 @@ test('1.6 §3.3 (darwin): on names the processes started before capture was on, 
     assert.deepEqual(first.io.json().restart, [{ harness: 'codex', pid: 5530 }], 'the one started before on; not the later one, not a shell')
     const again = await run(['codex', '--yes', '--json'])
     assert.deepEqual(again.io.json().restart, [], 'codex was already on: this on turned nothing on, so nothing to restart')
+  } finally { await server.close() }
+})
+
+// 1.6 §3.3「登记过的副作用」: an on that newly adds OpenCode's route says the descriptor's short sentence once before the question or, under --yes,
+// before the receipt; an on that adds nothing says none, and --json carries the full one in `notes`
+test('1.6 §3.3 (darwin): a route this on adds says its registered side effect once, also under --yes; an on that adds nothing says none', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['opencode'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const effect = w.harnesses.find((d) => d.name === 'opencode').proxyMode.effects[0]
+  const times = (r) => r.io.text().replace(/\s+/g, ' ').split(effect.short).length - 1
+  try {
+    assert.equal(times(await on(w, 'darwin', ['opencode', '--dry-run'])), 1, 'the plan says it once')
+    const first = await on(w, 'darwin', ['opencode', '--yes'])
+    assert.equal(first.exit, 0, first.io.text())
+    assert.equal(times(first), 1, `--yes says it once:\n${first.io.text()}`)
+    assert.equal(times(await on(w, 'darwin', ['opencode', '--yes'])), 0, 'nothing new: not said again')
   } finally { await server.close() }
 })

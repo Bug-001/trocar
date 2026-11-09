@@ -23,13 +23,13 @@ const errText = (e) => String((e && e.message) || e)
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 
 // §1.4「计划写全」: every planned route by the full path (and key) it will write; a route that writes no file of yours says why instead
-const planLine = (p, home) => [p.harness, p.paths.length ? `${p.paths.map((x) => tilde(x, home)).join(', ')}: ${routeWords(p)}` : `no file of yours: trocar hands ${p.harness} the setting as it starts`] // 1.6 §3.3: path: what changes there
+const planLine = (p, home) => [p.harness, p.paths.length ? `${p.paths.map((x) => tilde(x, home)).join(', ')}: ${routeWords(p)}${(p.keys || []).length ? ` (${p.keys.join(', ')})` : ''}` : `no file of yours: trocar hands ${p.harness} the setting as it starts`] // 1.6 §3.3: path: what changes there
 const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
 // 1.6 §1.1: the headline of a run that did not finish names the harnesses that did not: refused, or a route of theirs not written
 const unfinished = (r) => [...new Set([...r.refused.map((x) => x.harness), ...(r.routes || []).filter((x) => !x.ok).map((x) => x.harness)])]
 // 1.6 §3.3 · §1.1 ④: the notes the default text says — a step left to do (install pending), a fact not read (D38), a form that only forwards (invariant 4).
-// The rest (loopback, a registered side effect, a launch that skips the hook, a port moved) is said once elsewhere, and --details prints it.
-const saysNow = (n) => n.code === 'install-pending' || !!n.form || /could not be (told|read)/.test(n.text || '')
+// The rest (loopback, a registered side effect such as a host-tree form's, a launch that skips the hook, a port moved) is said once elsewhere, and --details prints it.
+const saysNow = (n) => n.code === 'install-pending' || /could not be (told|read)/.test(n.text || '')
 function shortReceipt(r, exit, home) {
   const failed = [...new Map((r.routes || []).filter((x) => !x.ok).map((x) => [`${x.harness}|${x.at || x.route}|${x.reason}`, x])).values()].map((x) => {
     const at = x.at ? tilde(x.at, home) : x.route ? formWords(`.${x.route}`) : ''
@@ -82,7 +82,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const dir = path.join(home, '.trocar', 'collector')
   const run = new Date().toISOString() // on every line this run writes, so the board's "last on" is this run's lines (as install's, 1.6 §1)
   const put = (rec) => { try { if (fs.existsSync(dir)) appendEvent(dir, { ...rec, run, ...(source ? { source } : {}) }) } catch { /* the receipt carries it (R11) */ } }
-  const [{ turnOnModel, offSince, offWords, STOPPED_BY_OFF }, { backendsFor, sourcesCtx, systemProxyNow }, { renderHook }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs')])
+  const [{ turnOnModel, offSince, offWords, STOPPED_BY_OFF }, { backendsFor, sourcesCtx, systemProxyNow }, { renderHook }, { hostTreeNote }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs'), import('../collector/core/proxymode/entries.mjs')])
   const b = deps.backends || (await backendsFor({ os, home, run: deps.exec || null, env, fs }))
   const ctx = deps.ctx || sourcesCtx({ os, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
   const args = { os, home, env, ids, harnesses: deps.harnesses || parts.harnesses, ctx, fs, renderHook, rootStore: b.rootStore || null, persistentEnv: (b.facts && b.facts.persistentEnv) || null, source, ...(deps.now ? { now: deps.now } : {}) }
@@ -136,13 +136,18 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   // V85: trocar's own tree (the record, the desired state, ingress.json) is one more row; it is no setting of yours, so no yes is asked for it
   const own = ownTreeItem(home, os), planned = [...plan.planned, own]
   // 1.6 §3.3「要确认时」: the default plan is printed when a yes is asked (or for --dry-run): one line per agent and file of yours, `new` on a file
-  // not confirmed last time, then each registered side effect of a route this on adds, once. --details prints the full plan on every run.
+  // not confirmed last time, then each registered side effect of a route this on adds, once (a host-tree form's, the descriptor's `effects` by their
+  // short sentence) — under --yes, with no plan to print, the side effects alone, before the receipt. --details prints the full plan on every run.
+  const added = fresh.length ? plan.planned.filter((p) => !p.paths.length || p.paths.some((x) => fresh.includes(x))) : []
+  const effects = [...new Map(args.harnesses.filter((d) => added.some((p) => p.harness === d.name)).flatMap((d) => {
+    const forms = new Set(added.filter((p) => p.harness === d.name).flatMap((p) => p.forms || [])), pm = d.proxyMode || {}
+    return [...(pm.forms || []).filter((f) => f.hostTree && forms.has(f.id)).map((f) => [f.id, `${d.name}: ${hostTreeNote(f.id)}.`]), ...(pm.effects || []).map((e) => [e.id, `${d.name}: ${e.short || e.when}.`])]
+  })).values()]
   if (plan.on.length && !details && (flags.has('--dry-run') || (fresh.length && !flags.has('--yes')))) {
-    const newOnes = new Set(plan.planned.filter((p) => !p.paths.length || p.paths.some((x) => fresh.includes(x))).map((p) => p.harness))
-    const effects = [...new Map(args.harnesses.filter((d) => newOnes.has(d.name)).flatMap((d) => ((d.proxyMode || {}).effects || []).map((e) => [e.id, `${d.name}: ${e.when}.`]))).values()]
     say(fit(['trocar on will point these agents at trocar:', ...pairs(plan.planned.flatMap((p) => (p.paths.length ? p.paths.map((x) => [p.harness, `${tilde(x, home)}${seen.size && fresh.includes(x) ? '  new' : ''}`]) : [[p.harness, 'no file of yours']])), { home }), ...effects], { home }).join('\n'))
   } else if (plan.on.length && details) say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
     ...pairs([...plan.planned.map((p) => { const [h, v] = planLine(p, home); return [h, isNew(p) ? `${v} (new since you last said yes)` : v] }), [own.what, own.detail]], { home })], { home }).join('\n'))
+  else if (plan.on.length && effects.length) say(fit(effects, { home }).join('\n'))
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
   if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup, plan) }), EXIT.incomplete) // nothing to turn on: no daemon started

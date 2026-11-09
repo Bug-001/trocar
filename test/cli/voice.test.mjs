@@ -4,7 +4,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { andList, countsBy } from '../../src/cli/text.mjs'
-import { unsaidIn } from '../../src/cli/words.mjs'
+import { unsaidIn, loopbackWords } from '../../src/cli/words.mjs'
+import { hostTreeNote } from '../../src/collector/core/proxymode/entries.mjs'
 import { formatUninstallReceipt, formatUninstallText, formatOnReceipt, formatOnText, formatOnPlan } from '../../src/cli/receipt.mjs'
 import { formatModelOnReceipt, formatModelOnText } from '../../src/cli/on-model.mjs'
 import { newReceipt } from '../../src/off/schema.mjs'
@@ -189,16 +190,19 @@ test('on (Linux): the default plan and receipt say no unsaid word and no pid; --
 test('on (macOS / Windows): the default receipt says no unsaid word and no pid; --details holds every path and pid; every command is on a line of its own', () => {
   for (const platform of ['darwin', 'win32']) {
     const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+    const hostTree = { harness: 'kimi-code', code: 'harness-note', form: 'kimi-code.vscode', text: hostTreeNote('kimi-code.vscode') } // a registered side effect: said once, in the plan
+    const pending = { harness: null, code: 'install-pending', item: 'root', state: 'declined', why: 'the trust store said no', command: 'trocar install' } // a form that only forwards (invariant 4)
     const r = { ...onReceipt({}, platform), routes: [{ harness: 'claude-code', route: 'settings', at: j('.claude', 'settings.json'), ok: true }, { harness: 'codex', route: 'env', at: j('.codex', '.env'), ok: true },
       { harness: 'z-code', route: 'cli', at: j('.zcode', 'config.json'), ok: false, code: 'not-routed', reason: 'own-egress' }, { harness: 'z-code', route: 'app', at: j('.zcode', 'app.json'), ok: false, code: 'not-routed', reason: 'blocker' }],
-      notes: [{ code: 'loopback-direct', hosts: ['localhost'], text: 'requests to localhost are not captured' }, { harness: 'codex', code: 'harness-note', form: 'codex.vscode', text: 'codex.vscode runs inside another program: trocar passes those connections on without capturing them' }] }
+      notes: [{ code: 'loopback-direct', hosts: ['localhost'], text: loopbackWords(['localhost']) }, hostTree, pending] }
     const text = formatModelOnText(r, 1, home), details = formatModelOnReceipt(r, 1, home)
     assert.deepEqual(unsaidIn(text), [], `${platform}:\n${text}`)
-    for (const pid of r.restart.map((x) => x.pid)) { assert.ok(!text.includes(String(pid)), text); assert.ok(details.includes(String(pid)), `${platform}: --details names ${pid}`) }
+    const prose = text.split('\n').filter((l) => !/^ {4}\S/.test(l)).join('\n')
+    for (const pid of r.restart.map((x) => x.pid)) { assert.ok(!prose.includes(String(pid)), text); assert.ok(details.includes(String(pid)), `${platform}: --details names ${pid}`) }
     for (const x of r.routes) assert.ok(details.includes(`~${x.at.slice(home.length)}`) || details.includes(x.at), `${platform}: --details names ${x.at}`)
     for (const c of [...r.refused.flatMap((x) => x.commands), 'trocar on z-code']) assert.ok(onItsOwnLine(text, c), `${c}:\n${text}`)
-    assert.ok(text.includes('codex.vscode runs inside another program'), 'a form that only forwards stays in the default text (invariant 4)')
-    assert.ok(!text.includes('requests to localhost'), 'the loopback note is --details only')
+    assert.ok(text.includes(pending.command) && text.includes(pending.why), 'a form that only forwards stays in the default text (invariant 4)')
+    for (const n of [hostTree, r.notes[0]]) { assert.ok(!text.includes(n.text), `said once elsewhere, not in the default text:\n${text}`); assert.ok(details.replace(/\s+/g, ' ').includes(n.text), '--details prints it') }
   }
 })
 
