@@ -155,7 +155,7 @@ test('0.1 §3 src/off, src/cli and src/netenv reach node:child_process only thro
   assert.deepEqual(childProcessUsers(root).sort(), ['src/cli/b.mjs', 'src/cli/d.mjs', 'src/netenv/c.mjs', 'src/off/a.mjs'])
 })
 
-test('runAsync quiet settles on the child\'s exit, not when something it started lets go of the pipes; past the timeout it is status null', { skip: process.platform === 'win32', timeout: 20_000 }, async () => {
+test('runAsync quiet settles on the child\'s exit, not when something it started lets go of the pipes; past the timeout it is status null', { skip: process.platform === 'win32' && 'its tools are shell-script stubs', timeout: 20_000 }, async () => {
   // the stubs' own `sleep` must resolve: with PATH = bin alone it is "not found" (127) at once, so the timeout case only passed when the machine was slow
   const bin = tmpDir('trocar-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
   stub(bin, 'opener', 'sleep 5 & exit 0'); stub(bin, 'stuck', 'exec sleep 5'); stub(bin, 'nope', 'exit 3')
@@ -166,7 +166,7 @@ test('runAsync quiet settles on the child\'s exit, not when something it started
   assert.equal((await runAsync('nope', [], { env, timeout: 3000, quiet: true })).status, 3)
 })
 
-test('MA15 an answer already in the pipe is whole when the event loop gets to it only after the limit: a callback stalled past it costs nothing', { skip: process.platform === 'win32', timeout: 20_000 }, async () => {
+test('MA15 an answer already in the pipe is whole when the event loop gets to it only after the limit: a callback stalled past it costs nothing', { skip: process.platform === 'win32' && 'its tools are shell-script stubs', timeout: 20_000 }, async () => {
   const bin = tmpDir('trocar-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
   stub(bin, 'answers', 'echo the-whole-answer')
   await runAsync('answers', [], { env, timeout: 5000 }) // macOS spends ~100 ms on a new script's first exec: the rounds below are about the answer, not that
@@ -187,7 +187,7 @@ test('MA15 an answer already in the pipe is whole when the event loop gets to it
   } finally { client.destroy(); server.close() }
 })
 
-test('MA16 the limit is a limit: what does not answer is null just past it, whether it ignores TERM, leaves a grandchild on the pipe, or simply hangs', { skip: process.platform === 'win32', timeout: 20_000 }, async () => {
+test('MA16 the limit is a limit: what does not answer is null just past it, whether it ignores TERM, leaves a grandchild on the pipe, or simply hangs', { skip: process.platform === 'win32' && 'its tools are shell-script stubs', timeout: 20_000 }, async () => {
   const bin = tmpDir('trocar-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
   const tools = { deaf: "trap '' TERM\nexec sleep 30", holder: 'sleep 2 & exit 0', hung: 'exec sleep 30' }
   for (const [tool, body] of Object.entries(tools)) {
