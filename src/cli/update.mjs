@@ -384,17 +384,20 @@ function reasonOf(doc) {
   return (doc.error && typeof doc.error.message === 'string' && doc.error.message) || [...rows('problems'), ...rows('pending'), ...skipped, ...rows('notes')].map(text).find((x) => typeof x === 'string' && x) || null
 }
 
-/** 4.11 CM43: the ones of `ids` with no covered form on this machine. `on` refuses a harness that is not on, and step 1 has just switched it off, so turning it on
+/** 4.11 CM43 · CM44: the ones of `ids` with no form here `on` writes entries for. `on` refuses a harness that is not on, and step 1 has just switched it off, so turning it on
  *  again would stop this update for good. Not known = none: `on` still judges each. */
 const noFormHere = async (ids, { platform, home, env, fs = nodeFs, deps }) => {
   if (!ids.length || !isProxyMode(platform)) return []
   try {
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
     const here = await (deps.presentForms || (await import('../collector/net-deps.mjs')).presentForms)({ os: platform, home, env, harnesses, fs })
-    return ids.filter((h) => here[h] && !here[h].length)
+    // the forms `on` writes entries for (4.11 P5): of those here, the measured ones when the harness has any measured on this system
+    const { routes } = await import('../collector/core/proxymode/sources.mjs')
+    const routed = (h) => { const d = harnesses.find((x) => x.name === h); if (!d || !d.proxyMode) return here[h] || []; const ok = routes(d.proxyMode, platform); return (here[h] || []).filter((id) => ok(d.proxyMode.forms.find((f) => f.id === id))) }
+    return ids.filter((h) => here[h] && !routed(h).length)
   } catch { return [] }
 }
-const goneWords = (gone) => `${gone.join(', ')}: no form trocar covers is on this machine any more, so capture is not switched on again for ${gone.length > 1 ? 'them' : 'it'}`
+const goneWords = (gone) => `${gone.join(', ')}: no form trocar sets up on this system is on this machine any more, so capture is not switched on again for ${gone.length > 1 ? 'them' : 'it'}`
 
 /** Step 1 undone with the code that wrote it (§5.5): the harnesses it switched off are switched on again. */
 const reOn = async (ids, ctx) => {
