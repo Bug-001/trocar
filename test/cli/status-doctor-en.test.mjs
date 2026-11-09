@@ -53,7 +53,7 @@ test('§3.5 a harness that needs setting up has its own row, says so before `on`
       'claude-code': harness(setup('ready')),
       hermes: harness({ ...off, ...setup('needed', 'carrier-absent') }), // trocar was installed before it
       codex: harness({ captured: false, reason: 'config-after-start', ...setup('needed', 'carrier-overwritten') }), // on the install record, its carrier overwritten by its own update
-      'kimi-code': harness(setup('needed', 'carrier-overwritten')), // a process from before the update, still captured: what is wrong now is not this row's
+      'kimi-code': harness(setup('needed', 'carrier-overwritten')), // a process from before the update, still captured: its next start is not, so the row says the step now
       opencode: harness({ ...off, ...setup('ready') }), // new, its certificate is the root: nothing to set up
       pi: harness({ ...off, ...setup('unknown') }),
       'z-code': harness({ ...off, ...setup('needed', 'root-missing') }), // the root is one row for the whole machine, not one per harness
@@ -62,8 +62,19 @@ test('§3.5 a harness that needs setting up has its own row, says so before `on`
   }), { now: NOW })
   clean(lines, 'status')
   const row = (h) => lines.find((l) => l.startsWith(`  ${h} `))
-  for (const h of ['hermes', 'codex']) assert.ok(row(h).includes('trocar install'), `${h}: ${row(h)}`)
-  for (const h of ['claude-code', 'kimi-code']) assert.ok(row(h) && !row(h).includes('trocar install'), `${h}: ${row(h)}`)
+  for (const h of ['hermes', 'codex', 'kimi-code']) assert.ok(row(h).includes('trocar install'), `${h}: ${row(h)}`)
+  assert.ok(row('claude-code') && !row('claude-code').includes('trocar install'), row('claude-code'))
+  // a captured harness whose setup is needed says so in its headline too, not only under Why (a Linux bundle that lacks a CA: capture works, the agent cannot verify those hosts)
+  const kimi = statusDetail(doc({ harnesses: { 'kimi-code': harness(setup('needed', 'carrier-overwritten')) } }), 'kimi-code', { now: NOW })
+  assert.ok(/set up again/.test(kimi[0]) && kimi.some((l) => l.trimEnd().endsWith(' trocar install')), kimi.join('|')) // the headline says it, the step is a line of its own
+  // More: points at the first agent to act on — not captured, then a needed setup — else the first row (both summaries)
+  for (const details of [false, true]) {
+    const more = statusSummary(doc({ harnesses: { 'claude-code': harness(setup('ready')), 'kimi-code': harness(setup('needed', 'carrier-overwritten')) }, install: { state: 'complete', harnesses: ['claude-code', 'kimi-code'], pending: [] } }), { now: NOW, details }).find((l) => l.startsWith('More:'))
+    assert.ok(more.includes('trocar status kimi-code'), `${details ? '--details' : 'default'}: ${more}`)
+  }
+  // steps that turn it off (marked text with no record: off, uninstall, install) end with on again, as a harness not captured yet is told
+  const marked = statusDetail(doc({ harnesses: { hermes: harness(setup('needed', 'marked-without-record')) } }), 'hermes', { now: NOW })
+  assert.ok(marked.some((l) => l.trimEnd().endsWith(' trocar on hermes')), marked.join('|'))
   const out = lines.find((l) => l.startsWith('  not installed:'))
   assert.deepEqual(out.replace('  not installed: ', '').split(', ').sort(), ['opencode', 'pi', 'z-code'], 'a harness needing setup is not said to be not installed, nor is setup asked of the others')
   const detail = statusDetail(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'carrier-absent') }) } }), 'hermes', { now: NOW })

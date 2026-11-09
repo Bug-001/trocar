@@ -272,7 +272,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const installed = new Set([...((prior && prior.entries) || []), ...((prior && prior.files) || [])].map((x) => x.harness).filter(Boolean))
   const withItems = new Set([...draft.entries, ...draft.files, ...draft.owned].map((x) => x.harness))
   const targets = kept.map((d) => d.name).filter((n) => !unwritable.some((x) => x.harness === n) && (withItems.has(n) || installed.has(n)))
-  const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
+  const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || 'no configuration found on this machine' // `what` names the harness: a reason several share is said once (1.6 §1.1 ④)
   const hint = new Set(certs ? [] : draft.entries.filter((e, i) => replaceable(entryJ[i])).map((e) => e.path))
   const skipped = [
     ...foreign.map((x) => ({ what: x.what, reason: x.reason })),

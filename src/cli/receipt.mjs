@@ -144,18 +144,27 @@ export const ownTreeItem = (home, platform) => ({ what: 'trocar', path: path.joi
 // a proxy setting the user changed after the last on: going on takes their value as the upstream (§3.3「要确认时」)
 const editedLine = (e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at trocar.`
 
+/** The skipped, each named once (1.6 §1.1 ④): a reason several share is one line for all of them (`Skipped, <reason>: a, b`); one of its
+ *  own keeps `a (<reason>)` on the `Skipped:` line. `t` shows a path (HOME as ~). → lines */
+export function skippedLines(skipped, t = (x) => x) {
+  const by = new Map()
+  for (const s of skipped || []) by.set(s.reason, [...(by.get(s.reason) || []), t(s.what)])
+  const own = [...by].filter(([, w]) => w.length === 1).map(([r, [w]]) => `${w} (${r})`)
+  return [...(own.length ? [`Skipped: ${own.join('; ')}`] : []), ...[...by].filter(([, w]) => w.length > 1).map(([r, w]) => `Skipped, ${r}: ${w.join(', ')}`)]
+}
+
 /** Every file `on` (or Linux `install`) would write or change, before it writes any (§1.4): the count first, then every file by full path and key. */
 export function formatPlan(p, { home = null, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
-  const items = planItems(p, { home, platform })
+  const items = planItems(p, { home, platform }), files = items.length - [p.run, p.records, home].filter(Boolean).length // the folders it names (run/trust/, flows/, ~/.trocar/) are not files
   const backups = t(p.backups || path.join(home || '~', '.trocar', 'backup'))
   return fit([
-    c.bold(`trocar ${command} will write ${items.length} file${items.length === 1 ? '' : 's'}:`),
+    c.bold(`trocar ${command} will write ${files} file${files === 1 ? '' : 's'}:`),
     ...pairs(items.map((i) => [i.what, i.detail]), { home }),
     // only when it edits a file of yours (an entry): trocar's own files and the ones it makes have no earlier bytes to keep
     ...((p.entries || []).length ? [`A copy of every file of yours it changes goes to ${backups}/ first.`] : []),
     ...watchLines(p.watch, t).map((l) => `  ${l}`),
-    ...(p.skipped && p.skipped.length ? [`Skipped: ${p.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`] : []),
+    ...skippedLines(p.skipped, t),
     ...(p.edited || []).map(editedLine),
     ...(p.restart && p.restart.length ? [`Restart to capture: ${p.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}. Until then they connect as they do now.`] : []),
   ].filter((l) => l !== null), { home }).join('\n')
@@ -217,7 +226,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
     lines.push(...pathList('Already in place, not rewritten:', r.unchanged.slice(0, 3), home, r.unchanged.length > 3 ? `and ${r.unchanged.length - 3} more (all of them: --json)` : null))
   }
   lines.push(...(r.refused || []).flatMap((x) => refusedLines(x, { past })))
-  if (r.skipped.length) lines.push(`Skipped: ${r.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`)
+  lines.push(...skippedLines(r.skipped, t))
   if (lingerText(r)) lines.push(lingerText(r))
   for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(...adoptedLines(h, x, topology && topology[h]))
   if (r.daemon && !daemonBit) lines.push('The collector is not running, so nothing is captured yet.', 'Start it: trocar daemon') // the command keeps its own line: folding must not cut it (§1.1③)

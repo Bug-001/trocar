@@ -245,6 +245,9 @@ test('formatPlan: every file the first on will write is listed before any is wri
   assert.match(text, /d +~\/\.trocar\/collector\/plugins\/d\/index\.js: trocar's plugin/)
   assert.match(text, /d +~\/\.d\/patch\.yml: line "- insert: x"/)
   assert.match(text, /record +~\/\.trocar\/collector\/flows\/: what each run did/, 'the event log is listed')
+  // the count is of files: the folders the plan names (shown with a trailing /) are not files
+  const listed = text.split('\n').map((l) => /^ +(?:[^\s~/]\S* +)?((?:~|\/)\S*?)(?: -> \S+)?:/.exec(l)).filter(Boolean).map((m) => m[1])
+  assert.equal(Number(/will write (\d+) file/.exec(text)[1]), listed.filter((x) => !x.endsWith('/')).length, text)
   assert.match(text, /o itself may write ~\/\.config\/o\/node_modules \(npm install\); uninstall[\s\S]*never deletes it$/)
 })
 
