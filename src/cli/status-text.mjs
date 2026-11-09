@@ -40,6 +40,8 @@ const CAPTURED = (h) => (h.captured === true ? 'yes' : h.desired === 'off' ? 'of
 const needsSetup = (x) => x.setup?.state === 'needed' && (x.setup.missing || []).some((m) => m.what !== 'root-missing')
 // the steps that set it up, from what is missing (4.11 P4b), as `on` gives them (model-on.mjs): the longest list, since install is every list's last step
 const setupFix = (x) => (x.setup.missing || []).filter((m) => m.what !== 'root-missing').map((m) => setupSteps(m.what)).reduce((a, c) => (c.length > a.length ? c : a), [])
+// a harness captured now whose setup is needed (its own update overwrote the carrier; a Linux bundle that lacks a CA): its next start, or the hosts that CA signs, are not
+const setupAgain = (x) => `set up again: ${setupFix(x).join(', then ')}`
 
 /** The one-screen summary of `trocar status` (§3.5). `doc` is the 附录 C.3 document. */
 /** C.3 `out_of_scope` (4.11 CM43): why an app on this machine is not captured. */
@@ -52,7 +54,6 @@ function summaryDetails(doc, { now = Date.now(), colors: c = noColor(), home = n
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
   const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(doc.harnesses[h]))
-  const on = shown.filter((h) => doc.harnesses[h].desired === 'on')
   const captured = shown.filter((h) => doc.harnesses[h].captured === true)
   // only an app trocar does not cover: install cannot help, so it is not the next step
   if (!shown.length) return [c.bold('No harness is set up for capture yet.'), ...outOfScopeLines(doc), '', ...readErrorLines(doc), ...((doc.out_of_scope || []).length ? [] : ['Next: trocar install'])]
@@ -75,13 +76,16 @@ function summaryDetails(doc, { now = Date.now(), colors: c = noColor(), home = n
   if (unseen.length) lines.push('', ...unseen.flatMap((t) => wrap(t, WIDTH)))
   lines.push(...outOfScopeLines(doc))
   lines.push('', ...pairs(summaryPairs(doc, now)))
-  const first = on.find((h) => doc.harnesses[h].captured !== true) || shown[0]
+  const first = actOn(doc, shown)
   lines.push('', `More: ${[first ? `trocar status ${first}` : null, 'trocar status --failures', 'trocar doctor'].filter(Boolean).join('   ')}`)
   return lines
 }
 
+/** The agent `More:` points at: the first to act on — on and not captured, then one whose setup is needed — else the first row. */
+const actOn = (doc, shown) => shown.find((h) => doc.harnesses[h].desired === 'on' && doc.harnesses[h].captured !== true) || shown.find((h) => needsSetup(doc.harnesses[h])) || shown[0]
+
 /** A harness's NOTE: what to set up, what is not seen yet, what is not known, or why it is not captured; `plain` in the default text's words, with no pid (§1.1 ④). */
-const noteOf = (x, h, pid, plain) => (needsSetup(x) && x.captured !== true ? `set up first: ${setupFix(x).join(', then ')}` : x.captured === true ? notSeenYet(x)
+const noteOf = (x, h, pid, plain) => (needsSetup(x) ? (x.captured === true ? setupAgain(x) : `set up first: ${setupFix(x).join(', then ')}`) : x.captured === true ? notSeenYet(x)
   : x.captured === null ? ((x.why || []).length ? openText(x, h, undefined, plain) : notSeenYet(x) || openText(x, h, undefined, plain))
     : noteText(x.reason, { harness: h, pid: plain ? null : pid && pid.pid, cause: pid && pid.cause, plain }))
 
@@ -124,7 +128,7 @@ function summaryShort(doc, { now = Date.now(), colors: c = noColor(), home = nul
   const unseen = names.flatMap((h) => uncapturedText(doc.harnesses[h], home).map((t) => `Note: ${h}: ${t}`))
   if (unseen.length) lines.push('', ...unseen.flatMap((t) => wrap(t, WIDTH)))
   lines.push(...outOfScopeLines(doc), '', ...pairs(shortPairs(doc, now)))
-  const first = shown.find((h) => doc.harnesses[h].desired === 'on' && doc.harnesses[h].captured !== true) || shown[0]
+  const first = actOn(doc, shown)
   lines.push('', `More: trocar status ${first}   trocar status --failures`)
   return lines
 }
@@ -205,7 +209,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
   if (!x) return [`${h}: ${unknown('it is not set up on this machine')}`, ...outOfScopeLines(doc, h)]
   // here only as forms trocar does not capture, and in no install record: nothing to turn on or fix, only why (4.6 「不采的形态」)
   if (x.present === false && !((doc.install && doc.install.harnesses) || []).includes(h) && uncapturedText(x, home).length) return [c.bold(`${h}: not captured on this machine`), '', ...uncapturedText(x, home).flatMap((s) => wrap(`Note: ${s}`, WIDTH - 2, '      ').map((t) => `  ${t}`))]
-  const verdict = x.captured === true ? ['captured', notSeenYet(x)].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
+  const verdict = x.captured === true ? ['captured', notSeenYet(x), needsSetup(x) && 'set up again below'].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
   const lines = [c.bold(`${h}: ${DESIRED[x.desired] || unknown('its on/off state could not be read')}, ${verdict}`), ...outOfScopeLines(doc, h), '']
   const rows = []
   if (finding) {
@@ -214,6 +218,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     finding.commands.forEach((cmd, i) => rows.push([i ? '' : 'Fix', cmd.run]))
     rows.push(['Check', finding.verify])
   } else if (needsSetup(x) && x.captured !== true) rows.push(['Why', `${h} has no trocar certificate in place yet`], ...[...setupFix(x), `trocar on ${h}`].map((cmd, i) => [i ? '' : 'Fix', cmd]))
+  else if (needsSetup(x)) { const st = setupFix(x); rows.push(...[...st, ...(st.some((c) => /^trocar (off|uninstall)\b/.test(c)) ? [`trocar on ${h}`] : [])].map((cmd, i) => [i ? '' : 'Fix', cmd])) } // captured now: the steps, a line each (1.1 ⑥), and on again when they turn it off
   else if (x.captured === true && !notSeenYet(x)) rows.push(['Why', (x.processes || []).length ? 'every running process of it is captured' : 'no process of it is running; new ones will be captured']) // never claims processes that are not there
   const login = loginRow(doc.autostart)
   if (login) rows.push(login)
