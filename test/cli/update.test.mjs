@@ -578,6 +578,32 @@ test('V96: a collector that refuses the off request is not named by a null pid',
   assert.doesNotMatch(out, /pid null/, 'D58②: a number the user can act on, or none — never a placeholder')
 })
 
+// §1.1 ④ rule 4: a service that holds its socket, answers nothing and does not stop is not fixed by `trocar update` alone — the way out is the stop
+// that works on this platform, the pid in the command, then `trocar update`
+test('§5.5: a hung service that cannot be stopped: the stop by hand for this platform, then trocar update', async () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const s = sandbox()
+    fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+    const sock = path.join(s.base, 'control.sock')
+    const t = ctx(s, {
+      platform,
+      daemonCode: () => null, // it holds the socket and answers nothing
+      deps: {
+        daemonState: async () => ({ state: 'unresponsive', socket: sock, lock: { pid: 4242 }, reason: 'does not answer' }),
+        request: async () => { const e = new Error('timed out'); e.code = 'ETIMEDOUT'; throw e },
+        stopDaemon: async () => ({ stopped: false, pid: 4242, error: 'it did not exit' }),
+        socketPath: sock, drainMs: 0,
+      },
+    })
+    assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.incomplete, t.io.text())
+    const lines = t.io.text().split('\n').map((l) => l.trim())
+    const stop = lines.findIndex((l) => l === (platform === 'win32' ? 'taskkill /PID 4242 /F' : 'kill -9 4242'))
+    assert.ok(stop >= 0, `${platform}: the stop that works here, with the pid:\n${t.io.text()}`)
+    assert.ok(lines.indexOf('trocar update') > stop, `${platform}: then trocar update:\n${t.io.text()}`)
+    assert.ok(s.handover(), `${platform}: the update stays written down`)
+  }
+})
+
 // ── V124 · the login entry is written before the collector is replaced ─────────────────────────────────────────────────────────────
 /** The world of a finish whose daemon may run another code, on a REAL entry file: `disk` is what the file holds now (default: this copy's
  *  program line under the older text), the entry this code renders has one line more, and `install` writes that text when it runs. The login

@@ -30,6 +30,7 @@ import { runOnCli } from './on.mjs'
 import { runInstallCli } from './install.mjs'
 import { replaceDaemon, daemonCode, entryStartsThisCopy, CUT } from './replace-daemon.mjs'
 import { runPlaceCli } from './place.mjs'
+import { stopByHand } from '../off/daemon-stop.mjs'
 import { PS_FILE_ARGS } from '../collector/arch/win32/custody.mjs'
 import { printJson } from './json.mjs'
 import { isProxyMode } from '../off/mode.mjs'
@@ -387,9 +388,15 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   r.restarted = replaced.restarted || !!(early && early.doc && early.doc.daemon && early.doc.daemon.started) // a daemon that was not there: install pulled it up on the new entry
   if (replaced.notes.length) r.notes.push(...replaced.notes)
   const daemonFailed = problems.length > 0
+  // §1.1 ④ rule 4: a service that would not stop is stopped by hand first (uninstall's stop-failed lines), or trocar update stops on it again
+  const byHand = (rep) => {
+    if (rep.stopped !== false || !Number.isInteger(rep.pid)) return []
+    const h = stopByHand({ platform, dir, pid: rep.pid, fs, run: deps.exec || null, env })
+    return ["trocar's service does not answer and would not stop. Stop it with:", ...h.commands.map((c) => INDENT + c), ...(h.after ? [h.after] : [])]
+  }
   // the login entry runs another copy: install here would quietly point it at this one — which copy it runs is the operator's to say
   if (only === 'daemon' || replaced.elsewhere) {
-    if (daemonFailed) { r.problems = problems; return no('daemon-not-replaced', problems[0], EXIT.incomplete, null, replaced.elsewhere ? elsewhereText(r.to, root, platform) : stoppedText(r.to, notRestarted, waiting.on, { told })) }
+    if (daemonFailed) { r.problems = problems; return no('daemon-not-replaced', problems[0], EXIT.incomplete, null, replaced.elsewhere ? elsewhereText(r.to, root, platform) : stoppedText(r.to, notRestarted, waiting.on, { told, before: byHand(replaced) })) }
     lines.push(details ? `trocar is now running ${r.to}.` : `trocar's service now runs ${ver(r.to) || r.to}.`)
     return done(EXIT.ok)
   }
@@ -408,7 +415,7 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
     const why = !daemonFailed && failed && reasonOf(failed.doc) // problems[0] is that step's line unless the collector's came first
     // the default text: where it stopped and `trocar update`; what the step leaves to the user (a desktop session's install) goes first
     const what = daemonFailed ? notRestarted : failed.command === 'install' ? 'trocar could not finish setting itself up' : 'capture could not be switched on again'
-    const left = daemonFailed ? [] : once([...todos(installed.doc), ...todos(r.on)])
+    const left = daemonFailed ? byHand(replaced) : once([...todos(installed.doc), ...todos(r.on)])
     // --details: the reason and the step's own, then every other note and the to-dos — all the default text says, and more (§1.1 ④ rule 10)
     const more = [...(why ? [`trocar ${failed.command}: ${why}`] : []), ...r.notes.filter((n) => n !== problems[0]).map((n) => `Note: ${n}`), ...left]
     return no(daemonFailed ? 'daemon-not-replaced' : 'not-finished', problems[0], EXIT.incomplete, more.length ? more.join('\n') : null,

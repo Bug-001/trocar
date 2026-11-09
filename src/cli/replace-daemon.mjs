@@ -16,8 +16,8 @@ export const CUT = "Open connections through trocar are cut once while trocar's 
  *  through the login entry install registered (a stopped LaunchAgent is booted out, so this bootstraps it, 4.9 §4).
  *  `by` is the command that runs it ('update' | 'install'): the drain names it, and the remedy says to run it again. `sameCode`: replaced on this code too
  *  (install rewrote the login entry it was started from).
- *  → `{ restarted, stopped?, notes, elsewhere?, from }` (`from`: the code the old daemon answered, null when none; `stopped`: whether the old
- *  daemon was stopped, absent when it already ran this code — so a caller knows a collector still runs after a failure); what went wrong is pushed on
+ *  → `{ restarted, stopped?, pid?, notes, elsewhere?, from }` (`from`: the code the old daemon answered, null when none; `stopped`: whether the old
+ *  daemon was stopped (`pid`: the one that was not, when known), absent when it already ran this code — so a caller knows a collector still runs after a failure); what went wrong is pushed on
  *  `problems`. The three modules of this step are the running code's: they are loaded here, in the process that finishes, never in one
  *  that merged. */
 export async function replaceDaemon({ by, env, home, platform, deps, dir, root, fs, problems, sameCode = false }) {
@@ -36,7 +36,7 @@ export async function replaceDaemon({ by, env, home, platform, deps, dir, root, 
   notes.push(...routing.notes)
   const stopped = routing.stop || (routing.confirmed ? await w.stopDaemon({ unitManaged: w.unitManaged() }) : null)
   const pid = (stopped && Number.isInteger(stopped.pid) ? stopped.pid : null) ?? (Number.isInteger(routing.daemon.pid) ? routing.daemon.pid : null)
-  if (!stopped || (!stopped.stopped && stopped.pid != null)) { problems.push(`the collector${pid == null ? '' : ` (pid ${pid})`} could not be stopped${stopped && stopped.error ? ` (${stopped.error})` : routing.problems[0] ? ` (${routing.problems[0]})` : ''}, so it still runs ${running || 'code of its own'}. ${again}`); return { restarted: false, stopped: false, notes, from: running } }
+  if (!stopped || (!stopped.stopped && stopped.pid != null)) { problems.push(`the collector${pid == null ? '' : ` (pid ${pid})`} could not be stopped${stopped && stopped.error ? ` (${stopped.error})` : routing.problems[0] ? ` (${routing.problems[0]})` : ''}, so it still runs ${running || 'code of its own'}. ${again}`); return { restarted: false, stopped: false, pid, notes, from: running } }
   const { ensureDaemonUp } = await import('../collector/install.mjs')
   const unit = deps.unit !== undefined ? deps.unit : await loginUnit({ home, env, platform, deps })
   if (!unit) { problems.push('this platform has no login entry to start the collector through, so it was not replaced'); return { restarted: false, stopped: true, notes, from: running } }
