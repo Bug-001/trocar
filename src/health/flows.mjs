@@ -11,7 +11,7 @@
 // bytes (ws.tail_raw, proxy preludes, bodies) ever reach the board.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { isFailure, notCapturedClass, expectedKey, LEVELS } from './codes.mjs'
+import { isFailure, notCapturedClass, expectedKey, LEVELS, NOTHING_LOST } from './codes.mjs'
 
 export const WINDOW_MS = 24 * 3600e3
 export const MAX_BYTES = 4 << 20
@@ -157,7 +157,6 @@ const PRELUDE_MS = 60_000 // a daemon's start-up lines are written within this b
 // precedes the newest run (its prelude included) and that the run did not write again is resolved too — a restart ended it.
 const ENDS = Object.freeze({ 'helper-ok': ['helper-down'], 'ca-ok': ['ca-invalid'], 'agent-list-ok': ['agent-list-invalid'] })
 const ENDED = new Set(Object.values(ENDS).flat())
-const NOTE_ONLY = 'upstream-slow' // C.3: only a wait was recorded, nothing lost: read as a resolved group is, a note from its first record
 const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r.suppressed : 0)
 
 /**
@@ -261,7 +260,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
       const g = groups.get(slot) || { key, count: 0, first_ts: null, last_ts: null, last: null }
       // `last` stays the newest record written (the resolution rules above read it); the times are a span over the records' times
       g.count += weight(r); widen(g, iso); g.last = pick(r); delete g.resolved
-      if (r.code === NOTE_ONLY) g.resolved = true
+      if (NOTHING_LOST.includes(r.code)) g.resolved = true // only a wait was recorded, nothing lost: a note from its first record (C.3)
       groups.delete(slot); groups.set(slot, g) // the Map's order is the order of each group's newest record written
       if (agent) { const a = agentRow(agent); if (later(a.last_failure, iso)) { a.last_failure = iso; a.last_failure_key = key } }
     } else if (ENDS[r.event]) {

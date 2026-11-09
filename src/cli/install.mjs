@@ -311,7 +311,8 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       // the residual risk (RISK) is the last line of the plan printed just above in this same run (§3.2 prints it there, and the
       // receipt sample does not carry it); printing it again put the paragraph on the screen twice (a macOS test machine 2026-10-18).
       // `--json` keeps it as `residual_risk`, because a document has no plan above it.
-      ...(r.problems.length ? [] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3): it is no next step until install has finished
+      // on refuses without the login entry (1.6 §3.3): it is no next step until install has finished; nor with no agent here that trocar sets up (4.11 P5)
+      ...(r.problems.length ? [] : ((r.manifest && r.manifest.install && r.manifest.install.harnesses) || []).length ? ['Next: trocar on'] : ['Nothing to capture yet. Install an agent trocar covers with its own installer, then run: trocar install']),
       ...breakGlass(home, platform)], { home }).concat(mwr ? ['', ...formatRefusal(mwr, { home, paths: marked })] : []).join('\n')) // the marked files: each whole on its own line, then the command (§1.1⑥)
     return r.exit
   }
