@@ -22,6 +22,7 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { drain, within, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 void runQuery
 const SHAPE = { growth: 120, compactAt: 6_000, subEvery: 3, subLanes: 2, late: 3 }, CALLS = 3000, SEG = '20261020T164731Z'
@@ -85,7 +86,7 @@ for (const name of Object.keys(KEEP)) for (const kind of KINDS[name]) for (const
         }, 50)
       }), EXIT_MS, 'the worker left at its idle clock')
       const h = readHead(home, id)
-      assert.ok(h && (h.pending ? h.pending.stopped : h.tier === 1), `the session says where it ended, whole or stopped: ${JSON.stringify(h && h.pending)}`)
+      assert.ok(h && (h.pending ? h.pending.stopped : h.tier === 1 && listed(h)), `the session says where it ended, whole or stopped: ${JSON.stringify(h && h.pending)}`)
       assert.deepEqual(failed, [], 'no query-failed')
       assert.equal(rawBytes(home), raw, 'the capture is byte for byte what it was')
       // an `f` line is read by nothing under a sidecar (the log keeps its offset), so no read finds it out; the scan of the next rebuild does

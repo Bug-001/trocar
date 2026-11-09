@@ -22,6 +22,7 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { rawHome } from './raw-home.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
@@ -81,7 +82,7 @@ const watched = (spawn) => {
 }
 const until = async (r, what, ok) => { await whileMoving(ok, () => r.n, what) }
 const foldLog = (home, s) => path.join(sessionDir(home, s.id), 'fold.0.ndjson')
-const folded = (home, id) => { const h = readHead(home, id); return h?.tier === 1 && h.pending === null }
+const folded = (home, id) => { const h = readHead(home, id); return h?.tier === 1 && h.pending === null && listed(h) }
 const quiet = (r, since = 0) => until(r, 'the worker went quiet', () => r.last >= since && Date.now() - r.last >= QUIET_MS)
 const answer = () => { const a = { status: 0, chunks: [], writeHead(s) { a.status = s }, write: (b) => { a.chunks.push(Buffer.from(b)); return true }, end() {}, once() {} }; return a }
 const stoppedOn = (home, id) => readHead(home, id)?.pending?.stopped?.code === 'heap-no-room'

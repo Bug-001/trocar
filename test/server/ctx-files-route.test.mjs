@@ -33,6 +33,7 @@ import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { BODY, REPLY, agentOf, darwinExec, freePort, through } from '../helpers/model-io.mjs'
 import { listenLocalhost } from '../helpers/localhost.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const CALLS = 1_100 // ≥ 2 sealed packs of 512 (3.5 PACK_MEMBERS)
 const pause = (ms) => new Promise((d) => setTimeout(d, ms))
@@ -85,7 +86,7 @@ function folded() {
     w.waits.fold = await whileMoving(async () => {
       const r = await w.d('head', gz), head = r.status === 200 ? JSON.parse(unzip(r.body)) : null
       done = head?.pending?.done ?? done
-      return head != null && head.pending == null && fs.existsSync(w.file('open.rest.ndjson'))
+      return head != null && head.pending == null && listed(head) && fs.existsSync(w.file('open.rest.ndjson'))
     }, () => `${w.reported.n} ${done}`, 'the worker folded the session and wrote its files')
     w.waits.left = await w.left('the worker is gone')
     return w
@@ -197,7 +198,7 @@ test('4.4 #16 folding head: polling a never-folded session\'s head, and nothing 
       tag = r.headers.etag
       const head = JSON.parse(unzip(r.body))
       done = head.pending?.done ?? done
-      return head.pending == null && fs.existsSync(w.file('head.json.gz')) && !fs.existsSync(w.file('head.pending.json.gz'))
+      return head.pending == null && listed(head) && fs.existsSync(w.file('head.json.gz')) && !fs.existsSync(w.file('head.pending.json.gz'))
     }, () => `${w.reported.n} ${done}`, 'the polled head reached the end of the fold')
     t.diagnostic(JSON.stringify({ waited }))
   } finally { await w.left('the worker is gone'); w.server.close() }
@@ -270,7 +271,7 @@ test('4.4 #17 tips: the keeper\'s new model calls of a keyed session ride on x-t
     // a just-forked worker answers within its slice budget and may stop at the reduction frontier (3.5 pending): read until it has none,
     // for as long as pending.done moves
     let doc = null
-    await whileMoving(async () => { doc = JSON.parse((await w.api(`/api/session?id=${KEY}&limit=200`)).body); return doc.pending == null },
+    await whileMoving(async () => { doc = JSON.parse((await w.api(`/api/session?id=${KEY}&limit=200`)).body); return doc.pending == null && listed(doc) },
       () => doc?.pending?.done, 'the keyed session folded to its last call')
     const rids = doc.calls.map((c) => c.rid)
     assert.equal(rids.length, N, 'the keyed session holds every call written')
