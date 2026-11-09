@@ -148,6 +148,7 @@ export const truncFact = (shown, total, fileMb) => `Showing only the latest ${sh
 export const unknownFact = (n) => `${n} records no parser can read; not drawn`
 export const LOGGED_FACT = 'calls are log only and not in the replay ›'
 export const loggedFact = (n) => `${n} ${LOGGED_FACT}`
+export const REINDEXING_FACT = 'Older capture files are still being re-indexed after an update; calls in them appear when that ends'
 export const filesFact = (n) => `${count(n, 'capture file was', 'capture files were')} not read in full; this session may be missing content ›`
 export const GAP_FACT = 'Capture had errors in this period; calls may be missing from the range read (inferred) · capture log ›'
 

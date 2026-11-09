@@ -530,7 +530,7 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux" && sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # Linux, once per machine: build the helper, then install it
 trocar install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
 trocar on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
-trocar status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
+trocar status                 # each agent and why it is (not) captured, and what to do; status <agent> has its proxy chain
 trocar off                    # stops routing and capture (off claude-code: only that one)
 trocar board                  # opens the board in your browser; the captures appear there
 ```
@@ -706,7 +706,7 @@ leaves out (each file, key, process and note). `--json` is the same document eit
 trocar install [--yes] [--dry-run] [--details] [--json]   # once: the certificates (D55); prints the plan and asks first
 trocar on [<harness>...] [--yes] [--dry-run] [--details] [--json]
 trocar off [<harness>...] [--now] [--yes] [--dry-run] [--details] [--json]
-trocar status [<harness>...] [--failures] [--details] [--json]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
+trocar status [<harness>...] [--failures] [--details] [--json]   # --failures: what failed, one row per kind; --details: every pid, code and host
 trocar uninstall [--purge-data] [--yes] [--dry-run] [--details] [--json]
 trocar doctor [<harness>...] [--details] [--json]
 

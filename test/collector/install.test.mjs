@@ -257,15 +257,13 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     assert.match(f[0].reason, /settings\.json: trocar cannot read it \(line 1, column \d+\); trocar's env\.NODE_EXTRA_CA_CERTS = .*trocar-ca\.pem may still be in it/)
     const { runStatusCli } = await import('../../src/cli/status.mjs')
     const out = []; const err = []
-    const code = await runStatusCli(['--failures'], { io: { out: (x) => out.push(x), err: (x) => err.push(x) }, home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux',
+    const code = await runStatusCli(['--failures', '--details'], { io: { out: (x) => out.push(x), err: (x) => err.push(x) }, home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux',
       // the control socket is asked through an injected `request` (0.1 §3): the sandbox HOME's socket path is longer than an AF_UNIX path may be on macOS,
       // so a real connect there fails with EINVAL ("does not answer") instead of the ENOENT of a daemon that is simply not running
       deps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test' }] }), request: async () => { throw Object.assign(new Error('no such socket'), { code: 'ENOENT' }) } } })
     // §3.5: the exit code counts only the harnesses that are on and not captured NOW — nothing is on here, so a clean 0; a failure in the last
     // 24 h is a Problems line, never an exit code (the old assertion was 1, from when "no daemon" decided it)
     assert.equal(code, 0, 'nothing is on, so nothing is uncaptured: the failure below does not decide the exit code (§3.5)')
-    assert.match(out.join('\n'), /^Daemon not running; nothing is captured\. Start it: trocar on$/m)
-    assert.match(out.join('\n'), /^ {2}Problems {4,}1 in the last 24 hours, latest just now$/m, 'the uninstall residue reaches the Problems line')
     // D38: what the uninstall left behind is still named — in the text (--failures) and in the document (`failures`)
     assert.match(out.join('\n'), /\.claude/, 'the residue, with its path, is in the text')
     const doc = []

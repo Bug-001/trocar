@@ -89,7 +89,7 @@ async function endpoint(s) {
 // (iii): `trocar collector status` with no daemon answering — it reads the disk
 async function statusOffline(s) {
   const o = []
-  const code = await runStatusCli(['--failures'], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home,
+  const code = await runStatusCli(['--failures', '--details'], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home,
     deps: { request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test: nothing looked at' }] }) } }) // on a Mac status asks launchd and the keychain (read-only): the runner is the test's
   return { code, text: o.join('\n') }
 }

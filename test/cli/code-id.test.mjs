@@ -77,7 +77,7 @@ test('C.3 daemon.runs_this_code and the daemon line: the collector on this code,
   const s = await installedHome()
   const doc = async (code) => JSON.parse(await statusOf(s, code, ['--json'])).daemon
   assert.deepEqual([(await doc(codeId())).runs_this_code, (await doc('9.9.9+fffffff')).runs_this_code, (await doc(undefined)).runs_this_code], [true, false, null])
-  const other = await statusOf(s, '9.9.9+fffffff', [])
+  const other = await statusOf(s, '9.9.9+fffffff', ['--details']) // the codes are facts of --details (1.6 §1.1 ④)
   assert.ok(other.includes('9.9.9+fffffff') && other.includes(codeId()), `both codes named:\n${other}`)
   assert.match(other, /trocar install/, 'with the way out')
   assert.ok(!(await statusOf(s, codeId(), [])).includes(codeId()), 'on this code: nothing said about it')
