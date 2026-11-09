@@ -15,7 +15,7 @@ const CHILD = fileURLToPath(new URL('./fixtures/linux-daemon-child.mjs', import.
 const ROUND_MS = 50
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-test('1.6 §3.1: a FIFO put on op.lock under a running daemon stops nothing: the next bundle round takes it over and the control socket answers', { skip: process.platform === 'win32' }, async (t) => {
+test('1.6 §3.1: a FIFO put on op.lock under a running daemon stops nothing: the next bundle round takes it over and the control socket answers', { skip: process.platform === 'win32' && 'Windows has no FIFOs' }, async (t) => {
   const root = tmpDir('as-l-') // short: unix socket paths are length-limited
   const home = path.join(root, 'home'), sock = path.join(root, 'c.sock'), lock = path.join(home, '.trocar', 'collector', 'op.lock')
   fs.mkdirSync(home)

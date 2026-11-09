@@ -206,7 +206,7 @@ for (const [name, { posix, make }] of Object.entries(SHAPES)) {
   })
 }
 
-test('1.6 §3.1: a FIFO put on the path while the lock is held does not stop the release, and what is there is not the holder\'s to remove', { skip: !POSIX }, async () => {
+test('1.6 §3.1: a FIFO put on the path while the lock is held does not stop the release, and what is there is not the holder\'s to remove', { skip: !POSIX && 'Windows has no FIFOs' }, async () => {
   const file = fileOf()
   const r = await childRun(`
     import fs from 'node:fs'
