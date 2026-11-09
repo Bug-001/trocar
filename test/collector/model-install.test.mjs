@@ -535,6 +535,21 @@ for (const os of ['darwin', 'win32']) {
       if (!Object.keys(after).length) for (const d of old.created_dirs || []) assert.ok(recs[0].created_dirs.includes(d), `${d}: still owned`)
     })
   }
+  // the directory install made for the file stays trocar's when the record is retired over a file the agent rewrote: once that file is gone too,
+  // uninstall leaves the HOME as it was before install (invariant 5), the directory included
+  test(`4.11 P4b · ${os}: a directory install made stays trocar's across a retired record; uninstall takes it once the file is gone`, async () => {
+    const { w, cfg } = await zcode()
+    const made = path.dirname(cfg)
+    assert.ok(keyRecords(w, cfg)[0].created_dirs.includes(made), 'install made the directory of the file')
+    fs.writeFileSync(cfg, JSON.stringify({ theme: 'dark' })) // the agent rewrote its config without trocar's key
+    const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+    assert.equal(r2.exit, 0, JSON.stringify({ p: r2.problems, pe: r2.pending }))
+    fs.rmSync(cfg) // later the agent's file is gone
+    const deps = { platform: os, exec: recordingExec().run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, ...(os === 'win32' ? { unit: { text: () => '' } } : {}) }
+    const { exit, receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps })
+    assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+    assert.equal(fs.existsSync(made), false, `${made}: install made it, so uninstall takes it`)
+  })
   test(`4.11 P4b · ${os}: an install key whose value the user replaced with their own is the user's: left, rule U, exit 0`, async () => {
     const { w, cfg } = await zcode()
     const mine = path.join(w.home, 'certs', 'z.pem'); put(mine, USER_PEM)
