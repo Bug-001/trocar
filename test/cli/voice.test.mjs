@@ -5,7 +5,8 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import { andList, countsBy } from '../../src/cli/text.mjs'
 import { unsaidIn } from '../../src/cli/words.mjs'
-import { formatUninstallReceipt, formatUninstallText } from '../../src/cli/receipt.mjs'
+import { formatUninstallReceipt, formatUninstallText, formatOnReceipt, formatOnText, formatOnPlan } from '../../src/cli/receipt.mjs'
+import { formatModelOnReceipt, formatModelOnText } from '../../src/cli/on-model.mjs'
 import { newReceipt } from '../../src/off/schema.mjs'
 import { formatOffReceipt, formatOffText } from '../../src/off/receipt.mjs'
 
@@ -123,5 +124,53 @@ test('off: the default text says no unsaid word and no pid; --details holds ever
       if (r.notes.length) assert.ok(text.includes(r.notes[0]), 'a fact not read stays in the default text (D38)')
       if (r.dry_run) for (const c of r.changed) assert.ok(text.includes(`~${c.path.slice(home.length)}`) || text.includes(c.path), 'the plan names each file of yours')
     }
+  }
+})
+
+// an on with what its receipt can hold: files changed with backups, trocar's own files, processes to restart, a refusal with its commands, a
+// blocked step with its command, notes said once (loopback) and a problem
+const onReceipt = (over = {}, platform = 'linux') => {
+  const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+  return {
+    ...newReceipt('on'), ok: true, harnesses: ['claude-code', 'codex'], user: 'alice', linger: true, daemon: { state: 'running', pid: 4012 },
+    changed: [{ path: j('.claude', 'settings.json'), change: 'env.HTTPS_PROXY -> trocar', backup: j('.trocar', 'backup', 'aa-1') }],
+    created: [j('.trocar', 'collector', 'state.json')], unchanged: [], skipped: [],
+    restart: [{ harness: 'codex', pid: 5530 }, { harness: 'codex', pid: 5531 }],
+    refused: [{ harness: 'pi', reason: 'setup-needed', why: 'its certificate setting is missing', commands: ['trocar install'] }],
+    blocked: [{ what: 'trocar on', reason: 'the helper is missing', command: 'sudo /usr/bin/node /opt/trocar/bin/trocar.mjs setup-helper' }],
+    notes: ['requests to localhost, 127.0.0.1, ::1 (a model or relay on this computer) do not go through trocar and are not captured'], problems: [], ...over,
+  }
+}
+
+test('on (Linux): the default plan and receipt say no unsaid word and no pid; --details holds every path and pid; every command is on a line of its own', () => {
+  const home = HOMES.linux, r = onReceipt()
+  const text = formatOnText(r, { home }), details = formatOnReceipt(r, { home, platform: 'linux' })
+  assert.deepEqual(unsaidIn(text), [], text)
+  for (const pid of [...r.restart.map((x) => x.pid), r.daemon.pid]) { assert.ok(!text.includes(String(pid)), text); assert.ok(details.includes(String(pid)), `--details names ${pid}`) }
+  for (const p of [...r.changed.flatMap((c) => [c.path, c.backup]), ...r.created]) assert.ok(details.includes(`~${p.slice(home.length)}`), `--details names ${p}`)
+  for (const c of commandsOf(r)) assert.ok(onItsOwnLine(text, c), `${c}:\n${text}`)
+  assert.match(text, /^Restart codex to capture it/m, 'the processes started before are one line (§3.3)')
+  assert.ok(!text.includes('127.0.0.1'), 'the loopback note is said once, in --details')
+  const plan = { targets: ['claude-code', 'pi'], first: false, newPaths: [r.changed[0].path], entries: [{ harness: 'claude-code', path: r.changed[0].path, keys: ['env', 'HTTPS_PROXY'] }], manifest: P('linux').join(home, '.trocar', 'collector', 'install-manifest.json') }
+  const shown = formatOnPlan(plan, { home })
+  assert.deepEqual(unsaidIn(shown), [], shown)
+  assert.match(shown, /claude-code\s+~\/\.claude\/settings\.json\s+new$/m, 'a file not confirmed last time ends in new')
+  assert.match(shown, /^ {2}pi\s+no file of yours$/m)
+  assert.ok(!shown.includes('.trocar') && !shown.includes('HTTPS_PROXY'), "trocar's own files and the keys are --details facts")
+  assert.doesNotMatch(formatOnPlan({ ...plan, first: true }, { home }), /new$/m, 'the first on after install marks nothing new')
+})
+
+test('on (macOS / Windows): the default receipt says no unsaid word and no pid; --details holds every path and pid; every command is on a line of its own', () => {
+  for (const platform of ['darwin', 'win32']) {
+    const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+    const r = { ...onReceipt({}, platform), routes: [{ harness: 'claude-code', route: 'settings', at: j('.claude', 'settings.json'), ok: true }, { harness: 'codex', route: 'env', at: j('.codex', '.env'), ok: true }],
+      notes: [{ code: 'loopback-direct', hosts: ['localhost'], text: 'requests to localhost are not captured' }, { harness: 'codex', code: 'harness-note', form: 'codex.vscode', text: 'codex.vscode runs inside another program: trocar passes those connections on without capturing them' }] }
+    const text = formatModelOnText(r, 1, home), details = formatModelOnReceipt(r, 1, home)
+    assert.deepEqual(unsaidIn(text), [], `${platform}:\n${text}`)
+    for (const pid of r.restart.map((x) => x.pid)) { assert.ok(!text.includes(String(pid)), text); assert.ok(details.includes(String(pid)), `${platform}: --details names ${pid}`) }
+    for (const x of r.routes) assert.ok(details.includes(`~${x.at.slice(home.length)}`) || details.includes(x.at), `${platform}: --details names ${x.at}`)
+    for (const c of r.refused.flatMap((x) => x.commands)) assert.ok(onItsOwnLine(text, c), `${c}:\n${text}`)
+    assert.ok(text.includes('codex.vscode runs inside another program'), 'a form that only forwards stays in the default text (invariant 4)')
+    assert.ok(!text.includes('requests to localhost'), 'the loopback note is --details only')
   }
 })

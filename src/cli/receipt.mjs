@@ -140,6 +140,9 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
 /** The one plan item for trocar's own tree (V85): `on`'s plan on every OS ends with it. */
 export const ownTreeItem = (home, platform) => ({ what: 'trocar', path: path.join(home, '.trocar'), detail: `${asDir(tilde(path.join(home, '.trocar'), home), platform)}: trocar's own files (its install record, what is turned on, its logs); trocar uninstall takes all of it back` })
 
+// a proxy setting the user changed after the last on: going on takes their value as the upstream (§3.3「要确认时」)
+const editedLine = (e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at trocar.`
+
 /** Every file `on` (or Linux `install`) would write or change, before it writes any (§1.4): the count first, then every file by full path and key. */
 export function formatPlan(p, { home = null, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
@@ -152,7 +155,7 @@ export function formatPlan(p, { home = null, platform = 'linux', command = 'on',
     ...((p.entries || []).length ? [`A copy of every file of yours it changes goes to ${backups}/ first.`] : []),
     ...watchLines(p.watch, t).map((l) => `  ${l}`),
     ...(p.skipped && p.skipped.length ? [`Skipped: ${p.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`] : []),
-    ...(p.edited || []).map((e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at trocar.`),
+    ...(p.edited || []).map(editedLine),
     ...(p.restart && p.restart.length ? [`Restart to capture: ${p.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}. Until then they connect as they do now.`] : []),
   ].filter((l) => l !== null), { home }).join('\n')
 }
@@ -368,5 +371,41 @@ export function formatUninstallText(r, { home = null, platform = process.platfor
   const d = r.daemon || {}
   if (d.state === 'unresponsive') lines.push("trocar's service did not answer and could not be stopped.")
   lines.push(...uninstallActions(r, { past, home, platform, asking, short: true }))
+  return fit(lines, { home }).join('\n')
+}
+
+/** 1.6 §3.3「之后的效果」: the agents whose processes were running before capture was on, as one line (several agents in one); each process and its
+ *  pid is a --details fact. → [line] or []. */
+export const restartLine = (r) => {
+  const hs = [...new Set((r.restart || []).map((x) => x.harness))]
+  return hs.length ? [`Restart ${andList(hs)} to capture ${hs.length === 1 ? 'it: it was' : 'them: they were'} started before capture was on.`] : []
+}
+
+/** The default plan of a Linux `on` (1.6 §3.3「要确认时」): one line per agent and file of yours, `new` on a file not confirmed last time (none on
+ *  the first on), `no file of yours` for an agent with none; trocar's own files, the keys and the route words are formatPlan's (`--details`). */
+export function formatOnPlan(p, { home = null, platform = 'linux' } = {}) {
+  const own = home ? path.join(home, '.trocar') : null
+  const yours = (x) => typeof x === 'string' && !(own && (x === own || x.startsWith(own + path.sep)))
+  const rows = planItems(p, { home, platform }).filter((i) => HARNESS_IDS.includes(i.what) && yours(i.path))
+    .map((i) => [i.what, `${tilde(i.path, home)}${!p.first && (p.newPaths || []).includes(i.path) ? '  new' : ''}`])
+  for (const h of p.targets || []) if (!rows.some(([x]) => x === h)) rows.push([h, 'no file of yours'])
+  return fit(['trocar on will point these agents at trocar:', ...pairs(rows, { home }), ...watchLines(p.watch, (x) => tilde(x, home)), ...(p.edited || []).map(editedLine)], { home }).join('\n')
+}
+
+/** The default text of a Linux `on` (1.6 §3.3, §1.1 ④): the conclusion, the Restart line, linger, and what the user must act on — a refusal, a
+ *  service not running, a problem, a fact not read (D38), a blocked step — each with its command on its own line. formatOnReceipt is `--details`. */
+export function formatOnText(r, { tense = 'past', home = null, colors: c = noColor() } = {}) {
+  const past = tense !== 'future'
+  const idle = past && (r.ok !== false || onlyRefused(r)) && r.daemon && r.daemon.state !== 'running'
+  const named = andList(r.harnesses || []) || 'no agent'
+  const lines = [r.ok === false && past && !onlyRefused(r) ? `${c.red('x')} trocar on did not finish. What stopped it is below.`
+    : idle ? "The settings are in place, but trocar's service is not running: nothing is captured until it is. Start it:"
+      : past ? `${c.green('Capturing')} ${named}.` : `trocar will start capturing ${named}.`]
+  if (idle) lines.push(commandLine('trocar daemon'))
+  lines.push(...restartLine(r), ...(r.refused || []).flatMap((x) => refusedLines(x, { past })))
+  if (lingerText(r)) lines.push(lingerText(r))
+  const isProblem = (n) => (r.problems ? r.problems.includes(n) : r.ok === false && past) // as formatOnReceipt judges it
+  for (const n of r.notes || []) if (isProblem(n) || /(cannot|could not) be read/.test(n)) lines.push(`${isProblem(n) ? 'Problem' : 'Note'}: ${n}`)
+  for (const b of r.blocked || []) if (b.command) lines.push(commandLine(b.command))
   return fit(lines, { home }).join('\n')
 }

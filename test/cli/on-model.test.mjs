@@ -22,7 +22,7 @@ function fakeIo() {
 const neverStarts = { path: '/nowhere/unit', text: () => '', registered: () => ({ state: 'present' }), enable: () => { throw new Error('the unit must not be touched') }, start: () => { throw new Error('the unit must not be touched') }, startNow: () => { throw new Error('the unit must not be touched') } }
 const on = (w, os, argv, unit = neverStarts) => {
   const io = fakeIo()
-  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+  const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
   return runOnCli(argv, { io, env: w.env, home: w.home, platform: os, deps }).then((exit) => ({ exit, io }))
 }
 
@@ -59,7 +59,7 @@ for (const os of ['darwin', 'win32']) {
     const w = await modelWorld({ os, commands: ['codex', 'opencode'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const planned = (await on(w, os, ['--dry-run', '--json'])).io.json().planned.filter((p) => p.route) // the route items; trocar's own tree is the one other (附录 C.2)
-    const text = (await on(w, os, ['--dry-run'])).io.text()
+    const text = (await on(w, os, ['--dry-run', '--details'])).io.text() // what changes in each file is a --details fact (§3.3)
     assert.ok(planned.length >= 2 && planned.every((p) => p.paths.length), JSON.stringify(planned))
     for (const f of planned.flatMap((p) => p.paths)) assert.match(text, new RegExp(`${f.replace(w.home, '~').replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}: \\S`), `${f}: the row says what changes there\n${text}`)
   })
@@ -96,7 +96,7 @@ for (const os of ['darwin', 'win32']) {
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const lines = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')) : []).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.source === 'board')
     const gone = { ...neverStarts, registered: () => ({ state: 'absent' }) }
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => gone } } } }
+    const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => gone } } } }
     const io = fakeIo()
     assert.equal(await runOn({ io, env: w.env, home: w.home, platform: os, deps, ids: null, flags: new Set(['--dry-run']), json: true, source: 'board' }), 0, io.text())
     assert.deepEqual(lines(), [], 'a dry run changed nothing and records nothing')
@@ -115,7 +115,7 @@ for (const os of ['darwin', 'win32']) {
     const w = await modelWorld({ os, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const results = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')) : []).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.kind === 'result')
-    const deps = (unit) => ({ getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, lockWaitMs: 30, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } })
+    const deps = (unit) => ({ getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, lockWaitMs: 30, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } })
     fs.writeFileSync(path.join(w.dir, 'op.lock'), JSON.stringify({ pid: process.pid, start_time: null, boot_id: null }) + '\n')
     const io = fakeIo()
     assert.equal(await runOn({ io, env: w.env, home: w.home, platform: os, deps: deps(neverStarts), ids: null, flags: new Set(['--yes']), json: true }), 1, io.text())
@@ -145,7 +145,7 @@ test('V104 proxy (darwin): the daemon opens doors for the first harness only →
     'POST /on': async ({ body }) => { asked = body; return { doors: Object.fromEntries(Object.entries(body.groups).filter(([g]) => g.startsWith(`${body.harnesses[0]}:`)).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } },
   } })
   try {
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
     const io = fakeIo()
     await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
     assert.ok(asked && asked.harnesses.length >= 2, JSON.stringify(asked))
@@ -171,7 +171,7 @@ test('V104 proxy (darwin): the manifest cannot be saved once an entry is written
     'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
   } })
   try {
-    const deps = { fs: full, getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const deps = { fs: full, getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
     const io = fakeIo()
     const exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
     assert.equal(wrote, true)
@@ -231,7 +231,7 @@ test('1.6 §3.3: the plan of on lists every path once, and speaks of an earlier 
   const { readManifest, saveManifest } = await import('../../src/off/manifest.mjs')
   const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
-  const planOf = async () => { const t = (await on(w, 'darwin', ['--dry-run'])).io.text().split('\n'); const i = t.findIndex((l) => /^trocar on will change/.test(l)); const j = t.findIndex((l) => /^trocar on would/.test(l)); return t.slice(i, j) } // the plan, up to the dry run's receipt
+  const planOf = async () => { const t = (await on(w, 'darwin', ['--dry-run'])).io.text().split('\n'); const i = t.findIndex((l) => /^trocar on will/.test(l)); const j = t.findIndex((l) => /^trocar on would/.test(l)); return t.slice(i, j) } // the plan, up to the dry run's receipt
   const env = '.codex/.env'
   const once = (plan) => assert.equal(plan.join(' ').split(env).length - 1, 1, `the path is named once\n${plan.join('\n')}`)
   const first = await planOf()
@@ -240,7 +240,7 @@ test('1.6 §3.3: the plan of on lists every path once, and speaks of an earlier 
   const m = readManifest(w.dir); saveManifest(w.dir, { ...m, confirmed_paths: [path.join(w.home, 'an', 'earlier', 'file')] })
   const later = await planOf()
   once(later)
-  assert.match(later.find((l) => l.includes(env)) || '', /new since you last said yes/, `the new row says so\n${later.join('\n')}`)
+  assert.match(later.find((l) => l.includes(env)) || '', /\bnew$/, `the new row says so\n${later.join('\n')}`)
 })
 
 // 1.6 §1.6 (R12): off goes first — it writes desired off before it waits for the lock, and an on that is part way through stops when it sees that:
@@ -266,7 +266,7 @@ test('1.6 §1.6 (darwin): off writes off after on wrote its first harness → on
   } })
   let doc, exit
   try {
-    const deps = { fs: full, getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const deps = { fs: full, getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
     const io = fakeIo()
     exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
     doc = io.json()
@@ -389,7 +389,7 @@ test('1.6 §3.3 (darwin): an on that wrote NO_PROXY notes once that loopback req
     assert.equal(notes.length, 1, `said once, not per harness: ${JSON.stringify(both.io.json().notes)}`)
     assert.deepEqual([...notes[0].hosts].sort(), [...hosts].sort())
     assert.equal(notes[0].harness, undefined, "a note of the run, not of one harness: no harness field")
-    const text = await on(w, 'darwin', ['codex', 'opencode', '--yes'])
+    const text = await on(w, 'darwin', ['codex', 'opencode', '--yes', '--details']) // the loopback note is said once, in --details (§3.3)
     const lines = text.io.text().split('\n').filter((l) => hosts.every((h) => l.includes(h)))
     assert.equal(lines.length, 1, text.io.text())
     assertEnglish(text.io.text(), 'the receipt of on')
@@ -429,7 +429,7 @@ test('4.11 P6: on writes the user\'s persistent NO_PROXY into the entries it wri
   } })
   try {
     const facts = { persistentEnv: (names) => (names.includes('NO_PROXY') ? { NO_PROXY: 'corp.example,.wq.internal' } : {}) }
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs, facts }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs, facts }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
     const io = fakeIo()
     assert.equal(await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: ['codex'], flags: new Set(['--yes']), json: true }), 0, io.text())
     const line = fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8').split(/\r?\n/).find((l) => l.startsWith('NO_PROXY='))
@@ -456,5 +456,28 @@ test('4.11 P6 ⑤ (darwin, default backends): on reads launchd\'s NO_PROXY by na
     const line = fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8').split(/\r?\n/).find((l) => l.startsWith('NO_PROXY='))
     assert.equal(line, 'NO_PROXY=localhost,127.0.0.1,::1,corp.example')
     assert.ok(asked.length && asked.every((a) => a[0] === 'getenv' && a.length === 2), JSON.stringify(asked))
+  } finally { await server.close() }
+})
+
+// 1.6 §3.3「之后的效果」: macOS / Windows `on` reports, as Linux does, the processes of the agents it just turned on that were already running —
+// `restart:[{harness, pid}]`, one Restart line in the default text, the pids in --details; a process started after on, or of an agent already on, is none
+test('1.6 §3.3 (darwin): on names the processes started before capture was on, and only of the agents it turned on now', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const codex = (pid, startedAt) => ({ pid, ppid: 1, uid: 501, startedAt, exe: '/usr/local/bin/codex', argv: ['codex'], cmdline: 'codex', env: () => null })
+  const procs = async () => [codex(5530, 1), codex(5531, Date.now() + 60_000), { ...codex(77, 1), exe: '/bin/zsh', argv: ['zsh'], cmdline: 'zsh' }]
+  const run = async (argv) => { const io = fakeIo(); const deps = { getuid: () => 501, procs, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }; return { exit: await runOnCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps }), io } }
+  try {
+    const first = await run(['codex', '--yes', '--json'])
+    assert.equal(first.exit, 0, first.io.text())
+    assert.deepEqual(first.io.json().restart, [{ harness: 'codex', pid: 5530 }], 'the one started before on; not the later one, not a shell')
+    const again = await run(['codex', '--yes', '--json'])
+    assert.deepEqual(again.io.json().restart, [], 'codex was already on: this on turned nothing on, so nothing to restart')
   } finally { await server.close() }
 })

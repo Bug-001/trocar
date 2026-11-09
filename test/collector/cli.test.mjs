@@ -228,7 +228,6 @@ test('cli: install / on go to the one `trocar on` (src/cli/on.mjs) with the desc
   const base = { home: '/h', daemon, install, script: '/repo/bin/trocar.mjs', platform: 'linux' }
   let t = io(); assert.equal(await runCli(['on', '--yes'], { ...base, ...t }), 0)
   assert.equal(t.o.length, 2, 'the plan, then the receipt (src/cli/receipt.mjs)')
-  assert.match(t.o[0], /^trocar on will write \d+ file/); assert.match(t.o[1], /^Capturing /)
   assertEnglish(t.o.join('\n'))
   t = io(); assert.equal(await runCli(['on', '--dry-run'], { ...base, ...t }), 0)
   assert.deepEqual(seen, [

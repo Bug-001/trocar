@@ -338,7 +338,7 @@ test('V29: the on receipt after install, in the text and in --json, carries the 
   assert.ok(path.isAbsolute(r.standalone))
   assert.ok(fs.statSync(r.standalone).isFile() && (fs.statSync(r.standalone).mode & 0o100), 'and the path is a file trocar wrote, executable (install wrote it; test/off/standalone.test.mjs runs it)')
   const io2 = fakeIo(); const home2 = tmpDir('trocar-on-v29b-'); seedClaude(home2); await installFirst(home2)
-  assert.equal(await runOnCli(['--yes'], onCtx(home2, io2)), 0)
+  assert.equal(await runOnCli(['--yes', '--details'], onCtx(home2, io2)), 0) // the four next steps are --details facts (§3.3)
   for (const c of ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall']) assert.ok(io2.stdoutText().includes(c), `the text carries ${c}`)
   assert.equal(breakGlassLine(io2.stdoutText()), '~/.trocar/bin/trocar-off', 'the text carries trocar-off, HOME as ~ (1.6 §3.2)')
   const m = readManifest(path.join(home, '.trocar', 'collector'))
