@@ -137,6 +137,25 @@ test('after on, off and on again of one switch harness, then off, --purge-data l
   }
 })
 
+// the same for a directory whose last record removes its file without trying the directory (a CA file): it goes when that record goes, and a
+// directory that still holds a file of the user's stays
+test('a directory on made goes with the last record in it, whichever kind that is; one holding a user file stays', async () => {
+  const { writeOwnedFile, applyJsonKey, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
+  for (const userFile of [false, true]) {
+    const s = await installedHome({ names: ['claude-code'] })
+    const d = path.join(s.dir, 'made-by-on', 'deep') // a file trocar removes without trying its directory (a CA file) is only ever under ~/.trocar
+    const m = readM(s.dir)
+    applyJsonKey({ dir: s.dir, manifest: m, harness: 'claude-code', phase: 'on', file: path.join(d, 'settings.json'), keys: ['env', 'HTTPS_PROXY'], value: 'http://127.0.0.1:1', home: s.home })
+    writeOwnedFile({ dir: s.dir, manifest: m, role: 'ca-cert', phase: 'install', file: path.join(d, 'ca.pem'), data: 'not a real certificate\n', home: s.home })
+    saveM(s.dir, m)
+    if (userFile) fs.writeFileSync(path.join(d, 'mine.txt'), 'the user\'s\n')
+    const r = await cli(s, ['--yes'])
+    assert.equal(r.exit, 0, r.io.text())
+    assert.equal(fs.existsSync(path.join(s.dir, 'made-by-on')), userFile, userFile ? 'a directory holding a user file stays' : `the directories on made are gone; left: ${fs.existsSync(d) ? fs.readdirSync(d).join(', ') : '-'}`)
+    if (userFile) assert.equal(fs.readFileSync(path.join(d, 'mine.txt'), 'utf8'), 'the user\'s\n')
+  }
+})
+
 test('R6 · §3.6: uninstall always asks — no terminal and no --yes prints the plan and exits 2 with nothing done; a terminal asks once (n: nothing, exit 1); --yes goes; --purge-data says the records go for good', async () => {
   const s = await installedHome({ names: ['claude-code'] }); keep(s)
   const snap = snapshot(s.home), ran = s.sys.exec.calls.length
