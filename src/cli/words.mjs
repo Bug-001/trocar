@@ -8,14 +8,22 @@ const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+|ERR_[A-Z0-9_]+)$/ // Node's own error cod
 /** 1.6 §1.1 ④ (D58 ⑦): the words the default text of a command never says, each with the word it says instead — the one place this table is
  *  written (the spec's table is its description). `--details` and `--json` may say them; a command line someone copies may name a pid. */
 export const UNSAID = Object.freeze([
-  { say: 'agent', not: ['harness', 'harnesses'] },
+  { say: 'agent', not: ['harness'] },
   { say: "trocar's service", not: ['daemon', 'collector'] },
   { say: 'trocar', not: ['door', 'carrier', 'entry', 'control socket', 'holder'] },
-  { say: 'a sentence', not: ['errno', 'exit code', 'EPIPE', 'ECONNREFUSED', 'ENOENT', 'EACCES', 'pid'] },
+  { say: 'a sentence', not: ['errno', 'exit code', 'hash', 'pid'] },
 ])
-const UNSAID_RE = new RegExp(`\\b(?:${UNSAID.flatMap((u) => u.not).map((w) => w.replace(/ /g, '\\s+')).join('|')})\\b`, 'i')
-/** The lines of `text` that say an unsaid word, a line laid out as a command to copy (four spaces in, `trocar` or a shell word first) aside. */
-export const unsaidIn = (text) => String(text).split('\n').filter((l) => !/^ {4}\S/.test(l) && UNSAID_RE.test(l))
+// a word, its plural too (`entry` → `entries`); an error code (EPIPE, ERR_*) by its shape, case and all; a path is the user's or trocar's name for a
+// place, so `~/.trocar/collector/flows/` is not the word "collector"
+const stem = (w) => w.replace(/ /g, '\\s+').replace(/y$/, '(?:y|ies)')
+const UNSAID_RE = new RegExp(`\\b(?:${UNSAID.flatMap((u) => u.not).map(stem).join('|')})(?:e?s)?\\b`, 'i')
+const ERRNO_WORD = /\b(?:E[A-Z][A-Z0-9_]{2,}|ERR_[A-Z0-9_]+)\b/
+/** The lines of `text` that say an unsaid word, a line laid out as a command to copy (four spaces in) aside. */
+export const unsaidIn = (text) => String(text).split('\n').filter((l) => {
+  if (/^ {4}\S/.test(l)) return false
+  const words = l.replace(/\S*[\\/]\S*/g, ' ')
+  return UNSAID_RE.test(words) || ERRNO_WORD.test(words)
+})
 
 /** 1.6 §3.3 · 1.9 §保真边界: the note of a route that sends loopback direct, naming the hosts it carries (4.11 P6). */
 export const loopbackWords = (hosts) => `requests to ${hosts.join(', ')} (a model or relay on this computer) do not go through trocar and are not captured`

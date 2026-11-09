@@ -697,8 +697,8 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 
 ## Commands
 
-These commands print the conclusion and what to do; `--details` adds every fact the short text leaves out (each
-file, key, process and note), and `--json` is the same document as before. `trocar help` prints the same, in three sections; `trocar help <command>` says one command, and
+`install`, `on`, `off`, `status`, `uninstall`, `doctor` and `update` take `--details`: every fact their short text
+leaves out (each file, key, process and note). `--json` is the same document either way. `trocar help` prints the same, in three sections; `trocar help <command>` says one command, and
 `trocar query <name> --help` one query. `trocar help --json` gives all of it as one document.
 
 ```sh

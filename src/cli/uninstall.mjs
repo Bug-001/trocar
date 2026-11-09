@@ -31,7 +31,7 @@ import { channelOf, packageRoot, setupHelperCommand } from '../version.mjs'
 import { DEFAULT_REDIRECTOR_BIN } from '../collector/arch/linux/redirector-client.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
-import { formatUninstallReceipt, formatUninstallText, fit } from './receipt.mjs'
+import { formatUninstallReceipt, formatUninstallText, trustStoreWhere, fit } from './receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask, undoScheduledTask, TASK_NAME, TASK_FILE, RUN_KEY } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
@@ -455,7 +455,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
  *  subject) is removed too — with a record or without — and checked gone by a second listing; then, when the record names no root key any more, the
  *  custody's one key (P1: one key, under a fixed name). What could not be read, removed or confirmed is a left row and a problem (D38). */
 const storeOf = (w) => w.deps.rootStore || rootStore({ platform: w.platform, run: w.exec, home: w.home, env: w.env, fs: w.fs })
-const storeWhere = (w) => (w.platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(w.home, 'Library', 'Keychains', 'login.keychain-db'))
+const storeWhere = (w) => trustStoreWhere(w.platform, w.home)
 const ask = async (fn) => { try { return (await fn()) || { error: 'no answer' } } catch (e) { return { error: errText(e) } } }
 const nameOf = rootName
 // the fingerprint last, a word of its own: too long for any line, it gets one to itself, whole (1.6 §1.1⑥), and no bracket is split from it

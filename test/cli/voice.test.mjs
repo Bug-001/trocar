@@ -63,3 +63,26 @@ test('uninstall (§1.4): the default plan names every file of yours outside ~/.t
   assert.doesNotMatch(plan, /Nothing was changed/)
   assert.match(formatUninstallText(receipt({ dry_run: true }), { home, platform: 'darwin', tense: 'future' }), /Nothing was changed/, '--dry-run still says it')
 })
+
+test('uninstall: what you must act on stays in the default text: each left row with its command, each problem and note; a refusal adds no Kept line', () => {
+  const home = HOMES.darwin
+  const left = [{ path: path.join(home, '.codex/.env'), reason: 'could not be parsed', command: `trocar off codex` }]
+  const failed = receipt({ ok: false, left, problems: ['the root could not be removed from your trust store'], notes: ['20261109T010000Z stays unsealed until trocar runs again'] })
+  const text = formatUninstallText(failed, { home, platform: 'darwin' })
+  for (const must of ['    trocar off codex', failed.problems[0], failed.notes[0], '~/.codex/.env']) assert.ok(text.includes(must), `${must}\n${text}`)
+  const refused = formatUninstallText(receipt({ ok: false, error: { code: 'collectors-online', message: 'capture is still on for codex' } }), { home, platform: 'darwin' })
+  assert.doesNotMatch(refused, /^Kept:/m, 'a refusal changed nothing, so it says nothing about what stays')
+  assert.match(formatUninstallText(receipt({ dry_run: true, purge_data: true }), { home, platform: 'darwin', tense: 'future', asking: true }), /captured records/, 'the plan says --purge-data deletes the records')
+  assert.equal(countsBy([], (p) => p), '')
+})
+
+test('uninstall (§1.4): the trust store and the root key are trocar\'s own, never a file of yours, in any case on Windows', () => {
+  const win = HOMES.win32
+  const r = receipt({ dry_run: true, changed: [{ path: 'Cert:\\CurrentUser\\Root', change: 'stray root taken out' }, { path: `${win}\\.Codex\\.env`, change: 'taken out' }],
+    removed: ['cng:abc', `${win}\\.codex\\.env`] }, 'win32')
+  const plan = formatUninstallText(r, { home: win, platform: 'win32', tense: 'future', asking: true })
+  assert.doesNotMatch(plan, /Cert:|cng:/)
+  assert.equal(plan.split('\n').filter((l) => /\.codex\\\.env/i.test(l)).length, 1, 'one file on Windows, whatever its case')
+  const mac = formatUninstallText(receipt({ dry_run: true, changed: [{ path: path.join(HOMES.darwin, 'Library/Keychains/login.keychain-db'), change: 'stray root taken out' }] }), { home: HOMES.darwin, platform: 'darwin', tense: 'future', asking: true })
+  assert.doesNotMatch(mac, /Keychains/)
+})

@@ -150,6 +150,7 @@ export const andList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} a
 /** Items counted by a key, said as `5 codex and 13 pi processes` (§1.1 ④ rule 5: a list of processes is a count and what to do). Keys keep the
  *  order they first appear in; the noun takes its plural from the total. */
 export function countsBy(items, keyOf, noun = 'process', plural = `${noun}es`) {
+  if (!items.length) return ''
   const n = new Map()
   for (const x of items) n.set(keyOf(x), (n.get(keyOf(x)) || 0) + 1)
   return `${andList([...n].map(([k, c]) => `${c} ${k}`))} ${items.length === 1 ? noun : plural}`

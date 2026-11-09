@@ -249,7 +249,8 @@ export const formatRefusal = (r, { home = null, paths = null } = {}) => fit([`tr
  *  lines in order as `error.commands`, and `error.command` the first. */
 export const markedRefusal = (command, e, steps = null) => ({ ...newReceipt(command), ok: false, error: { code: e.code, message: e.message, command: steps ? steps[0] : UNDO_LINE.install, ...(steps ? { commands: steps } : {}) }, problems: e.paths.map((f) => `${f} holds trocar's text, and no install record lists it`) })
 
-export function uninstallHeadline({ platform = process.platform, past = true } = {}) {
+export function uninstallHeadline({ platform = process.platform, past = true, ok = true } = {}) {
+  if (past && ok === false) return 'trocar uninstall did not finish. What is left is below.'
   const linux = platform === 'linux'
   if (!past) return `trocar uninstall will take out everything install put on this machine, ${linux ? 'the certificate settings it gave your agents included' : 'and remove the root certificate from your trust settings'}.`
   return `Uninstalled. trocar is no longer on your agents' path, and ${linux ? 'the certificate settings it gave them are gone' : 'its root certificate is gone from your trust settings'}.`
@@ -282,7 +283,7 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   if (typeof r.class_table === 'string') kept.push(`your traffic classes, ${t(r.class_table)}`)
   // §3.6 / 4.6: a bundle a live process may still have open is kept with trocar's CA taken out — the receipt says which, and who may hold it
   for (const b of r.kept_bundles || []) kept.push(`${t(b.path)} (trocar's certificate taken out)${(b.pids || []).length ? `: ${(b.pids || []).map((p) => `pid ${p}`).join(', ')} may have loaded it` : ''}`)
-  const lines = [past && r.ok === false ? 'trocar uninstall did not finish. What is left is below.' : uninstallHeadline({ platform, past })]
+  const lines = [uninstallHeadline({ platform, past, ok: r.ok })]
   if (r.nothing_installed) lines.push('Nothing of trocar is installed for your user, so there was nothing to take out.')
   // a file is said once, as `off` says it: several entries of one file (json keys) with the same change are one row
   if (removed.length) lines.push(past ? 'Removed' : 'Will remove', ...[...new Set(removed)].map((x) => `  ${x}`))
@@ -324,33 +325,45 @@ function uninstallActions(r, { past, home, platform, asking, short = false }) {
   return lines
 }
 
+/** Where the user's trust store keeps trocar's root, as an uninstall row names it (4.11 §3 ㉔): the one spelling src/cli/uninstall.mjs and this file share. */
+export const trustStoreWhere = (platform, home) => (platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(home, 'Library', 'Keychains', 'login.keychain-db'))
+
 /** The default text of `trocar uninstall` (1.6 §3.6, §1.1 ④): the plan names each file of yours by its full path (several in one directory are
  *  one line with a count) and says trocar's own things in one sentence; the receipt is the conclusion, one Kept line and what is left to do.
  *  Every other fact is formatUninstallReceipt's (`--details`). `asking`: the plan printed before the question (§1.4). */
 export function formatUninstallText(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', asking = false } = {}) {
-  const past = tense !== 'future'
-  const P = platform === 'win32' ? path.win32 : path.posix
+  const past = tense !== 'future', win = platform === 'win32'
+  const P = win ? path.win32 : path.posix
   const t = (x) => tilde(x, home)
   const own = home ? P.join(home, '.trocar') : null
-  const ours = (p) => typeof p !== 'string' || /^[a-z]{2,}:/.test(p) || (own && (p === own || p.startsWith(own + P.sep)))
-  const lines = [past && r.ok === false ? 'trocar uninstall did not finish. What is left is below.' : uninstallHeadline({ platform, past })]
+  const key = (p) => (win ? String(p).toLowerCase() : String(p)) // one file in any case on Windows
+  const under = (p, dir) => !!dir && (key(p) === key(dir) || key(p).startsWith(key(dir) + P.sep))
+  const store = home ? trustStoreWhere(platform, home) : null
+  const keyId = (p) => /^[A-Za-z]{2,}:/.test(p) && p !== TASK_NAME && !(store && key(p) === key(store)) // a root key by its custody id (keychain:…, cng:…)
+  // §1.4: trocar's own things are what is under ~/.trocar, the trust store's root and the root key; every other path is a file of yours
+  const ours = (p) => typeof p !== 'string' || under(p, own) || keyId(p) || (store && key(p) === key(store))
+  const lines = [uninstallHeadline({ platform, past, ok: r.ok })]
   if (r.nothing_installed) lines.push('Nothing of trocar is installed for your user, so there was nothing to take out.')
   if (!past) {
-    // §1.4: every path outside ~/.trocar is a file of yours; files of one directory share a line, with their count
-    const files = [...new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || [])].filter((p) => !ours(p)))]
+    const files = [...new Map([...(r.changed || []).map((c) => c.path), ...(r.removed || [])].filter((p) => !ours(p)).map((p) => [key(p), p])).values()]
     const byDir = new Map()
-    for (const f of files) byDir.set(f === TASK_NAME ? f : P.dirname(f), [...(byDir.get(f === TASK_NAME ? f : P.dirname(f)) || []), f])
-    const rows = [...byDir].flatMap(([dir, fs]) => (fs.length > 1 ? [`${t(dir)} (${fs.length} files)`] : fs.map((f) => (f === TASK_NAME ? `the scheduled task ${f}` : t(f)))))
+    for (const f of files) { const d = f === TASK_NAME ? f : P.dirname(f); byDir.set(key(d), [...(byDir.get(key(d)) || []), f]) }
+    const rows = [...byDir.values()].flatMap((fs) => (fs.length > 1 ? [`${t(P.dirname(fs[0]))} (${fs.length} files)`] : fs.map((f) => (f === TASK_NAME ? `the scheduled task ${f}` : t(f)))))
     if (rows.length) lines.push('It takes trocar out of these files of yours:', ...rows.map((x) => `  ${x}`))
-    lines.push(platform === 'linux' ? "It also deletes trocar's own files in ~/.trocar, its backups of your files among them."
-      : "It also deletes trocar's root key, its backups of your files, and its own files in ~/.trocar.") // the headline said the root certificate
+    // the sentence says what the plan holds: a key, the backups, trocar's own files (the headline already said the root certificate)
+    const removed = r.removed || []
+    const parts = [...(removed.some(keyId) ? ["trocar's root key"] : []),
+      ...((r.dropped_backups || []).length || removed.some((p) => typeof p === 'string' && own && under(p, P.join(own, 'backup'))) ? ['its backups of your files'] : []),
+      ...(removed.some((p) => typeof p === 'string' && under(p, own) && !under(p, P.join(own, 'backup'))) ? ['its own files in ~/.trocar'] : [])]
+    if (parts.length) lines.push(`It also deletes ${andList(parts)}.`)
     if (r.purge_data) lines.push('With --purge-data it deletes your captured records too.')
   }
   const kept = r.kept || []
-  if (kept.length && !r.purge_data) {
+  if (kept.length && !r.purge_data && !r.error) { // a refusal changed nothing: what stays is not news (§1.1 ④ rule 7)
+    const known = kept.every((k) => Number.isFinite(k.bytes))
     const total = kept.reduce((n, k) => n + (Number.isFinite(k.bytes) ? k.bytes : 0), 0)
-    const inside = kept.every((k) => own && String(k.path).startsWith(own))
-    lines.push(`Kept: ${andList(kept.map((k) => k.what))} (${size(total)}${inside ? ', in ~/.trocar' : ''}).`)
+    const inside = kept.every((k) => under(String(k.path), own))
+    lines.push(`Kept: ${andList(kept.map((k) => k.what))} (${known ? size(total) : 'size not known'}${inside ? ', in ~/.trocar' : ''}).`)
   }
   const d = r.daemon || {}
   if (d.state === 'unresponsive') lines.push("trocar's service did not answer and could not be stopped.")
