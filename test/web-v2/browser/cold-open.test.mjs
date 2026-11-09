@@ -159,3 +159,17 @@ test('1.5 K-32: a head behind the tip ids says so in place, with the count; 1.5 
     assert.deepEqual(boot.errors, [])
   } finally { await boot.context.close() }
 })
+
+test('1.3 #16 · 2.1 §token 计数行: the head\'s probes.series draws the token-count row, a bar per measured size; the row names the full count', { skip, timeout: 300_000 }, async () => {
+  const w = await folded(270_000), { head } = w
+  const at = Date.parse(head.markTs), series = [3, 2, 1].map((k, i) => ({ ts: new Date(at - k * 1000).toISOString(), tokens: 1000 * (i + 1), retention: 'full' }))
+  const probes = { count: series.length + 2, series } // two counts came back without a size: counted, not drawn
+  const c = await fresh(w, { route: (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...head, probes }) }) })
+  try {
+    await c.page.goto(`${w.b.url}/#/replay/${encodeURIComponent(w.project)}/${encodeURIComponent(w.id)}`)
+    const row = await c.page.waitForSelector('#rails .k-token-count', { timeout: 15_000 })
+    assert.equal(await row.$$eval('.pbar[data-lane="token-count"]', (e) => e.length), series.length, 'a bar per measured size')
+    assert.match(await row.$eval('.railname', (e) => e.textContent), new RegExp(`\\b${probes.count}\\b`), 'the row names probes.count, the full truth')
+    assert.deepEqual(c.errors, [])
+  } finally { await c.context.close() }
+})
