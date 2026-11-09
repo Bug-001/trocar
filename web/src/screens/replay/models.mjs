@@ -20,7 +20,7 @@ import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
 import { ENTRY, ENTRY_TIP } from '../../../legacy/labels/library.mjs'
 import { stepCount, partsOf, stepAt, placeSpan } from './strip-layout.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
-import { titleCase, titleText } from '../library/model.mjs'
+import { titleCase, titleText } from '../../../legacy/core/titles.mjs'
 // no price table yet, or an unreadable one: the one reason an unpriced number gives (2.2 §「≈ $」按钮), never "no unit price"
 const tableWhy = (s) => (s.pricingErr ? priceStateNote(null, s.pricingErr) : W.PRICES_LOADING)
 

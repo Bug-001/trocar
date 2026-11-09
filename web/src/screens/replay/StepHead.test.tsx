@@ -72,10 +72,17 @@ test('1.2 §编号: during a first read .sb-no counts the calls read instead of 
 // count arrive: the step head says that M, never a finished count shorter than the session
 test('1.2 §编号: the head\'s step count is M while the main lane\'s count has not caught up with it', () => {
   const { s, view, bar, model } = step({ at: 1 })
-  s.desk.head = { ...s.desk.head, steps: 1580 }; act(() => view.step())
+  s.desk.head = { ...s.desk.head, axis: s.anchor.id, steps: 1580 }; act(() => view.step())
   const no = bar().querySelector('.sb-no')!
   expect(no.getAttribute('data-m')).toBe('1580')
   expect(no.getAttribute('title')).toBe(W.stepNo(model().n, 1580))
+})
+
+// a tier-0 head (axis null) counts every model call, sub-agents' too: its steps are not the main lane's, so M stays the lane's
+test('1.2 §编号: a head whose steps are not on the anchor lane\'s axis does not change M', () => {
+  const { s, view, bar } = step({ at: 1 })
+  s.desk.head = { ...s.desk.head, tier: 0, axis: null, steps: 1580 }; act(() => view.step())
+  expect(bar().querySelector('.sb-no')!.getAttribute('data-m')).toBe(String(s.anchor.count ?? s.anchor.calls.length))
 })
 
 // a catch-up (a head with pending after a head without it) is not a first read: N / M stays

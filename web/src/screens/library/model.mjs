@@ -10,6 +10,7 @@ import { captureVerdict, capHealthPatch } from '../../../legacy/core/capture-ver
 import { readFailure, mark } from '../../../legacy/core/ui.mjs'
 import { sessionKey } from '../../../legacy/library/logic.mjs'
 import * as W from '../../../legacy/labels/library.mjs'
+import { titleCase, titleText } from '../../../legacy/core/titles.mjs'
 
 export { sessionKey }
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
@@ -56,11 +57,8 @@ export function flattenSessions(data) {
 }
 const lastMs = (s) => { const t = Date.parse(s.last_ts); return Number.isNaN(t) ? null : t }
 
-// ── the title rule (1.8 §标题规则): `title` as it is; `title_source: 'unread'` says the read failed; `null` is 没有采到提问; any other
-// value, or none (a list stored by the release before says 'pending'), is a title not read yet, not a fact about the session
-// one title rule for every screen that names a session (1.8 §标题规则; the replay head uses it too, 1.2 §会话头)
-export const titleCase = (s) => (s.title != null ? 'title' : s.title_source === 'unread' ? 'unread' : s.title_source === null ? 'none' : 'pending')
-export const titleText = (s) => ({ title: () => String(s.title), unread: () => W.PROMPT_UNREAD, none: () => W.UNTITLED, pending: () => W.TITLE_PENDING })[titleCase(s)]()
+// ── the title rule (1.8 §标题规则): one for every screen, core/titles.mjs
+export { titleCase, titleText }
 export function titleTipOf(s) {
   const id = s.session_id, c = titleCase(s)
   if (c !== 'title') return c === 'unread' ? W.titleUnread(id) : c === 'none' ? W.titleNoKey(id) : W.titlePending(id)
