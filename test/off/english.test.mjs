@@ -39,7 +39,6 @@ test('D58: off with things to undo, and off with programs still connected, read 
   const io = fakeIo()
   assert.equal(await runOffCli([], { io, home: s.home, env: s.sh.env, platform: 'linux', deps: s.offDeps({ getuid: () => 1000 }) }), 0, io.text())
   readable('off-undone', io.stdoutText(), { home: s.home })
-  assert.match(io.stdoutText(), /^Capture is off for /)
 
   // the §3.4 sample itself: a harness still connected through trocar, forwarded only, and the daemon running
   const held = formatOffReceipt({

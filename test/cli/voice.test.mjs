@@ -7,6 +7,7 @@ import { andList, countsBy } from '../../src/cli/text.mjs'
 import { unsaidIn } from '../../src/cli/words.mjs'
 import { formatUninstallReceipt, formatUninstallText } from '../../src/cli/receipt.mjs'
 import { newReceipt } from '../../src/off/schema.mjs'
+import { formatOffReceipt, formatOffText } from '../../src/off/receipt.mjs'
 
 const HOMES = { darwin: '/Users/alice', linux: '/home/alice', win32: 'C:\\Users\\alice' }
 const P = (platform) => (platform === 'win32' ? path.win32 : path.posix)
@@ -85,4 +86,42 @@ test('uninstall (§1.4): the trust store and the root key are trocar\'s own, nev
   assert.equal(plan.split('\n').filter((l) => /\.codex\\\.env/i.test(l)).length, 1, 'one file on Windows, whatever its case')
   const mac = formatUninstallText(receipt({ dry_run: true, changed: [{ path: path.join(HOMES.darwin, 'Library/Keychains/login.keychain-db'), change: 'stray root taken out' }] }), { home: HOMES.darwin, platform: 'darwin', tense: 'future', asking: true })
   assert.doesNotMatch(mac, /Keychains/)
+})
+
+// an off with something of every kind its receipt can hold: files restored, one with your later edits, a backup kept, the service, a cut, processes
+// still passing through, a file it could not undo (with the line that puts it back) and one the user must fix by a command
+const offReceipt = (over = {}, platform = 'darwin') => {
+  const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+  return {
+    ...newReceipt('off'), ok: true, all: true, harnesses: ['claude-code', 'codex', 'pi'], still_on: [],
+    changed: [{ path: j('.claude', 'settings.json'), harness: 'claude-code', change: 'env.HTTPS_PROXY', result: 'restored', backup: j('.trocar', 'backup', 'aa-1') },
+      { path: j('.codex', '.env'), harness: 'codex', change: 'HTTPS_PROXY', result: 'reverted-not-identical', backup: j('.trocar', 'backup', 'bb-2'), prior_left: [{ key: 'HTTPS_PROXY', line: 3 }] }],
+    removed: [j('.trocar', 'collector', 'switch', 'pi')], skipped: [],
+    kept_backups: [{ path: j('.claude', 'settings.json'), backup: j('.trocar', 'backup', 'cc-3'), reason: 'you changed it after trocar did' }],
+    daemon: { state: 'running', pid: 4012 }, relayed: { closing: 2, waiting: 0, cut: 0 }, routing: { confirmed: true, state: 'stopped' },
+    holders: [{ harness: 'codex', pid: 5530 }, { harness: 'codex', pid: 5531 }, { harness: 'pi', pid: 6677 }],
+    left: [], pending: [], residue: [], still_trusting: [], kept_bundles: [], user_processes: [], problems: [], notes: [], ...over,
+  }
+}
+const pidsOf = (r) => [...(r.holders || []).map((h) => h.pid), ...(r.daemon && r.daemon.pid ? [r.daemon.pid] : [])]
+const commandsOf = (r) => [...(r.left || []).flatMap((l) => [l.command, l.restore]), ...(r.blocked || []).map((b) => b.command), ...(r.refused || []).flatMap((x) => x.commands || [x.command])].filter(Boolean)
+const onItsOwnLine = (text, command) => text.split('\n').some((l) => l.trim() === command)
+
+test('off: the default text says no unsaid word and no pid; --details holds every path and pid; every command is on a line of its own', () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+    const failed = offReceipt({ ok: false, left: [{ path: j('.zcode', 'config.json'), harness: 'z-code', result: 'left-unparsable', reason: `${j('.zcode', 'config.json')}: trocar cannot read it; trocar's proxy setting may still be in it. The file as it was before trocar is kept at ${j('.trocar', 'backup', 'dd-4')}; by hand: cp a b (puts the whole file back)`, backup: j('.trocar', 'backup', 'dd-4'), restore: 'cp a b' },
+      { path: j('.kimi', 'x'), result: 'error', reason: 'it is locked', command: 'trocar off kimi-code' }], routing: { confirmed: false, state: 'unknown' }, notes: ['the process table could not be read (permission denied)'] }, platform)
+    for (const r of [offReceipt({}, platform), failed, offReceipt({ dry_run: true }, platform), offReceipt({ holders: null }, platform)]) {
+      const text = formatOffText(r, { home }), details = formatOffReceipt(r, { home })
+      assert.deepEqual(unsaidIn(text), [], `${platform}:\n${text}`)
+      for (const pid of pidsOf(r)) assert.ok(!text.includes(String(pid)), `${platform}: no pid in the default text:\n${text}`)
+      for (const pid of pidsOf(r)) assert.ok(details.includes(String(pid)), `${platform}: --details names pid ${pid}`)
+      const paths = [...r.changed.map((c) => c.path), ...r.removed, ...r.kept_backups.map((k) => k.backup), ...r.left.map((l) => l.path)]
+      for (const p of paths) assert.ok(details.includes(`~${p.slice(home.length)}`) || details.includes(p), `${platform}: --details names ${p}`) // src/off shows ~ by the host's separator
+      for (const c of commandsOf(r)) assert.ok(onItsOwnLine(text, c), `${platform}: ${c} on its own line:\n${text}`)
+      if (r.notes.length) assert.ok(text.includes(r.notes[0]), 'a fact not read stays in the default text (D38)')
+      if (r.dry_run) for (const c of r.changed) assert.ok(text.includes(`~${c.path.slice(home.length)}`) || text.includes(c.path), 'the plan names each file of yours')
+    }
+  }
 })
