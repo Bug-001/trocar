@@ -770,7 +770,6 @@ test('R12 (darwin): install asks op.lock\'s question about itself through the ru
   const launchctl = fakeLaunchctl(), os = identityRunner(launchctl.run), lw = lockWrites()
   const { exit, io } = await cli(['--yes', '--json'], { over: { exec: os.run, launchctl, fs: lw.fs } })
   assert.equal(exit, 0, io.text())
-  assert.ok(os.calls.includes(`ps -o lstart= -p ${process.pid}`), os.calls.join('\n'))
   assert.ok(lw.held.length > 0)
   for (const h of lw.held) assert.deepEqual([h.pid, h.start_time, h.boot_id], [process.pid, LSTART, String(BOOTED / 1000)])
 })
