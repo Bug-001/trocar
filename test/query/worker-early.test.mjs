@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url'
 import { createQueryService } from '../../src/query/service.mjs'
 import { indexDir, segmentFiles } from '../../src/query/index-build.mjs'
 import { indexRows, provisionalRows, sessionGroups } from '../../src/query/rows.mjs'
-import { readHead } from '../../src/query/ctx-files.mjs'
+import { readHead, PACK_MEMBERS } from '../../src/query/ctx-files.mjs'
+import { sessionDir } from '../../src/query/projection.mjs'
 import { markOn, sinceAt } from '../../src/query/named/session.mjs'
 import { validateQueryDoc } from '../../src/cli/schema.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
@@ -144,6 +145,40 @@ test('3.5 §行表先读: a keyed session in the newest segment is answered befo
       for (let i = 0; i < xs.length; i++) assert.deepEqual(typeof (await ask(svc, 'block', { ref: xs[i] })).doc.blocks[0].bytes, 'string')
       for (let i = 0; i < xs.length; i++) assert.deepEqual((await ask(svc, 'block', { ref: xs[i] })).doc.blocks[0].bytes, (await ask(ref.svc, 'block', { ref: ys[i] })).doc.blocks[0].bytes, `${xs[i]}: the bytes of ${ys[i]}`)
       assert.deepEqual(readHead(home, id), readHead(one, id), `${id}: the one-pass head`)
+    }
+  } finally { svc.stop(); ref.svc.stop() }
+})
+
+// a pack and a tail written while the list was provisional carry that state in their doc heads (ctx-files.mjs docLine): once the pass ends
+// they are written again, so the files are the one-pass fold's and a worker that starts again finds nothing to rewrite (4.4 #15)
+test('3.5 §行表先读: a pack sealed before the pass ended is written again once it ends: the packs and the head are the one-pass fold\'s', async () => {
+  const home = path.join(tmpDir('trocar-early-packs-'), '.trocar'), B = 'early-pack-4a1b-9c2d-000000000004'
+  fs.mkdirSync(path.join(home, 'collector'), { recursive: true, mode: 0o700 })
+  const old = bigSession({ home, id: L, segment: S0 })
+  old.append(3); await old.seal()
+  for (let i = 0; i < 3; i++) { const o = bigSession({ home, id: `early-f${String(i).padStart(3, '0')}-4a1b-9c2d-000000000003`, segment: `20261020T1647${String(2 + i).padStart(2, '0')}Z` }); o.append(3); await o.seal() } // more than one to rebuild: the pool's threads hold
+  while (!old.file.includes(NEWEST)) await old.seal()
+  bigSession({ home, id: B, segment: NEWEST, growth: 60 }).append(PACK_MEMBERS + 40) // one pack sealed, and the open span
+  fs.rmSync(indexDir(home), { recursive: true, force: true })
+  const one = twin(home)
+  const { said, svc, release } = service(home, true)
+  const ref = service(one, false)
+  try {
+    for (let i = 0; i < 300 && !(readHead(home, B)?.pending == null && readHead(home, B)?.packs?.length); i++) await ask(svc, 'session', { id: B })
+    const early = readHead(home, B)
+    assert.ok(early.packs.length >= 1 && pendingOf(early).length === 1 && !rowsSaid(said), 'a pack sealed while the pass still reads')
+    release()
+    await until(() => rowsSaid(said), 'the pass ended')
+    await settle(svc, home, B)
+    await settle(ref.svc, one, B)
+    assert.deepEqual(readHead(home, B).packs, readHead(one, B).packs, 'the packs are the one-pass fold\'s')
+    for (const { n } of readHead(one, B).packs) for (const part of ['main', 'rest']) {
+      const f = (h) => fs.readFileSync(path.join(sessionDir(h, B), `p${n}.${part}.ndjson.gz`))
+      assert.deepEqual(f(home), f(one), `p${n}.${part}: the one-pass fold's bytes`)
+    }
+    for (const part of ['main', 'rest']) {
+      const f = (h) => fs.readFileSync(path.join(sessionDir(h, B), `open.${part}.ndjson`), 'utf8').split('\n')[0]
+      assert.equal(f(home), f(one), `open.${part}: its doc head is the one-pass fold's`)
     }
   } finally { svc.stop(); ref.svc.stop() }
 })
