@@ -70,3 +70,6 @@ export const PRICE_NOTE = 'Estimated cost = usage × the unit prices here; a loc
 // 外观页
 export const THEME_SYSTEM = 'System', THEME_LIGHT = 'Light', THEME_DARK = 'Dark',
   THEME_UNSTORABLE = 'This browser does not allow saving the choice; after a refresh it returns to System'
+
+// 存储页的回执:确认已发出、回答是 5xx(1.11 §改级别)
+export const RCPT_FAILED_UNKNOWN = 'The service failed while making the change, so it may or may not have been made; the level shown is the one the service reports now'
