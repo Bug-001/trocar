@@ -58,7 +58,7 @@ import { lowerPriority } from '../low-priority.mjs'
 import { READING_MS, extendSession, headAsked, heapHasRoom, indexed, noRoomStop, openSessions, rereadingNow, roomFor, saveIndexes, sealParts } from './named/session.mjs'
 import { dropProvisional, indexRows, provisionalRows, sessionGroups } from './rows.mjs'
 import { segmentFiles, warmSegmentIndex } from './index-build.mjs'
-import { indexPool, poolSize } from './index-pool.mjs'
+import { indexPool, poolSize, sweepTemps } from './index-pool.mjs'
 import { filling, pauseFill } from './usage.mjs'
 import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
 import { foldStale } from './fold-log.mjs'
@@ -413,8 +413,8 @@ async function readRows() {
     // list after, oldest first, from those warm entries (a segment's index stands alone; the keys are the list's, in its order)
     // a sealed segment's index is built on the pool's threads when this machine has room for them (index-pool.mjs), all queued at once, newest
     // first; this thread reads each back in that order, and builds here what a thread did not (a plain segment, a thread that failed)
-    const segs = segmentFiles(home, nodeFs, []).reverse(), threads = poolSize(), pool = threads > 1 ? indexPool({ home, threads, deps: process.argv[3] || null }) : null
-    const tick = pool && setInterval(progress, PROGRESS_MS) // the threads work while this thread waits: the daemon's idle clock hears it
+    sweepTemps(home)
+    const segs = segmentFiles(home, nodeFs, []).reverse(), threads = poolSize(), pool = threads > 1 ? indexPool({ home, threads, deps: process.argv[3] || null, tick: progress }) : null
     try {
       const built = new Map(pool ? segs.filter(([, at]) => at.sealed && !at.plain).map(([s]) => [s, pool.build(s)]) : [])
       for (const [segment, at] of segs) {
@@ -423,7 +423,7 @@ async function readRows() {
         progress()
         await ease()
       }
-    } finally { clearInterval(tick); pool?.close() }
+    } finally { pool?.close() }
     rows = await indexRows({ home, fs: nodeFs, errors: [], progress, ease })
   } catch (e) { say(e) }
   rowsRead = true

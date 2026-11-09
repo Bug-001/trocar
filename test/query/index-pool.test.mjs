@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { indexPool, poolSize } from '../../src/query/index-pool.mjs'
+import { indexPool, poolSize, sweepTemps } from '../../src/query/index-pool.mjs'
 import { indexDir, segmentFiles, segmentIndex } from '../../src/query/index-build.mjs'
 import { WORKER_MEMORY_MB } from '../../src/query/warm.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -25,12 +25,14 @@ test('3.5 §行表先读: a thread writes the same index file as the worker\'s o
   for (const segment of sealed) await segmentIndex({ home, segment })
   const one = files(home)
   fs.rmSync(indexDir(home), { recursive: true, force: true })
-  const pool = indexPool({ home, threads: 2 })
+  let ticks = 0
+  const pool = indexPool({ home, threads: 2, tick: () => { ticks++ } })
   try {
     assert.deepEqual(await Promise.all(sealed.map((seg) => pool.build(seg))), [true, true, true, true])
   } finally { pool.close() }
   assert.equal(await pool.build(sealed[0]), false, 'no thread left: the caller indexes it')
   assert.deepEqual(files(home), one)
+  assert.ok(ticks > 0, 'the threads said they were at work')
 })
 
 test('3.5 §行表先读: the pool takes half the cores, and no more threads than a quarter of the memory holds at twice the heap cap', () => {
@@ -39,6 +41,8 @@ test('3.5 §行表先读: the pool takes half the cores, and no more threads tha
   assert.equal(poolSize({ cores: 8, memory: 4 * 3 * thread }), 3)
   assert.equal(poolSize({ cores: 1, memory: 64 * 2 ** 30 }), 1)
   assert.equal(poolSize({ cores: 8, memory: 2 * 2 ** 30 }), 1, 'too little memory: the worker\'s thread alone')
+  assert.equal(poolSize({ cores: 8, memory: 8 * 2 ** 30 }), 2)
+  assert.equal(poolSize({ cores: 8, memory: 4 * 2 ** 30 }), 1)
 })
 
 for (const how of ['open', 'write']) {
@@ -55,7 +59,24 @@ for (const how of ['open', 'write']) {
     assert.equal(built, false, 'the build says the thread did not write it')
     const json = (h) => (fs.existsSync(indexDir(h)) ? fs.readdirSync(indexDir(h)).filter((f) => f.endsWith('.json')) : [])
     assert.deepEqual(json(home), [], 'no index file, whole or partial')
+    const temps = () => (fs.existsSync(indexDir(home)) ? fs.readdirSync(indexDir(home)).filter((f) => f.includes('.tmp-')) : [])
+    if (how === 'write') assert.equal(temps().length, 1, 'the temp file it wrote')
+    sweepTemps(home) // its pid is this process's: a live writer's temp file stays
+    if (how === 'write') { assert.equal(temps().length, 1); for (const f of temps()) fs.renameSync(path.join(indexDir(home), f), path.join(indexDir(home), f.replace(/\.tmp-\d+-/, '.tmp-999999-'))) }
+    sweepTemps(home) // a gone process's goes
+    assert.deepEqual(temps(), [])
     await segmentIndex({ home, segment }) // the caller's own build (worker.mjs readRows)
     assert.deepEqual(json(home), [`${segment}.json`])
   })
 }
+
+test('3.5 §行表先读: when every thread has died, the builds still waiting resolve false, so the pass goes on', { timeout: 30_000 }, async () => {
+  const home = path.join(tmpDir('trocar-pool-all-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'collector'), { recursive: true })
+  const s = bigSession({ home, id: 'pool-cccc-4a1b-9c2d-000000000003' })
+  for (let i = 0; i < 3; i++) { s.append(3); await s.seal() }
+  const sealed = segmentFiles(home).filter(([, at]) => at.sealed).map(([seg]) => seg)
+  process.env.TROCAR_TEST_THREAD_DIES = 'open'
+  const pool = indexPool({ home, threads: 1, deps: DEPS })
+  try { assert.deepEqual(await Promise.all(sealed.map((seg) => pool.build(seg))), [false, false, false]) } finally { pool.close(); delete process.env.TROCAR_TEST_THREAD_DIES }
+})
