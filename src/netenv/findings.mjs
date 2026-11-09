@@ -9,7 +9,7 @@ import { trustReasonText } from '../collector/core/codes.mjs'
 import { TRUST_REASONS, ROUTE_TRUST_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { FINDINGS_WIN32 } from './findings-win32.mjs'
 import { ago } from '../cli/text.mjs'
-import { statusReason } from '../cli/words.mjs'
+import { statusReason, plainSentence } from '../cli/words.mjs'
 import { setupHelperCommand } from '../version.mjs'
 
 const BY_CLASS = { problem: 0, expected: 1, note: 2 }
@@ -340,21 +340,36 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
  * The findings as lines for a person (附录 B · §3.7): a problem or an expected finding is numbered, a note is prefixed `Note:`; then `Fix` with one command
  * to a line and `Check` with the one that verifies it. Wrapped to 80 columns, except a path or a command, which keeps its own line unbroken.
  */
-export function renderFindings(findings, { width = 80 } = {}) {
+// ── the default text (1.6 §3.7, §1.1 ④): a pid only in --details ─────────────────────────────────────────────────────────────────────────────────────
+const PID_COMMAND = /^(?:kill|Stop-Process -Id) \d+$/ // the commands restartSteps and collectors-online fill in with a pid
+const NO_ACTION = /^No action needed\b/ // the step of an expected finding that asks nothing of you
+/** A finding's sentence without the pids it names: `: pid N started` is `: it was started`, `(pid N, M)` goes, any other `pid N` is `a process`. */
+export const noPid = (s) => String(s).replace(/: pid \d+ started/g, ': it was started').replace(/ \(pid [^)]*\)/g, '').replace(/: pid \d+\./g, '.').replace(/\bpid \d+\b/g, 'a process')
+/** Does an expected finding ask something of you (a step that is not 「No action needed」)? Capture that is off is your choice, not a step. */
+export const needsYou = (f) => f.class === 'expected' && f.code !== 'desired-off' && f.commands.some((c) => !NO_ACTION.test(c.run))
+
+/** The findings as `doctor` prints them: numbered problems and expected findings, then notes. `short` (the default text): no why, no pid, and a
+ *  command that needs one is left to --details; a finding with `see` points there in one line instead of Fix and Check. */
+export function renderFindings(findings, { width = 80, short = false } = {}) {
   const lines = []
   let n = 0
   for (const f of fold(findings)) {
     const head = f.class === 'note' ? 'Note: ' : `${(n += 1)}. `
     const pad = ' '.repeat(head.length)
-    lines.push(...wrap(`${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
-    if (f.why) lines.push(...wrap(f.why, width - head.length).map((l) => pad + l))
-    f.commands.forEach((c, i) => {
+    if (lines.length) lines.push('') // a blank line between findings (§3.7's samples)
+    lines.push(...wrap(short ? plainSentence(noPid(f.what)) : `${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
+    if (f.why && !short) lines.push(...wrap(f.why, width - head.length).map((l) => pad + l))
+    if (f.see) { lines.push(`${pad}See    ${f.see}`); continue }
+    const dropped = short && f.commands.some((c) => PID_COMMAND.test(c.run))
+    // the step a pid fills in, said in words in its place (rule 4: the way out is whole), the command in --details
+    const cmds = short ? [...f.commands.filter((c) => !PID_COMMAND.test(c.run)), ...(dropped ? [gui('If it still runs after that, end it: its process number is in trocar doctor --details')] : [])] : f.commands
+    cmds.forEach((c, i) => {
       // a note is not a problem, so what it offers is not a `Fix` (a macOS test machine 2026-10-18: a Fix sat under the headline "no problems")
       const label = i === 0 ? `${pad}${f.class === 'note' ? 'Option' : 'Fix   '} ` : `${pad}       `
       // a command to copy is never folded (§1.1⑥): a paste of half of `sudo <node> <trocar.mjs> setup-helper` runs node alone; a step in an
       // application is prose, so it folds inside the width, two deeper than its first line (§1.1⑥, an indented line's fold)
       if (c.shell !== 'gui') lines.push(label + c.run)
-      else lines.push(...wrap(c.run, width - label.length - 2).map((l, k) => (k ? ' '.repeat(label.length + 2) : label) + l))
+      else lines.push(...wrap(short ? plainSentence(c.run) : c.run, width - label.length - 2).map((l, k) => (k ? ' '.repeat(label.length + 2) : label) + l))
     })
     if (f.verify) lines.push(`${pad}Check  ${f.verify}`)
   }

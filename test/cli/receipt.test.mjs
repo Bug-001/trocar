@@ -367,7 +367,7 @@ test('V10: status says unknown with the reason for connections the daemon did no
   // the lock cannot be read and nothing answers
   const lock = path.join(s.dir, 'lock'); fs.writeFileSync(lock, '{}')
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === lock) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
-  r = await runStatus(s, [], { request: down(), fs: broken })
+  r = await runStatus(s, ['--details'], { request: down(), fs: broken }) // the service's line and Connections are --details' when not needed (1.6 §3.5)
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   assert.match(flat(r.text), new RegExp(`Daemon: unknown \\(${esc(lock.replace(s.home, '~'))}: EACCES`)) // HOME as ~ (1.6 §1.1⑤)
   assert.match(flat(r.text), /Connections unknown \(whether a daemon runs is not known/)
