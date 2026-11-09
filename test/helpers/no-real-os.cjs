@@ -34,6 +34,14 @@ process.env.TROCAR_TEST_SANDBOX = '1'
 //    nothing is: a test that needs one makes its own). Only when it is set: a platform without one gets none (CLAUDE.md, 平台缝).
 //    os.tmpdir() is the run's own here because leak-guard.cjs loads first (package.json's test script) and moved TMPDIR.
 if (process.env.XDG_RUNTIME_DIR) process.env.XDG_RUNTIME_DIR = path.join(os.tmpdir(), 'no-session-runtime')
+// Windows: os.homedir() reads USERPROFILE, never HOME, and a test that hands process.env on would reach the developer's real profile (their ~/.trocar,
+//    their agents' configs). Moved into the run's temp dir like XDG_RUNTIME_DIR; os.tmpdir() reads TEMP / TMP there, not the profile. HOME stays the tests'.
+if (process.platform === 'win32') {
+  const profile = path.join(os.tmpdir(), 'no-real-profile')
+  Object.assign(process.env, { USERPROFILE: profile, HOMEDRIVE: path.parse(profile).root.slice(0, 2), HOMEPATH: profile.slice(2) })
+}
+// The rule for a child given an explicit env: on win32, one with HOME and no USERPROFILE (any case) gets USERPROFILE = that HOME; nothing else is added.
+const profileFor = (env, platform) => (platform === 'win32' && env.HOME && !Object.keys(env).some((k) => k.toUpperCase() === 'USERPROFILE') ? env.HOME : undefined)
 
 // + the macOS native pieces trocar ships (T13): the signing helper writes the login keychain, procenv reads another process's
 // memory, plutil reads managed preferences — a test injects a runner or a stub, never the committed binary or the real tool
@@ -112,14 +120,23 @@ function guard(name, a) {
   }
 }
 
+/** `a` with the options' explicit env given a USERPROFILE by profileFor, copied (the caller's object is not touched). */
+function withProfile(a) {
+  const i = [1, 2].find((j) => a[j] && typeof a[j] === 'object' && !Array.isArray(a[j]))
+  const env = i && a[i].env, profile = env && profileFor(env, process.platform)
+  if (!profile) return a
+  const out = [...a]; out[i] = { ...a[i], env: { ...env, USERPROFILE: profile } }
+  return out
+}
+
 function patch(name) {
   const original = cp[name]
   if (typeof original !== 'function' || original.trocarGuarded) return
-  const wrapped = function (...a) { guard(name, a); return original.apply(this, a) }
+  const wrapped = function (...a) { guard(name, a); return original.apply(this, withProfile(a)) }
   Object.defineProperty(wrapped, 'name', { value: name })
   Object.defineProperty(wrapped, 'trocarGuarded', { value: true })
   const custom = original[util.promisify.custom] // exec / execFile resolve to {stdout, stderr}; that function holds the original
-  if (custom) Object.defineProperty(wrapped, util.promisify.custom, { value: function (...a) { guard(name, a); return custom.apply(this, a) } })
+  if (custom) Object.defineProperty(wrapped, util.promisify.custom, { value: function (...a) { guard(name, a); return custom.apply(this, withProfile(a)) } })
   cp[name] = wrapped
 }
 for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync']) patch(name)
@@ -166,4 +183,4 @@ process.on('exit', () => {
   process.exitCode = 1
 })
 
-module.exports = { REAL_TOOLS, realToolsIn, commandWords }
+module.exports = { REAL_TOOLS, realToolsIn, commandWords, profileFor }

@@ -61,7 +61,7 @@ function runCopy(text, argv, { env = {}, nodeArgs = [], sibling = null } = {}) {
 function runWritten(s, argv, { extraEnv = {}, stubs = stubBin() } = {}) {
   const text = fs.readFileSync(standalonePath(s.home), 'utf8')
   assert.ok(text.includes(STANDALONE_ENTRY), 'the file ends with the standard entry call')
-  return runCopy(text.replace(STANDALONE_ENTRY, AS_LINUX), argv, { env: { ...s.sh.env, PATH: stubs.bin, ...extraEnv } }).then((r) => ({ ...r, stubs }))
+  return runCopy(text.replace(STANDALONE_ENTRY, AS_LINUX), argv, { env: { ...s.sh.env, USERPROFILE: s.home, PATH: stubs.bin, ...extraEnv } }).then((r) => ({ ...r, stubs }))
 }
 
 // two sandboxes in the same state never hold the same paths, times or backup names: what a receipt says is compared with those taken out
@@ -171,7 +171,7 @@ test('V2: with the install manifest lost the copy on darwin takes out a door val
   const text = fs.readFileSync(standalonePath(w.home), 'utf8')
   assert.ok(text.includes(STANDALONE_ENTRY))
   const asDarwin = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'darwin', deps: { platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'stub' }), procs: async () => [], getuid: () => 1000, sleep: async () => {} } })`
-  const run = await runCopy(text.replace(STANDALONE_ENTRY, asDarwin), [zc.name, '--yes', '--json'], { env: { HOME: w.home, PATH: stubBin().bin } })
+  const run = await runCopy(text.replace(STANDALONE_ENTRY, asDarwin), [zc.name, '--yes', '--json'], { env: { HOME: w.home, USERPROFILE: w.home, PATH: stubBin().bin } })
   assert.equal(run.status, 0, run.stdout + run.stderr)
   assert.equal(JSON.parse(run.stdout).undone_by_marker, true)
   const after = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -437,7 +437,7 @@ test('V35: `trocar doctor` says nothing of a copy that is current, and makes a f
   fs.mkdirSync(bin)
   for (const name of ['security', 'systemctl', 'launchctl', 'certutil', 'loginctl', 'ss', 'ip']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 1\n`, { mode: 0o755 }) // doctor's trust check finds these, and only these (`ss` and `ip` are the reads of its network facts, which only read) (its dependency probe looks at files on PATH, it starts no `which`)
   for (const name of ['ps', 'socktable', 'route', 'ifconfig', 'scutil']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 }) // the flip (4.9 §4): the doctor's status block on a Mac is the NEW status now — it reads the process table and the darwin network facts, all read-only, all stubbed to the empty world
-  const doctor = () => spawnSync(process.execPath, [path.join(REPO, 'bin', 'trocar.mjs'), 'doctor', '--details'], { env: { TROCAR_SOURCE: tmpDir('trocar-src-'), PATH: bin, TROCAR_NATIVE_DIR: bin, HOME: s.home, TMPDIR: os.tmpdir(), TROCAR_TEST_SANDBOX: '1' }, encoding: 'utf8', timeout: 60_000 })
+  const doctor = () => spawnSync(process.execPath, [path.join(REPO, 'bin', 'trocar.mjs'), 'doctor', '--details'], { env: { TROCAR_SOURCE: tmpDir('trocar-src-'), PATH: bin, TROCAR_NATIVE_DIR: bin, HOME: s.home, USERPROFILE: s.home, TMPDIR: os.tmpdir(), TROCAR_TEST_SANDBOX: '1' }, encoding: 'utf8', timeout: 60_000 })
   const flat = (r) => r.stdout.replace(/\n\s+/g, ' ') // §3.7 findings wrap at the §1.1 width; the fact is the sentence
   const file = standalonePath(s.home)
   const good = fs.readFileSync(file, 'utf8')
