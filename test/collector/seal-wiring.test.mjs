@@ -20,6 +20,7 @@ import { withScratchCwd } from '../helpers/model-daemon.mjs'
 import { rawHome } from '../../src/paths.mjs'
 import { openSealed } from '../../src/raw/reader.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { controlEndpointFor } from '../../src/off/control-client.mjs'
 
 // The sealer is a `fork` child, which inherits this process's execArgv — and `npm test`'s preloads are RELATIVE paths
 // (`--require ./test/helpers/...`), so a test that changes the cwd (withScratchCwd below, as the model daemon runs)
@@ -27,7 +28,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 process.execArgv = process.execArgv.map((a) => (a.startsWith('./') ? path.resolve(a) : a.replace(/^(--require=)(\.\/.*)$/, (_, f, rel) => f + path.resolve(rel))))
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
-const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {} }
+const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, bypassOf: () => [], systemProxy: () => null, procTable: async () => [], close: () => {} }
 const CLOSED = '20261017T100000Z'
 const LINE = Buffer.from(JSON.stringify({ id: 'req_left_over', ts: '2026-10-17T10:00:00.000Z', req_body: 'z'.repeat(60) }) + '\n')
 const CAPTURE = Buffer.from(JSON.stringify({ id: 'req_old', ts: '2026-10-16T08:00:00.000Z', req_body: 'y'.repeat(60) }) + '\n')
@@ -77,6 +78,25 @@ for (const platform of ['darwin', 'win32']) {
       const d = await startDaemon({ dir: w.dir, env: w.env, home: w.home, arch: { os: platform, controlEndpoint }, harnesses: w.harnesses, getuid: () => 501,
         identity: () => ({ start_time: '111', boot_id: 'boot-1' }), model: { backends: { custody: w.custody, dirs: w.ctx.dirs }, parts: NOBODY } })
       try { await sealedLeftover(left) } finally { await d.stop({ reason: 'test' }) }
+    })
+  })
+}
+
+// 4.2 §自动封存 (V127): the model entry wires the uninstall stop's seal too — an exit request by uninstall seals the closed segment the queue never got.
+for (const platform of ['darwin', 'win32']) {
+  test(`${platform}: the model daemon's uninstall stop seals what is still plaintext before it exits`, { timeout: 30_000 }, async () => {
+    const w = await modelWorld({ os: platform, commands: ['codex'] })
+    const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
+    await withScratchCwd(platform, async () => {
+      const d = await startDaemon({ dir: w.dir, env: w.env, home: w.home, arch: { os: platform, controlEndpoint }, harnesses: w.harnesses, getuid: () => 501,
+        identity: () => ({ start_time: '111', boot_id: 'boot-1' }), model: { backends: { custody: w.custody, dirs: w.ctx.dirs }, parts: NOBODY } })
+      try {
+        const left = leftovers(w.dir) // after the start: the start scan never queued it
+        const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
+        await ep.request({ socketPath: ep.socketPath, method: 'POST', path: '/off', body: { exit: true, by: 'uninstall' } })
+        await d.exited
+        assert.deepEqual(fs.readdirSync(left.raw).filter((n) => n.startsWith(CLOSED)), [`${CLOSED}.sealed`], 'sealed before the exit, the plaintext gone')
+      } finally { await d.stop({ reason: 'test' }) }
     })
   })
 }

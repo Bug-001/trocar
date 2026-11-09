@@ -119,13 +119,15 @@ test('fidelity marker: with no manifest, a marked file whose bytes prove no enco
   on(c, b)
   const resaved = RESAVED['nul-in-text'](textOf(fs.readFileSync(b.file)))
   fs.writeFileSync(b.file, resaved)
-  const plan = planByMarker({ home: b.root, ids: ['codex'] })
+  // uninstall's view (both phases): Codex's .env block is on's route on macOS / Windows and install's certificate block on Linux (marker.mjs MARKER_PATHS)
+  const PH = ['on', 'install']
+  const plan = planByMarker({ home: b.root, ids: ['codex'], phases: PH })
   assert.equal(plan.length, 1, 'the mark is found in the bytes even though they are not text trocar may write')
   const [r] = undoByMarker(plan, { home: b.root })
   assert.equal(r.result, 'left-unreadable')
   assert.ok(fs.readFileSync(b.file).equals(resaved))
   fs.writeFileSync(b.file, Buffer.from([0xd6, 0x41, 0x0a]))
-  assert.deepEqual(planByMarker({ home: b.root, ids: ['codex'] }), [], 'no mark in it: nothing to undo')
+  assert.deepEqual(planByMarker({ home: b.root, ids: ['codex'], phases: PH }), [], 'no mark in it: nothing to undo')
 })
 // ---- JSON (4.6「标记与安装」: JSON 按 JSONC 读写): Claude Code's two keys in its settings.json, the gate address and the CA ---------------------
 const GATE = 'http://127.0.0.1:9'

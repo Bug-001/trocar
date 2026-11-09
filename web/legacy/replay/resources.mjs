@@ -1,17 +1,19 @@
 // replay/resources.mjs — the resource explorer on the right page (2.4): what entered the context across the WHOLE
 // session, and where each of it stands at the playhead (not yet · live · evicted) — one lifecycle sentence per row, in
 // words. Six groups keyed by the resource kind (a render-time projection, never a schema enum); the first two are open by
-// default, the rest live behind one 「其他 N 项」 row.
+// default, the rest live behind one 「其他 N 项」 row. On the chapter axis the compaction group leaves out the compactions the Overview's chapter heads carry (2.4).
 // The ledger is the anchor lane's `lane` answer (resources, seen, events; 3.5 §会话读) as the desk holds it: nothing is said
 // until that lane is held; an empty ledger has its own sentence (this agent may not provide one — never "no resources").
 // The key of a resource is the server's `resKey` / `key`, else kind::label. `el` is #resexp; `s` is the replay desk's state.
 import { esc, kf } from '../core/fmt.mjs'
 import { resState } from './lanes.mjs'
 import { relPath, midClip } from './analysis.mjs'
-import { navGroup, jumpToStepAndBlock } from './outline.mjs'
+import { navGroup, jumpToStepAndBlock, jumpToBlockIndex } from './outline.mjs'
+import { blockJump } from './jump.mjs'
+import { onChapterAxis } from './timeline.mjs'
 import { KIDS, serialize, keyed, patchInto } from '../core/units.mjs'
 import * as W from '../labels/replay.mjs'
-import { resKeyOf, laneEvents, seenFiles, ledgerDone } from './model.mjs'
+import { resKeyOf, laneEvents, seenFiles, ledgerDone, compactionNumbers, stepOf, carriesRes } from './model.mjs'
 
 const SEEN_CAP = 40
 // a resource is datable (has a lifecycle to speak of) only with a usable segment list; the six display groups and the
@@ -25,10 +27,12 @@ const stepWordOf = (s) => {
   return (localIdx) => (isMain ? `step ${no(localIdx) + 1}` : `call ${no(localIdx) + 1}`)
 }
 // the anchor lane's ledger as the desk holds it; null while that lane is not held. `seen` is 2.4's 只见到名字 (seenFiles:
-// the opened files taken out); `done` = its ledger_next chain is read to the end, so the ledger's counts are exact (2.4:67)
+// the opened files taken out); `done` = its ledger_next chain is read to the end, so the ledger's counts are exact (2.4:67);
+// `pending` = its last lane answer stood behind the fold, so what it lacks says nothing yet (2.4 还在读)
 function ledgerOf(s) {
   const h = s.desk && s.anchor && s.desk.held.get(s.anchor.id)
-  return h ? { res: [...h.resources.values()], seen: seenFiles(s.desk, s.anchor.id), events: laneEvents(s.desk, s.anchor.id), done: ledgerDone(s.desk, s.anchor.id) } : null
+  return h ? { res: [...h.resources.values()], seen: seenFiles(s.desk, s.anchor.id), events: laneEvents(s.desk, s.anchor.id), done: ledgerDone(s.desk, s.anchor.id), pending: h.pending,
+    note: h.note, noLedger: h.noLedger } : null
 }
 
 // a read file's visible name is cut in the middle past this many characters; the hover keeps the full path (2.4)
@@ -38,6 +42,7 @@ const NAME_MAX = 48
 // (navGroup); a row's html depends on the playhead only through its state, so a step redraws just the rows it moved across
 const BUSY = { key: 'busy', html: '<div class="navsub busy" aria-busy="true"></div>' } // the lane is on its way: a sized empty row, no words
 const EMPTY = () => ({ key: 'empty', html: `<div class="navsub empty">${esc(W.NO_RESOURCES)}</div>` })
+const SO_FAR = (s) => ({ key: 'so-far', html: `<div class="navsub empty">${esc(s.desk.pending?.read != null ? W.FILES_UPDATING : W.FILES_READING)}</div>` })
 export function resourceUnits(s) {
   const a = s.anchor
   if (!a) return []
@@ -46,7 +51,8 @@ export function resourceUnits(s) {
   const rp = (p) => esc(midClip(relPath(cwd, p), NAME_MAX))
   const ledger = ledgerOf(s)
   if (!ledger) return [BUSY]
-  const { res, seen, events, done } = ledger
+  const { res, seen, events, done, pending, note, noLedger } = ledger
+  const none = () => (pending ? SO_FAR(s) : EMPTY())
   // a count the ledger gives is not known until its chain is read: an empty busy box, never a digit (2.4:67, invariant 4)
   const ct = (n) => (done ? n : null)
   const N = a.calls.length
@@ -54,7 +60,7 @@ export function resourceUnits(s) {
   const withSeg = res.filter(hasSeg)
   const of = (k) => withSeg.filter((r) => r.kind === k)
   const guessed = new Set(events.filter((x) => x.type === 'compaction' && x.inferred).map((x) => x.rid)) // read per row: a row must not walk the events
-  const view = (r, enter) => `data-view="${esc(resKeyOf(r))}" data-viewstep="${enter}" data-viewlabel="${esc(r.label)}"`
+  const view = (r, enter) => `data-view="${esc(resKeyOf(r))}" data-viewstep="${enter}"`
   // the lifecycle sentence's state at the playhead + the enter/evict locals (N from the FIRST segment, M from the LAST)
   const life = (r) => {
     // bad data (2.4 验收 #10): segments missing or empty → degrade with a placeholder, never throw — no step numbers,
@@ -74,15 +80,19 @@ export function resourceUnits(s) {
   const out = []
   const rowsOf = (rs, row) => keyed(rs.map((r) => ({ key: resKeyOf(r), html: row(r) })))
   // the ledger statement sits at the TOP of the list (2.4 element table) and is about the LEDGER, not a fallback for
-  // "nothing rendered": an existing-but-empty ledger (or no key) with nothing tracked says so even while the compaction
-  // group draws below — compaction events are not resources (#7: 两种情况都照样画).
-  if (done && !res.length && !seen.length) out.push(EMPTY())
+  // "nothing rendered": an existing-but-empty ledger (or no key) with nothing tracked says so (#7)
+  // the ledger cannot be known (2.4 没有资源信息): that sentence alone, a code other than 'no-ledger' on hover; only part of it kept: a line on top
+  if (noLedger) out.push({ key: 'empty', html: `<div class="navsub empty"${note && note !== 'no-ledger' ? ` title="${esc(note)}"` : ''}>${esc(W.NO_LEDGER)}</div>` })
+  else if ((done || pending) && !res.length && !seen.length) out.push(none())
+  if (!noLedger && note === 'partial-ledger') out.push({ key: 'partial', html: `<div class="navsub empty">${esc(W.PARTIAL_LEDGER)}</div>` })
+  const top = out.length // the lines above are about the ledger, not groups: the quiet groups still stand on their own after them
 
   const fileRow = (r) => { const l = life(r)
     return `<div class="navsub ${l.cls}" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}">` +
       `<button type="button" class="nsl viewname" ${view(r, l.enter)} title="${esc(r.label)}" aria-label="${esc(W.viewNameTip(relPath(cwd, r.label)))}">${rp(r.label)}</button>` +
       `<button type="button" class="navlife" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(l.word)}</button></div>` }
-  const files = of('file')
+  // a path only the run settles (a `runtime` code, 2.4 item 6) stays as the command wrote it: its own group, with the code's reason
+  const files = of('file').filter((r) => !r.runtime), runtime = of('file').filter((r) => r.runtime)
   if (files.length) out.push(...navGroup(s, 'life-file', W.RES_GRP.file, ct(files.length), rowsOf(files, fileRow)))
 
   const loadRow = (r) => { const l = life(r)
@@ -103,13 +113,17 @@ export function resourceUnits(s) {
   const dlRow = (r) => { const l = life(r)
     return `<div class="navsub" data-navstep="${l.enter}"><span class="nsl" title="${esc(r.label)}">${esc(r.kind === 'dir' ? W.DIR_WORD : W.LINK_WORD)} ${rp(r.label)}</span><button type="button" class="navlife" data-navstep="${l.enter}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(W.lifeSeen(at(l.enter)))}</button></div>` }
   const dl = [...of('dir'), ...of('link')]
+  const runtimeRow = (r) => { const why = Object.hasOwn(W.RUNTIME_WHY, r.runtime) ? W.RUNTIME_WHY[r.runtime] : r.runtime; return fileRow(r).replace(/<\/div>$/, `<span class="nsx" title="${esc(why)}">${esc(why)}</span></div>`) }
+  const numbers = compactionNumbers(events, (e) => L(e.rid))
   const compRow = (e) => {
-    const atStep = L(e.rid)
+    const atStep = L(e.rid), n = numbers.get(e)
     const word = e.type === 'compaction'
-      ? W.compactRow(at(atStep), e.from != null ? String(e.from) : '—', e.to != null ? String(e.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
+      ? W.compactRow(at(atStep), n.from != null ? String(n.from) : '—', n.to != null ? String(n.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
       : W.summarizeRow(at(atStep), e.out != null ? kf(e.out) : '—')
     return `<div class="navsub" data-navstep="${atStep}"><span class="nsl" title="${esc(word)}">${esc(word)}</span></div>` }
-  const comps = events.filter((e) => e && (e.type === 'compaction' || e.type === 'summarize'))
+  // on the chapter axis the Overview's chapter heads carry each compaction and its numbers, so the group leaves them out (2.4, 2.5)
+  const dropComp = onChapterAxis(s)
+  const comps = events.filter((e) => e && ((e.type === 'compaction' && !dropComp) || e.type === 'summarize'))
   const others = res.filter((r) => !['file', 'scaffold', 'skill', 'capability', 'dir', 'link'].includes(r.kind))
   // others keeps EVERY unknown kind (even one without segments — 2.4 Edge cases: 不丢); an undated row shows no step
   // number and carries no data-navstep (there is no enter to locate)
@@ -123,6 +137,7 @@ export function resourceUnits(s) {
     return navGroup(s, 'life-seen', `${W.RES_GRP.seen} · ${W.GUESS}`, ct(seen.length), [{ key: 'chips', html: `<div class="navseen" data-kids>${KIDS}</div>`, kids: chips }, ...more], { hint: W.SEEN_GROUP_TIP })
   })() : []
   const inner = [
+    ...(runtime.length ? navGroup(s, 'life-runtime', W.RES_GRP.runtime, ct(runtime.length), rowsOf(runtime, runtimeRow)) : []),
     ...seenBlock,
     ...(skills.length || caps.length ? navGroup(s, 'life-cap', W.RES_GRP.cap, ct(skills.length + caps.length), rowsOf([...skills, ...caps], capRow)) : []),
     ...(dl.length ? navGroup(s, 'life-dl', W.RES_GRP.dl, ct(dl.length), rowsOf(dl, dlRow)) : []),
@@ -130,14 +145,14 @@ export function resourceUnits(s) {
     ...(others.length ? navGroup(s, 'life-other', W.RES_GRP.other, ct(others.length), rowsOf(others, otherRow)) : []),
   ]
   if (inner.length) {
-    const nOthers = seen.length + skills.length + caps.length + dl.length + comps.length + others.length
+    const nOthers = runtime.length + seen.length + skills.length + caps.length + dl.length + comps.length + others.length
     // a session with nothing above: the groups stand on their own — a lone 「N more」 row would hide the only content.
     // N holds ledger counts: while the chain is unread the row says 「more」 with the busy box in the count's place
-    if (!out.length) out.push(...inner)
+    if (out.length === top) out.push(...inner)
     else out.push(...(done ? navGroup(s, 'life-others', W.OTHERS_ROW(nOthers), '', inner) : navGroup(s, 'life-others', W.OTHERS_ROW('').trim(), null, inner)))
   }
   // entries exist but none renderable: never a blank page; a ledger still on its way is a sized empty row, not "none"
-  if (!out.length) out.push(done ? EMPTY() : BUSY)
+  if (!out.length) out.push(done || pending ? none() : BUSY)
   return out
 }
 export const resourcesHtml = (s) => serialize(resourceUnits(s))
@@ -145,31 +160,27 @@ export const resourcesHtml = (s) => serialize(resourceUnits(s))
 export function renderResources(el, s) {
   if (!s.anchor || !s.anchor.calls.length) { patchInto(el, []); return }
   patchInto(el, [{ key: 'zone', html: `<div class="resz">${esc(W.RES_SECTION)}</div>` }, ...resourceUnits(s)])
-  // the < 1200 px fold line names what the right page holds (1.2 §窄屏): 「读过的文件 N · 原始数据」 and the disclosure chevron. N is the
-  // 读过的文件 group's own count — the same hasSeg-filtered set the group header counts, so the two cannot drift. No
-  // ledger (null / no key), or nothing the group would count → only 「原始数据」: never a "0" standing in for absent
-  // records (invariant 4) — an empty ledger says so in the page itself, the fold line has nothing to name.
-  const bar = s.root && s.root.querySelector && s.root.querySelector('#rpbar')
-  if (bar) {
-    const h = s.desk && s.desk.held.get(s.anchor.id)
-    const n = h && ledgerDone(s.desk, s.anchor.id) ? [...h.resources.values()].filter((r) => r && r.kind === 'file' && hasSeg(r)).length : 0
-    bar.textContent = n > 0 ? `${W.RES_GRP.file} ${n} · ${W.RAW_WORD}` : W.RAW_WORD // the chevron is the bar's own ::after, a --glyph-disc mask that turns when open (replay.css)
-  }
 }
 
-// click a resource's name → show its content in the raw panel (loading the step where it is live); click the lifecycle
-// sentence → locate it. One click does one thing (the name's handler stops the walk).
-export function viewResource(s, step, resKey, label) {
-  if (step != null && step >= 0 && step !== s.playhead) s.setPlayhead(step, true) // clears the pin
-  s.viewPin = { resKey, label }
-  s.renderRaw()
+// click a resource's name → reveal the block in the window; click the lifecycle sentence → locate it. One click does one
+// thing (the name's handler stops the walk). In the step at the playhead the name reveals on the spot, the playhead staying,
+// the content preferred over the call that asked for it; else it moves to the target step and lands there by resKey. The list is the step's own: s.curFlat outlives a step that has none. A target step with no list says so (s.noBlock).
+export function revealResource(s, step, resKey) {
+  const cur = s.anchor && s.anchor.calls[s.playhead]
+  const flat = (cur && cur.rec && !cur.unparsed && s.desk && stepOf(s.desk, cur.rid).flat) || []
+  const content = flat.findIndex((b) => carriesRes(b, resKey) && b.kind !== 'tool_use')
+  const fi = content >= 0 ? content : flat.findIndex((b) => carriesRes(b, resKey))
+  if (fi >= 0) { jumpToBlockIndex(s, fi); return }
+  const target = s.anchor && s.anchor.calls[step]
+  if (!target || !target.rec || target.unparsed) s.noBlock()
+  else s.jumpTo(step, blockJump(resKey))
 }
 export function wireResources(el, s) {
   const onClick = (e) => {
     const tg = e.target.closest('[data-navtoggle]')
     if (tg) { const k = tg.dataset.navtoggle; if (s.navOpen.has(k)) s.navOpen.delete(k); else s.navOpen.add(k); s.renderNav(); return }
     const v = e.target.closest('[data-view]')
-    if (v) { e.stopPropagation(); viewResource(s, +v.dataset.viewstep, v.dataset.view, v.dataset.viewlabel); return }
+    if (v) { e.stopPropagation(); revealResource(s, +v.dataset.viewstep, v.dataset.view); return }
     if (e.target.closest('[data-navmore]')) { s.navSeenExpanded = !s.navSeenExpanded; s.renderNav(); return }
     const st = e.target.closest('[data-navstep]')
     if (st) jumpToStepAndBlock(s, +st.dataset.navstep, st.dataset.navres || '')

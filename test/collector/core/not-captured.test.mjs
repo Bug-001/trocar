@@ -177,6 +177,51 @@ test('a slow proxy reply to CONNECT is waited for, not cut; relayed verbatim whe
   assert.deepEqual(h.failures.map((f) => [f.code, f.phase]), [['upstream-slow', 'proxy-reply']])
 })
 
+// the flow's own dial (the transparent door, and the step-aside's fresh connection): a TCP connect that takes `ms` on a real socket
+const lateDial = (ms) => (dst) => { const s = new net.Socket(); s.connecting = true; setTimeout(() => { if (!s.destroyed) s.connect(dst.port, dst.address) }, ms); return s }
+const slowOf = (h) => h.failures.map((f) => [f.code, f.flow_id, f.phase, f.host, f.waited_ms >= 100])
+
+test('the flow\'s own slow dial is one upstream-slow event, phase connect, and the agent gets its reply: decrypted, and spliced with no other wait running', async () => {
+  const h = await rig(tlsUp(), { upstreamSlowMs: 100, connectUpstream: lateDial(250) })
+  assert.equal(await tlsTalk(h.port), RESP)
+  await h.close()
+  assert.deepEqual(h.flows[0].decision, 'decrypt')
+  assert.deepEqual(slowOf(h), [['upstream-slow', h.flows[0].flow_id, 'connect', 'upstream.test', true]]); assertEvents(h.failures)
+
+  const s = await rig(tlsUp(), { upstreamSlowMs: 100, connectUpstream: lateDial(250), meta: { decrypt: false } })
+  assert.equal(await tlsTalk(s.port), RESP)
+  await s.close()
+  assert.deepEqual([s.flows[0].decision, s.failures.map((f) => [f.code, f.phase])], ['splice', [['upstream-slow', 'connect']]])
+})
+
+test('the flow\'s dial and the TLS handshake after it are two waits, one event each; the handshake\'s clock starts at the connect', async () => {
+  const origin = tlsUp(); const originPort = await listen(origin)
+  const slow = net.createServer((c) => { const o = net.connect(originPort, '127.0.0.1'); let first = true
+    o.on('data', (d) => { if (first) { first = false; o.pause(); setTimeout(() => { c.write(d); o.resume() }, 300) } else c.write(d) })
+    c.on('data', (d) => o.write(d)); c.on('end', () => o.end()); o.on('end', () => c.end()); c.on('error', () => o.destroy()); o.on('error', () => c.destroy()) })
+  const h = await rig(slow, { upstreamSlowMs: 100, connectUpstream: lateDial(200) })
+  assert.equal(await tlsTalk(h.port), RESP)
+  await h.close(); origin.close()
+  assert.deepEqual(slowOf(h), [['upstream-slow', h.flows[0].flow_id, 'connect', 'upstream.test', true], ['upstream-slow', h.flows[0].flow_id, 'tls', 'upstream.test', true]])
+})
+
+test('a step-aside\'s fresh direct connection that is slow to connect is one upstream-slow event, phase connect, with the flow; the splice still goes through', async () => {
+  const late = lateDial(250); let dials = 0
+  const h = await rig(tlsUp(), { upstreamSlowMs: 100, upstreamCa: createCa({ commonName: 'not the upstream\'s' }).certPem, connectUpstream: (dst) => (dials++ ? late(dst) : net.connect(dst.port, dst.address)) })
+  assert.equal(await tlsTalk(h.port), RESP)
+  await h.close()
+  assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured, dials], ['splice', 'upstream-cert', 2])
+  assert.deepEqual(slowOf(h), [['upstream-slow', h.flows[0].flow_id, 'connect', 'upstream.test', true]])
+})
+
+test('a client that leaves during the flow\'s dial with no decision made stays closed_before_decision, and its watch goes with it', async () => {
+  const h = await rig(sink(), { upstreamSlowMs: 500, connectUpstream: lateDial(10_000) })
+  await rawTalk(h.port, null)
+  await h.settled(); await sleep(600)
+  await h.close()
+  assert.deepEqual([h.flows[0].error.type, h.flows[0].error.wait, h.failures], ['closed_before_decision', undefined, []])
+})
+
 test('a fast upstream writes no upstream-slow event', async () => {
   const h = await rig(tlsUp(), { upstreamSlowMs: 2000 })
   assert.equal(await tlsTalk(h.port), RESP)

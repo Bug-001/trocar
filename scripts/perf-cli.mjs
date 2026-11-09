@@ -3,6 +3,7 @@
 //   node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only sessions,status] [--json out.json]
 //   node scripts/perf-cli.mjs --idle <pid> [--seconds 60]        ← the resource line of §3.1 (D62④) on a running daemon
 //   node scripts/perf-cli.mjs --write-amp <HOME> [--records 200]  ← the write-amplification line of §3.1, both halves
+//   node scripts/perf-cli.mjs --reply-reads <HOME> --lane-doc a.json[,b.json] [--order walk|jump] [--at i --count n]  ← 2.3 #42 · §正文预取: `block` reads, one process
 //
 // It reports, per command: the COLD wall clock (the index deleted first), the WARM p50/p95 wall clock, the
 // command's own CPU time and peak RSS, and — separately — the CORE time, which is runQuery inside an already
@@ -19,6 +20,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { median } from './perf-query.mjs'
+import { isMain } from './is-main.mjs'
 
 const CLI = path.join(import.meta.dirname, '..', 'bin', 'trocar.mjs')
 const SELF = import.meta.filename
@@ -66,7 +68,7 @@ function diskRead(home, argv) {
 }
 
 // ── what is measured ──────────────────────────────────────────────────────────────────────────────
-// $session / $ref / $harness come from a discovery run, so the script works on any dataset.
+// $session / $ref / $harness / $host / $class come from a discovery run, so the script works on any dataset.
 const CMDS = [
   ['pricing', ['query', 'pricing'], { core: ['pricing', {}] }],
   ['segments', ['query', 'segments'], { core: ['segments', {}] }],
@@ -74,6 +76,12 @@ const CMDS = [
   ['sessions', ['query', 'sessions'], { core: ['sessions', {}] }],
   ['session', ['query', 'session', '--id', '$session'], { core: ['session', { id: '$session' }] }],
   ['calls', ['query', 'calls'], { core: ['calls', {}] }],
+  // without --class / --host / --ref `calls` is only the class table; these three list calls
+  ['calls-class', ['query', 'calls', '--class', '$class'], { core: ['calls', { class: '$class' }] }],
+  ['calls-host', ['query', 'calls', '--host', '$host'], { core: ['calls', { host: '$host' }] }],
+  ['calls-ref', ['query', 'calls', '--ref', '$ref'], { core: ['calls', { ref: '$ref' }] }],
+  ['traffic', ['query', 'traffic'], { core: ['traffic', {}] }],
+  ['overview', ['query', 'overview'], { core: ['overview', {}] }],
   ['block', ['query', 'block', '--ref', '$ref'], { core: ['block', { ref: '$ref' }] }],
   ['raw', ['raw', '$ref'], { json: false }],
   ['status', ['status'], { core: ['status', {}] }],
@@ -119,15 +127,16 @@ async function cores({ home, names, vars, runs }) {
   const nearby = []
   if (vars.session) {
     const open = await timed('session', { id: vars.session })
-    const page = open.doc?.page || {}
+    const oldest = open.doc?.more ? (open.doc.calls || [])[0]?.rid : null // a page is the newest rows; the next ends before its oldest (3.5 §会话读 --before)
     const steps = (open.doc?.records || []).map((r) => r.ref || r.text_ref).filter(Boolean)
     const seq = [
-      ['session page 2', 'session', { id: vars.session, after: page.next ?? '1', limit: String(page.limit ?? 50) }],
+      ['session page 2', 'session', oldest ? { id: vars.session, before: oldest, limit: '50' } : null],
       ['block of another step', 'block', { ref: steps[1] || vars.ref }],
       ['calls of this session', 'calls', { session: vars.session }],
       ['sessions (the list again)', 'sessions', {}],
     ]
     for (const [label, name, params] of seq) {
+      if (!params) continue // nothing to page to
       const ms = []
       let err = null
       for (let i = 0; i < runs; i++) { const r = await timed(name, params); ms.push(r.ms); err = err || r.error }
@@ -156,12 +165,17 @@ export async function measure({ home, runs = DEFAULT_RUNS, only = null }) {
   const buildMs = Number(process.hrtime.bigint() - t0) / 1e6
   const segDoc = run(home, ['query', 'segments'])
   const sesDoc = run(home, ['query', 'sessions'])
+  const top = (rows, n) => [...rows].sort((a, b) => n(b) - n(a))[0]
+  const host = top(run(home, ['query', 'traffic']).doc?.hosts || [], (h) => h.requests)
+  const cls = host ? top(Object.entries(host.classes), ([, n]) => n) : null
   const big = (segDoc.doc?.segments || []).filter((s) => s.records > 0).sort((a, b) => a.bytes - b.bytes).pop()
   const { HARNESS_IDS } = await import('../src/off/harness-names.mjs')  // one fact, one place (0.1 §2)
   const vars = {
     session: (sesDoc.doc?.sessions || [])[0]?.session_id ?? null,
     ref: big ? `${big.segment}:${big.records}` : null,
     harness: HARNESS_IDS[0],
+    host: host?.host ?? null,
+    class: cls ? cls[0] : null,
   }
   const dataset = { segments: (segDoc.doc?.segments || []).length, records: (segDoc.doc?.segments || []).reduce((n, s) => n + s.records, 0),
     bytes: (segDoc.doc?.segments || []).reduce((n, s) => n + (s.bytes || 0), 0), index_build_ms: Math.round(buildMs) }
@@ -298,6 +312,57 @@ function printAmp(o) {
   console.log(`  INDEX + USAGE SIDECAR PER RECORD ${s.index_bytes_per_record} B   (§3.1: ≤ 1 KB; the ratio here would be ${s.bytes_written_per_captured_byte}, which is meaningless at this size)`)
 }
 
+// 2.3 #42: a step's reply text, read the way the desk reads it when the playhead rests on that step: one `block` with the step's own
+// reply refs, in one process, step after step. `--lane-doc` is what `trocar query lane --json` answered (the steps and the definitions
+// their reply ids name), so the walk costs no fold and the dataset needs no projection of this build. Sealed and live are apart: the
+// two read a record differently (a frame decoded, a line at its offset), and a live segment's index is still growing.
+// Beside the reply (2.3 §正文预取): `ahead`, the one multi-ref `block` of the replies of the ±8 steps around, read after it; `open`, one
+// request block opened by itself (the step's newest added block), a nearby query of D62③. Every kind is held to the same 50 ms.
+// `order`: 'walk' rests on every step in turn (the shared frame and line caches warm from the step before); 'jump' lands on the
+// pooled steps at a stride past ±8, the way a click on the timeline lands. `at` / `count` take a slice of that order: one step in
+// a fresh process is the read with every cache cold.
+const REPLY_LINE_MS = 50, AHEAD = 8, STRIDE = 37
+async function replyReads({ home, docs, order = 'walk', at = 0, count = Infinity }) {
+  const { runQuery } = await import('../src/query/named/index.mjs')
+  const h = path.join(home, '.trocar')
+  const ctx = { home: h, userHome: home, env: { ...process.env, HOME: home, USERPROFILE: home }, platform: process.platform }
+  await runQuery('segments', {}, ctx) // the desk is open: every segment's rows are already in memory
+  const ms = {}
+  let errors = 0
+  const live = (ref) => fs.existsSync(path.join(h, 'raw', `${ref.split('#').pop().split(':')[0]}.ndjson`))
+  const time = async (kind, at, ref) => {
+    if (!ref.length) return
+    const t = process.hrtime.bigint()
+    const got = await runQuery('block', { ref }, ctx)
+    ;(ms[`${kind} ${live(at) ? 'live' : 'sealed'}`] ??= []).push(Number(process.hrtime.bigint() - t) / 1e6)
+    errors += got.errors.length
+  }
+  const all = docs.flatMap((doc) => {
+    const refOf = new Map(doc.defs.map((d) => [d.bid, d.ref]))
+    const replies = doc.steps.map((st) => (st.reply || []).map((b) => refOf.get(b)).filter(Boolean))
+    return doc.steps.map((step, i) => ({ step, reply: replies[i],
+      ahead: replies.slice(Math.max(0, i - AHEAD), i + AHEAD + 1).filter((_, k) => k !== Math.min(i, AHEAD)).flat(),
+      open: step.ops.filter((op) => op[0] === 1).flatMap((op) => op.slice(1)).map((b) => refOf.get(b)).filter(Boolean).pop() }))
+  })
+  let stride = order === 'jump' ? STRIDE : 1
+  while (all.length % stride === 0 && stride > 1) stride++ // coprime with the count: every step once
+  for (let j = at; j < Math.min(all.length, at + count); j++) {
+    const s = all[(j * stride) % all.length]
+    await time('reply', s.step.rid, s.reply)
+    await time('ahead', s.step.rid, s.ahead)
+    if (s.open) await time('open', s.open, [s.open])
+  }
+  const row = (v) => ({ n: v.length, p50_ms: +pct(v, 50).toFixed(1), p95_ms: +pct(v, 95).toFixed(1), max_ms: +Math.max(...v).toFixed(1) })
+  return { line_ms: REPLY_LINE_MS, ...Object.fromEntries(Object.entries(ms).sort().map(([k, v]) => [k, row(v)])), errors }
+}
+
+function printReplies(o) {
+  for (const [k, r] of Object.entries(o)) {
+    if (r && r.n) console.log(`${k.padEnd(13)} n ${String(r.n).padStart(4)}  p50 ${r.p50_ms} ms  p95 ${r.p95_ms} ms  max ${r.max_ms} ms  line ${o.line_ms} ms  ${r.p95_ms <= o.line_ms ? 'within' : 'OVER'}`)
+  }
+  console.log(`errors  ${o.errors}`)
+}
+
 function print(out) {
   const t = out.dataset
   console.log(`dataset  ${t.segments} segments  ${t.records} records  ${(t.bytes / 2 ** 30).toFixed(2)} GiB  index build (the keeper's, whole home) ${t.index_build_ms} ms`)
@@ -324,10 +389,20 @@ async function main(argv) {
     if (args.json) fs.writeFileSync(args.json, JSON.stringify(o, null, 2))
     return
   }
+  if (args['reply-reads']) {
+    const docs = String(args['lane-doc']).split(',').map((f) => JSON.parse(fs.readFileSync(f, 'utf8')))
+    const o = await replyReads({ home: args['reply-reads'], docs, order: args.order, at: Number(args.at || 0), count: args.count ? Number(args.count) : Infinity })
+    printReplies(o)
+    if (args.json) fs.writeFileSync(args.json, JSON.stringify(o, null, 2))
+    return
+  }
   if (!args.home) { console.error('usage: node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only a,b] [--json out.json]\n       node scripts/perf-cli.mjs --idle <pid> [--seconds 60] [--json out.json]\n       node scripts/perf-cli.mjs --write-amp <HOME> [--records 200] [--json out.json]'); process.exit(2) }
-  const out = await measure({ home: args.home, runs: args.runs ? Number(args.runs) : undefined, only: args.only ? args.only.split(',') : null })
+  const only = args.only ? args.only.split(',') : null
+  const known = CMDS.map(([n]) => n), unknown = (only || []).filter((n) => !known.includes(n))
+  if (unknown.length) { console.error(`perf-cli: --only names no command: ${unknown.join(', ')} (known: ${known.join(', ')})`); process.exit(2) }
+  const out = await measure({ home: args.home, runs: args.runs ? Number(args.runs) : undefined, only })
   print(out)
   if (args.json) fs.writeFileSync(args.json, JSON.stringify(out, null, 2))
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) main(process.argv.slice(2))
+if (isMain(import.meta.url)) main(process.argv.slice(2))

@@ -4,6 +4,8 @@
 //   entry = { kind: 'json-key', path, keys, value, semantic: 'append'|'replace' }   a key in a user file
 //         | { kind: 'text', path, format: 'dotenv-block', vars, semantic }   a sentinel block (text-edit.mjs)
 //         | { kind: 'text', path, format: 'line'|'yaml-list', line, after? }   one sentinel line / YAML row
+//         | { kind: 'text', path, format: 'pem-block' }   trocar's root as a marked block at the end of the user's own CA file
+//           (4.11 rule U: the descriptor names only a file the user owns; the plan adds the root, `pem`)
 //   file  = { path, certsFrom: string[], bundle? }   an trocar-owned trust file: the CERTIFICATE blocks of the user's
 //           CA files + the trocar CA, nothing else (never a private key, never a copy of a user file); `bundle: true`
 //           makes it a combined bundle (bundle.mjs: Node roots + OS roots first), the only file a replace-semantics
@@ -20,6 +22,7 @@ import { certsOf, composeBundle } from './bundle.mjs'
 import { SENTINEL } from '../../../off/text-edit.mjs'
 import { CODE } from '../codes.mjs'
 import { rootsLeftOut } from '../tls/roots.mjs'
+import { managedTree } from '../proxymode/hooks/wrapper.mjs'
 
 // Login-environment locations: a CA variable there makes every program of the user trust trocar (vetoed, D37④).
 const LOGIN_ENV = [/\/\.config\/environment\.d\//, /\/\.(profile|bash_profile|bash_login|bashrc|zshrc|zshenv|zprofile|zlogin|pam_environment)$/, /\/\.config\/fish\//, /^\/etc\//]
@@ -87,8 +90,11 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
         if (inLogin && !(e.format === 'line' && shimPathLine(collectorDir).test(e.line) && e.after)) {
           throw new Error(`${where}: a login-environment file only ever gets the launch-shim PATH line, placed after the agent installer's own (D37④)`)
         }
+      } else if (e.kind === 'text' && e.format === 'pem-block') {
+        // rule U (4.11 P4): the descriptor names a file the user owns; never a login file, trocar's own tree, or one a package manager or the system rewrites
+        if (inLogin || e.path.startsWith(path.dirname(collectorDir) + path.sep) || managedTree(e.path)) throw new Error(`${where}: a certificate block goes only into the user's own CA file`)
       } else throw new Error(`${where}: unknown entry kind ${e.kind}${e.format ? ` / format ${e.format}` : ''}`)
-      entries.push({ harness: d.name, ...e })
+      entries.push({ harness: d.name, ...e, ...(e.format === 'pem-block' ? { pem: caCertPem } : {}) })
     }
     for (const o of out.owned || []) {
       const where = `${d.name}: ${o.path}`
@@ -128,8 +134,11 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
         }
       }
       if (f.bundle) {
-        const b = composeBundle({ nodeRoots: roots.node, osRootsText: roots.osText, userCerts, caPem: caCertPem })
-        files.push({ harness: d.name, path: f.path, role: 'bundle', data: b.data, sources, user_fps: b.user_fps, roots_fp: b.roots_fp })
+        // composed when something is written: it parses every root, and `on` writes no certificate item (D55①), so it never asks (D62①)
+        let b = null
+        const bundle = () => (b ||= composeBundle({ nodeRoots: roots.node, osRootsText: roots.osText, userCerts, caPem: caCertPem }))
+        const want = [...new Set(userCerts.map((pem) => { try { return new X509Certificate(pem).fingerprint256 } catch { return null } }).filter(Boolean))] // what it would carry, without the roots (D62①)
+        files.push({ harness: d.name, path: f.path, role: 'bundle', get data() { return bundle().data }, sources, want_fps: want, compose: (kept) => composeBundle({ nodeRoots: roots.node, osRootsText: roots.osText, userCerts: [...kept, ...userCerts], caPem: caCertPem }), get user_fps() { return bundle().user_fps }, get roots_fp() { return bundle().roots_fp } })
         if (roots.missing) note(d.name, CODE.systemRootsUnavailable, `${f.path} carries Node's roots only: ${roots.missing}; a CA installed system-wide (a corporate proxy's) is not in it`)
       } else {
         const seen = new Set()

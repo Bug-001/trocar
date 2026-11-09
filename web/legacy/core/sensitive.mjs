@@ -22,4 +22,10 @@ export const revealHeader = (api, ref, name, opts) => api.get('calls', { ref, re
  * bundled into the build, 4.4 静态面), so the page and the receipts hide the same. Pure, no DOM. */
 export const redactUrlCredentials = (text) => hideUserinfo(text ?? '')
 
+/** One technical-details pair with every string in its value through redactUrlCredentials — {text} / {mono} / {parts: [...]} alike — so
+ * what a row shows and what its Copy button copies come from values already hidden (1.9 §保真边界). */
+export const redactPair = ({ k, v }) => ({ k, v: redactValue(v) })
+const redactValue = (v) => (v && v.parts ? { ...v, parts: v.parts.map(redactValue) }
+  : Object.fromEntries(Object.entries(v || {}).map(([n, x]) => [n, typeof x === 'string' ? redactUrlCredentials(x) : x])))
+
 export const redactUrlCredentialsHtml = (text) => esc(redactUrlCredentials(text))

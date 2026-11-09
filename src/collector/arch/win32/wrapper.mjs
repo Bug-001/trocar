@@ -1,5 +1,5 @@
 // wrapper.mjs (arch/win32) — the Windows half of the 4.11 P8 install-folder wrapper: wrapper.cs rendered with C# literals and compiled at
-// install by the inbox .NET Framework compiler (lab W3), the way core's placeWrapper (core/proxymode/hooks/wrapper.mjs) takes it as
+// install by the inbox .NET Framework compiler, the way core's placeWrapper (core/proxymode/hooks/wrapper.mjs) takes it as
 // `renderWrapper` + `compile`. A real compile and run is a Windows test machine's (L4); the unit side checks the rendering and the compiler's argv.
 import nodeFs from 'node:fs'
 import path from 'node:path'

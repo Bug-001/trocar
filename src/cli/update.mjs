@@ -18,7 +18,7 @@ import { codeId, codeIdOf, packageRoot, channelOf, packageName } from '../versio
 import { execTool, runAsync } from '../off/exec.mjs'
 import { collectorDir, stateFile, launcherPath } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
-import { readManifest } from '../off/manifest.mjs'
+import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { commandNamed, usageLine } from './commands.mjs'
 import { pairs as pairsAt, wrap } from './text.mjs'
@@ -138,7 +138,8 @@ async function update({ io, env, home, platform, deps, flags }) {
     if (ran.status !== 0 || !got) return no('installer-failed', `the download failed: ${said(ran.stderr) || (ran.error && ran.error.message) || `the installer exited ${ran.status}`}. Nothing changed.`)
     const [, kind, v, staged] = got
     r.to = v
-    if (kind === 'up-to-date' || v === r.from) { lines.push(`trocar update: already up to date (${r.from}).`); return done(EXIT.ok) }
+    // the installer names a version; this copy's code id is that version, then which code it is
+    if (kind === 'up-to-date' || v === r.from.split('+')[0]) { lines.push(`trocar update: already up to date (${r.from}).`); return done(EXIT.ok) }
     const on = harnessesOn({ home, fs })
     if (on.error) return no('state-unreadable', on.error)
     r.harnesses = on.ids
@@ -188,6 +189,9 @@ async function update({ io, env, home, platform, deps, flags }) {
     const to = r.to = r.from
     const daemonOther = typeof running === 'string' && running !== to
     if (!daemonOther && (installed === undefined || installed === to)) {
+      // a script copy whose record says nothing is installed (an uninstall that kept the code for a machine-wide helper saves it with
+      // `install: null`): there is nothing installed to bring up to date, so this is a first install — install's own plan and question
+      if (channel === 'script' && installed === undefined && fs.existsSync(manifestPath(dir))) return (deps.install || runInstallCli)([...flags], { io, env, home, platform, deps })
       if (channel === 'script') return scripted()
       return no('npm-package', `this trocar was installed with npm. Get the newest with npm i -g ${packageName(root, { fs })}@latest, then run trocar update to restart the collector on it.`, EXIT.usage)
     }
@@ -261,9 +265,10 @@ async function update({ io, env, home, platform, deps, flags }) {
     return no('merge-failed', `the new code could not be merged in (${merged.err || `git exit ${merged.code}`}); the agents that were being captured are being captured again`)
   }
   if (touchesDeps) {
-    const npm = execTool('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { run: deps.exec || null, env, cwd: root, timeoutMs: 600_000 })
-    // the code IS replaced: the handover file stays, so the next run goes on from step 4 (§5.5)
-    if (npm.code !== 0) return no('npm-failed', `the code is now ${r.to}, but what it needs could not be installed (${npm.err || `npm exit ${npm.code}`}). ${AGAIN}`)
+    const npmArgs = ['install', '--omit=dev', '--no-audit', '--no-fund']
+    const npm = execTool('npm', npmArgs, { run: deps.exec || null, env, cwd: root, timeoutMs: 600_000, platform })
+    // the code IS replaced: the handover file stays, so the next run goes on from step 4 (§5.5) — which skips npm, so the way out runs it by hand
+    if (npm.code !== 0) return no('npm-failed', `the code is now ${r.to}, but what it needs could not be installed (${npm.err || `npm exit ${npm.code}`}). In ${root}, run npm ${npmArgs.join(' ')}, then run trocar update again${on.ids.length ? `. Until then capture is off for ${on.ids.join(', ')}; that trocar update switches them on again` : ''}`)
   }
 
   // 3 · the new code finishes, in a process of its own. No harness name in its arguments (D67①): the file holds them.
@@ -308,7 +313,9 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   }
   try { fs.rmSync(handover, { force: true }) } catch (e) { return no('handover-not-removed', `this update finished, but it could not be written off (${(e && e.message) || e})`) }
   lines.push(`trocar is now ${r.to}${waiting.from && waiting.from !== r.to ? ` (it was ${waiting.from})` : ''}.`, // no record of the code before: no "was"
-    ...pairs([[ROW.collector, r.restarted ? 'running the new code' : 'already running this code'], [ROW.again, waiting.on.join(', ') || 'nothing was being captured']]))
+    ...pairs([[ROW.collector, r.restarted ? 'running the new code' : 'already running this code'], [ROW.again, waiting.on.join(', ') || 'nothing was being captured']]),
+    // what the install it ran says is still the user's to do, and this run's own notes (D38): the update is often the only install the user sees
+    ...[...new Set([...((installed.doc && Array.isArray(installed.doc.notes)) ? installed.doc.notes : []), ...r.notes])].flatMap((n) => wrap(`Note: ${n}`)))
   return done(EXIT.ok)
 }
 

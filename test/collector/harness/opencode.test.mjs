@@ -11,6 +11,8 @@ import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { readManifest } from '../../../src/collector/core/trust/journal.mjs'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, plantMarker, CA, OTHER } from './_ctx.mjs'
+import { tmpDir, removeTmp } from '../../helpers/tmp.mjs'
+import { presentForms } from '../../../src/collector/arch/model-backends.mjs'
 
 test('opencode: curl, npm and platform binaries match, `serve` is long-lived; the Node launcher and BUN_BE_BUN self-execs do not (R1)', () => {
   assert.equal(matchOf([oc], facts({ exe: '/home/u/.opencode/bin/opencode', argv: ['opencode', 'run', 'hi'] })).agent, 'opencode')
@@ -22,6 +24,48 @@ test('opencode: curl, npm and platform binaries match, `serve` is long-lived; th
   assert.equal(matchOf([oc], serve).agent, 'opencode')
   const reg = createRegistry([oc])
   assert.deepEqual([reg.isLongLived(oc, serve), reg.isLongLived(oc, facts({ exe: serve.exe, argv: ['opencode', 'run', 'serve me'] }))], [true, false])
+})
+
+// macOS process table of OpenCode desktop 2.0.32 under `on` (one turn): only the sidecar connects to the door; the main process talks to the
+// sidecar's local port, the network-service helper to the sidecar and the user's proxy.
+test('opencode desktop on macOS: the sidecar `opencode-cli serve` is opencode, of the desktop form; the app\'s main process and helpers are not; the CLI still is', async () => {
+  const app = '/Applications/OpenCode.app/Contents/MacOS'
+  const home = tmpDir()
+  try {
+    const cli = path.join(home, 'Library/Application Support/ai.opencode.desktop/cli/2.0.32-arm64/opencode-cli')
+    fs.mkdirSync(path.dirname(cli), { recursive: true }); fs.writeFileSync(cli, '')
+    const mac = (exe, argv) => facts({ os: 'darwin', exe, argv: [exe, ...argv], env: null })
+    const agentOf = (exe, argv) => matchOf([oc], mac(exe, argv)).agent
+    assert.deepEqual([
+      agentOf(`${app}/OpenCode`, []), // as a person starts it
+      agentOf(`${app}/OpenCode`, ['--remote-debugging-port=9222']), // as the measurement started it
+      agentOf(`${home}/Applications/OpenCode.app/Contents/MacOS/OpenCode`, []), // another install location
+      agentOf('/Volumes/Tools/OpenCode 2.app/Contents/MacOS/OpenCode', []), // a renamed bundle elsewhere
+      agentOf(`${app}/../Frameworks/OpenCode Helper.app/Contents/MacOS/OpenCode Helper`, ['--type=gpu-process']),
+      agentOf(`${app}/../Frameworks/OpenCode Helper.app/Contents/MacOS/OpenCode Helper`, ['--type=utility', '--utility-sub-type=network.mojom.NetworkService']),
+      agentOf(`${app}/../Frameworks/OpenCode Helper (Renderer).app/Contents/MacOS/OpenCode Helper (Renderer)`, ['--type=renderer']),
+    ], [null, null, null, null, null, null, null])
+    const sidecar = mac(cli, ['serve', '--service'])
+    assert.equal(matchOf([oc], sidecar).agent, 'opencode')
+    assert.equal(createRegistry([oc]).isLongLived(oc, sidecar), true)
+    assert.ok((await presentForms({ os: 'darwin', home, env: { HOME: home, PATH: '' }, harnesses: [oc] })).opencode.includes('opencode.desktop'))
+    assert.equal(agentOf('/opt/homebrew/bin/opencode', []), 'opencode')
+    assert.equal(agentOf(path.join(home, '.opencode/bin/opencode'), ['run', 'hi']), 'opencode')
+  } finally { removeTmp(home) }
+})
+
+// Windows: the app's file is OpenCode.exe under any folder, and its Electron helpers are the same file with --type; every CLI build is lowercase (measured, the npm channel)
+test('opencode desktop on Windows: the file named OpenCode.exe and its helpers are not opencode, wherever they sit; the CLI builds and the sidecar are', () => {
+  const win = (exe, argv) => matchOf([oc], facts({ os: 'win32', exe, argv: [exe, ...argv], env: null })).agent
+  const apps = ['C:\\Users\\u\\AppData\\Local\\Programs\\@opencodedesktop\\OpenCode.exe', 'D:\\Tools\\anywhere\\OpenCode.exe']
+  for (const exe of apps) {
+    for (const argv of [[], ['--type=gpu-process'], ['--type=renderer'], ['--type=utility', '--utility-sub-type=network.mojom.NetworkService'], ['--type=crashpad-handler']]) {
+      assert.equal(win(exe, argv), null, `${exe} ${argv.join(' ')}`)
+    }
+  }
+  const npm = 'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules'
+  for (const exe of [`${npm}\\opencode-ai\\bin\\opencode.exe`, `${npm}\\opencode-windows-x64\\bin\\opencode.exe`, `${npm}\\opencode-windows-x64-baseline\\bin\\opencode.exe`, 'C:\\Users\\u\\.opencode\\bin\\opencode.exe']) assert.equal(win(exe, ['run', 'hi']), 'opencode', exe)
+  assert.equal(win('C:\\Users\\u\\AppData\\Roaming\\ai.opencode.desktop\\cli\\2.0.27\\opencode-cli.exe', ['serve']), 'opencode')
 })
 
 test('opencode: relay hosts from the global, OPENCODE_CONFIG, project and inline layers (JSONC, {env:X} substituted)', () => {
@@ -79,7 +123,7 @@ test('opencode inject: trocar\'s plugin file in OpenCode\'s plugin dir (XDG_CONF
     assert.deepEqual([p.paths, p.entries, p.files], [[plug], [], []], 'one file, nothing in OpenCode\'s config, no environment')
     assert.ok(p.owned[0].data.includes(JSON.stringify(path.join(dir, 'ca', 'trocar-ca.pem'))) && p.owned[0].data.includes(JSON.stringify(path.join(dir, 'run', 'trust'))))
     assert.deepEqual(p.watch.map((w) => path.basename(w.path)), ['package.json', 'package-lock.json', 'bun.lock', 'node_modules'])
-    assert.ok(p.records.every((r) => r.code === 'harness-note') && p.records.some((r) => /npm registry once/.test(r.reason)))
+    assert.ok(p.records.every((r) => r.code === 'harness-note') && p.records.some((r) => r.reason.includes('@opencode-ai/plugin')), 'the npm install OpenCode does is told')
     const xdg = planTrust({ descriptors: [oc], ctxFor: () => ({ ...ctx, env: new Map([['XDG_CONFIG_HOME', path.join(s.home, 'xdg')]]) }), caCertPem: CA.certPem, collectorDir: dir })
     assert.deepEqual(xdg.paths, [path.join(s.home, 'xdg', 'opencode', 'plugins', 'trocar-ca.js')])
   } finally { s.done() }

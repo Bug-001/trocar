@@ -165,8 +165,8 @@ export default function HostScreen({ route, router }: ScreenProps) {
         </div>
       </div>
       <div className="hhead colhead" aria-hidden="true">
-        <span className="cell">Time</span><span className="cell-endpoint">Endpoint</span><span className="cell class">Class</span>
-        <span className="cell num sent">{W.COL.sent}</span><span className="cell num recv">{W.COL.recv}</span><span className="cell marks"></span>
+        <span className="cell">{W.COL.time}</span><span className="cell-endpoint">{W.COL.endpoint}</span><span className="cell class">{W.COL.class}</span>
+        <span className="cell num sent">{W.COL.sent}</span><span className="cell num recv">{W.COL.recv}</span><span className="cell marks">{W.COL.marks}</span>
       </div>
       <div className="hlist" id="hlist" role="list" aria-label="Requests" ref={listRef} style={{ position: 'relative', height: virt.getTotalSize() }}>
         {items.map((it) => {
@@ -207,7 +207,7 @@ export default function HostScreen({ route, router }: ScreenProps) {
       <div className="d-head"><Button className="iconbtn dclose" aria-label={W.CLOSE_DETAIL} onPress={() => router.setParams({ ref: null })}>×</Button></div>
       {m && m.rec
         ? <RequestView view={rm && rm.rec ? requestView(rm, { revealed: name }) : requestView(m, { revealed: null })} onReveal={(n) => setRevealed({ ref, name: n })} />
-        : <ReadFail cls="d-err" fail={failOf(W.THIS_REQUEST, { status: r.ok ? null : r.status, error: (m && m.error) || r.error })} onRetry={() => { void base.refetch() }} />}
+        : <ReadFail cls="d-err" fail={failOf(W.THIS_REQUEST, r.ok ? { status: null, error: m && m.error } : { ...r, error: (m && m.error) || r.error })} onRetry={() => { void base.refetch() }} />}
     </>
   }
 

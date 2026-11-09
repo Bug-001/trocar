@@ -10,7 +10,7 @@ import { runOffCli } from '../../src/off/main.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
-import { formatOnReceipt, formatPlan } from '../../src/cli/receipt.mjs'
+import { formatOnReceipt, formatPlan, formatUninstallReceipt } from '../../src/cli/receipt.mjs'
 import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { readStateFile } from '../../src/off/state.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
@@ -369,7 +369,7 @@ test('V10: status says unknown with the reason for connections the daemon did no
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === lock) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
   r = await runStatus(s, [], { request: down(), fs: broken })
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  assert.match(flat(r.text), new RegExp(`Daemon: unknown \\(${esc(lock)}: EACCES`))
+  assert.match(flat(r.text), new RegExp(`Daemon: unknown \\(${esc(lock.replace(s.home, '~'))}: EACCES`)) // HOME as ~ (1.6 §1.1⑤)
   assert.match(flat(r.text), /Connections unknown \(whether a daemon runs is not known/)
   assert.ok(!/Connections (0|none|no )/.test(flat(r.text))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
   // --json: the same, as data
@@ -423,4 +423,12 @@ test('formatPlan: the backup line only when the plan changes a file of yours', a
   const edits = { ...own, entries: [{ harness: 'claude-code', path: '/home/a/.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'] }] }
   assert.doesNotMatch(formatPlan(own, { home }), /\.trocar\/backup/)
   assert.match(formatPlan(edits, { home }), /\.trocar\/backup/)
+})
+
+test('uninstall text: a file is one row of Removed, however its entries spell it on Windows and however many changes it had', () => {
+  const home = 'C:\\Users\\u'
+  const ca = `${home}\\.trocar\\collector\\ca\\trocar-ca.pem`, env = `${home}\\.codex\\.env`
+  const text = formatUninstallReceipt({ ...newReceipt('uninstall'), ok: true, changed: [{ path: ca, change: "trocar's root certificate removed from your trust store" }, { path: env, change: 'HTTPS_PROXY removed' }, { path: env, change: 'SSL_CERT_FILE removed' }],
+    removed: [ca.replace('.trocar', '.TROCAR'), ca, `${home}\\.dsh\\trocar-cordis-plugin.mjs`] }, { home, platform: 'win32' })
+  for (const name of ['trocar-ca.pem', '.env', 'trocar-cordis-plugin.mjs']) assert.equal(text.split('\n').filter((l) => l.toLowerCase().includes(name.toLowerCase())).length, 1, `${name}: ${text}`)
 })

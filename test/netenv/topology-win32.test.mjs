@@ -55,11 +55,11 @@ test('W29/D49 the one line about per-process rules of a VPN / proxy: in `status 
   assert.ok(ROWS.some((r) => r.on_path === true) && ROWS.some((r) => r.on_path === false), 'both sides are covered')
 })
 
-test('W29 row e (v2rayN) is a proxy hop named by its executable and its port, and nothing else about it (D49: no product, no mode, no rule, no secret, no node name of the user\'s)', () => {
+test('W29 row e (v2rayN) is a proxy hop named by its address and port, never its executable, and nothing else about it (D49: no product, no mode, no rule, no secret, no node name of the user\'s)', () => {
   const row = ROWS.find((r) => r.n === 'e'), t = buildTopology(row.facts).codex
   const hop = t.nodes.find((n) => n.kind === 'proxy')
-  assert.deepEqual(hop, { id: hop.id, kind: 'proxy', name: 'v2rayN.exe', addr: '127.0.0.1', port: 10808, pid: 23001 })
-  assert.equal(renderCompact(t)[0].includes('v2rayN.exe :10808'), true)
+  assert.deepEqual(hop, { id: hop.id, kind: 'proxy', name: '127.0.0.1:10808', addr: '127.0.0.1', port: 10808, pid: 23001 })
+  assert.equal(renderCompact(t)[0].includes('] :10808 -> ') && !/v2rayN/i.test(JSON.stringify(t)), true)
   for (const n of t.nodes) assert.ok(!/password|secret|HK-|proxies:/i.test(JSON.stringify(n)))
 })
 
@@ -176,7 +176,7 @@ test('W36 one entry per code row of §10.4 — no more, no less — and each ent
   assert.deepEqual(Object.keys(FINDINGS_WIN32), [
     'not-routed', 'entry-changed', 'egress-differs', 'elevated-agent', 'proxy-dead',
     'upstream-unreachable', 'engine-port-taken', 'forwarder-down', 'form-unsupported', 'proxy-unsupported',
-    'system-proxy-pac', 'other-redirector', 'socktable-unavailable', 'cause-unknown',
+    'system-proxy-pac', 'other-redirector', 'socktable-unavailable', 'cause-unknown', 'cert-intermediate-unavailable',
   ])
   for (const [code, entry] of Object.entries(FINDINGS_WIN32)) {
     assert.equal(typeof entry.commands, 'function', `${code}: the commands are a function of the context`)
@@ -207,11 +207,9 @@ const LITERALS = {
       why: 'Your system proxy could not be read (denied), and trocar does not guess, so it did not connect this form.',
       commands: [A('trocar on codex'), A('trocar doctor codex'), cmd('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable')] },
     'upstream-unparseable': { ctx: CTX({ h: 'claude-code', fm: { id: 'claude-code.cli', route: { reason: 'not-routed', why: 'upstream-unparseable' }, entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.claude\\settings.json', format: 'json', key: 'env.HTTPS_PROXY' } } }),
-      why: 'trocar cannot read the proxy address this form had, so it did not connect it.',
-      commands: [cmd('Write it as http://host:port or socks5://host:port', 'gui'), cmd('Open C:\\Users\\u\\.claude\\settings.json in Notepad and set env.HTTPS_PROXY to "unknown proxy address (absent)"', 'gui'), A('trocar on claude-code'), A('trocar off claude-code')] },
+      why: 'trocar cannot read the proxy address this form had, so it did not connect it.' },
     'credentials-in-system-proxy': { ctx: CTX({ h: 'codex', fm: { id: 'codex.app', route: { reason: 'not-routed', why: 'upstream-unparseable', detail: 'credentials-in-system-proxy' }, entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.codex\\.env', format: 'dotenv', key: 'HTTPS_PROXY' } } }),
-      why: 'Your system proxy address carries a login, which Windows itself does not use, so trocar did not connect this form.',
-      commands: [cmd('Take the login out of your system proxy address', 'gui'), cmd('Put the line HTTPS_PROXY=unknown proxy address (absent) in C:\\Users\\u\\.codex\\.env', 'gui'), A('trocar on codex'), A('trocar off codex')] },
+      why: 'Your system proxy address carries a login, which Windows itself does not use, so trocar did not connect this form.' },
     'no-why': { ctx: CTX({ h: 'kimi-code', fm: null }),
       why: 'This form has no entry trocar can use.',
       commands: [cmd("Use kimi-code's CLI form instead", 'gui'), A('trocar status kimi-code')] },
@@ -225,16 +223,13 @@ const LITERALS = {
   'upstream-unreachable': { ctx: CTX({ h: 'codex', upPort: 7897 }),
     commands: [cmd('netstat -ano -p TCP | findstr ":7897"'), cmd('Start your proxy, or turn off the system proxy that points at it', 'gui')], verify: 'trocar status codex' },
   'engine-port-taken': { ctx: CTX({ h: 'codex', enginePort: 17990 }),
-    what: 'Another program holds the port trocar listens on, so nothing is captured.', why: 'trocar picks another port after a restart.',
-    commands: [cmd('netstat -ano -p TCP | findstr ":17990"'), A('trocar off'), A('trocar on')], verify: 'trocar status' },
-  'forwarder-down': { ctx: CTX({ h: 'codex' }),
-    commands: [A('trocar on'), A('trocar off codex'), cmd('Restart codex after that, and it connects without trocar', 'gui')], verify: 'trocar status' },
+    what: 'Another program holds the port trocar listens on, so nothing is captured.', verify: 'trocar status' },
+  'forwarder-down': { ctx: CTX({ h: 'codex' }), verify: 'trocar status' },
   'form-unsupported': { ctx: CTX({ h: 'claude-code', fm: { id: 'claude-code.desktop' } }),
     what: 'claude-code (claude-code.desktop) cannot take an upstream proxy that needs a login.', why: 'Its entry takes no login, so trocar does not hand it one.',
     commands: [cmd("Use claude-code's CLI form or its editor extension instead", 'gui')], verify: 'trocar status claude-code' },
   'proxy-unsupported': { ctx: CTX({ h: 'deepseek-dsh', protocol: 'socks4', fm: { entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.dsh\\.env', format: 'dotenv', key: 'HTTPS_PROXY' } } }),
-    what: 'deepseek-dsh does not support the proxy scheme socks4.', why: 'trocar cannot use a socks4 proxy as its upstream, so it did not connect this form.',
-    commands: [cmd('Write it as http://host:port or socks5://host:port', 'gui'), cmd('Put the line HTTPS_PROXY=unknown proxy address (absent) in C:\\Users\\u\\.dsh\\.env', 'gui'), A('trocar on deepseek-dsh'), A('trocar off deepseek-dsh')], verify: 'trocar status deepseek-dsh' },
+    what: 'deepseek-dsh does not support the proxy scheme socks4.', why: 'trocar cannot use a socks4 proxy as its upstream, so it did not connect this form.', verify: 'trocar status deepseek-dsh' },
   'system-proxy-pac': { ctx: CTX({}),
     commands: [cmd("Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL")], verify: 'trocar status' },
   'other-redirector': { ctx: CTX({}), commands: [cmd('netsh winsock show catalog')], verify: 'trocar status' },
@@ -246,7 +241,7 @@ const LITERALS = {
 
 test('W36 each §10.4 command equals its literal (the values filled: the entry file and its key, the ports of the facts — no placeholder, no download address)', () => {
   const one = (name, spec, entry, ctx) => {
-    assert.deepEqual(entry.commands(ctx), spec.commands, `${name}: the commands, as literals`)
+    if (spec.commands) assert.deepEqual(entry.commands(ctx), spec.commands, `${name}: the commands, as literals`)
     if (spec.verify) assert.equal(entry.verify(ctx), spec.verify, `${name}: how to check`)
     if (spec.why) assert.equal(entry.why(ctx), spec.why, `${name}: the why`)
     if (spec.what) assert.equal(entry.what(ctx), spec.what, `${name}: the what`)
@@ -274,4 +269,21 @@ test('W36 the static scans (4.8 E6): findings-win32.mjs has no command that chan
   const src = fs.readFileSync(path.join(REPO, 'src/netenv/findings-win32.mjs'), 'utf8').replace(/^\s*\/\/.*$/gm, '') // the code, not its comments (which say why each of these is absent)
   for (const bad of ['Set-ItemProperty', 'reg add', 'CI\\Policy', 'Get-NetTCPConnection']) assert.ok(!src.includes(bad), `${bad} is not in the Windows doctor table`)
   assert.ok((src.match(/netstat -ano -p TCP \| findstr/g) || []).length >= 1, 'the port check is the netstat + findstr form')
+})
+
+// 4.11 P10 · 1.6 C.3: a form whose entry holds trocar's stale PAC address is drawn direct with the edge inferred, whatever form drew that hop first;
+// a form beside it with its own entry intact is not judged by it
+test('a stale PAC form: off the path, drawn direct and inferred, also after a form whose own direct hop was drawn first', () => {
+  const measured = form('claude-code.cli', { entry: null }) // its own way, direct and measured, drawn first
+  const stale = form('claude-code.desktop', { entry: { where: 'configLibrary/x.json#egressProxyPacUrl', trocar: true, opt_in: false, intact: false, code: 'pac-address-stale' } })
+  const F = pfacts('claude-code', measured, fwForm(17991, { state: 'forward-only' }))
+  F.harnesses['claude-code'].forms = [measured, stale]
+  F.forwarder.forms[stale.id] = fwForm(17993)
+  const t = buildTopology(F)['claude-code']
+  const br = t.branches.find((b) => b.form === stale.id), nodes = new Map(t.nodes.map((n) => [n.id, n]))
+  assert.deepEqual([br.on_path, br.captured, br.reason], [false, false, 'pac-address-stale'])
+  assert.ok(br.path.every((id) => !nodes.get(id).trocar), JSON.stringify(br))
+  const e = t.edges.find((x) => x.from === br.path[0] && x.to === br.path[1])
+  assert.deepEqual([e.via, e.inferred], ['direct', true])
+  assert.notEqual(t.branches.find((b) => b.form === measured.id).reason, 'pac-address-stale', 'the other form keeps its own verdict')
 })

@@ -76,7 +76,7 @@ export async function factsOfPid(pid, { helper, psTimeoutMs = PS_TIMEOUT_MS, onU
 }
 
 // ---- the environment, cwd and parent of a pid (RFC 4.11 P7's proc readers; the upstream chain asks them) --------------------------
-// One helper `proc-env` read answers all three (W2: one PEB read gives the environment entries asked for, the current directory and the
+// One helper `proc-env` read answers all three (one PEB read gives the environment entries asked for, the current directory and the
 // parent that created it). Cached by pid + start time for the life of the process: a busy agent costs one read, not one per connection
 // (the single helper channel). A caller that does not know the start time gets no caching (a pid alone can be reused); an answer of
 // another life than the one asked about is no answer. Only the named variables are asked for, returned and cached (4.9 §5.2).
@@ -100,28 +100,31 @@ export function parseProcEnv(data) {
   return { startedAt: data.startedAt ?? null, cwd: data.cwd ?? null, env, ppid: data.ppid ?? null, parent }
 }
 
+const UNREAD = Symbol('unread') // a proc-env the helper did not answer, or answered with a row it could not read
+
 /** procReaders({ helper, timeoutMs, cacheMax }) → { envOf(pid, names, { startedAt }), cwdOf(pid, { startedAt }), parentOf(pid, { startedAt }) },
  *  each async and null when the process cannot be read. envOf → { <asked name>: value } for the names set (compared case-insensitively:
  *  Windows names are); cwdOf → the current directory; parentOf → { ppid, startedAt } of the PARENT that created it (its start time keys
- *  the next step up the chain), null when the parent is gone or its pid now holds a younger process. */
+ *  the next step up the chain), null when the parent is gone or its pid now holds a younger process; it throws when the process could not be read
+ *  (unread is no end of the chain, D38). */
 export function procReaders({ helper, timeoutMs = PROC_ENV_TIMEOUT_MS, cacheMax = CACHE_MAX } = {}) {
   if (!helper || typeof helper.call !== 'function') throw new TypeError('procReaders needs the helper client (helper.mjs)')
   const cache = new Map() // `${pid}:${startedAt}` → { names: Set(UPPER), answer: Promise<parsed | null> }
   const ask = async (pid, names) => {
     let data
-    try { data = await helper.call('proc-env', { pid, names: [...names] }, { timeoutMs }) } catch { return null }
-    return parseProcEnv(data)
+    try { data = await helper.call('proc-env', { pid, names: [...names] }, { timeoutMs }) } catch { return UNREAD }
+    return parseProcEnv(data) || (data && data.error === 'gone' ? null : UNREAD) // a gone process is an answer; access-denied, other-user, a broken row are not
   }
   async function read(pid, startedAt, names = []) {
     if (!Number.isInteger(pid) || pid <= 0) return null
     const want = new Set(names.map(upper))
-    const check = (r) => (r && (startedAt == null || r.startedAt === startedAt) ? r : null) // another life of the pid is not the process asked about
+    const check = (r) => (r === UNREAD || (r && (startedAt == null || r.startedAt === startedAt)) ? r : null) // another life of the pid is not the process asked about
     if (startedAt == null) return check(await ask(pid, want))
     const key = `${pid}:${startedAt}`
     const held = cache.get(key)
     if (held && [...want].every((n) => held.names.has(n))) {
       const r = check(await held.answer)
-      if (r) return r
+      if (r && r !== UNREAD) return r
     }
     const all = new Set([...(held ? held.names : []), ...want])
     const answer = ask(pid, all)
@@ -129,7 +132,7 @@ export function procReaders({ helper, timeoutMs = PROC_ENV_TIMEOUT_MS, cacheMax 
     cache.set(key, entry)
     if (cache.size > cacheMax) cache.delete(cache.keys().next().value)
     const r = check(await answer)
-    if (!r && cache.get(key) === entry) cache.delete(key) // a failed read is asked again next time
+    if ((!r || r === UNREAD) && cache.get(key) === entry) cache.delete(key) // a failed read is asked again next time
     return r
   }
   return {
@@ -137,12 +140,12 @@ export function procReaders({ helper, timeoutMs = PROC_ENV_TIMEOUT_MS, cacheMax 
       const want = [...new Set(names)]
       if (!want.length) return {}
       const r = await read(pid, startedAt, want)
-      if (!r) return null
+      if (!r || r === UNREAD) return null
       const o = {}
       for (const n of want) { const hit = r.env.get(upper(n)); if (hit) o[n] = hit[1] }
       return o
     },
-    async cwdOf(pid, { startedAt = null } = {}) { const r = await read(pid, startedAt); return r ? r.cwd : null },
-    async parentOf(pid, { startedAt = null } = {}) { const r = await read(pid, startedAt); return r ? r.parent : null },
+    async cwdOf(pid, { startedAt = null } = {}) { const r = await read(pid, startedAt); return r && r !== UNREAD ? r.cwd : null },
+    async parentOf(pid, { startedAt = null } = {}) { const r = await read(pid, startedAt); if (r === UNREAD) throw new Error(`pid ${pid} could not be read`); return r ? r.parent : null },
   }
 }

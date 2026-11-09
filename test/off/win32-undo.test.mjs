@@ -10,7 +10,7 @@ import path from 'node:path'
 import { KNOWN_KINDS, OFF_VERSION, FILE_ENTRY_KINDS, undoByHand, parseManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
-import { TASK_NAME, RUN_KEY } from '../../src/off/win32.mjs'
+import { TASK_NAME, RUN_KEY, TASK_FILE, disableScheduledTask } from '../../src/off/win32.mjs'
 import { TASK_NAME as ARCH_TASK_NAME, RUN_KEY as ARCH_RUN_KEY } from '../../src/collector/arch/win32/autostart.mjs'
 import { newManifest, applyJsonKey, applyTextEntry, saveManifest as saveCoreManifest } from '../../src/collector/core/trust/journal.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -35,13 +35,14 @@ function reg({ value = 'ours', breakOn = null } = {}) {
   return { run, calls, handles: ['reg'] }
 }
 /** schtasks: the task starts as `state` ('present' | 'absent' | 'unknown'); every call recorded. */
-function schtasks({ state = 'present', fail = [] } = {}) {
+function schtasks({ state = 'present', fail = [], xml = '' } = {}) {
   const calls = []
   const run = (file, args) => {
     const cmd = [file, ...args].join(' ')
     calls.push(cmd)
     if (file !== 'schtasks') return { status: 1, stdout: '', stderr: `not schtasks: ${file}` }
     if (fail.some((f) => cmd.includes(f))) return { status: null, stdout: '', stderr: 'did not run' }
+    if (args[0] === '/Query' && args.includes('/XML')) return { status: 0, stdout: xml, stderr: '' }
     if (args[0] === '/Query') return state === 'unknown' ? { status: 5, stdout: '', stderr: 'ERROR: The service is not responding.' } : { status: state === 'present' ? 0 : 1, stdout: '', stderr: '' }
     return { status: 0, stdout: '', stderr: '' } // /Change /Delete
   }
@@ -68,8 +69,10 @@ test('a run-key entry: ours is deleted, ours over a prior restores it, a value t
   assert.ok(r.m.entries.length === 0, 'the entry leaves the manifest')
   const prior = { kind: 'REG_SZ', value: 'C:\\my\\own.exe at login' }
   const rg = reg()
+  const removedChange = r.out.results[0].change
   r = await run(entry(prior), [rg])
   assert.equal(r.out.results[0].result, 'restored', 'ours over a prior: the prior is put back')
+  assert.ok(r.out.results[0].change && r.out.results[0].change !== removedChange && r.out.results[0].gone === false, 'the row says the value was set back, not taken out')
   assert.ok(rg.calls.some((c) => c.startsWith('reg add') && c.includes(prior.value) && c.includes('/t REG_SZ')), 'with its kind')
   r = await run(entry(), [reg({ value: 'theirs:C:\\my\\own.exe at login' })])
   assert.equal(r.out.results[0].result, 'left-user-value', 'a value the user set: left as is')
@@ -88,14 +91,37 @@ test('a scheduled-task entry: off disables the task, uninstall deletes it, an ab
     const m = { version: 3, entries: [entry], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
     return { out: await undoHarnesses({ dir, home: dir, manifest: m, ids: null, procs: async () => [], now: new Date(), dropCa, fs, exec: execOf(...tools), env: {} }), m }
   }
-  const st = schtasks()
+  // the task file install wrote; schtasks prints it back as UTF-16LE, which the exec decodes as UTF-8
+  const task = (cmd, args) => `<?xml version="1.0"?><Task><Actions Context="Author"><Exec><Command>${cmd}</Command><Arguments>${args}</Arguments></Exec></Actions></Task>`
+  const ours = task('conhost.exe', '--headless "C:\\Users\\张三\\node.exe" "C:\\Users\\张三\\trocar.mjs" daemon --supervise')
+  const printed = (x) => Buffer.from(x, 'utf16le').toString('utf8')
+  fs.writeFileSync(path.join(dir, TASK_FILE), ours)
+  const st = schtasks({ xml: printed(ours) })
   let r = await run(false, [st, reg()])
   assert.deepEqual(r.out.results.map((x) => x.result), ['restored'])
-  assert.deepEqual(st.calls.filter((c) => c.startsWith('schtasks')), ['schtasks /Query /TN \\trocar\\collector', 'schtasks /Change /TN \\trocar\\collector /DISABLE'], 'an off disables; the Run value goes with it')
+  assert.ok(st.calls.includes('schtasks /Change /TN \\trocar\\collector /DISABLE'), 'an off disables trocar\'s task; the Run value goes with it')
   assert.equal(r.m.entries.length, 0)
-  const del = schtasks()
+  // a task under trocar's name that is not the one install wrote: off leaves it as it is and says so, naming its program only
+  for (const xml of [task('C:\\evil.exe', '/secret-arg'), ours.replace('</Exec>', '</Exec><Exec><Command>calc.exe</Command></Exec>')]) {
+    const other = schtasks({ xml: printed(xml) })
+    r = await run(false, [other, reg()])
+    assert.ok(!other.calls.some((c) => c.includes('/DISABLE')), 'a task that is not trocar\'s is not switched off')
+    assert.equal(r.out.results[0].result, 'left-user-value')
+    assert.ok(!JSON.stringify(r.out).includes('secret-arg'), 'its arguments are never said')
+  }
+  fs.rmSync(path.join(dir, TASK_FILE))
+  const none = schtasks({ xml: printed(ours) })
+  r = await run(false, [none, reg()])
+  assert.ok(!none.calls.some((c) => c.includes('/DISABLE')), 'no task file: no record of trocar\'s task, so it is not switched off')
+  fs.writeFileSync(path.join(dir, TASK_FILE), ours)
+  const del = schtasks({ xml: printed(ours) })
   r = await run(true, [del, reg()])
-  assert.deepEqual(del.calls.filter((c) => c.startsWith('schtasks')), ['schtasks /Query /TN \\trocar\\collector', 'schtasks /Delete /TN \\trocar\\collector /F'], 'an uninstall deletes')
+  assert.ok(del.calls.includes('schtasks /Delete /TN \\trocar\\collector /F'), 'an uninstall deletes trocar\'s task')
+  const kept = schtasks({ xml: printed(task('C:\\evil.exe', '/secret-arg')) })
+  r = await run(true, [kept, reg()])
+  assert.ok(!kept.calls.some((c) => c.includes('/Delete')), 'nor a task that is not trocar\'s')
+  assert.ok(!JSON.stringify(r.out).includes('secret-arg'))
+  fs.rmSync(path.join(dir, TASK_FILE))
   r = await run(false, [schtasks({ state: 'absent' }), reg({ value: 'gone' })])
   assert.equal(r.out.results[0].result, 'already-restored', 'neither the task nor the Run value is there')
   r = await run(false, [schtasks({ state: 'unknown' }), reg()])
@@ -159,7 +185,9 @@ test('the round trip: an off over a manifest of every collector kind returns eac
     { phase: 'on', kind: 'forwarder-binary', harness: 'claude-code', path: exe, sha256: 'x', installed_at: '2026-10-09T00:00:00Z' },
   )
   saveCoreManifest(dir, m)
-  const rg = reg(), st = schtasks()
+  const taskXml = '<Task><Actions><Exec><Command>conhost.exe</Command><Arguments>daemon --supervise</Arguments></Exec></Actions></Task>'
+  fs.writeFileSync(path.join(dir, TASK_FILE), taskXml) // the task file install wrote: the task registered is trocar's
+  const rg = reg(), st = schtasks({ xml: taskXml })
   const { receipt, exit } = await runOff({ home, env: { TROCAR_TEST_SANDBOX: '1' }, ids: null, yes: true, deps: {
     platform: 'win32',
     exec: execOf(rg, st),
@@ -172,6 +200,9 @@ test('the round trip: an off over a manifest of every collector kind returns eac
   assert.deepEqual(fs.readFileSync(envFile), preEnv, 'the trust entry: byte for byte back')
   assert.ok(rg.calls.some((c) => c.startsWith('reg delete')), 'the Run value taken out')
   assert.ok(st.calls.some((c) => c.includes('/Change') && c.includes('/DISABLE')), 'the task disabled')
+  // a registry value and a task are no files: a value taken out is listed as removed, a task switched off as changed, each saying what happened
+  assert.ok(receipt.removed.includes(`${RUN_KEY.hive}\\${RUN_KEY.key}\\${RUN_KEY.name}`), JSON.stringify(receipt.removed))
+  assert.ok(receipt.changed.some((c) => c.path === TASK_NAME && c.change && !/lines/.test(c.change)), JSON.stringify(receipt.changed))
   assert.ok(fs.existsSync(exe), 'the kernel copy kept while it drains')
   const after = parseManifest(fs.readFileSync(path.join(dir, 'install-manifest.json'), 'utf8'))
   assert.deepEqual(after.entries.map((e) => e.kind), ['forwarder-binary'], 'only the draining kernel copy is left in the ledger')
@@ -184,3 +215,19 @@ test('the names the undo touches are the arch module\'s own (the inlined pieces 
 })
 
 const sha256of = (buf) => createHash('sha256').update(buf).digest('hex')
+
+test('uninstall and a task under trocar\'s name: with no task file (no record), it is trocar\'s only when its action is the one this copy would write', () => {
+  const dir = tmpDir('trocar-w32-uninst-')
+  const task = (args) => `<Task><Actions Context="Author"><Exec><Command>conhost.exe</Command><Arguments>${args}</Arguments></Exec></Actions></Task>`
+  const ours = task('--headless "C:\\Users\\Zoë\\.trocar\\bin\\trocar.cmd" daemon --supervise')
+  const printed = (x) => Buffer.from(x, 'utf16le').toString('utf8')
+  const go = (registered, written) => {
+    const st = schtasks({ xml: printed(registered) })
+    if (written) fs.writeFileSync(path.join(dir, TASK_FILE), written); else fs.rmSync(path.join(dir, TASK_FILE), { force: true })
+    const t = disableScheduledTask({ uninstall: true, run: execOf(st), env: {}, file: path.join(dir, TASK_FILE), ours, fs })
+    return [t.task, st.calls.some((c) => c.includes('/Delete')), JSON.stringify(t).includes('secret')]
+  }
+  assert.deepEqual(go(ours, null), ['deleted', true, false], 'no file, this copy\'s daemon: trocar\'s, deleted')
+  assert.deepEqual(go(task('--headless "C:\\elsewhere\\trocar.cmd" daemon --supervise --secret'), null), ['not-trocars', false, false], 'no file, another program: left')
+  assert.deepEqual(go(ours, task('other --secret')), ['not-trocars', false, false], 'the file decides when there is one')
+})

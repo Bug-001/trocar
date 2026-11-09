@@ -13,7 +13,9 @@
 // seal(), or, failing that, when the line file is collected.
 //   A SIDECAR (4.3 §4 旁索引) beside it, `<name>.idx`, holds what a scan of the first `bytes` would have put in the heap: the
 // header line `{v: SIDECAR_V, …head, bytes, parts: [[name, type, byteLength]]}`, then each part's bytes. Never a second source: a
-// sidecar that does not load is a scan. The lines created anew or cut drop their sidecar before the next write.
+// sidecar that does not load is a scan. The lines created anew or cut drop their sidecar before the next write; a writer drops the one
+// whose index named no whole line at once (fault), or the next open would load it and read the same line; a reader writes nothing, so
+// only its own process leaves that sidecar unread from then on.
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -173,6 +175,7 @@ function readAt(fs, fd, pos, n) {
 }
 
 const told = new Set(); // the files whose index named no whole line, said once (fault)
+const unindexed = new Set(); // the files whose index named no whole line to a reader that may not remove it (fault): this process scans them
 /** lineFile({fs, base, write, onFail}) → {append(text) → the offset of its first byte, read(off, len) → Buffer, json(off, len) → the whole line there parsed (else
  *  throws fault(off, len): ELINEPART), scan(from), bytes,
  *  settled, unreadable, cut(len), remove(), seal({partBytes}), touch(), loadSidecar(), saveSidecar({head, parts}), close()}.
@@ -313,6 +316,8 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     throw fault(off, len);
   }
   function fault(off, len) {
+    if (!write) unindexed.add(base);
+    else { covers = Infinity; try { fs.rmSync(sidecarOf(side), { force: true }); } catch { /* the next open reads it, and this says it again */ } }
     return said(Object.assign(new Error(`${name}: no whole line at byte ${off} (${len} B): the file is not the generation its index was built from`), { code: 'ELINEPART' }));
   }
   // an ELINEPART (a part that does not decode, a line that is not there, a tail that is not this handle's), said on stderr the first
@@ -411,7 +416,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   const self = {
     append, read, json, fault, scan, cut, remove, seal, close,
     touch() { if (write && end) try { const t = new Date(); fs.utimesSync(tailOf(T), t, t); } catch { /* the GC order only */ } },
-    loadSidecar() { const r = loadSidecar({ fs, file: side, endsLine: (n) => n <= end && read(n - 1, 1)[0] === 10 }); covers = r ? r.head.bytes : Infinity; return r; },
+    loadSidecar() { const r = unindexed.has(base) ? null : loadSidecar({ fs, file: side, endsLine: (n) => n <= end && read(n - 1, 1)[0] === 10 }); covers = r ? r.head.bytes : Infinity; return r; },
     saveSidecar({ head, parts: ps2 }) { mine(); covers = Infinity; saveSidecar({ fs, file: side, head, parts: ps2 }); covers = head.bytes; },
     get bytes() { return end + arena; }, get settled() { return write && !arena && !trunc; }, get unreadable() { return unreadable; },
   };

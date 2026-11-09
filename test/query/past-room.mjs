@@ -52,9 +52,9 @@ for await (const _ of (await import('node:readline')).createInterface({ input: p
 /** readerBudget(heapMb) → the heap budget of a reader of readerFlags(heapMb). */
 export const readerBudget = (heapMb) => Number(execFileSync(process.execPath, [...readerFlags(heapMb), '--input-type=module', '-e', BUDGET], { encoding: 'utf8' }))
 // a process of its own, with a large heap: the steady caches it reckons the room with hold this home's index rows only
-const growArgs = ({ home, shape, heapMb }) => ['--require', NO_REAL_OS, ...heapFlags(2048), '--input-type=module', '-e', GROW, home, JSON.stringify(shape), String(readerBudget(heapMb))]
-/** pastRoom({home, shape, heapMb}) → the id of a bigSession of `shape` in `home`, grown past the room of a reader of
- *  readerFlags(heapMb) (growPast). */
+const growArgs = ({ home, shape, heapMb, share = 1 }) => ['--require', NO_REAL_OS, ...heapFlags(2048), '--input-type=module', '-e', GROW, home, JSON.stringify(shape), String(readerBudget(heapMb) * share)]
+/** pastRoom({home, shape, heapMb, share}) → the id of a bigSession of `shape` in `home`, grown past the room of a reader of
+ *  readerFlags(heapMb) (growPast), or past that share of it. */
 export const pastRoom = (o) => JSON.parse(execFileSync(process.execPath, growArgs(o), { encoding: 'utf8', input: '', maxBuffer: 1 << 20 })).id
 /** grower(o) → {id, more(), stop()}: pastRoom's session, in a process kept to grow it one call at a time (`more()`), each wait on it
  *  lasting while it makes progress (test/helpers/ticking.mjs). `stop()` waits until it is gone. */

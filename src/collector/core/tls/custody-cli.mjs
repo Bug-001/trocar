@@ -12,20 +12,25 @@ import { execTool } from '../../../off/exec.mjs'
 const EXIT_UNAVAILABLE = 3
 /** The error word both programs answer `issue` with when the root key is not there (exit 4): a throw with this code, which the issuer reads as cert-key-missing. */
 export const NO_KEY = 'no-key'
+export const UNAVAILABLE = 'unavailable' // the custody's answer when this session cannot use the key (4.11 P1): a value, or canCreate's error code
 
 /** cliCustody({ kind, file, prefix, name, run, env, timeoutMs }) → { kind, create, exists, issueIntermediate, remove }. `file` +
  *  `prefix` is what runs before the verb (the helper itself, or powershell.exe and its -File script); `name` is what errors call it;
  *  `run` is execTool's injected runner. */
-export function cliCustody({ kind, file, prefix = [], name = file, run = null, env = process.env, timeoutMs = 120000 }) {
-  const call = (args) => {
-    const r = execTool(file, [...prefix, ...args], { run, env, timeoutMs })
-    let o = null
-    try { o = JSON.parse(r.out) } catch { /* said below */ }
-    if (r.code === EXIT_UNAVAILABLE || (o && o.error === 'unavailable')) return 'unavailable'
-    if (r.code === 0 && o && !o.error) return o
-    const why = o && o.error ? `${o.error}${o.message ? `: ${o.message}` : ''}` : (r.err || r.out || '').slice(0, 200)
-    throw Object.assign(new Error(`${name} ${args[0]} failed (exit ${r.code ?? 'none'}): ${why}`), { code: (o && o.error) || 'helper-failed' })
-  }
+/** cliCall({ file, prefix, name, run, env, timeoutMs }) → (args) → the program's JSON | 'unavailable', or a throw (err.code = its error word).
+ *  The one run of the program every verb goes through, a backend's own verbs included. */
+export const cliCall = ({ file, prefix = [], name = file, run = null, env = process.env, timeoutMs = 120000 }) => (args) => {
+  const r = execTool(file, [...prefix, ...args], { run, env, timeoutMs })
+  let o = null
+  try { o = JSON.parse(r.out) } catch { /* said below */ }
+  if (r.code === EXIT_UNAVAILABLE || (o && o.error === 'unavailable')) return 'unavailable'
+  if (r.code === 0 && o && !o.error) return o
+  const why = o && o.error ? `${o.error}${o.message ? `: ${o.message}` : ''}` : (r.err || r.out || '').slice(0, 200)
+  throw Object.assign(new Error(`${name} ${args[0]} failed (exit ${r.code ?? 'none'}): ${why}`), { code: (o && o.error) || 'helper-failed' })
+}
+
+export function cliCustody({ kind, ...program }) {
+  const call = cliCall(program)
   return {
     kind,
     create({ subject }) {

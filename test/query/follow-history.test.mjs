@@ -14,7 +14,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { drain, within } from '../helpers/bounded.mjs'
 import { bigSession } from './big-session.mjs'
 import '../../src/query/named/index.mjs'
 import { extendSession } from '../../src/query/named/session.mjs'
@@ -33,10 +33,11 @@ const H = 90, Q = SHAPE.subEvery * Math.ceil((2 * PACK_MEMBERS - H + 6) / SHAPE.
 const DRIVER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const { openProjection } = await import(${at('../../src/query/projection.mjs')})
 const { openFoldLog } = await import(${at('../../src/query/fold-log.mjs')})
 const [home, id, partBytes, frameBytes] = [process.argv[1], process.argv[2], Number(process.argv[3]), Number(process.argv[4])]
-while (await extendSession({ home, writer: true }, id, 1e9));
+await drain(() => extendSession({ home, writer: true }, id, 1e9))
 saveIndexes()
 if (partBytes) {
   const p = openProjection({ home, key: id }), log = openFoldLog({ home, key: id, projection: { id: p.id, bytes: p.bytes } })
@@ -83,12 +84,12 @@ async function followed(quiet) {
   // the worker opens the session again and follows its first call (its first slice renders its files: the cold path), then the rest
   const ctx = { home, fs: own, writer: true }
   s.append(1)
-  while (await extendSession(ctx, s.id, Infinity));
+  await drain(() => extendSession(ctx, s.id, Infinity))
   const reads = []
   for (let i = 1; i < F; i++) {
     s.append(1)
     bytes = 0; counting = true
-    try { while (await extendSession(ctx, s.id, Infinity)); } finally { counting = false }
+    try { await drain(() => extendSession(ctx, s.id, Infinity)) } finally { counting = false }
     reads.push(bytes)
   }
   return { reads, frame, home, id: s.id }

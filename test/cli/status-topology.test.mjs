@@ -130,7 +130,7 @@ test('V42: one hop that cannot be read changes no exit code and no verdict — i
   fs.writeFileSync(file, JSON.stringify({ ...doc, env: { ...doc.env, HTTPS_PROXY: 'http://127.0.0.1:7891' } }, null, 2))
   const nobody = (f, args, o) => (f === 'ss' ? { status: 0, stdout: 'LISTEN 0 4096 127.0.0.1:7891 0.0.0.0:*', stderr: '' } : s.sys.exec.run(f, args, o))
   const r = await status(s, ['claude-code'], { exec: nobody })
-  assert.match(r.text, /^ {4}new processes$\n^ {6}claude-code -> trocar :47123 -> 127\.0\.0\.1:7891 \(unknown: owner not known\) -> internet$/m, r.text)
+  assert.match(r.text, /^ {4}new processes$\n^ {6}claude-code -> trocar :47123 -> :7891 \(unknown: owner not known\) -> internet$/m, r.text)
   assert.equal(r.exit, before.exit, 'a hop that cannot be read is not a verdict that cannot be given: only `captured` null exits 3 (1.6 §2)')
   const j = (await status(s, ['--json'], { exec: nobody })).json()
   assert.deepEqual([j.topology['claude-code'].captured, j.topology['claude-code'].on_path], [true, true])

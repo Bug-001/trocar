@@ -1,4 +1,4 @@
-// trocar install-folder wrapper (spec 4.11 P8; lab W3). Compiled by `trocar install` with the
+// trocar install-folder wrapper (spec 4.11 P8). Compiled by `trocar install` with the
 // inbox .NET Framework csc.exe and written where the agent's program was; the program itself was moved to .trocar-real\ beside it under the
 // same name. Without the switch file: the certificate variable is set only when it is unset, and the real program runs with the same command
 // line (the tail after argv[0], verbatim: no re-quoting can change an argument), the inherited std handles, and its exit code is ours.

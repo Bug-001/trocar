@@ -6,17 +6,20 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
-import { routeEntry, mergeNoProxy } from '../../../../src/collector/core/proxymode/entries.mjs'
+import { routeEntry, mergeNoProxy, pacPath } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { encodeText, decodeBytes } from '../../../helpers/file-shapes.mjs'
 import { world, put, bytesOf } from './fixtures/entries-ctx.mjs'
+import { applyJsonKey } from '../../../../src/collector/core/trust/journal.mjs'
 
 const harnesses = await loadHarnesses()
 const withSelect = harnesses.flatMap((h) => Object.entries(h.proxyMode.routes).filter(([, r]) => r.select).map(([id, r]) => ({ h, id, r })))
 const withArray = harnesses.flatMap((h) => Object.entries(h.proxyMode.routes).filter(([, r]) => r.arrayItems).map(([id, r]) => ({ h, id, r })))
 const DOOR = 'http://127.0.0.1:18002' // a PAC door takes no credentials
-const PAC = `${DOOR}/trocar.pac`
+const KEY = 'ab'.repeat(16)
+const PAC = `${DOOR}${pacPath(KEY)}` // the PAC address carries the install's key (P10)
 const SHAPES = [['utf8', false, '\n'], ['utf8', true, '\r\n'], ['utf16le', true, '\n']]
 const json = (o, eol) => JSON.stringify(o, null, 2).replace(/\n/g, eol) + eol
 const read = (f) => JSON.parse(decodeBytes(fs.readFileSync(f)).text)
@@ -24,7 +27,7 @@ const read = (f) => JSON.parse(decodeBytes(fs.readFileSync(f)).text)
 function lib(os, { meta = undefined, entries = {}, shape = SHAPES[0], ...opts } = {}) {
   const w = world({ os, ...opts })
   const { h, id, r } = withSelect[0]
-  const ctx = { ...w.ctx, harness: h.name, route: r, routeId: id }
+  const ctx = { ...w.ctx, harness: h.name, route: r, routeId: id, pacToken: KEY }
   const dir = resolveLoc(r.select.dir, ctx)[0]
   const enc = (o) => encodeText(json(o, shape[2]), shape[0], shape[1])
   if (meta !== undefined) put(path.join(dir, r.select.meta), enc(meta))
@@ -110,6 +113,20 @@ test('ruling ③ — the user\'s own egress in the applied entry, a system PAC, 
   }
 })
 
+test('P5 · ruling ③ — a door value of trocar\'s in the applied entry (its manifest lost) is not the user\'s egress: on writes, off leaves no door; the user\'s loopback on another port still is', () => {
+  for (const own of ['egressProxyUrl', 'egressProxyPacUrl']) for (const [v, isDoor] of [['http://127.0.0.1:18004/trocar.pac', true], ['http://127.0.0.1:18004', true], ['http://127.0.0.1:7890', false]]) {
+    const L = lib('darwin', { meta: { appliedId: 'u1' }, entries: { u1: { [own]: v, inferenceProvider: 'gateway' } } })
+    put(path.join(L.w.dir, 'ingress.json'), JSON.stringify({ groupPorts: { 'claude-code:a': 18001, 'claude-code:b': 18002, 'claude-code:c': 18004 } }))
+    const res = routeEntry('json-key').write(L.ctx, DOOR)
+    const label = `${own}=${v}`
+    if (!isDoor) { assert.deepEqual([res.code, res.reason], ['not-routed', 'own-egress'], label); continue }
+    assert.equal(res.ok, true, label)
+    assert.ok(!JSON.stringify(res.records.map((x) => x.prior_value)).includes(':18004'), `${label}: the door is not the prior`)
+    routeEntry('json-key').undo(L.ctx, res.records)
+    assert.deepEqual(read(path.join(L.dir, 'u1.json')), { inferenceProvider: 'gateway' }, `${label}: off leaves no door`)
+  }
+})
+
 const KIMI = withArray[0]
 for (const [why, start, expectRecord] of [['the array absent', { 'http.proxy': 'http://mine:1' }, true], ['the array present', { 'settingsSync.ignoredSettings': ['editor.fontSize'] }, true], ['the array already holding the item', { 'settingsSync.ignoredSettings': ['http.proxy'] }, false], ['no file', null, true]]) {
   test(`arrayItems — ${why}: the element is added once (recorded as json-array-item${expectRecord ? '' : ': here nothing to add'}); off restores the bytes`, () => {
@@ -143,3 +160,61 @@ test('P6 mergeNoProxy: loopback first, then the user\'s values (both spellings),
   assert.equal(mergeNoProxy({ userValues: ['*.corp, LOCALHOST', undefined, '.corp.example,*.CORP'], persistent: { NO_PROXY: '.internal,::1' } }), 'localhost,127.0.0.1,::1,*.corp,.corp.example,.internal')
   assert.equal(mergeNoProxy({ userValues: [], persistent: ['10.0.0.0/8'] }), 'localhost,127.0.0.1,::1,10.0.0.0/8')
 })
+
+// a record's tag, held clear or as its fingerprint
+const tagOf = (r) => r.door_sha256 ?? sha256(r.door)
+const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex')
+
+// P10 · invariant 5: a PAC address trocar wrote before (an earlier key, or the address an earlier version wrote, with no key) is trocar's own stale
+// value, not the user's egress: on writes the current address over it. An address of the user's own still stops it (own-egress)
+for (const os of ['darwin', 'win32']) test(`P10 ${os} — on over trocar's own earlier PAC address (another key, or none) writes the keyed one; over the user's own it stops`, () => {
+  const L = lib(os, { meta: { appliedId: 'u1', entries: [{ id: 'u1', name: 'mine' }] }, entries: { u1: { inferenceProvider: 'gateway' } } })
+  const f = path.join(L.dir, 'u1.json')
+  assert.equal(routeEntry('json-key').write(L.ctx, DOOR).ok, true)
+  const KEY2 = 'cd'.repeat(16), PAC2 = `${DOOR}${pacPath(KEY2)}`
+  const again = routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR)
+  assert.equal(again.ok, true, `a new key over trocar's recorded address: ${JSON.stringify(again)}`)
+  assert.equal(read(f)[L.key], PAC2)
+  assert.ok(L.w.ctx.manifest.entries.some((e) => tagOf(e) === sha256(PAC2)), 'the record names the address it wrote, so the next key change is seen')
+  routeEntry('json-key').undo(L.ctx, L.w.ctx.manifest.entries.filter((e) => e.harness === L.ctx.harness))
+  assert.equal(read(f)[L.key], undefined)
+  // the record an earlier version wrote: the address with no key in it, tagged with the door (what its on wrote). Its tag is not the address on
+  // writes now: undone (the entry still holds that value), and the keyed address written
+  const old = applyJsonKey({ dir: L.w.ctx.dir, manifest: L.w.ctx.manifest, harness: L.ctx.harness, phase: 'on', home: L.w.ctx.home, fs, file: f, keys: L.r.proxyKeys[0], value: `${DOOR}/trocar.pac` })
+  Object.assign(old, { route: L.ctx.routeId, door: DOOR })
+  assert.equal(routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR).ok, true)
+  assert.equal(read(f)[L.key], PAC2)
+  assert.deepEqual(L.w.ctx.manifest.entries.filter((e) => e.harness === L.ctx.harness).map(tagOf), [sha256(PAC2)], 'one record, naming the keyed address')
+  // a value put there by hand, whatever it looks like (an address of trocar's door, or another): it differs from what the record says was written, so it
+  // is the user's change — kept and refused with that reason, never taken for the user's egress
+  for (const hand of [`${DOOR}/trocar.pac`, 'http://proxy.corp.example/proxy.pac']) {
+    fs.writeFileSync(f, JSON.stringify({ ...read(f), [L.key]: hand }, null, 2) + '\n')
+    let refused = null
+    try { const r = routeEntry('json-key').write({ ...L.ctx, pacToken: KEY2 }, DOOR); refused = r.ok ? null : r } catch (e) { refused = e }
+    assert.ok(refused && !/own-egress/.test(JSON.stringify(refused.reason ?? refused.message)), `${hand}: kept, with the reason a changed value gets: ${refused && (refused.reason || refused.message)}`)
+    assert.equal(read(f)[L.key], hand, 'kept')
+  }
+  // the user's own PAC address in an entry trocar holds no record of: their egress, nothing written
+  const U = lib(os, { meta: { appliedId: 'u1', entries: [{ id: 'u1', name: 'mine' }] }, entries: { u1: { [L.key]: 'http://proxy.corp.example/proxy.pac' } } })
+  const r = routeEntry('json-key').write(U.ctx, DOOR)
+  assert.deepEqual([r.code, r.reason], ['not-routed', 'own-egress'])
+  assert.deepEqual(U.snap(), U.before)
+})
+
+// invariant 5 · the ruling: a record whose tag is not the address on writes now is trocar's stale value only while the entry still holds what it wrote.
+// A value the user put there after trocar did is kept and refused with that reason, whether trocar created the entry or found it applied — never
+// undone with the rest, never answered with a new entry made applied over it, never called the user's egress
+for (const os of ['darwin', 'win32']) for (const [kind, meta, entries] of [['an entry trocar created', undefined, {}], ['an applied entry', { appliedId: 'u1', entries: [{ id: 'u1', name: 'mine' }] }, { u1: { inferenceProvider: 'gateway' } }]]) {
+  test(`P10 ${os} — ${kind}, its value changed by hand, then a new key: kept, refused as the user's change, nothing else moved`, () => {
+    const L = lib(os, { meta, entries })
+    assert.equal(routeEntry('json-key').write(L.ctx, DOOR).ok, true)
+    const rec = L.w.ctx.manifest.entries.find((e) => e.harness === L.ctx.harness && e.keys.join('.') === L.key)
+    const f = rec.path, hand = 'http://proxy.corp.example/proxy.pac'
+    fs.writeFileSync(f, JSON.stringify({ ...read(f), [L.key]: hand }, null, 2) + '\n')
+    const before = L.snap()
+    let refused = null
+    try { const r = routeEntry('json-key').write({ ...L.ctx, pacToken: 'cd'.repeat(16) }, DOOR); refused = r.ok ? null : r } catch (e) { refused = e }
+    assert.ok(refused && !/own-egress/.test(JSON.stringify(refused.reason ?? refused.message)), `refused as the user's change: ${refused && (refused.reason || refused.message)}`)
+    assert.deepEqual(L.snap(), before, 'the entry, _meta.json and the directory as they were: no entry made applied over the user\'s')
+  })
+}

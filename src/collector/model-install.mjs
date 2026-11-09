@@ -10,32 +10,35 @@ import tls from 'node:tls'
 import { collectorHome } from '../paths.mjs'
 import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
-import { rootIdOf } from '../off/root-store.mjs'
-import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { rootIdOf, rootName, ROOT_SUBJECT, strayRoots } from '../off/root-store.mjs'
+import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeEntry, replaceable, retireEntry, inheritDirs, judgeOwned, sha256, notTrocars, samePath, markedWithoutRecord, MARKED_WITHOUT_RECORD } from './core/trust/journal.mjs'
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
-import { standaloneFiles } from '../off/paths.mjs'
-import { missingDirs, pathKey } from '../off/fsutil.mjs'
-import { resolveLoc, readSrc, holds, routedForms } from './core/proxymode/sources.mjs'
+import { standaloneFiles, switchFileIn } from '../off/paths.mjs'
+import { missingDirs, editTarget, writeDurable } from '../off/fsutil.mjs'
+import { resolveLoc, readSrc, holds, routedForms, fileOf, inTrocar } from './core/proxymode/sources.mjs'
 import { noProxyNames } from './core/proxymode/entries.mjs'
-import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
+import { placeWrapper, managedTree, targetOf } from './core/proxymode/hooks/wrapper.mjs'
 import { lineComment, removeTrocarText } from '../off/text-edit.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { unitedLiveness, daemonEnv } from './install.mjs'
 import { CODE, EVENT } from './core/codes.mjs'
 import { runEventWriter } from '../off/events.mjs'
+import { writeBackup } from '../off/backup.mjs'
 import { certBlocks, certsOf, composeBundle } from '../off/pem.mjs'
+import { errnoWords } from '../cli/words.mjs'
 
 /** The OSes the collector model (4.11) runs on — the one list `install`, `on`, `uninstall` and the arch backends ask. */
 export const MODEL_OS = Object.freeze(['darwin', 'win32'])
 export const isModelOs = (os) => MODEL_OS.includes(os)
 
-const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // the store the user root goes into (src/off/root-store.mjs removes it on uninstall)
-export const ROOT_SUBJECT = 'trocar local root' // the subject a reset uses to recognise trocar's own certificate
+export const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // the store the user root goes into (src/off/root-store.mjs removes it on uninstall)
 const NOT_USERS = CODE.notUsersFile
 const errText = (e) => String((e && e.message) || e)
+// a write that failed: a file error (Node's, with a syscall) is its file in 1.6 A.1's words, its errno left to the item's `code`; any other error its own text
+const writeErrText = (e) => (e && e.syscall ? `${e.path ? `${e.path}: ` : ''}${errnoWords(e, 'write')}` : errText(e))
 // The key custody is a native program (4.11 P1): 'unavailable' is a VALUE, but it can also FAIL outright — a HOME with no login keychain answers
 // "A default keychain could not be found" (a macOS test machine 2026-10-18, where install exited 70 with a stack at the person). A failure is a stated
 // refusal: `install` says what happened and what to do, carries `error.code` and exits 1.
@@ -44,8 +47,38 @@ const CUSTODY_ADVICE = Object.freeze({
   darwin: 'trocar needs the login keychain of this user: log in to this Mac at its own desktop once (that is where the keychain is made), then run trocar install again there',
   win32: 'run trocar install again from a terminal of your own desktop session',
 })
+/** A custody verb that threw, as the refusal install carries in `pending` (its `code` becomes the receipt's `error.code`). */
+// the log-in advice answers the keychain's own failure (the helper's error word 'failed', with its OSStatus) and a session that cannot make a key ('unavailable'); a helper that did not run at all is another matter
+// 'unavailable': the keychain is there but this session cannot use it (an ssh login has no access to the desktop's, even while the user is logged in there; or it is locked)
+const ADVICE_SESSION = 'Run trocar install from a Terminal in your desktop session: an ssh login cannot use the login keychain, even while you are logged in at the desktop'
+const ADVICE_HELPER = 'trocar\'s own signing helper could not be run, so this copy of trocar is incomplete: install trocar again, then run trocar install'
+const custodyFailed = (os, verb, e) => ({ item: 'root-key', state: 'failed', code: CUSTODY_FAILED,
+  reason: `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${os !== 'darwin' ? CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32 : e && e.code === 'unavailable' ? ADVICE_SESSION : e && e.code === 'failed' ? CUSTODY_ADVICE.darwin : ADVICE_HELPER}` })
+/** Asked before install prints its plan, takes its lock or writes anything: does the custody answer at all? → `{}` or `{ refusal }` (the pending item):
+ *  a custody that cannot be used leaves the HOME as it was. Only a gate: runInstall asks exists() again under the lock, where another install may have made the key since. */
+export async function custodyPreflight({ os, custody }) {
+  let has
+  try { has = await custody.exists() } catch (e) { return { refusal: custodyFailed(os, 'exists', e) } }
+  // a missing key is looked up without a GUI, but made only with one (4.11 P1): ask whether this session can make it
+  if (!has && typeof custody.canCreate === 'function') try { await custody.canCreate() } catch (e) { return { refusal: custodyFailed(os, 'create', e) } }
+  return {}
+}
 // an OS prompt that was not answered (timeout, no GUI session) is pending; one the user answered no is declined (1.6 §1.6)
 const promptState = (r) => r.state || (/time[d ]?out|no gui|interaction|session|unavailable/i.test(String(r.reason || '')) ? 'pending' : 'declined')
+
+export const STRAY_ROOT = 'stray-root'
+const UNREADABLE = 'unreadable' // 1.6 附录 C.1: both are ERROR_CODES (src/cli/json.mjs), refusals before any write, not D38 records
+/** 4.11 §3 ㉔: one trocar root per user. The trocar roots the user's store holds (P3 `list`, by subject) that manifest `m` does not list → null
+ *  (none), or the refusal { code, reason }: `stray-root`, naming each by its fingerprint; `unreadable` when the store cannot be listed (never
+ *  read as none, D38). Asked before install writes anything, and by its plan. */
+export async function strayRootRefusal({ m, rootStore }) {
+  const r = await strayRoots(rootStore, m)
+  if (r.error) return { code: UNREADABLE, reason: `your user trust store could not be read (${r.error}), so whether it already holds a trocar root is not known; nothing was changed. Run trocar install again once it can be read` }
+  const stray = r.roots
+  if (!stray.length) return null
+  const names = stray.map(rootName).join(', ')
+  return { code: STRAY_ROOT, reason: `your user trust store already holds a trocar root that trocar's install record does not list (${names}), and trocar never trusts a second one beside it; nothing was changed. Run trocar uninstall first (it removes every trocar root), then trocar install` }
+}
 
 /** Rule U (P4): may trocar append its block to `file`? → null (yes) or the reason it is not this user's own file. */
 function usersFileWhy(file, { fs = nodeFs, owns }) {
@@ -54,7 +87,7 @@ function usersFileWhy(file, { fs = nodeFs, owns }) {
   try { real = fs.realpathSync(file) } catch { return `${file} does not exist` }
   const tree = managedTree(real)
   if (tree) return `${real} is inside ${tree}, which a package manager or the system rewrites`
-  try { if (!fs.statSync(real).isFile()) return `${real} is not a file` } catch (e) { return `${real} cannot be read (${e.code || e.message})` }
+  try { if (!fs.statSync(real).isFile()) return `${real} is not a file` } catch (e) { return `${real}: ${errnoWords(e)}` }
   const o = owns(real)
   if (o !== true) return o === false ? `${real} belongs to another user` : `who owns ${real} cannot be told`
   try { fs.accessSync(real, nodeFs.constants.W_OK) } catch { return `${real} is read-only for this user` }
@@ -66,6 +99,9 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const dir = collectorHome(path.join(home, '.trocar'))
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
+  const stray = await strayRootRefusal({ os, m, rootStore }) // ㉔: before the first write
+  if (stray) return { refusal: stray, manifest: null, fp256: null, items: [], carriers: [], pending: [], problems: [stray.reason], notes: [], exit: 1 }
+  if (!m.install) m.created_at = now().toISOString() // a manifest an unclean uninstall kept (install: null): this install starts now (1.6 C.3 failures.since)
   const before = JSON.stringify(m)
   const items = [], carriers = [], pending = [], problems = [], notes = [], installedHarnesses = [] // the last: read by finish(), which an install with no root reaches early
   // R5 / 附录 C.1: an item that is about no harness carries NO harness field (a `harness: null` is drift validateReceipt reports, a Windows test machine 2026-10-18)
@@ -74,7 +110,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); save() }
   const stdl = writeStandalone({ home, version: OFF_VERSION, platform: os, fs }) // the way back first (R3)
   for (const file of standaloneFiles(home, os)) said('trocar-off', stdl.files.includes(file) ? 'written' : 'intact', { path: file }) // trocar-off.cmd too on Windows
-  if (installHelper) { const h = installHelper(interactive); if (h && h.why && h.why !== 'same') problems.push(h.why) }
+  // a helper kept (no terminal, or the key's box not answered) still signs: a note, never a failure that stops an update before on
+  if (installHelper) { const h = installHelper(interactive); if (h && h.why && h.why !== 'same') (h.kept ? notes : problems).push(h.why) }
 
   // a · the root's key (P1): created only when the custody has none; the root it returns must have the ROOT profile (T12)
   let rootDer = null
@@ -83,12 +120,13 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   let custodyWhy = null
   const ask = async (verb, arg) => {
     try { return await custody[verb](arg) } catch (e) {
-      custodyWhy = `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32}`
-      pending.push({ item: 'root-key', state: 'failed', code: CUSTODY_FAILED, reason: custodyWhy })
+      const p = custodyFailed(os, verb, e)
+      custodyWhy = p.reason
+      pending.push(p)
       return null
     }
   }
-  const has = await ask('exists')
+  const has = await ask('exists') // under the lock: another install may have made the key since the preflight asked
   if (custodyWhy) return finish()
   if (has === 'unavailable') { pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody is not reachable (macOS: no graphical login session); run trocar install again in a terminal of that session' }) }
   else if (rec && has === true && fs.existsSync(ca.pem)) { rootDer = pemToDer(fs.readFileSync(ca.pem, 'utf8')); said('root-key', 'intact', { fp256: rec.fp256 }) }
@@ -187,6 +225,9 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   if (unit) {
     const d = daemonEnv(env, dir)
     if (d.note) { notes.push(d.note); runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.installNote, where: 'install', kind: 'note', code: CODE.unitEnvNotCarried, reason: d.note }) }
+    // 4.11 P4: a registration under trocar's name the record does not list (one the unit file does not hold: a scheduled task) is backed up before it is replaced
+    const prior = !m.files.some((x) => samePath(x.path, unit.path, fs)) && typeof unit.registeredBytes === 'function' ? unit.registeredBytes() : null
+    if (prior) writeBackup({ home, file: unit.path, data: prior, now: now(), fs })
     owned(unit.path, 'unit', null, unit.text(d.env), 0o644)
   }
   const agentList = readAgentList({ home, fs }).entries
@@ -201,7 +242,12 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     // `code`: the code that ran install (1.6 §5.5: an npm copy's update finishes until it is this code). A Set up (only) is not an install: it keeps
     // the code the last install wrote, so an update after `npm i -g` still runs install and `on` on the new code (4.6 清单)
     const code = only ? (m.install && typeof m.install.code === 'string' ? m.install.code : null) : ran
-    const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed, ...(code ? { code } : {}) }
+    // 4.11 P4b: the carriers this run skipped for marked text no record lists — install again repeats the skip, so setup names it with uninstall as the fix.
+    // Rewritten for the harnesses whose carriers this run judged (a Set up judges one); a run that stopped before the carriers keeps every one
+    const kept = Object.fromEntries(Object.entries((m.install && m.install.skipped) || {}).filter(([h]) => !installedHarnesses.includes(h)))
+    const skips = Object.entries(Object.groupBy(carriers.filter((x) => x.code === MARKED_WITHOUT_RECORD), (x) => x.harness)).map(([h, xs]) => [h, xs.map((x) => ({ path: x.path ?? null, code: x.code }))])
+    const skippedRec = { ...kept, ...Object.fromEntries(skips) }
+    const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed, ...(Object.keys(skippedRec).length ? { skipped: skippedRec } : {}), ...(code ? { code } : {}) }
     if (JSON.stringify(next) !== JSON.stringify(m.install)) m.install = next
     if (JSON.stringify(m) !== before) save()
     const skipped = carriers.filter((x) => x.state === 'skipped').length + items.filter((x) => x.state === 'skipped').length
@@ -211,12 +257,21 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   function owned(file, role, harness, data, mode, { sources = null, extra = {} } = {}) {
     const j = judgeOwned({ manifest: m, file, planned: sha256(Buffer.from(data)), fs })
     if (j.action === 'skip-intact') return said(role, 'intact', { path: file, harness })
-    writeOwnedFile({ dir, manifest: m, harness, role, phase: 'install', file, data, mode, sources, extra, now: now(), fs })
+    writeOwnedFile({ dir, manifest: m, harness, role, phase: 'install', file, data, mode, sources, extra, home, now: now(), fs })
     said(role, 'written', { path: file, harness })
   }
 
+  // 4.11 P4b: install's own item that is gone or no longer holds trocar's text is placed again, the one way back (on writes none, D55①): its record
+  // leaves first and the new one owns what the old one created — the same sequence as Linux's install (src/collector/install.mjs), every OS alike
+  function placed(planned, write) {
+    const j = judgeEntry({ manifest: m, planned, fs })
+    const retired = replaceable(j) ? retireEntry({ dir, manifest: m, entry: j.entry, now: now(), fs }) : null
+    const e = write()
+    if (e && retired) inheritDirs({ dir, manifest: m, entry: e, from: retired, fs })
+    return e
+  }
   function jsonKey(desc, file, keys, value) {
-    const e = applyJsonKey({ dir, manifest: m, harness: desc.name, phase: 'install', file, keys, value, home, now: now(), fs })
+    const e = placed({ harness: desc.name, kind: 'json-key', path: file, keys }, () => applyJsonKey({ dir, manifest: m, harness: desc.name, phase: 'install', file, keys, value, home, now: now(), fs }))
     said('config-key', e ? 'written' : 'intact', { path: file, keys, harness: desc.name })
   }
 
@@ -241,7 +296,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       }
       if (c.kind === 'wrapper') {
         if (!wrapperKit) return { state: 'skipped', code: NOT_USERS, why: `this build has no wrapper for ${os}` }
-        const wctx = { ...ctx, fs, owns, facts, dir, manifest: m, harness: desc.name, switchFile: path.join(dir, 'switch', desc.name), caFile: ca.pem, proxyEnv: (desc.proxy && desc.proxy.env) || [], proxyNames: (desc.proxy && desc.proxy.env) || [], now }
+        const wctx = { ...ctx, fs, owns, facts, dir, manifest: m, harness: desc.name, switchFile: switchFileIn(dir, desc.name), caFile: ca.pem, proxyEnv: (desc.proxy && desc.proxy.env) || [], proxyNames: (desc.proxy && desc.proxy.env) || [], now }
         const r = placeWrapper(wctx, c, wrapperKit)
         return r.ok ? { state: r.result } : { state: 'skipped', code: r.code, why: r.why }
       }
@@ -249,17 +304,22 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         const pdir = resolveLoc(c.dir, ctx)[0], loader = c.loader ? resolveLoc(c.loader.file, ctx)[0] : null // no loader: the host finds files in the folder
         if (!pdir || (c.loader && !loader)) return { state: 'skipped', code: 'not-routed', why: 'the plugin folder or its loader does not resolve here' }
         if (!renderHook) return { state: 'skipped', code: 'not-routed', why: 'this build was given no hook renderer' }
-        const names = (desc.proxy && desc.proxy.env) || []
-        const hook = renderHook(c.template, { CA_FILE: ca.pem, SWITCH: path.join(dir, 'switch', desc.name), PROXY_ENV: names, PROXY_NAMES: names, NO_PROXY_ENV: noProxyNames(desc) })
+        const hook = hookOf(desc, c, dir, renderHook)
         const file = path.join(pdir, hook.name), text = hook.text
         owned(file, 'plugin', desc.name, text, 0o644)
         if (!c.loader) return { state: 'placed' }
-        const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit: { format: 'yaml-list', line: `- ${c.loader.keys.at(-1)}: [{ name: ${JSON.stringify(file)} }] ${lineComment("loads trocar's CA trust plugin")}` }, home, now: now(), fs })
+        const edit = loaderEdit(c, file)
+        const e = placed({ harness: desc.name, kind: 'text', path: loader, format: edit.format, ...(edit.vars ? { vars: edit.vars } : { line: edit.line }) }, () => applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit, home, now: now(), fs }))
         said('plugin-loader', e ? 'written' : 'intact', { path: loader, harness: desc.name })
         return { state: 'placed' }
       }
       return { state: 'skipped', code: 'not-routed', why: `no carrier kind ${c.kind}` }
-    } catch (e) { problems.push(`${desc.name}: ${errText(e)}`); return { state: 'skipped', code: e.code || 'install-error', why: errText(e) } }
+    } catch (e) {
+      if (e.code !== MARKED_WITHOUT_RECORD) problems.push(`${desc.name}: ${writeErrText(e)}`) // a marked file is the receipt's own refusal, one problem per file (src/cli/install.mjs)
+      // 4.11 P4: a file that is not trocar's at a path it writes its own to — left alone, and on record (D38)
+      if (e.code === CODE.notTrocarsFile) runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.failure, where: 'install', code: e.code, harness: desc.name, path: e.path, reason: writeErrText(e) })
+      return { state: 'skipped', code: e.code || 'install-error', ...(e.path ? { path: e.path } : {}), why: writeErrText(e) }
+    }
   }
 
   // the CERTIFICATE blocks of the files a `merges` source names, per file: [{ file, certs }] (4.11 P4); what is not carried over is said, never silent (D38)
@@ -271,7 +331,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       if (!path.isAbsolute(file)) { notes.push(`${desc.name}: ${where} (${file || typeof value}) is not an absolute path; its certificates are not in trocar's bundle`); return [] }
       if (inTrocar(file, home, ctx.os)) return []
       let buf
-      try { buf = fs.readFileSync(file) } catch (e) { notes.push(`${desc.name}: ${file} (${where}) is unreadable (${e.code || errText(e)}); its certificates are not in trocar's bundle`); return [] }
+      try { buf = fs.readFileSync(file) } catch (e) { notes.push(`${desc.name}: ${file} (${where}): ${errnoWords(e)}; its certificates are not in trocar's bundle`); return [] }
       const got = certsOf(file, buf)
       for (const k of got.skipped) notes.push(`${desc.name}: ${file}: ${k.type ? `block ${k.index} (${k.type})` : 'the file'} is not carried into trocar's bundle: ${k.why}`)
       return [{ file, certs: got.certs }]
@@ -286,8 +346,12 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       // and its record with it; the block for this root is then placed as new (a fresh installed_at)
       const older = m.entries.find((e) => e.kind === 'text' && e.format === 'pem-block' && e.harness === desc.name && e.path === file && !holdsRoot(e, rootBody))
       if (older) {
-        const out = removeTrocarText(fs.readFileSync(file, 'latin1'), older.ops)
-        if (out.found) fs.writeFileSync(file, out.text, 'latin1')
+        const target = editTarget(file, fs), before = fs.readFileSync(target)
+        const out = removeTrocarText(before.toString('latin1'), older.ops)
+        if (out.found) { // 1.6 R2: a copy of the bytes first, then the file through its link, never torn
+          writeBackup({ home, file, data: before, now: now(), fs })
+          writeDurable(target, Buffer.from(out.text, 'latin1'), fs.statSync(target).mode & 0o7777, fs)
+        }
         m.entries.splice(m.entries.indexOf(older), 1); save()
       }
       // two harnesses whose settings name one file (Claude Code and Kimi Code both read NODE_EXTRA_CA_CERTS; Codex and Hermes SSL_CERT_FILE) share
@@ -296,17 +360,53 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       if (shared) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'intact', shared_with: shared.harness }); return }
       const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file, edit: { format: 'pem-block', pem: rootPem }, home, now: now(), fs })
       carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: e ? 'placed' : 'intact' })
-    } catch (e) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: e.code || NOT_USERS, why: errText(e) }) }
+    } catch (e) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: e.code || NOT_USERS, why: writeErrText(e) }) }
   }
 }
+
+// a plug-in carrier's file as install writes it → { name, text }: the same bytes for the same harness and HOME, whatever the root (the CA is named by path)
+function hookOf(desc, c, dir, renderHook) {
+  const names = (desc.proxy && desc.proxy.env) || []
+  return renderHook(c.template, { CA_FILE: caPaths(path.join(dir, 'ca')).pem, SWITCH: switchFileIn(dir, desc.name), PROXY_ENV: names, PROXY_NAMES: names, NO_PROXY_ENV: noProxyNames(desc) })
+}
+
+/** Where install's certificate carriers would be on this machine, for an uninstall with no install record (1.6 R3, 4.11 §1 uninstall): every form of
+ *  this OS, present or not (the agent may be gone since), each carrier resolved as install resolves it (`ctx.facts` for a wrapper's file name) →
+ *  places for src/off/marker.mjs planByMarker: a config key's value under ~/.trocar (json-value), the wrapper and the real program it runs (wrapper),
+ *  a plug-in by the bytes install writes (owned-file `exact`) and the row that loads it by its mark and the plug-in's path (line `names`), and rule U's
+ *  files by the marked block (pem-block). Reads nothing but the settings rule U reads. → { places, unseen }: `unseen`, the variables (by the
+ *  descriptors) that may have named a rule U file at install and name none now, of each harness on this OS none of whose settings names one. */
+export function carrierPlaces({ os, harnesses, ctx, home, owns, renderHook, fs = nodeFs }) {
+  const dir = collectorHome(path.join(home, '.trocar')), out = [], unseen = new Set()
+  for (const desc of harnesses.filter((d) => d.proxyMode)) {
+    const h = desc.name, pm = desc.proxyMode, forms = pm.forms.filter((f) => f.os.includes(os))
+    for (const c of [...new Set(forms.map((f) => pm.certs[f.cert]).filter(Boolean))]) {
+      if (c.kind === 'config-key' && c.format === 'json') for (const file of resolveLoc(c.file, ctx)) out.push({ harness: h, how: 'json-value', file, keys: c.keys })
+      if (c.kind === 'wrapper') { const t = targetOf(ctx, c); if (t) out.push({ harness: h, how: 'wrapper', file: t.file, real: t.real }) }
+      if (c.kind !== 'plugin') continue
+      const pdir = resolveLoc(c.dir, ctx)[0]
+      if (!pdir) continue
+      const hook = hookOf(desc, c, dir, renderHook), file = path.join(pdir, hook.name)
+      out.push({ harness: h, how: 'owned-file', file, exact: hook.text })
+      const loader = c.loader ? resolveLoc(c.loader.file, ctx)[0] : null
+      if (loader) out.push({ harness: h, how: 'line', file: loader, yaml: true, names: [JSON.stringify(file)] })
+    }
+    // rule U's file once, whichever harness names it first (SSL_CERT_FILE, NODE_EXTRA_CA_CERTS are read by more than one): the receipt counts files (1.6 §3.4)
+    const files = forms.length ? ruleUFiles(desc, ctx, { home, owns, fs }) : []
+    for (const { file } of files) if (!out.some((p) => p.how === 'pem-block' && p.file === file)) out.push({ harness: h, how: 'pem-block', file })
+    if (forms.length && !files.length) for (const n of certVars(desc)) unseen.add(n)
+  }
+  return { places: out, unseen: [...unseen] }
+}
+
+/** The environment variables a harness's `userCertFiles` reads (4.11 P4), in the descriptor's order. */
+export const certVars = (desc) => [...new Set(((desc.proxyMode && desc.proxyMode.userCertFiles) || []).flat().filter((s) => s && typeof s.env === 'string').map((s) => s.env))]
 
 // the base64 of a root, and whether a pem-block record holds it: how a block of this root is told from one of an older root (㉒; the Set up plan, too)
 export const pemBody = (pem) => pem.replace(/-----[A-Z ]+-----|\s/g, '')
 export const holdsRoot = (e, body) => (e.ops || []).some((o) => o.pem && o.inserted.replace(/\s/g, '').includes(body))
 
 // a path inside trocar's own tree (~/.trocar): a setting that names one was set by install (trocar's bundle or root), never the user's own file.
-// Compared as the OS compares paths (pathKey: no case on Windows and macOS), so another spelling of trocar's own file is still trocar's (4.11 rule U)
-const inTrocar = (file, home, os) => { const k = (p) => pathKey(p, { platform: os, realpath: null }); return k(path.resolve(home, file)).startsWith(`${k(path.join(home, '.trocar'))}/`) }
 
 /** Is a `config-key` carrier's setting the user's already (P4, CM10)? Set to a file outside trocar's tree — or, for an `add` key, set in the install
  *  env — install leaves the key alone and rule U appends to that file instead. Read by install and by its plan alike. */
@@ -316,16 +416,19 @@ function keyIsUsers(c, ctx, home) {
   return c.semantics === 'add' && !!readSrc({ env: c.keys.at(-1) }, ctx).set
 }
 
-/** Rule U's files (4.11 P4) for one harness, from its `userCertFiles` settings as they are now: each file one names, once, in the descriptor's order,
+/** Rule U's files (4.11 P4) for one harness, from its `userCertFiles` settings as they are now: each file one names (every match), once, in the descriptor's order,
  *  outside trocar's own tree → [{ file, why }] (`why`: not this user's own file — said, never written). The one list install acts on and its plan
  *  names (1.6 V85: the plan names every file install changes). */
 export function ruleUFiles(desc, ctx, { home, owns, fs = nodeFs }) {
   const out = []
   for (const src of desc.proxyMode.userCertFiles || []) {
     const r = readSrc(src, ctx)
-    if (r.error || !r.set || typeof r.value !== 'string') continue
-    const file = path.isAbsolute(r.value) ? r.value : path.resolve(home, r.value)
-    if (!inTrocar(file, home, ctx.os) && !out.some((x) => x.file === file)) out.push({ file, why: usersFileWhy(file, { fs, owns }) })
+    if (r.error || !r.set) continue
+    for (const { value } of r.all) { // every match: one key may name a file per route (4.11 P4)
+      if (typeof value !== 'string') continue
+      const file = fileOf(value, { home, cwd: home }) // install has no process: a relative path under the home
+      if (!inTrocar(file, home, ctx.os) && !out.some((x) => x.file === file)) out.push({ file, why: usersFileWhy(file, { fs, owns }) })
+    }
   }
   return out
 }
@@ -338,10 +441,29 @@ const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] != nul
 // directory and its loader, a wrapper's bin directory) resolved the way `on` and `install` resolve it — so the plan names the file it will change
 // (1.6 §1.4「计划写全」) instead of a kind alone. A carrier whose place cannot be resolved on this machine says so, and why.
 const carrierLoc = (c) => c.file || c.dir || c.binDir || null
+// the line a plug-in's loader file gets: the run writes it, the plan previews it
+const loaderEdit = (c, file) => ({ format: 'yaml-list', line: `- ${c.loader.keys.at(-1)}: [{ name: ${JSON.stringify(file)} }] ${lineComment("loads trocar's CA trust plugin")}` })
 const carrierKeys = (c) => c.keys || (c.file && c.file.keys) || null
 
-export function planInstall({ os, harnesses, ctx, home, owns, fs = nodeFs }) {
+export function planInstall({ os, harnesses, ctx, home, owns, hookFile = null, fs = nodeFs }) {
   const rows = []
+  const dir = collectorHome(path.join(home, '.trocar'))
+  let m = null
+  try { m = readManifest(dir, fs) } catch { /* an unreadable record: the run refuses it, the plan has nothing to add */ }
+  // 4.11 P4: the plug-in file install would put where a file that is not trocar's already is — the run skips that carrier, so the plan says so
+  const foreignPlugin = (c) => {
+    const pdir = hookFile && resolveLoc(c.dir, ctx)[0]
+    const file = pdir && path.join(pdir, hookFile(c.template))
+    const why = file && judgeOwned({ manifest: m, file, fs }).action === 'write' ? notTrocars({ dir, file, fs }) : null
+    return why ? { file, why } : null
+  }
+  // 1.6 §3.2: trocar's marked text in a loader file no record lists — the run's applyTextEntry refuses it and skips the carrier, so the plan says so
+  const markedLoader = (c) => {
+    const pdir = hookFile && c.loader && resolveLoc(c.dir, ctx)[0], loader = pdir && resolveLoc(c.loader.file, ctx)[0]
+    if (!loader || (m && m.entries.some((e) => samePath(e.path, loader, fs)))) return null
+    const why = markedWithoutRecord({ file: loader, edit: loaderEdit(c, path.join(pdir, hookFile(c.template))), fs })
+    return why ? { file: loader, why } : null
+  }
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
     const forms = routedForms(desc.proxyMode, os, ctx)
     for (const f of forms) {
@@ -351,13 +473,19 @@ export function planInstall({ os, harnesses, ctx, home, owns, fs = nodeFs }) {
       // the key stays the user's: a row that says so (install records the form as rule-u), and rule U's file below is what changes
       if (carrier === 'config-key' && keyIsUsers(c, ctx, home)) { rows.push({ harness: desc.name, form: f.id, carrier, paths: resolveLoc(c.file, ctx), keys: c.keys, state: 'rule-u' }); continue }
       // a plug-in is two places when a file loads it: its folder (the plug-in file goes there) and the loader file (a line that loads it)
+      const foreign = carrier === 'plugin' ? foreignPlugin(c) : null
+      if (foreign) { rows.push({ harness: desc.name, form: f.id, carrier, paths: [foreign.file], keys: null, state: 'skipped', code: CODE.notTrocarsFile, why: foreign.why }); continue }
+      const marked = carrier === 'plugin' ? markedLoader(c) : null
+      if (marked) { rows.push({ harness: desc.name, form: f.id, carrier, paths: [marked.file], keys: null, state: 'skipped', code: MARKED_WITHOUT_RECORD, why: marked.why }); continue }
       const places = carrier === 'root' ? [{ loc: null }] : c.kind === 'plugin' && c.loader ? [{ loc: c.dir }, { loc: c.loader.file, keys: c.loader.keys, loader: true }] : [{ loc: carrierLoc(c), keys: carrierKeys(c) }]
       for (const { loc, keys = null, loader } of places) rows.push({ harness: desc.name, form: f.id, carrier, paths: loc ? resolveLoc(loc, ctx) : [], keys: keys || null, ...(loader ? { loader } : {}) })
     }
     // rule U, as install runs it: one block per file, placed by the first harness whose settings name it (the next finds it there); a file that is
     // not this user's is a row too, with its why, as install records it skipped
     if (forms.length) for (const { file, why } of ruleUFiles(desc, ctx, { home, owns, fs })) {
-      if (why) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null, state: 'skipped', code: NOT_USERS, why })
+      // a file already holding trocar's marked text no record lists: the run refuses the block (1.6 §3.2), so the plan says so
+      const marked = !why && !(m && m.entries.some((e) => e.format === 'pem-block' && samePath(e.path, file, fs))) ? markedWithoutRecord({ file, edit: { format: 'pem-block' }, fs }) : null
+      if (why || marked) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null, state: 'skipped', code: why ? NOT_USERS : MARKED_WITHOUT_RECORD, why: why || marked })
       else if (!rows.some((r) => r.carrier === 'pem-block' && !r.state && r.paths[0] === file)) rows.push({ harness: desc.name, form: null, carrier: 'pem-block', paths: [file], keys: null })
     }
   }

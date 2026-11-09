@@ -28,11 +28,11 @@ test('text-edit: the dotenv block goes on top, unquoted, LF; a user line with th
   assert.throws(() => dotenvBlock('', { SSL_CERT_FILE: '/a/$HOME.pem' }), /unquoted absolute paths only/)
 })
 
-test('text-edit: a sentinel line goes after the last line it must follow; one carrying no sentinel is refused', () => {
+test('text-edit: a sentinel line goes at the end, after the line it must follow; one carrying no sentinel is refused', () => {
   const rc = '# rc\nexport PATH="$HOME/.kimi-code/bin:$PATH"\nalias ll=ls\n'
   const line = `export PATH="/h/.trocar/collector/bin:$PATH" ${lineComment('kimi shim')}`
   const r = insertLine(rc, { line, after: '\\.kimi-code/bin' })
-  assert.equal(r.text, `# rc\nexport PATH="$HOME/.kimi-code/bin:$PATH"\n${line}\nalias ll=ls\n`)
+  assert.equal(r.text, `${rc}${line}\n`)
   assert.equal(reverseOps(r.text, r.ops), rc)
   assert.equal(insertLine('A=1', { line }).text, `A=1\n${line}\n`, 'a last line without a newline gets one before trocar\'s')
   assert.throws(() => insertLine(rc, { line, after: 'nowhere' }), /no line matches/)
@@ -213,7 +213,7 @@ test('text-edit ③: one eolOf decides every insert — CRLF when CRLF outnumber
   const rc = insertLine('export A=1\r\nalias x=y', { line: `export PATH=p ${lineComment('k')}` })
   assert.equal(rc.text, `export A=1\r\nalias x=y\r\nexport PATH=p ${lineComment('k')}\r\n`)
   const after = insertLine('export PATH=/kimi/bin\r\nB=2\r\n', { line: `export PATH=p ${lineComment('k')}`, after: '^export PATH=/kimi/bin$' })
-  assert.equal(after.text, `export PATH=/kimi/bin\r\nexport PATH=p ${lineComment('k')}\r\nB=2\r\n`, 'a line\'s own \\r is not part of what `after` matches')
+  assert.equal(after.text, `export PATH=/kimi/bin\r\nB=2\r\nexport PATH=p ${lineComment('k')}\r\n`, 'a line\'s own \\r is not part of what `after` matches; the new line takes the file\'s line end')
   const yml = insertLine('- a\r\n# note\r\n', { line: `- r ${lineComment('x')}`, format: 'yaml-list' })
   assert.equal(yml.text, `- a\r\n# note\r\n- r ${lineComment('x')}\r\n`, 'a CRLF comment line is still a comment line')
 })

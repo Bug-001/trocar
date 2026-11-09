@@ -17,6 +17,7 @@ import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { codeId, codeIdOf } from '../../src/version.mjs'
 import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
 import { newManifest, saveManifest } from '../../src/off/manifest.mjs'
+import { recentFailures } from '../../src/collector/core/events.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
@@ -293,6 +294,20 @@ test('§5.5 step 2: a merge that changes the lockfile runs npm install without d
   assert.deepEqual(npm, [[s.root, 'install', '--omit=dev', '--no-audit', '--no-fund']])
 })
 
+test('§5.5 step 2: an npm install that fails says to run that same npm install in the checkout, then trocar update, and names the harnesses left off', async () => {
+  const s = sandbox({ on: ['codex', 'opencode'] })
+  s.ahead('package-lock.json')
+  const exec = (file, args, opts) => (file === 'npm' ? { status: 1, stdout: '', stderr: 'npm broke' } : spawnSync(file, args, opts))
+  const t = ctx(s, { deps: { exec } })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.incomplete, t.io.text())
+  const { error } = t.io.json()
+  assert.equal(error.code, 'npm-failed')
+  for (const part of [s.root, 'npm install --omit=dev --no-audit --no-fund', 'trocar update']) assert.ok(error.message.includes(part), `${part} in: ${error.message}`)
+  assert.ok(error.message.indexOf('npm install') < error.message.indexOf('trocar update'), 'npm first, then update')
+  for (const h of ['codex', 'opencode']) assert.ok(error.message.includes(h), `the harness left off is named: ${h}`)
+  assert.deepEqual(s.handover().on, ['codex', 'opencode'], 'the handover still lists them, so the next update switches them on')
+})
+
 test('V95: a merge that fails leaves the harnesses captured again, no handover file and HEAD where it was, exit 1', async () => {
   const s = sandbox({ on: ['codex', 'opencode'] })
   s.ahead('merge-fails.md')
@@ -408,6 +423,17 @@ test('V96: an install or on that fails in the finish has its own reason printed;
   }
 })
 
+// D38 · 1.6 §5.5: what install's receipt says is still the user's to do (its notes: a key helper kept that only a desktop Terminal can replace) is
+// said by the update that ran it too — an update is often the only install the user sees
+test('V96: the notes of the install a finish ran are printed by the update, once each', async () => {
+  const s = sandbox()
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  const note = `kept-${Math.random().toString(36).slice(2, 8)}: run trocar install from a Terminal in your desktop session`
+  const t = ctx(s, { deps: { install: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('install'), ok: true, problems: [], notes: [note] })); return EXIT.ok } } })
+  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  assert.equal(t.io.text().split(note).length - 1, 1, t.io.text())
+})
+
 // D38: the note names only harnesses, and one this code has no descriptor for would fail the whole `on` — dropped, and said
 test('V96: a handover file naming an agent this code does not know drops it with a note and switches the rest on', async () => {
   const s = sandbox()
@@ -441,6 +467,26 @@ test('V96: the collector on another code is asked to drain and exit before it is
   assert.deepEqual(asked.find(([m]) => m === 'POST'), ['POST', '/off', { exit: true, by: 'update' }], 'drained first: POST /off, the whole daemon, not now, naming the update')
   assert.equal(stopped.length, 1, 'and stopped once after that')
   assert.deepEqual([t.io.json().restarted, daemon], [true, codeId(s.root)])
+})
+
+test('D38: a login entry the replaced collector came back through by a fallback writes its failure record once, and says it once', async () => {
+  const s = sandbox()
+  const sock = path.join(s.base, 'control.sock')
+  let daemon = '0.1.0+0000000'
+  const event = { event: 'failure', where: 'install', code: 'task-register-failed', reason: 'schtasks /Create was refused (Access is denied); trocar starts at login through the HKCU Run entry instead' }
+  const t = ctx(s, {
+    daemonCode: () => daemon,
+    deps: {
+      daemonState: async () => ({ state: 'running', socket: sock, lock: { pid: 4242 } }),
+      request: async () => ({ actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 0, waiting: 0, cut: 0 } }),
+      stopDaemon: async () => ({ stopped: true, pid: 4242, signals: ['SIGTERM'] }),
+      unit: { path: '/login/entry', registered: () => ({ state: 'present' }), enable: () => { daemon = codeId(s.root); return { code: 0, via: 'run-key', event } } },
+      socketPath: sock, drainMs: 0,
+    },
+  })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.equal(recentFailures(s.dir).filter((f) => f.code === 'task-register-failed').length, 1, 'the failure record is in flows/')
+  assert.equal(t.io.json().notes.filter((n) => n === event.reason).length, 1, 'and said once')
 })
 
 test('V96: a collector that refuses the off request is not named by a null pid', async () => {
@@ -642,4 +688,16 @@ test('CM44: a harness whose only form here is not measured on this system, besid
   assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
   assert.deepEqual(t.calls.on.map((a) => a.filter((x) => !x.startsWith('--'))), [['codex']])
   assert.equal(s.handover(), null, 'the update is done')
+})
+
+test('a script copy on a machine whose last uninstall kept its record (install: null) has nothing installed to update: update hands to install, with its plan and question', async () => {
+  const s = sandbox({ on: [] })
+  const app = path.join(s.home, '.trocar', 'app'), root = path.join(app, '0.2.0')
+  fs.mkdirSync(root, { recursive: true })
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'trocar-cli', version: '0.2.0' }) + '\n')
+  const m = newManifest(); m.install = null; saveManifest(s.dir, m) // what uninstall saves when it leaves items behind
+  const t = ctx(s, { deps: { root }, daemonCode: () => null })
+  const exit = await runUpdateCli(['--dry-run'], t.c)
+  assert.equal(exit, EXIT.ok, t.io.text())
+  assert.deepEqual([t.calls.install, t.calls.off, t.calls.on, t.calls.child], [[['--dry-run']], [], [], []])
 })

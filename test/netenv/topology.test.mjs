@@ -42,16 +42,16 @@ test('V42: an owner that cannot be read and a PAC are nodes with an unknown reas
   }
 })
 
-test('V42/D49: a proxy whose owner is a readable process (row 24, and a VPN client, row 2) is that process by its executable with its port and pid, and nothing is said of what product it is; the exit after it is just the exit; an owner that gave no name is the address', () => {
+test('V42/D49: a proxy whose owner is a readable process (row 24, and a VPN client, row 2) is its address with the owner\'s pid, never the owner\'s program name (a proxy\'s program is its product); the exit after it is just the exit', () => {
   const t = buildTopology(ROWS.find((r) => r.n === 24).facts)['claude-code']
   const p = t.nodes.find((n) => n.kind === 'proxy')
-  assert.deepEqual(p, { id: p.id, kind: 'proxy', name: 'node', addr: '127.0.0.1', port: 38743, pid: 898 })
+  assert.deepEqual(p, { id: p.id, kind: 'proxy', name: '127.0.0.1:38743', addr: '127.0.0.1', port: 38743, pid: 898 })
   assert.deepEqual(t.nodes.find((n) => n.kind === 'egress'), { id: t.nodes.find((n) => n.kind === 'egress').id, kind: 'egress', name: 'internet' }, 'no unknown, no chosen_by')
   assert.deepEqual(validateTopology({ 'claude-code': t }), [])
   const nameless = buildTopology(facts('claude-code', { listeners: [{ addr: '127.0.0.1', port: 38743, pid: 898 }] }, { setting: proxyOf('http://127.0.0.1:38743') }))['claude-code'].nodes.find((n) => n.kind === 'proxy')
   assert.deepEqual([nameless.name, nameless.pid, nameless.unknown], ['127.0.0.1:38743', 898, undefined])
   const vpnClient = buildTopology(ROWS.find((r) => r.n === 2).facts)['claude-code'].nodes.find((n) => n.kind === 'proxy')
-  assert.deepEqual([vpnClient.name, vpnClient.unknown, vpnClient.product, vpnClient.version, vpnClient.mode], ['mihomo', undefined, undefined, undefined, undefined])
+  assert.deepEqual([vpnClient.name, vpnClient.unknown, vpnClient.product, vpnClient.version, vpnClient.mode], ['127.0.0.1:7890', undefined, undefined, undefined, undefined])
 })
 
 test('V42: a listener list that could not be read gives the proxy its reason, and one that was read and holds nobody gives `nothing listening`, never an unknown owner', () => {
@@ -191,9 +191,9 @@ test('an https:// proxy is drawn as one: the engine ends the outer TLS of the ag
   const viaOf = (value) => { const t = topo(value), p = t.nodes.find((n) => n.kind === 'proxy'); return t.edges.find((e) => e.to === p.id).via }
   assert.deepEqual([viaOf('https://127.0.0.1:8443'), viaOf('http://127.0.0.1:8443'), viaOf('socks5://127.0.0.1:8443')], ['proxy-https', 'proxy-http', 'proxy-socks'])
   const line = (value) => renderCompact(topo(value))[0]
-  assert.match(line('https://127.0.0.1:8443'), /-> \[CONNECT passed on as it is\] mihomo :8443/)
-  assert.match(line('http://127.0.0.1:8443'), /-> \[CONNECT passed on as it is\] mihomo :8443/)
-  assert.match(line('socks5://127.0.0.1:8443'), /-> \[SOCKS passed on as it is\] mihomo :8443/)
+  assert.match(line('https://127.0.0.1:8443'), /-> \[CONNECT passed on as it is\] :8443/)
+  assert.match(line('http://127.0.0.1:8443'), /-> \[CONNECT passed on as it is\] :8443/)
+  assert.match(line('socks5://127.0.0.1:8443'), /-> \[SOCKS passed on as it is\] :8443/)
 })
 
 test('on_path is false — not true, not unknown — when trocar cannot be on the path: wanted off with no process to read the watch table of, and wanted on with the kernel holding no link of this instance', () => {

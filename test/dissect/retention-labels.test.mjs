@@ -72,3 +72,25 @@ test('F9 — a session key in the body of a call that is not inference is not a 
     assert.equal(sessionKeyOf({ ...nonLlm, is_llm_call: true, endpoint: '/v1/chat/completions', traffic_class: 'llm' }).key, 'abc-123', `${proc.agent}.${key}: inference is as before`)
   }
 })
+
+test('4.1 #13 / 保真边界 ② — a compressed reply stored as decompressed text only says so; one that kept its wire bytes, or was not decoded, does not', () => {
+  const SSE = 'event: ping\ndata: {}\n\n'
+  const old = (resp, o = {}) => ({ id: 'z', ts_request: '2026-10-21T00:00:00Z', is_llm_call: true, endpoint: '/v1/messages', req_body: '{}', resp, ...o })
+  const sse = (h = { 'content-encoding': 'gzip' }, o = {}) => ({ status: 200, kind: 'sse', raw: SSE, headers: h, ...o })
+  const has = (rec) => captureLabelsOf(rec).map((l) => l.id).includes('resp-decoded-only')
+  for (const [name, rec] of [
+    ['old shape', old(sse())],
+    ['old shape, several codings', old(sse({ 'content-encoding': 'identity, br' }))],
+    ['under resp.partial', old({ kind: 'error', status: null, error: { type: 'ECONNRESET' }, partial: sse() })],
+  ]) assert.ok(has(rec), name)
+  for (const [name, rec] of [
+    ['wire bytes kept', old(sse(undefined, { wire_b64: 'H4sI', content_encoding: 'gzip' }))],
+    ['wire bytes kept under partial', old({ kind: 'error', status: null, partial: sse(undefined, { wire_b64: 'H4sI' }) })],
+    ['not decoded', old(sse(undefined, { raw: undefined, raw_b64: 'AAEC', encoding_error: 'bad gzip', content_encoding: 'gzip' }))],
+    ['identity', old(sse({ 'content-encoding': 'identity' }))],
+    ['no header', old(sse({}))],
+    ['empty', old({ status: 204, kind: 'empty', headers: { 'content-encoding': 'gzip' } })],
+    ['log only', old(sse(), { is_llm_call: false, body_retention: 'log', traffic_class: 'telemetry', req_body: { raw_chars: 2, verbatim: false } })],
+    ['websocket', old(sse(), { transport: 'ws' })],
+  ]) assert.ok(!has(rec), name)
+})

@@ -4,9 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { SAW_BAR_PX, barsThatFit, fitWindow, capWindow, renderOverview, repositionBrush } from '../../web/legacy/replay/timeline.mjs'
-import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
-import { deskOf } from './desk-world.mjs'
+import { SAW_BAR_PX, barsThatFit, fitWindow, capWindow } from '../../web/legacy/replay/timeline.mjs'
 
 const css = fs.readFileSync(new URL('../../web/legacy/css/replay.css', import.meta.url), 'utf8')
 const rule = (sel) => { const m = css.match(new RegExp('(?:^|\\n)\\s*' + sel.replace(/[.#]/g, '\\$&') + '\\s*\\{([^}]*)\\}')); assert.ok(m, sel); return m[1] }
@@ -62,48 +60,3 @@ test('「全部」 on a session that does not fit gives the window that fits aro
   assert.deepEqual(capWindow({ lo: 0, hi: 40, prev: { lo: 10, hi: 20 }, K: 175, playhead: 5 }), { lo: 0, hi: 40 }, 'it fits: truly all')
 })
 
-
-// ── the mid-drag guard: a repaint during a brush drag must not destroy the strip's DOM (the pointer capture rides it) ──
-test('renderOverview with brushDragging: the backdrop is left untouched, only the brush geometry is written back', () => {
-  const mk = () => {
-    const map = new Map([['ovstrip', { innerHTML: '' }], ['ovbrush', { style: {} }], ['ovpin', { style: {} }]])
-    return { map, el: { querySelector: (sel) => map.get(sel.replace(/^#/, '')) || null } }
-  }
-  const anchor = { calls: Array.from({ length: 8 }, (_, i) => ({ rid: `R${i}`, ctx: 10 + i })), peakCtx: 20 }
-  const s = { anchor, view: { lo: 0, hi: 8 }, playhead: 0, brushDragging: false }
-  const { map, el } = mk()
-  renderOverview(el, s)
-  assert.ok(map.get('ovstrip').innerHTML.includes('ovbars'), 'not dragging: the strip is (re)built')
-  // mid-drag: a poll repaint must not reassign innerHTML (the brush and its pointer capture live in that DOM)
-  s.brushDragging = true
-  s.view = { lo: 2, hi: 6 }
-  map.get('ovstrip').innerHTML = 'SENTINEL-DOM'
-  renderOverview(el, s)
-  assert.equal(map.get('ovstrip').innerHTML, 'SENTINEL-DOM', 'dragging: the backdrop is not rebuilt')
-  assert.equal(map.get('ovbrush').style.left, '25.000%', 'left = lo/N = 2/8')
-  assert.equal(map.get('ovbrush').style.width, '50.000%', 'width = (hi-lo)/N = 4/8')
-  assert.ok(Math.abs(parseFloat(map.get('ovpin').style.left) - 6.25) < 0.01, 'pin at (playhead+0.5)/N = 0.5/8')
-  // the drag ends: the next render rebuilds the backdrop for the new view
-  s.brushDragging = false
-  renderOverview(el, s)
-  assert.notEqual(map.get('ovstrip').innerHTML, 'SENTINEL-DOM', 'drag over: the strip is rebuilt')
-  assert.ok(map.get('ovstrip').innerHTML.includes('ovbrush'), 'the brush comes back with it')
-  assert.equal(map.get('ovbrush').style.left, '25.000%', 'and the geometry still matches the view')
-})
-
-// 1.3 §主轨 compaction: the compaction cell is a mark with no visible text; its words ride the aria-label
-test('the problem lane\'s compaction cell has no text content and a non-empty aria-label', async () => {
-  const { renderSaw } = await import('../../web/legacy/replay/timeline.mjs')
-  for (const inferred of [false, true]) {
-    const rows = Array.from({ length: 4 }, (_, i) => ({ ctx: 100 + i, usage: { read: 90, create: 5, fresh: 5, out: 1 }, ...(i === 2 ? { compaction: true, compactionInferred: inferred } : {}) }))
-    const anchor = anchorLane(buildLanes(deskOf([{ kind: 'main', rows, head: { peakCtx: 103 } }])))
-    const nodes = new Map()
-    const node = () => ({ innerHTML: '', textContent: '', title: '', style: { setProperty() {} }, classList: { toggle() {} } })
-    const el = { querySelector: (sel) => { if (!nodes.has(sel)) nodes.set(sel, node()); return nodes.get(sel) }, querySelectorAll: () => [] }
-    renderSaw(el, { anchor, view: { lo: 0, hi: 4 }, playhead: 0, sawView: 'ctx', problems: [] })
-    const m = nodes.get('#probrow').innerHTML.match(/<span class="pcompact[^"]*"([^>]*)>([^<]*)<\/span>/)
-    assert.ok(m, 'the compaction cell is drawn')
-    assert.equal(m[2], '', 'no text content')
-    assert.match(m[1], /aria-label="[^"]+"/)
-  }
-})

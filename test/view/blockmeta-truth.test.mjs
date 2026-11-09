@@ -4,6 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readRecords } from '../../src/raw/ingest.mjs';
 import { extract, createExtractContext, materialize } from '../../src/view/extract.mjs';
+import { tagWord } from '../../web/legacy/replay/blocks.mjs';
+import { sysLabel } from '../../src/dissect/cc.mjs';
 
 // THE NUMBERS ON THE COLLAPSED ROW MUST BE THE SOURCE'S NUMBERS.
 //
@@ -93,7 +95,7 @@ function expectedText({ sec, src }) {
 // Who is speaking, and what kind of turn it is — the two strings the collapsed row leads with.
 function expectedRoleTag({ sec, role, src }) {
   if (sec === 'tools') return { role: 'tool', tag: 'def' };
-  if (sec === 'system') return { role: 'system', tag: null };   // tag is the server's section label
+  if (sec === 'system') return { role: 'system', tag: null };   // tag: the closed-set test below
   if (src.type === 'thinking' || src.type === 'redacted_thinking') return { role: 'assistant', tag: 'thinking' };
   if (src.type === 'tool_use' || src.type === 'server_tool_use') return { role: 'assistant', tag: `action · ${src.name}` };
   if (src.type === 'tool_result') return { role, tag: 'observation' };
@@ -199,6 +201,20 @@ test('`head.role` and `head.tag` say what the source says', () => {
     });
   }
   assert.ok(checked > 100, `only ${checked} heads checked`);
+});
+
+test('every `head.tag` is in the closed set the board has a word for; a system block\'s own name rides in `head.label` (2.3 块头 tag 的词)', () => {
+  let system = 0;
+  for (const { gi, src, got } of pairs()) {
+    got.forEach((b, i) => {
+      assert.notEqual(tagWord(b.head.tag), null, `call #${gi} block ${i} (${b.sec}/${b.kind}): head.tag="${b.head.tag}" has no word, the board would show unknown`);
+      if (b.sec !== 'system') return;
+      system++;
+      const name = sysLabel(src[i].src.text);
+      assert.equal(b.head.tag === 'system-reminder' ? 'system-reminder' : b.head.label, name, `call #${gi} block ${i}: the block's name is kept`);
+    });
+  }
+  assert.ok(system > 0, 'the sample has system blocks');
 });
 
 test('`head.label` previews the tool ARGUMENT on an action row', () => {

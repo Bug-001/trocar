@@ -16,6 +16,7 @@ export const templateUrl = (id) => new URL(`./${TEMPLATES[id].file}`, import.met
 
 /** renderHook(id, values) → { name, text }: the template filled (render.mjs: a closed set of slots), and the file name it is written under —
  *  trocar-<template file without .tmpl>. What install and on are handed, so they need not import the harness tree (layering rule 5). */
+export const hookFile = (id) => `trocar-${TEMPLATES[id].file.replace(/\.tmpl$/, '')}`
 export function renderHook(id, values) {
-  return { name: `trocar-${TEMPLATES[id].file.replace(/\.tmpl$/, '')}`, text: renderTemplate(readFileSync(templateUrl(id), 'utf8'), values) }
+  return { name: hookFile(id), text: renderTemplate(readFileSync(templateUrl(id), 'utf8'), values) }
 }

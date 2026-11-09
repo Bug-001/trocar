@@ -11,17 +11,19 @@
 // Trust: on Linux, trocar's extension <agent dir>/extensions/trocar-ca.js appends the trocar CA to Node's default roots and writes the
 // per-pid marker (the root-only body it shares with dsh, 4.6); on macOS / Windows the P9 template pi-extension adds the root and reads the switch file once.
 import path from 'node:path'
-import { expandHome, parseJsonc } from '../core/config-read.mjs'
+import { parseJsonc } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { envProxies, urlHostsDeep } from './_common.mjs'
 import { renderPlugin } from './_plugins.mjs'
+import { HOME_PLACES } from '../../off/marker.mjs'
+import { homeRoot } from '../../off/loc.mjs'
 
-const agentDir = (get, home) => expandHome(get('PI_CODING_AGENT_DIR'), home) || path.join(home, '.pi', 'agent')
+const agentDir = (env, home) => homeRoot(HOME_PLACES.pi, { home, env }) // the place the marker undo looks too
 
 // The hosts <agent dir>/models.json names (pi's models docs): a provider's `baseUrl` replaces the built-in one, a custom provider needs one, a model
 // may carry its own. pi reads the file as JSON with comments; one trocar cannot parse is reported (D38) and names no host.
 function configHosts(ctx) {
-  const file = path.join(agentDir((k) => ctx.env.get(k), ctx.home), 'models.json')
+  const file = path.join(agentDir(ctx.env, ctx.home), 'models.json')
   const text = ctx.readText(file)
   if (text == null) return []
   const { data, errors } = parseJsonc(text)
@@ -32,7 +34,7 @@ function configHosts(ctx) {
 function inject(ctx) {
   return {
     owned: [{
-      path: path.join(agentDir((k) => ctx.env.get(k), ctx.home), 'extensions', 'trocar-ca.js'), role: 'plugin', mode: 0o644,
+      path: path.join(agentDir(ctx.env, ctx.home), 'extensions', 'trocar-ca.js'), role: 'plugin', mode: 0o644,
       data: renderPlugin(['node-roots.js', 'pi/exports.js'], { caFile: ctx.caPem, markerDir: path.join(ctx.collectorDir, 'run', 'trust') }),
     }],
     notes: [{ code: 'harness-note', text: "a pi started with --no-extensions, or whose settings leave trocar's extension out, does not load it and is not decrypted" }],
@@ -44,7 +46,7 @@ function inject(ctx) {
 // and pi copies it into its environment before it loads extensions; no OS proxy. A SOCKS proxy makes the request fail.
 const proxy = {
   env: ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY'],
-  files: [{ path: ({ home, env }) => path.join(agentDir((k) => env[k], home), 'settings.json'), format: 'json', keys: [['httpProxy']], applies: 'fill', env: 'PI_CODING_AGENT_DIR', names: ['HTTPS_PROXY', 'HTTP_PROXY'] }], // pi: HTTP(S)_PROXY ??= httpProxy
+  files: [{ path: ({ home, env }) => path.join(agentDir(env, home), 'settings.json'), format: 'json', keys: [['httpProxy']], applies: 'fill', env: 'PI_CODING_AGENT_DIR', names: ['HTTPS_PROXY', 'HTTP_PROXY'] }], // pi: HTTP(S)_PROXY ??= httpProxy
   systemProxy: { http: false, ws: false },
   schemes: ['http', 'https'],
   unsupported: { socks5: 'fails' },
@@ -57,10 +59,9 @@ const proxy = {
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3): data only. The install-time extension in pi's extensions dir carries the root and reads
 // the switch file once at import (so a pi started while on is a holder, P12); every form has it. Verified: the official install's pi accepted a
-// leaf chained to the root with only the extension adding it (fetch, WebSocket and node:https; both test machines). npm's and rpc mode were
-// measured with the root in NODE_EXTRA_CA_CERTS only; until measured themselves they get no entry where a sibling is measured (4.11 P5), and a pi of
-// theirs started beside the official one rides its switch-file route.
-const PI = (p) => ({ base: 'home', dir: '.pi/agent', env: 'PI_CODING_AGENT_DIR', path: p })
+// leaf chained to the root with only the extension adding it (fetch, WebSocket and node:https; both test machines). npm's and rpc mode too, on
+// both: decrypted with no trocar root in any CA variable (the only extra CA being the relay's own), so the extension alone carries trust.
+const PI = (p) => ({ ...HOME_PLACES.pi.dir, path: p })
 const NOT_MEASURED = { reason: 'not-measured' }
 const form = (id, present, verified = NOT_MEASURED) => ({ id, os: ['darwin', 'win32'], route: 'switch', cert: 'ext', trust: 'node', present, verified: { darwin: verified, win32: verified } })
 const proxyMode = {
@@ -68,8 +69,8 @@ const proxyMode = {
     // only the official installer writes install/current-version (its launcher reads it; both OS); <agent dir>/bin is not a sign of it: pi
     // downloads fd / rg there for every install
     form('pi.cli', [PI('install/current-version')], true),
-    form('pi.npm', [{ command: 'pi' }]),
-    form('pi.rpc', [{ command: 'pi' }]),
+    form('pi.npm', [{ command: 'pi' }], true),
+    form('pi.rpc', [{ command: 'pi' }], true),
     // the Bun binary is an archive unpacked anywhere and leaves nothing of its own to probe, so any `pi` on PATH stands for it; it stays
     // out of scope (Bun has no tls.setDefaultCACertificates, so the extension cannot add the root)
     form('pi.bin', [{ command: 'pi' }], { reason: 'out-of-scope' }),
@@ -122,6 +123,8 @@ export default {
   proxy,
   proxyMode,
   proxies: (ctx) => envProxies(ctx.env, proxy.env),
+  // `pi` is also the name of other programs: one of those on PATH counts as pi, and install writes pi's idle extension
+  present: [{ base: 'home', dir: '.pi/agent', env: 'PI_CODING_AGENT_DIR' }, { command: 'pi' }],
   inject,
   trust: {
     // the marker first: when it is there, a failure names it, not a CA file the user exported for pi

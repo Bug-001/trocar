@@ -86,7 +86,7 @@ export function failOf(what, r) {
   const obj = r != null && typeof r === 'object'
   const status = obj && typeof r.status === 'number' ? r.status : null
   const why = obj ? r.error : r
-  return { line: READ_FAIL(what, status), pairs: [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : String(why)]] }
+  return { line: READ_FAIL(what, status, obj && r.timedOut === true), pairs: [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : String(why)]] }
 }
 
 // flatText(pairs) — the copy text of technical pairs: `k: v` per line, the bare value on a continuation row

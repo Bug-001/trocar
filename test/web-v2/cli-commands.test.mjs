@@ -46,13 +46,18 @@ test('every trocar command the board carries is a 1.6 command used with its own 
   assert.ok(Object.values(BOARD).some((cmd) => TROCAR.test(cmd)))
 })
 
+// a command names one of the CLI's commands (the header's "names an entry of COMMANDS"): "trocar is re-reading …" is a sentence about trocar
+const NAMES = new Set(CLI.map((c) => c.name))
+const isCommand = (s) => { const m = TROCAR.exec(s); return !!m && NAMES.has(m[1]) }
+
 test('no label file outside COMMANDS carries an trocar command string', () => {
+  assert.ok(isCommand('trocar off') && isCommand('sudo trocar setup-helper') && !isCommand('trocar is re-reading its index'), 'the detector is not vacuous')
   const allowed = new Set(Object.values(BOARD))
   const bad = []
   for (const f of fs.readdirSync(LABELS).filter((f) => f.endsWith('.mjs'))) {
     const src = fs.readFileSync(path.join(LABELS, f), 'utf8')
     for (const m of src.matchAll(/(['"`])((?:\\.|(?!\1)[^\\\n])*)\1/g)) {
-      if (/^(?:sudo )?trocar [a-z]/.test(m[2]) && !allowed.has(m[2])) bad.push(`labels/${f}: "${m[2]}"`)
+      if (isCommand(m[2]) && !allowed.has(m[2])) bad.push(`labels/${f}: "${m[2]}"`)
     }
   }
   assert.deepEqual(bad, [])

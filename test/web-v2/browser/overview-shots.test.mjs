@@ -1,5 +1,5 @@
 // test/web-v2/browser/overview-shots.test.mjs — the overview in real Chrome on the real face (1.7): the recent-sessions rows fit
-// their card at 1280 (titles whole, the date inside the card), the first-use page, and the K-30 page off the viewport's corner.
+// their card at 1280 (the date inside the card; a long title ends in an ellipsis on its row by design), the first-use page, and the K-30 page off the viewport's corner.
 // the first-use page with its agent rows (1.7 §首次使用: one control per row, only GETs until a click), and an O1 item landing on its
 // 采集 row opened (1.7 #16, ?h=). Elements are found by role and accessible name; the class names stay only for the fit checks.
 // Shots: overview, overview-first-use, overview-first-use-agents and forbidden at 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
@@ -34,12 +34,12 @@ const recentLinks = (page) => card(page, CARD.recent).getByRole('link')
 // the agents card's controls: each switch (react-aria puts role=switch on its input) and each Set up button; data-hctl names the kind
 const controls = (page) => { const a = card(page, CARD.agents); return a.getByRole('switch').or(a.getByRole('button', { name: CTL.setup, exact: true })) }
 const themePage = (page) => page.locator('[data-theme-choice]')
-// how the recent rows sit in their card: a cut title, or a date past the card's edge
+// how the recent rows sit in their card: a date past the card's edge
 const recentFit = (page) => page.evaluate(() => {
   const card = document.querySelector('.ovcard.recent').getBoundingClientRect()
   return [...document.querySelectorAll('.ovcard.recent .ovitem')].flatMap((a) => {
-    const tx = a.querySelector('.ovtx'), wh = a.querySelector('.ovwhen')
-    return [tx.scrollWidth > tx.clientWidth + 0.5 ? `cut: ${tx.textContent}` : null, wh.getBoundingClientRect().right > card.right ? `date out: ${wh.textContent}` : null].filter(Boolean)
+    const wh = a.querySelector('.ovwhen')
+    return wh.getBoundingClientRect().right > card.right ? [`date out: ${wh.textContent}`] : []
   })
 })
 const hscroll = (page) => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)
