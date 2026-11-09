@@ -13,7 +13,7 @@ import { spawn, spawnSync, execFile, execFileSync, exec, execSync } from 'node:c
 import { tmpDir } from './tmp.mjs'
 import { takeRefusals } from './no-real-os.mjs'
 
-const { REAL_TOOLS, realToolsIn } = createRequire(import.meta.url)('./no-real-os.cjs')
+const { REAL_TOOLS, realToolsIn, profileFor } = createRequire(import.meta.url)('./no-real-os.cjs')
 const GUARD = fileURLToPath(new URL('./no-real-os.cjs', import.meta.url))
 const HELPER = fileURLToPath(new URL('./no-real-os.mjs', import.meta.url))
 const NOOP = '--trocar-test-noop'
@@ -216,4 +216,24 @@ test('no-real-os: a refused write nobody acknowledged fails the process, like a 
   const r = spawnSync(process.execPath, ['--require', GUARD, '-e', `try { require('node:fs').writeFileSync(${JSON.stringify(INTO)}, '') } catch {}`], { encoding: 'utf8' })
   assert.equal(r.status, 1)
   assert.equal(fs.existsSync(INTO), false)
+})
+
+// Windows: os.homedir() reads USERPROFILE and ignores HOME; a child handed an env with a sandbox HOME and no USERPROFILE would find the real profile
+test('no-real-os: on win32 a child env with HOME and no USERPROFILE gets USERPROFILE = that HOME; a given USERPROFILE is kept; elsewhere nothing is added', () => {
+  assert.equal(profileFor({ HOME: '/x' }, 'win32'), '/x')
+  assert.equal(profileFor({ HOME: '/x', USERPROFILE: '/y' }, 'win32'), undefined)
+  assert.equal(profileFor({ HOME: '/x', userprofile: '/y' }, 'win32'), undefined)
+  assert.equal(profileFor({ HOME: '/x' }, 'darwin'), undefined)
+  assert.equal(profileFor({ HOME: '/x' }, 'linux'), undefined)
+})
+
+const WIN_ONLY = process.platform !== 'win32' && 'os.homedir() reads USERPROFILE on win32 only'
+test('no-real-os: on win32 the test process\'s own profile is in the temp dir', { skip: WIN_ONLY }, () => {
+  assert.ok(process.env.USERPROFILE.startsWith(os.tmpdir()) && os.homedir() === process.env.USERPROFILE, process.env.USERPROFILE)
+})
+
+test('no-real-os: on win32 a child given an env with only HOME reports that HOME as its home, not the real profile', { skip: WIN_ONLY }, () => {
+  const home = tmpDir('trocar-profile-')
+  const r = spawnSync(process.execPath, ['-e', "process.stdout.write(require('os').homedir())"], { env: { HOME: home, SystemRoot: process.env.SystemRoot }, encoding: 'utf8' })
+  assert.equal(r.stdout, home, r.stderr)
 })
