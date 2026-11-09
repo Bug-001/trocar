@@ -356,7 +356,7 @@ export function renderFindings(findings, { width = 80, short = false } = {}) {
   for (const f of fold(findings)) {
     const head = f.class === 'note' ? 'Note: ' : `${(n += 1)}. `
     const pad = ' '.repeat(head.length)
-    if (short && lines.length) lines.push('') // the default text: a blank line between findings (§3.7's sample)
+    if (lines.length) lines.push('') // a blank line between findings (§3.7's samples)
     lines.push(...wrap(short ? plainSentence(noPid(f.what)) : `${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
     if (f.why && !short) lines.push(...wrap(f.why, width - head.length).map((l) => pad + l))
     if (f.see) { lines.push(`${pad}See    ${f.see}`); continue }

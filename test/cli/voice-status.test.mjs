@@ -7,6 +7,12 @@ import { statusSummary, failuresBlock } from '../../src/cli/status-text.mjs'
 import { doctorShort, doctorDetails } from '../../src/cli/doctor.mjs'
 import { FINDING_CODES, findingFor } from '../../src/netenv/findings.mjs'
 import { STATUS_REASONS } from '../../src/health/codes.mjs'
+import path from 'node:path'
+import { runDoctor } from '../../src/cli/doctor.mjs'
+import { installedHome } from '../off/fixtures/off-ctx.mjs'
+import { fakeIo, recordingExec } from './fixtures/on-ctx.mjs'
+import { reply, asDaemon, SOCK } from './fixtures/status-ctx.mjs'
+import { absentSpawn } from '../helpers/no-real-os.mjs'
 
 const NOW = Date.parse('2026-11-09T05:30:00Z'), ago = (min) => new Date(NOW - min * 60e3).toISOString()
 const harness = (over = {}) => ({ desired: 'on', captured: true, reason: null, why: [], forms: [], processes: [], ...over })
@@ -74,3 +80,15 @@ test('doctor: no unsaid word and no pid for any finding; --details keeps every f
     for (const fact of [f.what, ...f.commands.map((c) => c.run)]) assert.ok(full.includes(fact.replace(/\s+/g, ' ')), `${code}: --details keeps ${fact}`)
   }
 })
+
+test('doctor over a real document: the findings doctor makes of its own (a service on other code, the undo copy, the capture failures) are said in the default text\'s words too', async () => {
+  const s = await installedHome()
+  const io = fakeIo()
+  await runDoctor(['--json'], { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { spawn: absentSpawn, has: () => true, request: asDaemon(reply({ code: '9.9.9+fffffff' })), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice', exec: recordingExec().run } })
+  const doc = { ...JSON.parse(io.stdoutText()), status: { failures: null } }
+  assert.ok(doc.findings.some((f) => f.code === 'daemon-other-code'), 'the fixture has a finding of doctor\'s own')
+  const short = doctorShort(doc, { now: NOW }), copy = doc.findings.flatMap((f) => [...f.commands.filter((c) => c.shell !== 'gui').map((c) => c.run), f.verify || []])
+  plain(short.filter((l) => !copy.some((c) => c && l.trimEnd().endsWith(c))), 'doctor')
+  for (const l of doctorDetails(doc)) assert.ok(l.length <= 80 || copy.some((c) => c && l.trimEnd().endsWith(c)), `doctor --details folds inside 80 columns: ${l}`)
+})
+

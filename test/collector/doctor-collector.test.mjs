@@ -47,7 +47,7 @@ test('doctor reports the collector: a running-but-untrusted agent with its reaso
     const { status, out } = doctor(home, source, ['--details']) // the install notes and the reasons are facts of --details
     assert.equal(status, 1, `the capture failure status counts makes doctor exit 1:\n${out}`)
     assert.match(out, /Notes of the last install/)
-    assert.match(out, /codex: .*corp\.pem: block 1 \(PRIVATE KEY\) is not carried over/, `the block that was not merged: its type and its file:\n${out}`)
+    assert.match(out.replace(/\s+/g, ' '), /codex: .*corp\.pem: block 1 \(PRIVATE KEY\) is not carried over/, `the block that was not merged: its type and its file (a note folds inside 80 columns):\n${out}`)
     assert.ok(!out.includes('U0VDUkVULUtFWQ'), 'never the key itself')
     // the running-but-untrusted agent is a problem of the capture health the document carries, never silence (D38); its code and reason are what `trocar status --failures` prints
     const j = doctor(home, source, ['--json'])

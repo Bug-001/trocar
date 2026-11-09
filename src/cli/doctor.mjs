@@ -13,7 +13,7 @@ import { codeId } from '../version.mjs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { EXIT, newReceipt } from '../off/schema.mjs' // as in status.mjs: the keys and the exit codes, not ./schema.mjs's checker (D62)
-import { unknown, andList, shellArg as shq } from './text.mjs'
+import { unknown, andList, wrap, colors, WIDTH, shellArg as shq } from './text.mjs'
 import { plainSentence } from './words.mjs' // shq: a path with a space or a quote stays one argument of the chmod line
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { statusFacts, statusDocOf } from './status.mjs'
@@ -206,7 +206,8 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   const doc = await doctorDoc({ names: named.ids, home, env, platform, deps })
   const { exit } = doc
   if (json) { const { exit: _drop, ...out } = doc; printJson(io, out); return exit }
-  for (const l of (details ? doctorDetails : doctorShort)(doc)) io.out(l)
+  const c = colors(io) // the headline bold on a terminal (§1.1 颜色)
+  for (const [i, l] of (details ? doctorDetails : doctorShort)(doc).entries()) io.out(i ? l : c.bold(l))
   return exit
 }
 
@@ -252,6 +253,7 @@ export function doctorDetails(doc) {
   if (doc.findings && doc.findings.length) out.push('', ...renderFindings(doc.findings))
   out.push(...judged(doc))
   for (const u of doc.undetermined.filter((x) => x.reason === 'no captured data yet')) out.push(`${u.what.replace(/^./, (m) => m.toUpperCase())}: no captured data yet`)
-  if (doc.install_notes.length) out.push('', ...doc.install_notes)
+  // a note folds inside 80 columns under its own text (§1.1⑥): the terminal would break it mid-word
+  if (doc.install_notes.length) out.push('', ...doc.install_notes.flatMap((l) => (/^\s/.test(l) ? wrap(l.trim(), WIDTH - 2, '      ').map((t) => `  ${t}`) : [l])))
   return out
 }

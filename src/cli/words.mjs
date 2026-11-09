@@ -414,5 +414,5 @@ export function plainFailure(g) {
 /** A sentence another module wrote and --json keeps (a finding's, a board or login reason, a reason a read failed) in the default text's words:
  *  its few words of UNSAID said the user's way, its error code left out. */
 export const plainSentence = (s) => String(s).replace(/\bbad entry\b/g, 'bad item').replace(/\bbad entries\b/g, 'bad items').replace(/\blogin entry\b/g, 'login item')
-  .replace(/\bentry (\d+)\b/g, 'item $1').replace(/\b(?:the |a )?daemon\b/gi, "trocar's service")
+  .replace(/\bentry (\d+)\b/g, 'item $1').replace(/\b(?:the |a |trocar's )?(?<![\\/.\w])(?:daemon|collector)\b(?![\\/])/gi, "trocar's service") // a path's /collector/ is its name
   .replace(/:? ?\(?\b(?:E[A-Z][A-Z0-9_]{2,}|ERR_[A-Z0-9_]+)\b\)?/g, '') // an error code is --details' (§1.1 ④ rule 3): the sentence around it says what happened
