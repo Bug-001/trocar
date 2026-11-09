@@ -67,6 +67,9 @@ test('§3.5 a harness that needs setting up has its own row, says so before `on`
   // a captured harness whose setup is needed says so in its headline too, not only under Why (a Linux bundle that lacks a CA: capture works, the agent cannot verify those hosts)
   const kimi = statusDetail(doc({ harnesses: { 'kimi-code': harness(setup('needed', 'carrier-overwritten')) } }), 'kimi-code', { now: NOW })
   assert.ok(/set up again/.test(kimi[0]) && kimi.some((l) => l.trimEnd().endsWith(' trocar install')), kimi.join('|')) // the headline says it, the step is a line of its own
+  // steps that turn it off (marked text with no record: off, uninstall, install) end with on again, as a harness not captured yet is told
+  const marked = statusDetail(doc({ harnesses: { hermes: harness(setup('needed', 'marked-without-record')) } }), 'hermes', { now: NOW })
+  assert.ok(marked.some((l) => l.trimEnd().endsWith(' trocar on hermes')), marked.join('|'))
   const out = lines.find((l) => l.startsWith('  not installed:'))
   assert.deepEqual(out.replace('  not installed: ', '').split(', ').sort(), ['opencode', 'pi', 'z-code'], 'a harness needing setup is not said to be not installed, nor is setup asked of the others')
   const detail = statusDetail(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'carrier-absent') }) } }), 'hermes', { now: NOW })

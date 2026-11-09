@@ -215,7 +215,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     finding.commands.forEach((cmd, i) => rows.push([i ? '' : 'Fix', cmd.run]))
     rows.push(['Check', finding.verify])
   } else if (needsSetup(x) && x.captured !== true) rows.push(['Why', `${h} has no trocar certificate in place yet`], ...[...setupFix(x), `trocar on ${h}`].map((cmd, i) => [i ? '' : 'Fix', cmd]))
-  else if (needsSetup(x)) rows.push(...setupFix(x).map((cmd, i) => [i ? '' : 'Fix', cmd])) // captured now: the steps, a line each (1.1 ⑥); its finding's Why, when there is one, came above
+  else if (needsSetup(x)) { const st = setupFix(x); rows.push(...[...st, ...(st.some((c) => /^trocar (off|uninstall)\b/.test(c)) ? [`trocar on ${h}`] : [])].map((cmd, i) => [i ? '' : 'Fix', cmd])) } // captured now: the steps, a line each (1.1 ⑥), and on again when they turn it off
   else if (x.captured === true && !notSeenYet(x)) rows.push(['Why', (x.processes || []).length ? 'every running process of it is captured' : 'no process of it is running; new ones will be captured']) // never claims processes that are not there
   const login = loginRow(doc.autostart)
   if (login) rows.push(login)
