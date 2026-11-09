@@ -29,6 +29,10 @@ const { fileURLToPath } = require('node:url')
 const { syncBuiltinESMExports } = require('node:module')
 
 process.env.TROCAR_TEST_SANDBOX = '1'
+// 5. A fresh HOME does not move the session's runtime directory, and on Linux the running collector's control socket is $XDG_RUNTIME_DIR/trocar/collector.sock:
+//    a test that hands process.env on would ask the developer's own daemon. Moved to a path in the run's temp dir where nothing listens (and
+//    nothing is: a test that needs one makes its own). Only when it is set: a platform without one gets none (CLAUDE.md, 平台缝).
+if (process.env.XDG_RUNTIME_DIR) process.env.XDG_RUNTIME_DIR = path.join(os.tmpdir(), 'no-session-runtime')
 
 // + the macOS native pieces trocar ships (T13): the signing helper writes the login keychain, procenv reads another process's
 // memory, plutil reads managed preferences — a test injects a runner or a stub, never the committed binary or the real tool
