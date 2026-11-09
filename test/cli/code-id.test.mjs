@@ -97,19 +97,31 @@ test('doctor: a collector on other code is a problem, daemon-other-code, fixed b
   assert.equal((await run(codeId())).some((x) => x.code === 'daemon-other-code'), false)
 })
 
-// §3.5 · §3.7: after a git pull by hand the last install ran other code, and `trocar update` is the one way out (install cannot redo on's entries);
-// a service another copy started, with this code installed, stays `trocar install`'s
-test('a service on other code after a pull by hand: status and doctor say trocar update; with this code installed, trocar install', async () => {
+// §3.5 · §3.7: a copy pulled past its own install (install.code other, its login entry starts this copy) is put on its code by `trocar update`; a
+// service another copy installed and starts (its entry), or this code installed, by `trocar install`
+test('a service on other code: status and doctor say trocar update for a pull past this copy\'s install, trocar install for another copy\'s', async () => {
   const s = await installedHome()
   const dir = path.join(s.home, '.trocar', 'collector')
-  const doctorFix = async () => {
+  const root = tree(CODE); fs.mkdirSync(path.join(root, '.git')); fs.writeFileSync(path.join(root, '.git', 'HEAD'), `${'cd'.repeat(20)}\n`) // a checkout: channel git
+  const entry = path.join(s.home, 'login-entry'), line = (r) => `ExecStart=${path.join(r, 'bin', 'trocar.mjs')}`
+  const unit = { path: entry, text: () => `${line(root)}\n` }
+  const deps = { root, unit, script: path.join(root, 'bin', 'trocar.mjs'), spawn: absentSpawn, has: () => true, request: asDaemon(reply({ code: '9.9.9+fffffff' })), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice', exec: recordingExec().run }
+  const env = { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }
+  const fix = async () => {
     const io = fakeIo()
-    await runDoctor(['--json'], { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { spawn: absentSpawn, has: () => true, request: asDaemon(reply({ code: '9.9.9+fffffff' })), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice', exec: recordingExec().run } })
-    return ((JSON.parse(io.stdoutText()).findings || []).find((x) => x.code === 'daemon-other-code') || { commands: [] }).commands.map((c) => c.run)
+    await runDoctor(['--json'], { io, home: s.home, platform: 'linux', env, deps })
+    const f = (JSON.parse(io.stdoutText()).findings || []).find((x) => x.code === 'daemon-other-code')
+    const st = fakeIo()
+    await runStatusCli([], { io: st, home: s.home, platform: 'linux', env, deps })
+    const out = st.stdoutText(), at = out.indexOf('other code'), service = at < 0 ? '' : out.slice(at, out.indexOf('\n\n', at)) // the service's sentence (it wraps): the other rows have ways out of their own
+    return [f && f.commands.map((c) => c.run), ['trocar update', 'trocar install'].filter((c) => service.includes(c))]
   }
-  const said = async () => [await statusOf(s, '9.9.9+fffffff', []), await statusOf(s, '9.9.9+fffffff', ['--details'])]
-  assert.deepEqual(await doctorFix(), ['trocar install'], 'this code installed: another copy started the service')
-  const m = readManifest(dir); m.install = { ...m.install, code: '0.0.1+0000000' }; saveManifest(dir, m)
-  assert.deepEqual(await doctorFix(), ['trocar update'], 'install ran older code: update is the way out')
-  for (const text of await said()) { assert.match(text, /trocar update/, text); assert.doesNotMatch(text, /Put it on this code: trocar install/, text) }
+  const installedAs = (code) => { const m = readManifest(dir); m.install = { ...m.install, code }; saveManifest(dir, m) }
+  installedAs('0.0.1+0000000')
+  fs.writeFileSync(entry, `${line(root)}\n`)
+  assert.deepEqual(await fix(), [['trocar update'], ['trocar update']], 'pulled past its own install: update')
+  fs.writeFileSync(entry, `${line(path.join(s.home, 'another-copy'))}\n`)
+  assert.deepEqual(await fix(), [['trocar install'], ['trocar install']], 'another copy installed and its entry starts it: install')
+  fs.writeFileSync(entry, `${line(root)}\n`); installedAs(codeId(root))
+  assert.deepEqual(await fix(), [['trocar install'], ['trocar install']], 'this code installed: install')
 })

@@ -618,22 +618,54 @@ test('§5.5: an npm copy with nothing to finish says npm i -g <name>@latest and 
   assert.ok(lines.indexOf(`npm i -g ${name}@latest`) < lines.indexOf('trocar update'), 'npm first')
 })
 
-// §5.5 已是最新: HEAD equal to upstream is not up to date while the last install ran other code — a git pull by hand. The finish is an update's:
-// what is on goes off (this code, by the records), then the service, install and on again; install alone cannot redo the entries on wrote (D55①)
-test('§5.5: after a git pull by hand (install.code older), update switches off what is on, then finishes: install and on again', async () => {
+// §5.5 已是最新: HEAD equal to upstream is not up to date when this copy was pulled past its own install (install.code other, the login entry starts
+// this copy). The finish is an update's: what is on goes off, then the service, install and on; install alone cannot redo on's entries (D55①)
+const pulledWorld = (s, { entryCopy = s.root, code = '0.1.0+0000000', on = ['codex'] } = {}) => {
+  installedBy(s, code)
+  const file = path.join(s.base, 'login-entry'), line = (root) => `<string>${path.join(root, 'bin', 'trocar.mjs')}</string>`
+  fs.writeFileSync(file, `${line(entryCopy)}\n`)
+  const log = []
+  const t = ctx(s, { deps: {
+    unit: { path: file, text: () => `${line(s.root)}\n`, registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }) },
+    off: async (argv) => { log.push(['off', ...argv.filter((x) => !x.startsWith('--'))]); return EXIT.ok },
+    install: async () => { log.push(['install']); return EXIT.ok },
+    on: async (argv) => { log.push(['on', ...argv.filter((x) => !x.startsWith('--'))]); return EXIT.ok },
+  } })
+  return { t, log, on }
+}
+test('§5.5: after a git pull by hand, update switches off what is on, then installs and switches it on again, in that order', async () => {
   const s = sandbox({ on: ['codex'] })
-  installedBy(s, '0.1.0+0000000')
-  const t = ctx(s)
+  const { t, log } = pulledWorld(s)
   assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
-  const names = (calls) => calls.map((a) => a.filter((x) => !x.startsWith('--')))
-  assert.deepEqual([names(t.calls.off), t.calls.install.length, names(t.calls.on), t.calls.child], [[['codex']], 1, [['codex']], []], t.io.text())
+  assert.deepEqual(log, [['off', 'codex'], ['install'], ['on', 'codex']], t.io.text())
   assert.equal(s.handover(), null, 'finished: the file is gone')
-
-  const same = sandbox({ on: ['codex'] })
-  installedBy(same, codeId(same.root))
-  const u = ctx(same)
-  assert.equal(await runUpdateCli(['--yes'], u.c), EXIT.ok, u.io.text())
-  assert.deepEqual([u.calls.off, u.calls.install, u.calls.on], [[], [], []], 'installed on this code and the service on it: up to date, nothing changed')
+})
+test('§5.5: not a pull past this copy\'s install — another copy installed (its entry), this code installed, or a record that cannot be read: nothing is switched off', async () => {
+  for (const [why, set] of [
+    ['another copy installed and its login entry starts it', (s) => pulledWorld(s, { entryCopy: path.join(s.base, 'other-copy') })],
+    ['this code installed', (s) => pulledWorld(s, { code: codeId(s.root) })],
+    ['a record that cannot be read', (s) => { const w = pulledWorld(s); fs.writeFileSync(path.join(s.dir, 'install-manifest.json'), '{ not json'); return w }],
+  ]) {
+    const s = sandbox({ on: ['codex'] })
+    const { t, log } = set(s)
+    await runUpdateCli(['--yes'], t.c)
+    assert.deepEqual(log.filter(([c]) => c === 'off'), [], `${why}: nothing switched off:\n${t.io.text()}`)
+    assert.equal(s.handover(), null, `${why}: no update written down`)
+  }
+})
+test('§5.5: a pull past the install finishes offline with a note; --dry-run and no --yes without a terminal change nothing', async () => {
+  const s = sandbox({ on: ['codex'] })
+  const { t, log } = pulledWorld(s)
+  fs.rmSync(s.up, { recursive: true, force: true }) // git fetch fails
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(log, [['off', 'codex'], ['install'], ['on', 'codex']])
+  assert.ok(t.io.json().notes.length >= 1, 'a note says the newest code was not pulled')
+  for (const argv of [['--dry-run'], []]) {
+    const d = sandbox({ on: ['codex'] })
+    const w = pulledWorld(d)
+    await runUpdateCli(argv, w.t.c)
+    assert.deepEqual([w.log, d.handover()], [[], null], `${argv}: nothing called, nothing written`)
+  }
 })
 
 // ── V124 · the login entry is written before the collector is replaced ─────────────────────────────────────────────────────────────

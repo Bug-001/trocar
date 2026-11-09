@@ -32,7 +32,7 @@ import { runInstallCli } from './install.mjs'
 import { replaceDaemon, daemonCode, entryStartsThisCopy, CUT } from './replace-daemon.mjs'
 import { runPlaceCli } from './place.mjs'
 import { stopByHand } from '../off/daemon-stop.mjs'
-import { installedCode } from './refresh.mjs'
+import { installedCode, pulledPastInstall } from './refresh.mjs'
 import { PS_FILE_ARGS } from '../collector/arch/win32/custody.mjs'
 import { printJson } from './json.mjs'
 import { isProxyMode } from '../off/mode.mjs'
@@ -165,7 +165,7 @@ async function update({ io, env, home, platform, deps, flags }) {
 
   /** §5.5: the code changed without an update (a git pull by hand): this code switches off what is on (by the records: the old code is gone), writes
    *  the handover file, and finishes as step 4 does — the service, install, and on again, so on's entries are this code's. */
-  const pulledByHand = async (installed, running) => {
+  const pulledByHand = async (installed, running, told = []) => {
     const on = harnessesOn({ home, fs })
     if (on.error) return no('state-unreadable', on.error)
     const from = installed || 'code it does not name'
@@ -180,7 +180,7 @@ async function update({ io, env, home, platform, deps, flags }) {
       await reOn(on.ids, { io, env, home, platform, deps })
       return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`, EXIT.incomplete, null, unwritable(e, 'nothing was changed'))
     }
-    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: installed, on: on.ids }, details })
+    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: installed, on: on.ids }, details, told })
   }
 
   /** The handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the code says. */
@@ -315,14 +315,19 @@ async function update({ io, env, home, platform, deps, flags }) {
     try { writeHandover(handover, { from: waiting.from, on: all }, fs) } catch (e) { return finishHere(`this update could not be written down (${(e && e.message) || e})`, 'the update could not be written down') }
     return pullAndHand(checked, all, async (why) => finishHere(why, 'the fast-forward failed'))
   }
+  // §5.5 已是最新: this copy was pulled past its own install (a git pull by hand) — finished as an update is: what is on goes off, then step 4. The
+  // finish needs no network: newer code that cannot be pulled now (offline, no upstream, local commits) does not stop it; changes of your own do
+  const pulled = await pulledPastInstall({ home, root, env, platform, deps, fs })
+  if (checked.refusal && pulled && !['local-changes', 'checkout-unreadable'].includes(checked.refusal.code)) {
+    r.to = r.from
+    return pulledByHand(installedCode(home, fs), await daemonCode({ platform, dir, env, fs, deps }), notPulled(checked.refusal.why, checked.refusal.short))
+  }
   if (checked.refusal) return no(checked.refusal.code, checked.refusal.message, EXIT.incomplete, null, [checked.refusal.text])
   const { head, target } = checked
   if (head === target) {
     const running = await daemonCode({ platform, dir, env, fs, deps })
-    const installed = installedCode(home, fs)
     r.to = r.from
-    // §5.5 已是最新: the last install ran other code (a git pull by hand) — finished as an update is: what is on goes off, then step 4
-    if (installed !== undefined && installed !== r.from) return pulledByHand(installed, running)
+    if (pulled) return pulledByHand(installedCode(home, fs), running)
     if (running === r.from) { lines.push(`trocar update: already up to date (${r.from}).`); return done(EXIT.ok) }
     return daemonOnly(running)
   }

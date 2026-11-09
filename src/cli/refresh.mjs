@@ -1,7 +1,9 @@
 // refresh.mjs — which command puts this machine on this code (RFC 1.6 §3.5, §3.7, §5.5): the one judgement `status`, `doctor` and `update` share.
 //   installedCode(home, fs) → the code the last `install` ran (string), null (a record that names none, or one that cannot be read), undefined (never)
-//   refreshCommand({ home, root, fs }) → 'trocar update' when this code changed since the last install and update knows this copy's channel, else 'trocar install'
+//   pulledPastInstall({ home, root, env, platform, deps, fs }) → this copy's code changed since its own last install (a git pull by hand)
+//   refreshCommand({ … }) → 'trocar update' when pulledPastInstall and update knows this copy's channel, else 'trocar install'
 import nodeFs from 'node:fs'
+import path from 'node:path'
 import { codeId, channelOf } from '../version.mjs'
 import { readManifest } from '../off/manifest.mjs'
 import { collectorDir } from '../off/paths.mjs'
@@ -17,11 +19,21 @@ export function installedCode(home, fs = nodeFs) {
   return typeof m.install.code === 'string' && m.install.code ? m.install.code : null
 }
 
-/** §3.5 · §3.7: the one way out of a service on other code or a stale trocar-off. This code was not installed yet (a git pull by hand, files replaced
- *  under an npm or script copy): `trocar update` switches what is on off, replaces the service, installs and switches it on again (§5.5) — install
- *  alone leaves the entries `on` wrote (D55①). Otherwise (another copy started the service, or nothing changed since the install): `trocar install`. */
-export function refreshCommand({ home, root, fs = nodeFs }) {
-  const installed = installedCode(home, fs)
-  const changed = installed !== undefined && installed !== codeId(root)
-  return changed && ['git', 'npm', 'script'].includes(channelOf(root, { home, fs })) ? 'trocar update' : 'trocar install'
+/** §5.5: the code of this copy changed since this copy's last install. A record that names other code (or none), read cleanly, and a login entry that
+ *  starts THIS copy: a pull keeps the program path, another checkout or copy does not (its install is its own, `trocar install` from here takes over).
+ *  A manifest that cannot be read is not this case: install refuses it and says why, so nothing is switched off for an install that cannot run. */
+export async function pulledPastInstall({ home, root, env = process.env, platform = process.platform, deps = {}, fs = nodeFs }) {
+  let m
+  try { m = readManifest(collectorDir(home), fs) } catch { return false }
+  if (!m || m.unsupported || !m.install || typeof m.install !== 'object') return false
+  const installed = typeof m.install.code === 'string' && m.install.code ? m.install.code : null
+  if (installed === codeId(root)) return false
+  const { entryStartsThisCopy } = await import('./replace-daemon.mjs')
+  return entryStartsThisCopy({ home, env, platform, deps: { ...deps, script: deps.script || path.join(root, 'bin', 'trocar.mjs') }, fs })
+}
+
+/** §3.5 · §3.7: the one way out of a service on other code or a stale trocar-off — trocar update when this copy was pulled past its own install and
+ *  update knows its channel (it finishes as an update: §5.5), else trocar install (another copy started the service, or nothing changed since). */
+export async function refreshCommand(o) {
+  return ['git', 'npm', 'script'].includes(channelOf(o.root, { home: o.home, fs: o.fs || nodeFs })) && await pulledPastInstall(o) ? 'trocar update' : 'trocar install'
 }
