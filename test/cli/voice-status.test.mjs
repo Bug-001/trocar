@@ -86,6 +86,13 @@ test('doctor over a real document: the findings doctor makes of its own (a servi
   const io = fakeIo()
   await runDoctor(['--json'], { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { spawn: absentSpawn, has: () => true, request: asDaemon(reply({ code: '9.9.9+fffffff' })), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice', exec: recordingExec().run } })
   const doc = { ...JSON.parse(io.stdoutText()), status: { failures: null } }
+  // §1.1 颜色: the headline is bold on a terminal only, and NO_COLOR turns that off; a pipe gets the same words with no escape byte
+  const text = async (tty, env = {}) => { const o = fakeIo({ tty }); await runDoctor([], { io: o, home: s.home, platform: 'linux', env: { ...s.sh.env, ...env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { spawn: absentSpawn, has: () => true, request: asDaemon(reply({ code: '9.9.9+fffffff' })), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice', exec: recordingExec().run } }); return o.stdoutText() }
+  const [pipe, tty] = [await text(false), await text(true)]
+  assert.ok(!pipe.includes('\u001b') && /^\u001b\[1m/.test(tty), 'bold on a terminal, plain in a pipe')
+  assert.equal(tty.split('\n')[0].replace(/\u001b\[\d+m/g, ''), pipe.split('\n')[0], 'the same words')
+  process.env.NO_COLOR = '1'
+  try { assert.ok(!(await text(true)).includes('\u001b'), 'NO_COLOR: no escape byte on a terminal either') } finally { delete process.env.NO_COLOR }
   assert.ok(doc.findings.some((f) => f.code === 'daemon-other-code'), 'the fixture has a finding of doctor\'s own')
   const short = doctorShort(doc, { now: NOW }), copy = doc.findings.flatMap((f) => [...f.commands.filter((c) => c.shell !== 'gui').map((c) => c.run), f.verify || []])
   plain(short.filter((l) => !copy.some((c) => c && l.trimEnd().endsWith(c))), 'doctor')
