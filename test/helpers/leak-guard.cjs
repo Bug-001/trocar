@@ -112,9 +112,9 @@ function names(dir) {
 
 /** pid → start time of the process running under it now, for those of `pids` that run; without `process.pid` in it, nothing is
  *  known. Windows has no `ps`: a running pid is taken as the same process. */
-function started(pids) {
+function started(pids, tz = undefined) {
   if (process.platform === 'win32') return new Map(pids.filter((pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }).map((pid) => [pid, '']))
-  const r = require('node:child_process').spawnSync('/bin/ps', ['-o', 'pid=', '-o', 'lstart=', '-p', pids.join(',')], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } })
+  const r = require('node:child_process').spawnSync('/bin/ps', ['-o', 'pid=', '-o', 'lstart=', '-p', pids.join(',')], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', ...(tz ? { TZ: tz } : {}) } })
   return new Map(String(r.stdout ?? '').split('\n').map((l) => l.trim().split(/\s+/)).filter(([pid]) => pid).map(([pid, ...t]) => [Number(pid), t.join(' ')]))
 }
 
@@ -126,11 +126,14 @@ function sweep(runDir) {
   const owners = new Map(names.map((n) => {
     try { const m = JSON.parse(fs.readFileSync(path.join(tmp, n, RUNNER), 'utf8')); return [n, Number.isInteger(m.pid) ? m : null] } catch { return [n, null] }
   }))
-  const running = started([process.pid, ...[...owners.values()].filter(Boolean).map((m) => m.pid)])
-  try { fs.writeFileSync(path.join(runDir, RUNNER), JSON.stringify({ pid: process.pid, start: running.get(process.pid) ?? null })) } catch { /* not recorded: swept once a day old */ }
+  // `lstart` is printed in ps's time zone, so a runner under another TZ would read a live runner's start as another process's and remove its
+  // directory in the middle of its run: each runner records its start in UTC too (`utc`) and is compared by it. `start` (the local zone)
+  // stays for a runner whose guard predates `utc`, which compares by it and reads by it
+  const pids = [process.pid, ...[...owners.values()].filter(Boolean).map((m) => m.pid)], running = started(pids), utc = started(pids, 'UTC')
+  try { fs.writeFileSync(path.join(runDir, RUNNER), JSON.stringify({ pid: process.pid, start: running.get(process.pid) ?? null, utc: utc.get(process.pid) ?? null })) } catch { /* not recorded: swept once a day old */ }
   for (const [n, owner] of owners) {
-    const dir = path.join(tmp, n)
-    const gone = owner && running.has(process.pid) && (!running.has(owner.pid) || (owner.start !== null && running.get(owner.pid) !== owner.start))
+    const dir = path.join(tmp, n), [now, was] = owner && owner.utc != null ? [utc, owner.utc] : [running, owner && owner.start]
+    const gone = owner && running.has(process.pid) && (!running.has(owner.pid) || (was != null && now.get(owner.pid) !== was))
     if (owner ? gone : old(dir)) removeTree(dir)
   }
 }
