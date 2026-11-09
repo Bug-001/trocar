@@ -20,6 +20,7 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const SEGMENTS = 24, CALLS = 60, ASK = 30_000, SESSION_CALLS = 3_000
 const line = (seg, n) => JSON.stringify({ ts: '2026-11-05T09:00:00.000Z', endpoint: '/v1/chat/completions', method: 'POST',
@@ -46,7 +47,7 @@ async function homeOf(prefix, segment = '20261020T164737Z') {
 }
 const answer = () => ({ status: 0, writeHead(s) { this.status = s }, write: () => true, end() {}, once() {} })
 const sidecars = (home, segments) => segments.filter((s) => fs.existsSync(usageFile(home, s))).length
-const folded = (home, id) => { const h = readHead(home, id); return h?.tier === 1 && h.pending === null }
+const folded = (home, id) => { const h = readHead(home, id); return h?.tier === 1 && h.pending === null && listed(h) }
 const service = (home) => { const r = reporting(workerFork); return { r, svc: createQueryService({ home, fork: r.fork, idleMs: 60_000 }) } }
 const ready = async (svc) => { const a = answer(); await svc.relay({ name: 'sessions', params: {}, res: a }); assert.equal(a.status, 200) }
 

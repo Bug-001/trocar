@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { normResp } from '../../src/view/analyze.mjs'
+import { normResp } from '../../src/dissect/record-fields.mjs'
 import { normResp as normResponses, normRespChat } from '../../src/dissect/openai.mjs'
 import { normRespWs } from '../../src/dissect/openai-ws.mjs'
 

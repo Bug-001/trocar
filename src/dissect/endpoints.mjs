@@ -8,7 +8,7 @@
 // matching row wins, so the token-count row comes first (`/v1/messages/count_tokens` is a ruler, not inference, 3.2).
 // `wire` is the wire format the path names on its own, or null when the path names none the board dissects (Gemini, D37 ⑥).
 // `unsupported` names an inference wire with no dissector in v1 (D37 ⑥), which the registry labels.
-export const ENDPOINTS = Object.freeze([
+const ENDPOINTS = Object.freeze([
   { path: '.*count_tokens.*', class: 'token-count', wire: null },
   { path: '.*/v1/messages$', class: 'llm', wire: 'anthropic' },            // Anthropic Messages (incl. relay prefixes)
   { path: '.*/responses$', class: 'llm', wire: 'openai-responses' },       // OpenAI Responses (Codex)

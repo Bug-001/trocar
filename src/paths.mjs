@@ -24,10 +24,6 @@ import path from 'node:path';
 
 export const trocarHome = () => path.join(os.homedir(), '.trocar');
 
-// reverse-proxy / relay tee (CC-CLI, Codex, OpenCode, DeepSeek-CLI)
-export const captureOut = () => path.join(trocarHome(), 'capture.ndjson');
-// MITM (Claude Desktop — the only source that must decrypt TLS)
-export const mitmOut = () => path.join(trocarHome(), 'claude-capture.ndjson');
 // The per-user process collector's own state and logs (RFC 4.6 §记录) live here: ca/ flows/ audit/ replays/ lock
 // state.json. NO envelopes — those are segments under rawHome(). The board never reads this subtree because a
 // root's scan only descends into <sub>/calls.ndjson (server.mjs scanRoots), and `trocar etl <dir>`

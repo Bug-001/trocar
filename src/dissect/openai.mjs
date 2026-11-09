@@ -111,7 +111,7 @@ export function resourceRef(block) {
 // the board's per-block rules for a reply on the OpenAI wires (resource links, faithfulness)
 export const REPLY_RULES = Object.freeze({ resourceRef, faith: (bl) => (bl.type === 'thinking' ? faithfulness(bl) : undefined) });
 // a short label for the (single) Codex instructions block.
-export function sysLabel(text) {
+function sysLabel(text) {
   const t = text || '';
   if (/^You are Codex/.test(t)) return 'Codex instructions';
   if (/<skills_instructions>|<plugins_instructions>/.test(t)) return 'developer instructions';

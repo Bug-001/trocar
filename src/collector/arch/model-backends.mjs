@@ -8,7 +8,7 @@ import { isModelOs, ruleUFiles } from '../model-install.mjs'
 import { redactProxyUrl } from '../../netenv/redact.mjs'
 import { recordDrift } from '../../netenv/adopt.mjs'
 import { userWhich } from '../../off/user-path.mjs'
-export { MODEL_OS, isModelOs } from '../model-install.mjs' // the one list of the OSes the model runs on
+export { isModelOs } from '../model-install.mjs' // the one list of the OSes the model runs on
 
 /** The installed signing helper the darwin custody runs (4.11 P1): under ~/.trocar/bin, beside trocar-off. */
 export const signHelperPath = (home, name) => path.join(home, '.trocar', 'bin', name)

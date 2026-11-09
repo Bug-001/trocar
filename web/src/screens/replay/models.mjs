@@ -20,6 +20,7 @@ import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
 import { ENTRY, ENTRY_TIP } from '../../../legacy/labels/library.mjs'
 import { stepCount, partsOf, stepAt, placeSpan } from './strip-layout.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
+import { titleCase, titleText } from '../../../legacy/core/titles.mjs'
 // no price table yet, or an unreadable one: the one reason an unpriced number gives (2.2 §「≈ $」按钮), never "no unit price"
 const tableWhy = (s) => (s.pricingErr ? priceStateNote(null, s.pricingErr) : W.PRICES_LOADING)
 
@@ -88,12 +89,12 @@ export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {})
   const slugOk = meta.project_slug && meta.project_slug !== '_unresolved'
   const hs = Array.isArray(meta.harnesses) ? meta.harnesses : null // the `sessions` multi-harness field; provider:'mixed' is never this signal (D37 ①)
   const hk = meta.harness != null ? harnessKey(meta.harness) : null
-  const unread = meta.title_source === 'unread'
+  const tc = titleCase(meta)
   return {
     back: backOf(libraryHash),
     // the title never borrows the id or the start time (the start is its own part)
-    title: { text: meta.title ?? null, fallback: meta.title != null ? null : unread ? W.PROMPT_UNREAD : W.UNTITLED, id: meta.session_id || '',
-      sourceTip: meta.title != null ? W.TITLE_FROM_WIRE : unread ? W.PROMPT_UNREAD_TIP : W.TITLE_UNTITLED_NEXT_TIP }, // a title always comes from the wire (4.4)
+    title: { text: meta.title ?? null, fallback: tc === 'title' ? null : titleText(meta), id: meta.session_id || '', // the list's rule (1.8 §标题规则)
+      sourceTip: { title: W.TITLE_FROM_WIRE, unread: W.PROMPT_UNREAD_TIP, none: W.TITLE_UNTITLED_NEXT_TIP, pending: W.TITLE_PENDING_TIP }[tc] }, // a title always comes from the wire (4.4)
     chip: { key: hk, name: harnessName(meta.harness), raw: harnessRaw(meta.harness), icon: harnessIconUrl(meta.harness),
       href: hk ? `#/capture?h=${encodeURIComponent(hk)}` : '#/capture', inferred: !!meta.harness_inferred, synthesized: !!meta.session_synthesized,
       multi: hs && hs.length > 1 ? { text: W.MULTIPLE_AGENTS, tip: W.MULTIPLE_AGENTS_TIP, inferred: hs.some((x) => x && (x.inferred || x.harness_inferred)) } : null },
@@ -222,7 +223,8 @@ export function stepHeadModel(s) {
     return at != null && h.tier ? { rough: true, n: at + 1, m: h.steps, read, label: read ? W.stepRead(at + 1, read.done, read.total) : W.stepNo(at + 1, h.steps) } : null
   }
   const main = s.anchor.kind === 'main', r = stepRef(s.lanes, call.rid)
-  const no = r ? (r.step ? r.n : r.k) : s.playhead + 1, m = r ? r.m : s.anchor.calls.length
+  // a step's M is the session's step count, the strip's: a head ending a first read lands before the files that carry the lane's count (1.2 §编号)
+  const no = r ? (r.step ? r.n : r.k) : s.playhead + 1, m = main ? stepCount(s) : r ? r.m : s.anchor.calls.length
   const ref = refRowOf(s.anchor, s.playhead), fid = callFacts(call), model = modelOf(call)
   return {
     rough: false, n: main ? no : null, k: main ? null : no, m, read, laneWord: main ? null : W.laneWord(s.anchor.kind),

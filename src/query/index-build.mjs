@@ -36,7 +36,7 @@ import { expandRequestBody } from '../dissect/request-body.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { fpRanges, readRangeSync } from './source.mjs';
 import { openSealed } from '../raw/reader.mjs';
-import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
+import { R, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 import { trocarHome, collectorHome } from '../paths.mjs';
 import { readDaemonLock } from '../off/daemon-stop.mjs';
 import { statKey, warmCache, fsTag } from './warm.mjs';
@@ -44,7 +44,19 @@ import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
-const INDEX_V = 11;
+const INDEX_V = 12;
+// FACTS_V: the version of BODY_FACTS and of every rule they are computed by: src/dissect/synth-key.mjs, the harness rows of
+// src/dissect/harnesses.mjs (session keys, user-agent rules, `synth`, hints, compaction) and the reply readers synth-key calls (the
+// dissectors' normResp, analyze.mjs's). A change to any of those bumps FACTS_V, not INDEX_V alone: an INDEX_V-only bump copies these
+// facts as they were. INDEX_V: the envelope's fields and the file's shape. A mark carries both (4.2 §段索引 两个版本键); one with no
+// `fv` is FACTS_V 1's when its v is 12 (the facts as INDEX_V 12 is released with them), and of no known facts before it.
+const FACTS_V = 1;
+const fvOf = (o) => o.fv ?? (o.v === 12 ? 1 : null);
+// What a reader's `v` asks of a mark: SEGMENT (the default), the segment index's two keys; a number, that `v` alone (the usage sidecar's, usage.mjs)
+const SEGMENT = Symbol('the segment index');
+const fits = (o, v) => (v === SEGMENT ? o.v === INDEX_V && fvOf(o) === FACTS_V : o.v === v);
+/** The entry's fields taken from the request body: an envelope-only INDEX_V change copies them from the old index (4.2 §段索引). */
+export const BODY_FACTS = Object.freeze(['session_key', 'synth_hash', 'kin_fp', 'kin_probe', 'kin_chain', 'kin_items', 'kin_late', 'kin_mark', 'kin_reply']);
 const CHUNK = 1 << 20;
 /** How long a scan that was given `ease` holds the event loop at most, give or take a chunk or EASE_EVERY records (3.5 §行表先读). */
 const EASE_MS = 50, EASE_EVERY = 64;
@@ -71,13 +83,20 @@ const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v
 // ── one line → one index record ───────────────────────────────────────────
 // A line that is not JSON can never be indexed (its bytes are still on disk and `raw cat` still prints
 // them): it is reported, and it keeps its line number so every later record's id stays what it was.
-function recordOf(lineBuf, segment, lineNo, problems, offset = null, memo = null) {
+function recordOf(lineBuf, segment, lineNo, problems, offset = null, memo = null, prior = null) {
   let e;
   try { e = JSON.parse(lineBuf.toString('utf8')); } catch (err) {
     problems.push({ code: 'record-unparseable', reason: `${recordId(segment, lineNo)} is not JSON (${err.message}); it is left out of the index` });
     return null;
   }
-  return indexEntryOf(e, { segment, lineNo, storedBytes: lineBuf.length, offset, memo });
+  return indexEntryOf(e, { segment, lineNo, storedBytes: lineBuf.length, offset, memo, facts: prior && priorFacts(prior, segment, lineNo, lineBuf.length, offset) });
+}
+// This line's body facts from the old index (`prior`: its entries by id), when its entry is this line's: the same id, stored bytes and
+// offset (null in a sealed segment's); else null, and they are computed.
+function priorFacts(prior, segment, lineNo, storedBytes, offset) {
+  const old = prior.get(recordId(segment, lineNo));
+  if (!old || old.stored_bytes !== storedBytes || (old.offset ?? null) !== offset) return null;
+  return old;
 }
 
 /**
@@ -90,12 +109,11 @@ function recordOf(lineBuf, segment, lineNo, problems, offset = null, memo = null
  *   offset: where the line starts in the plaintext segment (null: sealed).
  *   memo: a scan's synthFactsOf memo (one per scan of one segment, dropped with it); the entry is the same without it.
  */
-export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null, memo = null }) {
-  // the body as the board reads it: a request body stored compressed (req_body null + req_body_b64) still carries its session key
-  const e = expandRequestBody(env);
+export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null, memo = null, facts = null }) {
+  // `facts`: an entry whose BODY_FACTS are this record's (the old index's, 4.2 §段索引): then the body is never read
+  const f = facts || bodyFactsOf(env, memo), e = env;
   const wire = e.body_wire_bytes || {};
   const h = harnessOf(e);
-  const synth = synthFactsOf(e, memo);
   return {
     id: recordId(segment, lineNo),
     ts: e.ts_request ?? e.ts ?? null,
@@ -107,7 +125,7 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null,
     stored_bytes: storedBytes,
     sent_bytes: finite(wire.req),
     received_bytes: finite(wire.resp),
-    session_key: sessionKeyOf(e).key ?? null,
+    session_key: f.session_key,
     is_llm: !!e.is_llm_call,
     ws: e.transport === 'ws',  // a WebSocket logical call: no HTTP status, so the index row's failed rule never counts it (failedOf)
     // the session facts: harness_id is the harness the BOARD decides (proc, else the UA — and it says which)
@@ -118,6 +136,26 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null,
     entrypoint: entrypointOf(e),
     log_only: isLogOnly(e),
     subagent: !!String(headerOf(e, 'x-claude-code-agent-id') || '').trim(),
+    synth_hash: f.synth_hash,
+    // kinship and chains (3.4 按内容认亲 · 合成键): what bodyFactsOf says
+    kin_fp: f.kin_fp,
+    kin_probe: f.kin_probe,
+    kin_chain: f.kin_chain,
+    kin_items: f.kin_items,
+    kin_late: f.kin_late,
+    kin_mark: f.kin_mark,
+    kin_reply: f.kin_reply,
+    offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
+  };
+}
+
+/** bodyFactsOf(env, memo) → the BODY_FACTS of one record, read from its request body (expanded when stored compressed). */
+function bodyFactsOf(env, memo = null) {
+  // the body as the board reads it: a request body stored compressed (req_body null + req_body_b64) still carries its session key
+  const e = expandRequestBody(env);
+  const synth = synthFactsOf(e, memo);
+  return {
+    session_key: sessionKeyOf(e).key ?? null,
     synth_hash: synth && synth.hash != null ? synth.hash : null,
     // kinship (3.4 按内容认亲): any call of a `synth: true` harness → the user-text fingerprints its session is recognized by; a
     // keyless call that is its harness's compaction request → the ones it looks with. Space-joined strings ('' when none): a scalar row.
@@ -130,7 +168,8 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null,
     kin_items: synth && synth.items ? synth.items.join(' ') : null,
     kin_late: synth && synth.late != null ? synth.late : null, // how many of kin_fp come from user texts after the first
     kin_mark: !!(synth && synth.mark),
-    offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
+    // a reply as kinship evidence (3.4 按内容认亲): its sampled windows as one item (count, first, last, digest), base64: hashes, never text
+    kin_reply: (synth && synth.reply) ?? null,
   };
 }
 
@@ -140,7 +179,7 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null,
 // one whole line, so a caller that loops until `done` always makes progress, however long a single line is.
 // `progress` is called after every chunk read: a scan of a cold segment is background work the query worker reports (3.5 后台抽取与归约).
 // `ease`: see `easing`; the fd stays open across it, and the scan reads only as far as the size it saw when it began.
-async function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity, progress = null, ease = null) {
+async function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity, progress = null, ease = null, prior = null) {
   const fd = fs.openSync(file, 'r');
   try {
     const st = fs.fstatSync(fd);
@@ -149,7 +188,7 @@ async function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes
     let pos = from, lineStart = from, lineNo = firstLine - 1, pending = Buffer.alloc(0);
     const take = (lineBuf) => {
       lineNo++;
-      if (lineBuf.length) { const r = recordOf(lineBuf, segment, lineNo, problems, lineStart, memo); if (r) records.push(r); }
+      if (lineBuf.length) { const r = recordOf(lineBuf, segment, lineNo, problems, lineStart, memo, prior); if (r) records.push(r); }
       lineStart += lineBuf.length + 1;
     };
     while (pos < st.size && (lineStart === from || pos - from < maxBytes)) {
@@ -184,7 +223,7 @@ async function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes
 // A sealed segment: its own index already knows every line's number and length, so the records come
 // out with the ids they had before sealing (V88). A file that cannot be read is reported, never
 // silently empty.
-async function scanSealed(fs, file, segment, problems, ease = null) {
+async function scanSealed(fs, file, segment, problems, ease = null, prior = null) {
   let sf;
   try { sf = openSealed(file, { fs }); } catch (e) {
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(file)}: ${String((e && e.message) || e)}` });
@@ -200,7 +239,7 @@ async function scanSealed(fs, file, segment, problems, ease = null) {
       try { line = sf.lineAt(i); } catch (e) { problems.push({ code: 'record-unreadable', reason: `${recordId(segment, lineNo)}: ${String((e && e.message) || e)}` }); continue; }
       if (line.length && line[line.length - 1] === NL) line = line.subarray(0, line.length - 1);
       if (!line.length) continue;
-      const rec = recordOf(line, segment, lineNo, problems, null, memo);
+      const rec = recordOf(line, segment, lineNo, problems, null, memo, prior);
       if (rec) records.push(rec);
     }
     return { records, mark: sealedMark(fs, file), bytesRead: fs.statSync(file).size, done: true };
@@ -216,7 +255,7 @@ async function scanSealed(fs, file, segment, problems, ease = null) {
 // its own. A v3 document has no mark line, so it is simply stale and is rebuilt like any stale index.
 const entryLine = (r) => `${JSON.stringify(r)}\n`;
 const problemLine = (p) => `${JSON.stringify({ p })}\n`;
-const markLine = (m) => `${JSON.stringify({ m, v: INDEX_V })}\n`;
+const markLine = (m) => `${JSON.stringify({ m, v: INDEX_V, fv: FACTS_V })}\n`;
 const fpDigest = (read, end) => { const h = createHash('sha256'); for (const [a, b] of fpRanges(end)) h.update(read(a, b)); return h.digest('base64'); };
 
 // The whole document, for a READER: everything up to the last complete mark line.
@@ -225,7 +264,7 @@ const fpDigest = (read, end) => { const h = createHash('sha256'); for (const [a,
 // reads only the bytes past that mark while the file is still that one (same ino: a whole rewrite is a rename, a new file) and
 // the mark line's bytes at its offset are unchanged (the keeper cuts a torn batch back to a mark, never before the last one it
 // wrote); else whole. The entries are the whole read's either way (4.2:49): keeping them current costs the new lines (D62).
-export function readIndex(fs, file, v = INDEX_V, past = null) {
+export function readIndex(fs, file, v = SEGMENT, past = null) {
   if (past && past.read) { const got = readPast(fs, file, v, past); if (got !== undefined) return got; }
   let ino = null, buf;
   try { ino = fs.statSync(file).ino } catch { /* read below says whether it is there */ }
@@ -254,10 +293,24 @@ function lastMark(lines, v, got) {
     const o = lines[i];
     if (!o || typeof o !== 'object') break;
     if (!o.m) continue;
-    if (o.v !== v) return null;
+    if (!fits(o, v)) return null;
     got.mark = o.m; upTo = i;
   }
   return upTo;
+}
+// The entries of an index whose INDEX_V is past but whose facts are current (4.2 §段索引 两个版本键), by id, for a rebuild that copies their
+// BODY_FACTS: only while that index's mark says `source` is still the file it indexed, or that file appended to, so no line moved; else null.
+function priorIndex(fs, file, source) {
+  let buf;
+  try { buf = fs.readFileSync(file) } catch { return null; }
+  let lines;
+  try { lines = JSON.parse(asArray(buf)); } catch { lines = completeLines(buf); }
+  let upTo = -1, last = null;
+  for (let i = 0; i < lines.length; i++) { const o = lines[i]; if (!o || typeof o !== 'object') break; if (o.m) { upTo = i; last = o; } }
+  if (!last || fvOf(last) !== FACTS_V || usability(fs, source, { mark: last.m }) === 'rebuild') return null;
+  const byId = new Map();
+  for (let i = 0; i < upTo; i++) { const o = lines[i]; if (!o.m && !o.p && typeof o.id === 'string') byId.set(o.id, o); }
+  return byId;
 }
 // Where a read of `buf` (the file's bytes from `base`) that ends with line `upTo` stopped: { ino, at, line }.
 function readTo(buf, base, upTo, ino) {
@@ -319,7 +372,7 @@ let tmpSeq = 0; // see storeIndex: the temp name is unique per call, not only pe
 const TAIL = 64 << 10; // a mark line is a few hundred bytes: room for it plus a torn batch, and widened if not
 // The last complete mark line WITHOUT the entries, for the keeper: all it needs is where its last pass ended (and
 // what to cut back), so its CPU per pass does not grow with the segment's record count either (D62).
-export function tailMark(fs, file, v = INDEX_V) {
+export function tailMark(fs, file, v = SEGMENT) {
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch { return null; }
   try {
@@ -339,7 +392,7 @@ export function tailMark(fs, file, v = INDEX_V) {
         let o;
         try { o = JSON.parse(body.subarray(at, nl)); } catch { break; }
         at = nl + 1;
-        if (o && o.m) { if (o.v !== v) return null; found = { mark: o.m, covered: from + at }; }
+        if (o && o.m) { if (!fits(o, v)) return null; found = { mark: o.m, covered: from + at }; }
       }
       if (found) return found;
       if (from === 0) return null;
@@ -503,7 +556,7 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
   const sealed = /\.sealed$/.test(source);
   const idxFile = path.join(indexDir(home), `${segment}.json`);
   // the keeper needs the stored mark and where it ended (only it appends); a reader needs the entries behind it
-  const stored = owner && !sealed ? tailMark(fs, idxFile) : readIndex(fs, idxFile, INDEX_V, past);
+  const stored = owner && !sealed ? tailMark(fs, idxFile) : readIndex(fs, idxFile, SEGMENT, past);
   const how = usability(fs, source, stored);
   // A stored index remembers what it could NOT read, and says it again on every later read: a problem
   // that only the read which BUILT the index reports would go silent the second time (D38).
@@ -514,12 +567,16 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
   if (how === 'reuse') return { segment, source, records: stored.records || [], problems: stored.problems || [], bytesRead: 0, done: true, stored: kept, grown };
   if (warmOnly && (how === 'rebuild' || fs.statSync(source).size - stored.mark.end > KEEPER_CHUNK_BYTES)) throw new IndexPending(`the index of ${segment} is not usable yet`);
   const prior = how === 'resume' && stored.problems ? stored.problems : []; // stored by an earlier pass, said again
+  // no index of this version: one whose facts are still current gives them, so the scan reads envelopes only (4.2 §段索引 两个版本键)
+  const old = !stored ? priorIndex(fs, idxFile, source) : null;
+  // shortcut: a keeper's rebuild in chunks (maxBytes) copies for its first chunk only, since that chunk's write replaces the old index and
+  // the next chunks resume with nothing to copy from; upgrade if the live segment's rebuild after an INDEX_V-only bump shows on the daemon's loop
   let got;
   try {
     got = sealed
-      ? await scanSealed(fs, source, segment, problems, ease)
+      ? await scanSealed(fs, source, segment, problems, ease, old)
       : (owner && fromEntries(fs, source, stored, how, entries))
-        || await scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes, progress, ease);
+        || await scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes, progress, ease, old);
   } catch (e) {
     if (plainWentSealed(home, segment, fs, source)) return segmentIndex({ home, segment, fs, maxBytes, owner, entries, past, progress });
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(source)}: ${String((e && e.message) || e)}` });

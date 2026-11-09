@@ -12,6 +12,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { mockUpstream } from '../helpers/mock-upstream.mjs'
+import { identityStubs } from '../helpers/lock-probe.mjs'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const SCRIPT = path.join(REPO, 'install', 'install.sh')
@@ -57,7 +58,7 @@ test.after(() => up?.close())
 
 /** Runs the installer with a fresh (or given) HOME; `input` pipes that text to `sh -s` instead of passing the file. */
 function install(args, { home = tmpDir('trocar-install-home-'), shell = 'sh', input, path: PATH = process.env.PATH } = {}) {
-  const env = { ...process.env, HOME: home, PATH, TROCAR_REGISTRY: `${up.base}/r1 ${up.base}/r2`, TROCAR_NODE_MIRROR: `${up.base}/n1 ${up.base}/n2` }
+  const env = { ...process.env, HOME: home, PATH: `${identityStubs(path.join(work, 'id-bin'))}${path.delimiter}${PATH}`, TROCAR_REGISTRY: `${up.base}/r1 ${up.base}/r2`, TROCAR_NODE_MIRROR: `${up.base}/n1 ${up.base}/n2` }
   for (const k of ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']) delete env[k]
   const asked = up.requests.length
   return new Promise((done) => {

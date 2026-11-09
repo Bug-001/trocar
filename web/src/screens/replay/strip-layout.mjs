@@ -73,7 +73,9 @@ export function stripLayout(chapters, W) {
 // the steps there are: the head's count may lag the lane's, and the lane's rows may be fewer than either
 export function stepCount(s) {
   const h = s.desk && s.desk.head, a = s.anchor
-  return Math.max((h && h.steps) || 0, (a && a.count) || 0, a ? a.calls.length : 0)
+  // the head's steps count its axis lane (a tier-0 head's, axis null, every model call): they are this lane's only on that axis
+  const own = h && (!a || (h.axis != null && a.id === h.axis)) ? h.steps || 0 : 0
+  return Math.max(own, (a && a.count) || 0, a ? a.calls.length : 0)
 }
 // the parts in global steps: the head's chapters, the last one holding every step written since; one part when they are another lane's
 export function partsOf(s) {

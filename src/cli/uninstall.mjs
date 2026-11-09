@@ -564,7 +564,7 @@ const REMOVE_TRIES = 20000 // and a count, in case the clock cannot be read as h
  *  removes app\, retried while Windows releases node.exe's image for REMOVE_WITHIN_S seconds by the clock (and at most REMOVE_TRIES times). Only once
  *  app\ is gone do the launcher and the directories `dirs` left empty (innermost first) go; when it is still there, `failure.line` is appended to
  *  `failure.file` and the launcher stays, so the next `trocar uninstall` can be run. */
-export function deferredRemoval({ app, launcher, pointer, dirs, env, failure }) {
+function deferredRemoval({ app, launcher, pointer, dirs, env, failure }) {
   const v = Object.fromEntries(Object.entries(env).filter(([k]) => !/^TROCAR_RM_/i.test(k)))
   Object.assign(v, { TROCAR_RM_APP: app, TROCAR_RM_LAUNCHER: launcher, TROCAR_RM_POINTER: pointer, TROCAR_RM_FAILED: failure.line, TROCAR_RM_FLOW: failure.file, TROCAR_RM_FLOWS: path.win32.dirname(failure.file) }) // Windows only: win32 reads either separator
   ;[...dirs].reverse().forEach((dir, i) => { v[`TROCAR_RM_DIR${i}`] = dir })

@@ -28,7 +28,7 @@ import { extendChain, linked, segmentsIn, sourceOf, createLinks, withUnread } fr
 const bodyOf = (rec) => { const b = parsedRequestBody(rec); return b && typeof b === 'object' ? b : null; };
 
 // → null (no thread) | { kind: 'create' | 'continue' | <other>, prevId }
-export function threadOf(body) {
+function threadOf(body) {
   const t = body && body.thread;
   if (!t || typeof t !== 'object') return null;
   const prevId = typeof t.previous_message_id === 'string' && t.previous_message_id ? t.previous_message_id : null;
@@ -152,7 +152,7 @@ function build(rec, body, thread, hp, share) {
 // get(rec) → the call's Plan, or null for a call without `thread`; context(rec) → the request the model was given (the call's own
 // body with system / tools / messages as stitched) with each block located, or null. A record read back later (by id) gets the
 // plan it was given. `read` as chain.mjs createLinks.
-export function threadPlanner(read = null) {
+function threadPlanner(read = null) {
   const byReply = new Map(); // reply id → the plan of the thread call that replied with it
   const plans = new Map(); // record id (the record itself when it has none) → plan | null
   const links = createLinks(read);

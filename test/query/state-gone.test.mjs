@@ -125,7 +125,7 @@ for (const [name, letGo] of [['the ledger making room', () => hold(heapBudget())
   })
 }
 
-test('the descriptors do not grow with the times a state is let go', { skip: process.platform === 'win32' }, async () => {
+test('the descriptors do not grow with the times a state is let go', { skip: process.platform === 'win32' && 'counts descriptors in /dev/fd, which Windows does not have' }, async () => {
   const s = homeWith(30), open = () => fs.readdirSync('/dev/fd').length
   const round = async () => { s.a.append(1); await whole(s); yieldCaches() }
   await round()
