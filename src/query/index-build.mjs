@@ -45,9 +45,11 @@ import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
 const INDEX_V = 12;
-// FACTS_V: the version of the facts taken from the request body (BODY_FACTS) and of the rules that compute them (3.4); INDEX_V, the
-// envelope's fields and the file's shape. A mark carries both (4.2 §段索引 两个版本键); one with no `fv` is FACTS_V 1's when its v is 12,
-// where fv began, and of no known facts before it.
+// FACTS_V: the version of BODY_FACTS and of every rule they are computed by: src/dissect/synth-key.mjs, the harness rows of
+// src/dissect/harnesses.mjs (session keys, user-agent rules, `synth`, hints, compaction) and the reply readers synth-key calls (the
+// dissectors' normResp, analyze.mjs's). A change to any of those bumps FACTS_V, not INDEX_V alone: an INDEX_V-only bump copies these
+// facts as they were. INDEX_V: the envelope's fields and the file's shape. A mark carries both (4.2 §段索引 两个版本键); one with no
+// `fv` is FACTS_V 1's when its v is 12 (the facts as INDEX_V 12 is released with them), and of no known facts before it.
 const FACTS_V = 1;
 const fvOf = (o) => o.fv ?? (o.v === 12 ? 1 : null);
 // What a reader's `v` asks of a mark: SEGMENT (the default), the segment index's two keys; a number, that `v` alone (the usage sidecar's, usage.mjs)
@@ -89,11 +91,11 @@ function recordOf(lineBuf, segment, lineNo, problems, offset = null, memo = null
   }
   return indexEntryOf(e, { segment, lineNo, storedBytes: lineBuf.length, offset, memo, facts: prior && priorFacts(prior, segment, lineNo, lineBuf.length, offset) });
 }
-// This line's body facts from the old index (`prior`: its entries by id), when its entry is this line's: the same id, the same stored bytes,
-// and the same offset where both have one (a plain segment sealed since keeps its lines, V88); else null, and they are computed.
+// This line's body facts from the old index (`prior`: its entries by id), when its entry is this line's: the same id, stored bytes and
+// offset (null in a sealed segment's); else null, and they are computed.
 function priorFacts(prior, segment, lineNo, storedBytes, offset) {
   const old = prior.get(recordId(segment, lineNo));
-  if (!old || old.stored_bytes !== storedBytes || (offset != null && old.offset != null && old.offset !== offset)) return null;
+  if (!old || old.stored_bytes !== storedBytes || (old.offset ?? null) !== offset) return null;
   return old;
 }
 
