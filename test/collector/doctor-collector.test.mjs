@@ -44,7 +44,7 @@ test('doctor reports the collector: a running-but-untrusted agent with its reaso
     appendEvent(dir, { event: 'agent-untrusted', pid: 4242, agent: 'claude-code', code: 'var-missing', reason: 'no trocar trust entry is in effect for this process' })
     writeStandalone({ home }) // what `trocar on` writes next to the install record: without it `doctor` has a problem of its own (standalone-stale), and this test is about the collector's own report
     const source = cleanSource(home)
-    const { status, out } = doctor(home, source)
+    const { status, out } = doctor(home, source, ['--details']) // the install notes and the reasons are facts of --details
     assert.equal(status, 1, `the capture failure status counts makes doctor exit 1:\n${out}`)
     assert.match(out, /Notes of the last install/)
     assert.match(out, /codex: .*corp\.pem: block 1 \(PRIVATE KEY\) is not carried over/, `the block that was not merged: its type and its file:\n${out}`)

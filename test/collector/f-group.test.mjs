@@ -89,7 +89,7 @@ async function endpoint(s) {
 // (iii): `trocar collector status` with no daemon answering — it reads the disk
 async function statusOffline(s) {
   const o = []
-  const code = await runStatusCli(['--failures'], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home,
+  const code = await runStatusCli(['--failures', '--details'], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home,
     deps: { request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test: nothing looked at' }] }) } }) // on a Mac status asks launchd and the keychain (read-only): the runner is the test's
   return { code, text: o.join('\n') }
 }
@@ -212,7 +212,7 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
   assert.equal(ca.reason, flowsOf(s).filter((r) => r.code === 'ca-invalid').at(-1).reason, '(iii) its reason is the newest record\'s, verbatim (C.3)')
   assert.ok(st.text.includes(failureBrief(ca)), '(iii) the offline text words it as words.mjs does')
   assert.doesNotMatch(st.text, /ca-invalid/, '(iii) no code on screen')
-  assert.doesNotMatch(st.text, /Certificate +not installed|No harness is set up/) // the harnesses of this machine install did not see are named `not installed:`
+  assert.doesNotMatch(st.text, /Certificate +not installed|No (?:harness|agent) is set up/) // the harnesses of this machine install did not see are named `not installed:`
   await assert.rejects(install(s), /CA|unusable/i, '(c) install does not answer "already installed"')
   p.done(); s.done()
 })

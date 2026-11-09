@@ -257,7 +257,7 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     assert.match(f[0].reason, /settings\.json: trocar cannot read it \(line 1, column \d+\); trocar's env\.NODE_EXTRA_CA_CERTS = .*trocar-ca\.pem may still be in it/)
     const { runStatusCli } = await import('../../src/cli/status.mjs')
     const out = []; const err = []
-    const code = await runStatusCli(['--failures'], { io: { out: (x) => out.push(x), err: (x) => err.push(x) }, home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux',
+    const code = await runStatusCli(['--failures', '--details'], { io: { out: (x) => out.push(x), err: (x) => err.push(x) }, home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux',
       // the control socket is asked through an injected `request` (0.1 §3): the sandbox HOME's socket path is longer than an AF_UNIX path may be on macOS,
       // so a real connect there fails with EINVAL ("does not answer") instead of the ENOENT of a daemon that is simply not running
       deps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test' }] }), request: async () => { throw Object.assign(new Error('no such socket'), { code: 'ENOENT' }) } } })

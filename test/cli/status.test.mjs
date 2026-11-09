@@ -204,7 +204,7 @@ test('the daemon answers: each agent is captured or says why, and the exit code 
   const one = (await docOf(['claude-code'], { request: asDaemon(reply({ agents })) })).harnesses['claude-code']
   assert.deepEqual([one.captured, one.reason], [false, 'config-after-start'])
   assert.deepEqual(one.processes.map((p) => [p.pid, p.captured, p.reason]), [[4121, true, null], [4388, false, 'config-after-start']])
-  r = await run(s, [], { request: asDaemon(reply({ agents: agents.slice(0, 1) })), procs: async () => [claudeProc(4121, Date.now() + 5000)] })
+  r = await run(s, ['--details'], { request: asDaemon(reply({ agents: agents.slice(0, 1) })), procs: async () => [claudeProc(4121, Date.now() + 5000)] })
   assert.equal(r.exit, 0, r.text)
   assert.match(r.text, /^Capturing 2 of 2 installed harnesses\./m)
   assert.match(r.text, /^ {2}claude-code {2}yes$/m)
@@ -265,7 +265,7 @@ test('the entry on disk decides when no process does: intact when the value is t
 test('no daemon: nothing is captured (daemon-not-running), read from the disk, with the processes found by the manifest\'s signatures — each one says the daemon is not running, whenever it started (the entry and the start time only come into it once a daemon answers)', async () => {
   const s = await installedHome()
   const old = Date.now() - 3600e3
-  const r = await run(s, [], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })
+  const r = await run(s, ['--details'], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })
   assert.equal(r.exit, 1, r.text)
   assert.match(r.text, /^Capturing 0 of 2 installed harnesses\.$/m)
   assert.match(r.text, /^Daemon not running; nothing is captured\. Start it: trocar on$/m)
@@ -349,7 +349,7 @@ test('R11: the daemon answers but could not read the kernel state: every harness
 
 test('a daemon that does not answer is daemon-not-responding; --json is one document that validates, with the code ids and the restart list', async () => {
   const s = await installedHome()
-  const r = await run(s, [], { request: down('ETIMEDOUT') })
+  const r = await run(s, ['--details'], { request: down('ETIMEDOUT') })
   assert.match(r.text, /^Daemon does not answer \([^)]*ETIMEDOUT/m); assert.match(r.text, /^ {2}claude-code {2}no {8}trocar runs in the background but does not answer$/m); assert.equal(r.exit, 1)
   const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start' }]
   const j = await run(s, ['--json'], { request: asDaemon(reply({ agents })) })
@@ -423,7 +423,7 @@ test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — no opt-in
 test('connections still relayed after an off: N closing and M waiting, in the text and in --json (cut is 0: only off --now cuts); none is said as none, with no daemon there is no engine', async () => {
   const s = await installedHome()
   assert.deepEqual((await run(s, ['--json'], { request: asDaemon(reply({ relayed: { closing: 2, waiting: 1 } })) })).io.json().relayed, { closing: 2, waiting: 1, cut: 0 })
-  const noresp = await run(s, [], { request: down('ETIMEDOUT') })
+  const noresp = await run(s, ['--details'], { request: down('ETIMEDOUT') })
   assert.match(noresp.text.replace(/\s+/g, ' '), /Connections unknown \([^)]*ETIMEDOUT/, 'a daemon that does not answer cannot say: unknown with the reason, never 0 (R11)')
   assert.doesNotMatch(noresp.text, /Connections {2}\d/, 'and no count is invented')
   assert.equal((await run(s, ['--json'], { request: down('ETIMEDOUT') })).io.json().relayed, 'unknown')
@@ -502,7 +502,7 @@ test('semantics 2: an install manifest that parses but is not a manifest ({"vers
     fs.writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body(JSON.parse(fs.readFileSync(file, 'utf8')))))
     const r = await run(s, [], { request: asDaemon(reply()) })
     assert.equal(r.exit, 3, r.text)
-    assert.ok(!/No harness is set up for capture yet/.test(r.text), 'a manifest nobody can read does not say "nothing is installed"')
+    assert.ok(!/No (?:harness|agent) is set up for capture yet/.test(r.text), 'a manifest nobody can read does not say "nothing is installed"')
     const doc = (await run(s, ['--json'], { request: asDaemon(reply()) })).io.json()
     assert.deepEqual(validateReceipt(doc), [])
     assert.deepEqual(doc.errors.filter((e) => e.where === 'the install record').map((e) => /install-manifest\.json.*not an install manifest this build can use/.test(e.reason)), [true], JSON.stringify(doc.errors))
