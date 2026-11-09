@@ -222,7 +222,8 @@ export function stepHeadModel(s) {
     return at != null && h.tier ? { rough: true, n: at + 1, m: h.steps, read, label: read ? W.stepRead(at + 1, read.done, read.total) : W.stepNo(at + 1, h.steps) } : null
   }
   const main = s.anchor.kind === 'main', r = stepRef(s.lanes, call.rid)
-  const no = r ? (r.step ? r.n : r.k) : s.playhead + 1, m = r ? r.m : s.anchor.calls.length
+  // a step's M is the session's step count, the strip's: a head ending a first read lands before the files that carry the lane's count (1.2 §编号)
+  const no = r ? (r.step ? r.n : r.k) : s.playhead + 1, m = main ? stepCount(s) : r ? r.m : s.anchor.calls.length
   const ref = refRowOf(s.anchor, s.playhead), fid = callFacts(call), model = modelOf(call)
   return {
     rough: false, n: main ? no : null, k: main ? null : no, m, read, laneWord: main ? null : W.laneWord(s.anchor.kind),

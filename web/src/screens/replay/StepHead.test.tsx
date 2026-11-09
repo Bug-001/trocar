@@ -68,6 +68,16 @@ test('1.2 §编号: during a first read .sb-no counts the calls read instead of 
   expect(no.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
 })
 
+// 1.2 §编号: a first read's end. The head without pending says how many steps the session has before the files that carry the main lane's
+// count arrive: the step head says that M, never a finished count shorter than the session
+test('1.2 §编号: the head\'s step count is M while the main lane\'s count has not caught up with it', () => {
+  const { s, view, bar, model } = step({ at: 1 })
+  s.desk.head = { ...s.desk.head, steps: 1580 }; act(() => view.step())
+  const no = bar().querySelector('.sb-no')!
+  expect(no.getAttribute('data-m')).toBe('1580')
+  expect(no.getAttribute('title')).toBe(W.stepNo(model().n, 1580))
+})
+
 // a catch-up (a head with pending after a head without it) is not a first read: N / M stays
 test('1.2 §编号: a catch-up after the first read keeps N / M', () => {
   const { s, view, bar, model } = step({ at: 1 })
