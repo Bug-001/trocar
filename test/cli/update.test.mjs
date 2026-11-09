@@ -886,3 +886,23 @@ test('§5.5: every to-do of the install and the on an update ran is in the updat
     }
   }
 })
+
+// §5.5 pulled by hand: the new code switches off what the OLD code's `on` wrote. off undoes by the record (path, hashes, the ops it wrote), never by a
+// descriptor, so a key the new code no longer writes still comes out; one it cannot reverse is named in the receipt (D38), never silently left
+test('§5.5: off by the new code takes out a key only an older on wrote, by its record; a record it cannot reverse is named', async () => {
+  const { installedHome } = await import('../off/fixtures/off-ctx.mjs')
+  const { applyJsonKey, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
+  for (const edited of [false, true]) {
+    const s = await installedHome({ names: ['claude-code'] })
+    const file = path.join(s.home, '.claude', 'settings.json')
+    const m = readM(s.dir)
+    // an older build's on wrote a key no descriptor of this code knows, through the same writer and record
+    applyJsonKey({ dir: s.dir, manifest: m, harness: 'claude-code', phase: 'on', file, keys: ['env', 'TROCAR_OLDER_BUILD_KEY'], value: 'http://127.0.0.1:1', home: s.home })
+    saveM(s.dir, m)
+    if (edited) fs.appendFileSync(file, '\n{ not json') // a file trocar can no longer read: its record cannot be reversed
+    const r = await s.off({})
+    const rec = r.receipt || r
+    if (!edited) assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /TROCAR_OLDER_BUILD_KEY/, 'the key only the older on wrote is gone, by its record')
+    else assert.ok((rec.left || []).some((x) => x.path === file && /TROCAR_OLDER_BUILD_KEY/.test(x.reason)), `named with its key, not silently left:\n${JSON.stringify(rec.left)}`)
+  }
+})
