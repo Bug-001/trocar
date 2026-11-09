@@ -187,8 +187,16 @@ test('2.3 #32: a rest of 100 ms reads the step\'s own bodies, then the reply bod
       assert.equal(reply.waiting, 0, `step ${n}: the reply bodies are drawn, none waits`)
       assert.ok(refs.some((ref) => reply.text.includes(blockBytes(ref))), `step ${n}: a reply part shows its bytes`)
     }
-    for (let n = k - 1; n >= k - R; n--) { await page.keyboard.press('ArrowLeft'); await page.waitForTimeout(150); await at(n) }
-    for (let n = k - R + 1; n <= k + R; n++) { await page.keyboard.press('ArrowRight'); await page.waitForTimeout(150); await at(n) }
+    // each press: wait for the step it moves to (how fast is step-perf's line, not this case's), then the rest
+    const press = async (key, n) => {
+      await page.keyboard.press(key)
+      await page.waitForFunction((n) => window.__stepNo()?.n === n, n, { polling: 'raf', timeout: 5000 })
+        .catch(async () => assert.fail(`${key}: step ${n} not reached in 5 s (on step ${await page.evaluate(() => window.__stepNo()?.n)})`))
+      await page.waitForTimeout(150)
+      await at(n)
+    }
+    for (let n = k - 1; n >= k - R; n--) await press('ArrowLeft', n)
+    for (let n = k - R + 1; n <= k + R; n++) await press('ArrowRight', n)
     // (3) no later block read asks for any of them again
     const again = blocks.filter((x) => x.t >= t1).flatMap((x) => x.refs).filter((ref) => nearRefs.has(ref))
     assert.deepEqual(again, [], 'no later block read carries the 17 steps\' reply refs')
