@@ -84,8 +84,8 @@ export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [],
  * `indexRows` reads them (warmOnly: never built here), while the worker's boot pass rebuilds the rest (3.5 §行表先读「先答的会话」).
  * A row is in a session only when the full list would put it in the same one whatever comes before it: it has a session key and no
  * chain (`synth_hash` null) — then it is that key's, with no lane key, in the full list too. A row whose session the synthesized-key
- * rule, kinship or a keyed session's chains decide has none here. While a segment is left out, `errors` says how many
- * (`index-pending`), so the answer says it may lack calls. null: a ready segment is not usable now (the caller asks again).
+ * rule, kinship or a keyed session's chains decide has none here. `errors` says how many segments are left out (`index-pending`),
+ * so the answer says it may lack calls. null: a ready segment is not usable now (the caller asks again).
  */
 export async function provisionalRows({ home = trocarHome(), fs = nodeFs, ready } = {}) {
   const errors = [], segs = [], all = segmentFiles(home, fs, errors);
@@ -97,7 +97,8 @@ export async function provisionalRows({ home = trocarHome(), fs = nodeFs, ready 
     for (const pr of got.problems) errors.push(problemEntry(`segments/${segment}`, pr));
     segs.push({ segment, records: got.records, entry: recordsId(got.records) });
   }
-  if (segs.length < all.length) errors.push({ where: 'index', code: 'index-pending', level: 'state', reason: `${all.length - segs.length} of ${all.length} capture files are still being re-indexed; until that ends this read may lack calls.` });
+  // said while the list is provisional, every segment ready or not: the full list is still being built, and this answer is not its answer
+  errors.push({ where: 'index', code: 'index-pending', level: 'state', reason: `${all.length - segs.length} of ${all.length} capture files are still being re-indexed, then the session list is built; until that ends this read may lack calls.` });
   const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
   return { rows: early.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old, true)).rows, errors, early: true };
 }

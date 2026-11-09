@@ -13,6 +13,7 @@ import { createQueryService } from '../../src/query/service.mjs'
 import { indexDir, segmentFiles } from '../../src/query/index-build.mjs'
 import { indexRows, provisionalRows, sessionGroups } from '../../src/query/rows.mjs'
 import { readHead } from '../../src/query/ctx-files.mjs'
+import { markOn, sinceAt } from '../../src/query/named/session.mjs'
 import { validateQueryDoc } from '../../src/cli/schema.mjs'
 import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
@@ -164,6 +165,18 @@ test('provisionalRows: only a keyed row with no chain has a session; the rest is
   assert.deepEqual(early.get(K).map((r) => r.id), full.get(K).map((r) => r.id))
   assert.equal(full.has(H) && full.has(KIMI), true)
   assert.deepEqual(errors.map((e) => [e.where, e.code]), [['index', 'index-pending']])
-  assert.deepEqual((await provisionalRows({ home, ready: new Set(segmentFiles(home).map(([s]) => s)) })).errors, [], 'every segment read: no note')
+  // every segment read, the full list not built yet: still a provisional answer, and it says so
+  assert.deepEqual((await provisionalRows({ home, ready: new Set(segmentFiles(home).map(([s]) => s)) })).errors.map((e) => [e.code, e.level]), [['index-pending', 'state']])
   assert.equal(await provisionalRows({ home: twin(home), ready: new Set([NEWEST]) }), null, 'a ready segment not usable now: no list, never one short of it')
+})
+
+test('3.5 id: an early plan\'s mark names it, so no other plan takes a delta from it; a cut and an early plan both say so', () => {
+  const plan = (o) => ({ start: 0, read: [], first: 'S:1', early: false, ...o })
+  const early = plan({ early: true }), full = plan(), cut = plan({ start: 4, read: [{ id: 'S:9' }] }), both = plan({ start: 4, read: [{ id: 'S:9' }], early: true })
+  assert.equal(markOn(full, 'S:20'), 'S:20')
+  assert.equal(sinceAt(early, markOn(early, 'S:20')), 'S:20', 'the early plan takes its own mark')
+  assert.equal(sinceAt(full, markOn(early, 'S:20')), null, 'the full list does not')
+  assert.equal(sinceAt(early, markOn(full, 'S:20')), null)
+  assert.equal(sinceAt(cut, markOn(both, 'S:20')), null, 'a cut early plan is not the cut full one')
+  assert.equal(sinceAt(both, markOn(both, 'S:20')), 'S:20')
 })

@@ -377,16 +377,19 @@ function sidecars(store) {
 // 后台抽取与归约). A save writes the whole reduction state, so at most once a minute it is a small part of the fold's own work.
 // TROCAR_CHECKPOINT_MS, read once, shortens it for a test.
 const SAVE_MIN = 256, SAVE_PART = 8, CHECKPOINT_MS = Number(process.env.TROCAR_CHECKPOINT_MS) || 60_000;
-// an early plan (members from the boot pass's provisional list, 3.5 §行表先读「先答的会话」) is named by `~` and its first member: older
-// members can still come before its mark, so a delta from an early document is taken against no other plan (sinceAt → null, a whole answer)
-const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : plan.early ? `~${plan.first}` : null);
+const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : null);
+// an early plan (members from the boot pass's provisional list, 3.5 §行表先读「先答的会话」) is named in its mark by `~` and its first
+// member: older members can still come before the mark, so a delta from an early document is taken against no other plan (a whole
+// answer). Only the mark: the fold's cut stays the cut, so the state folded early goes on under the full list.
+const markCut = (plan) => (cutOf(plan) ?? '') + (plan.early ? `~${plan.first}` : '') || null;
 /** markOn(plan, rid) → the mark on the wire (3.5 id): the frontier rid, and when the plan is cut `@` and its cut's first rid, so a
- *  mark names the cut its document was answered under. sinceAt(plan, M) → the rid M names when its cut is this plan's, else null:
- *  a document under another cut has members the cut's move let in or out that no delta carries (3.5 #19), so M is not known. */
-export const markOn = (plan, rid) => (rid == null || !cutOf(plan) ? rid : `${rid}@${cutOf(plan)}`);
+ *  mark names the cut its document was answered under (and an early plan `~` and its first member). sinceAt(plan, M) → the rid M names
+ *  when its cut is this plan's, else null: a document under another cut has members the cut's move let in or out that no delta carries
+ *  (3.5 #19), so M is not known. */
+export const markOn = (plan, rid) => (rid == null || !markCut(plan) ? rid : `${rid}@${markCut(plan)}`);
 export function sinceAt(plan, M) {
   const i = M.indexOf('@');
-  return (i < 0 ? null : M.slice(i + 1)) === cutOf(plan) ? (i < 0 ? M : M.slice(0, i)) : null;
+  return (i < 0 ? null : M.slice(i + 1)) === markCut(plan) ? (i < 0 ? M : M.slice(0, i)) : null;
 }
 // Whether a fold log was folded under this plan's cut: its last frontier's `n` (the members folded) = the members of the cut up to
 // its `f` that did not fail. A log folded under another cut would serve a reader that must cut a log folded uncut.

@@ -160,7 +160,11 @@ let earlyList = null // {n, got}: the last provisional list and how many segment
 async function earlyRows(name, params) {
   if (light || (name !== 'session' && name !== 'lane') || params?.id == null || !ready.size) return null
   try {
-    if (!earlyList || ready.size >= earlyList.n * 1.1 + 1) { const got = await provisionalRows({ home, fs: nodeFs, ready }); earlyList = got && { n: ready.size, got } }
+    if (!earlyList || ready.size >= earlyList.n * 1.1 + 1) {
+      const got = await provisionalRows({ home, fs: nodeFs, ready })
+      if (rowsRead) { dropProvisional({ home, fs: nodeFs }); return null } // the pass ended meanwhile: the full list answers (asked again)
+      earlyList = got && { n: ready.size, got }
+    }
     return earlyList && sessionGroups(earlyList.got.rows).has(String(params.id)) ? earlyList.got : null
   } catch (e) { say(e); return null }
 }
