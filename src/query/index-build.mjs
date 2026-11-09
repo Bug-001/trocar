@@ -569,6 +569,8 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
   const prior = how === 'resume' && stored.problems ? stored.problems : []; // stored by an earlier pass, said again
   // no index of this version: one whose facts are still current gives them, so the scan reads envelopes only (4.2 §段索引 两个版本键)
   const old = !stored ? priorIndex(fs, idxFile, source) : null;
+  // shortcut: a keeper's rebuild in chunks (maxBytes) copies for its first chunk only, since that chunk's write replaces the old index and
+  // the next chunks resume with nothing to copy from; upgrade if the live segment's rebuild after an INDEX_V-only bump shows on the daemon's loop
   let got;
   try {
     got = sealed
