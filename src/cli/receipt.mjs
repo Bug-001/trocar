@@ -6,7 +6,7 @@
 import path from 'node:path'
 import { standaloneCommand, appDir } from '../off/paths.mjs'
 import { COMMAND_INDENT, isCommandLine, foldHang } from '../off/receipt.mjs'
-import { noColor, WIDTH, wrap, pairs, size, tildeText, escRe } from './text.mjs'
+import { noColor, WIDTH, wrap, pairs, size, tildeText, escRe, andList } from './text.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
 import { TASK_NAME } from '../off/win32.mjs'
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
@@ -259,7 +259,7 @@ const KEY_WHERE = { keychain: "trocar's root key, from your login keychain", cng
 // Windows' scheduled task is a name in the Task Scheduler, not a file: said as the task (§3.6), never bare, where it would read as a path on the current drive
 const removedWords = (p, t) => { if (p === TASK_NAME) return `the scheduled task ${p}`; const k = /^([a-z]{2,}):/.exec(p); return k ? KEY_WHERE[k[1]] || "trocar's root key" : t(p) }
 
-export function formatUninstallReceipt(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', dataNote = null } = {}) {
+export function formatUninstallReceipt(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', dataNote = null, asking = false } = {}) {
   const past = tense !== 'future'
   const t = (x) => tilde(x, home)
   const P = platform === 'win32' ? path.win32 : path.posix
@@ -294,6 +294,15 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   // §1.1: a connection nothing else would end was cut — how many is said, never left to --json alone
   if ((r.relayed || {}).cut) lines.push(`${r.relayed.cut} connection${r.relayed.cut === 1 ? '' : 's'} that would not end by itself ${r.relayed.cut === 1 ? 'was' : 'were'} cut.`)
   for (const n of r.non_identical || []) lines.push(`Not byte for byte what it was (you changed it after trocar did; only trocar's part was taken out): ${t(n.path)} (backup ${t(n.backup)})`)
+  lines.push(...uninstallActions(r, { past, home, platform, asking }))
+  return fit(lines, { home }).join('\n')
+}
+
+/** What both the default text and `--details` of an uninstall end with (§3.6, §1.1 ④): what is left and what went wrong, each with its own way out,
+ *  then the one next step. */
+function uninstallActions(r, { past, home, platform, asking, short = false }) {
+  const t = (x) => tilde(x, home)
+  const lines = []
   // a reason that already starts with its file (`<path> could not be removed: …`) is that row; any other is said after the file — the file is named once
   const leftRow = (l) => (typeof l.reason === 'string' && l.path && l.reason.startsWith(l.path) ? `${t(l.path)}${l.reason.slice(l.path.length)}` : `${t(l.path)}: ${l.reason}`)
   for (const l of r.left || []) lines.push(`Left in place: ${leftRow(l)}`, ...(l.command ? [commandLine(l.command)] : []))
@@ -301,16 +310,50 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   for (const n of r.notes || []) lines.push(`Note: ${n}`)
   // §3.6: the purge hint names what `kept` holds — what --purge-data deletes — and is not given when nothing is kept
   const keptWhat = (r.kept || []).map((k) => k.what)
-  const and = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs[0])
   // the script copy's last step removed trocar itself (§3.6): no trocar command is left to name (D58), so the kept paths are said as what to delete by hand
   const codeGone = home != null && [...(r.removed || []), ...(r.scheduled || [])].includes(appDir(home))
   // §3.6 / §1.1③: a refusal (error) and a left row with its own command already say the next step — a second one would only repeat it
   const ownStep = !!r.error || ((r.left || []).length > 0 && r.left.every((l) => l.command) && !(r.problems || []).length)
-  if (!past) lines.push('Nothing was changed. Run it with --yes to do it.')
+  // §1.4: the plan printed before the question does not say nothing was changed — that line is --dry-run's, and the refusal's after a no
+  if (!past) { if (!asking) lines.push('Nothing was changed. Run it with --yes to do it.') }
   else if (ownStep) { /* said above: a refusal, or left rows that each carry their own next step (a shared one leaves ok true, §3.6) */ }
   else if (r.ok === false) lines.push('Fix what is above, then run: trocar uninstall')
-  else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${and(keptWhat)}), delete ${and(r.kept.map((k) => asDir(t(k.path), platform)))} by hand.`)
-  else if (!r.purge_data && keptWhat.length) lines.push(`To delete what was kept (${and(keptWhat)}), run:`, commandLine('trocar uninstall --purge-data'))
+  else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${andList(keptWhat)}), delete ${andList(r.kept.map((k) => asDir(t(k.path), platform)))} by hand.`)
+  else if (!r.purge_data && keptWhat.length) lines.push(short ? 'To delete them too, run:' : `To delete what was kept (${andList(keptWhat)}), run:`, commandLine('trocar uninstall --purge-data'))
   else if (!codeGone) lines.push('Install it again: trocar install')
+  return lines
+}
+
+/** The default text of `trocar uninstall` (1.6 §3.6, §1.1 ④): the plan names each file of yours by its full path (several in one directory are
+ *  one line with a count) and says trocar's own things in one sentence; the receipt is the conclusion, one Kept line and what is left to do.
+ *  Every other fact is formatUninstallReceipt's (`--details`). `asking`: the plan printed before the question (§1.4). */
+export function formatUninstallText(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', asking = false } = {}) {
+  const past = tense !== 'future'
+  const P = platform === 'win32' ? path.win32 : path.posix
+  const t = (x) => tilde(x, home)
+  const own = home ? P.join(home, '.trocar') : null
+  const ours = (p) => typeof p !== 'string' || /^[a-z]{2,}:/.test(p) || (own && (p === own || p.startsWith(own + P.sep)))
+  const lines = [past && r.ok === false ? 'trocar uninstall did not finish. What is left is below.' : uninstallHeadline({ platform, past })]
+  if (r.nothing_installed) lines.push('Nothing of trocar is installed for your user, so there was nothing to take out.')
+  if (!past) {
+    // §1.4: every path outside ~/.trocar is a file of yours; files of one directory share a line, with their count
+    const files = [...new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || [])].filter((p) => !ours(p)))]
+    const byDir = new Map()
+    for (const f of files) byDir.set(f === TASK_NAME ? f : P.dirname(f), [...(byDir.get(f === TASK_NAME ? f : P.dirname(f)) || []), f])
+    const rows = [...byDir].flatMap(([dir, fs]) => (fs.length > 1 ? [`${t(dir)} (${fs.length} files)`] : fs.map((f) => (f === TASK_NAME ? `the scheduled task ${f}` : t(f)))))
+    if (rows.length) lines.push('It takes trocar out of these files of yours:', ...rows.map((x) => `  ${x}`))
+    lines.push(platform === 'linux' ? "It also deletes trocar's own files in ~/.trocar, its backups of your files among them."
+      : "It also deletes trocar's root key, its backups of your files, and its own files in ~/.trocar.") // the headline said the root certificate
+    if (r.purge_data) lines.push('With --purge-data it deletes your captured records too.')
+  }
+  const kept = r.kept || []
+  if (kept.length && !r.purge_data) {
+    const total = kept.reduce((n, k) => n + (Number.isFinite(k.bytes) ? k.bytes : 0), 0)
+    const inside = kept.every((k) => own && String(k.path).startsWith(own))
+    lines.push(`Kept: ${andList(kept.map((k) => k.what))} (${size(total)}${inside ? ', in ~/.trocar' : ''}).`)
+  }
+  const d = r.daemon || {}
+  if (d.state === 'unresponsive') lines.push("trocar's service did not answer and could not be stopped.")
+  lines.push(...uninstallActions(r, { past, home, platform, asking, short: true }))
   return fit(lines, { home }).join('\n')
 }

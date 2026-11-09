@@ -315,7 +315,7 @@ test('V3 (uninstall — the certificate entries are its, D55① — the install 
   assert.deepEqual([flowEvents(a.s.dir).at(-1).kind, flowEvents(a.s.dir).at(-1).outcome], ['result', 'failed'])
   assert.ok(flowEvents(a.s.dir).some((e) => e.event === 'failure' && e.code === 'entry-not-undone' && /ENOSPC/.test(e.reason)))
   const b = await setup(); const io2 = fakeIo()
-  assert.equal(await runUninstallCli(['--yes'], ctxOf(b.s, io2, { fs: b.full })), 1)
+  assert.equal(await runUninstallCli(['--yes', '--details'], ctxOf(b.s, io2, { fs: b.full })), 1) // 1.6 §1.1 ④: each file is a --details fact
   const text = io2.stdoutText(), shown = (f) => f.replace(b.s.home, '~')
   assert.doesNotMatch(text, /No file of yours was changed/, 'the text does not say nothing changed over files that were put back')
   assert.deepEqual(diffOf(b.s, b.before).filter((f) => !text.includes(shown(f))), [], 'every changed file is in the text')

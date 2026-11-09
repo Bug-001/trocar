@@ -143,3 +143,14 @@ export function wrap(text, width = WIDTH, hang = '') {
 
 /** The one way to say a value could not be read (§1.1「读不到就说读不到」): `unknown`, with the reason when there is one. */
 export const unknown = (reason) => (reason ? `unknown (${reason})` : 'unknown')
+
+/** `a`, `a and b`, `a, b and c`: a list said as a sentence says it (§1.1 ④). */
+export const andList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs.length ? String(xs[0]) : '')
+
+/** Items counted by a key, said as `5 codex and 13 pi processes` (§1.1 ④ rule 5: a list of processes is a count and what to do). Keys keep the
+ *  order they first appear in; the noun takes its plural from the total. */
+export function countsBy(items, keyOf, noun = 'process', plural = `${noun}es`) {
+  const n = new Map()
+  for (const x of items) n.set(keyOf(x), (n.get(keyOf(x)) || 0) + 1)
+  return `${andList([...n].map(([k, c]) => `${c} ${k}`))} ${items.length === 1 ? noun : plural}`
+}
