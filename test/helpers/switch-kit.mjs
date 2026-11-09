@@ -7,7 +7,7 @@ import tls from 'node:tls'
 import { contractWorld, daemonFor, placesOf, snapshot } from './contract-world.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { seeds, userEdits, readDotenv, readJsonc, PROXY_NAMES } from './file-shapes.mjs'
-import { resolveLoc } from '../../src/collector/core/proxymode/sources.mjs'
+import { resolveLoc, routes } from '../../src/collector/core/proxymode/sources.mjs'
 
 export const OSES = ['darwin', 'win32']
 const BASE = { dotenv: ["# the user's own", 'OPENAI_API_KEY=sk-x', 'FOO_TIMEOUT=30'], json: ['{', '  "model": "m-1",', '  "env": {', '    "FOO_TIMEOUT": "30"', '  }', '}'] }
@@ -109,7 +109,9 @@ export function casesFor(os, harnesses) {
     const neighbour = harnesses[(hi + 1) % harnesses.length]
     // forms with the same route and the same first `present` place are one world to the product: one case names them all
     const worlds = new Map()
-    for (const f of h.proxyMode.forms.filter((x) => x.os.includes(os))) {
+    // a form not measured on `os` beside measured ones gets no entry (4.11 P5, CM44: out-of-scope-forms.test.mjs drives it): no case expects one
+    const routed = routes(h.proxyMode, os)
+    for (const f of h.proxyMode.forms.filter((x) => x.os.includes(os) && routed(x))) {
       const p0 = f.present[0], key = JSON.stringify([f.route, p0 && p0.perOs ? p0.perOs[os] : p0])
       worlds.set(key, [...(worlds.get(key) || []), f.id])
     }

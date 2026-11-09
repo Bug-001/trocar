@@ -19,11 +19,15 @@ export const PROJECTION_NOTES = Object.freeze(['projection-rebuilt', 'projection
 /** The codes of an unreadable ref in a `block` read's errors (src/query/named/block.mjs; 3.5 §会话读, 1.6 C.5). */
 export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing', 'view-unreadable'])
 
+/** C.3: codes that record a wait and lose nothing (the connection goes on, its bytes are kept): their groups are notes from their first record,
+ *  and a replay's capture gap does not count them (1.2 §会话保真行). */
+export const NOTHING_LOST = Object.freeze(['upstream-slow'])
+
 /** The codes of a query the daemon ended before a worker answered it (src/query/service.mjs; 3.5 §行表先读, 1.6 C.5). */
 export const QUERY_WAIT_PROBLEMS = Object.freeze(['still-reading'])
 /** The codes of a `session` read's own errors (src/query/named/session.mjs; 3.5 §会话读): no such session, a member that did not read back or extract. */
 export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable',
-  'record-missing', 'field-missing']) // a member whose block the reduction could not read back (3.5 §读不全不静默)
+  'record-missing', 'field-missing', 'index-pending']) // index-pending: answered while capture files are still re-indexed (3.5 §行表先读「先答的会话」), no loss // a member whose block the reduction could not read back (3.5 §读不全不静默)
 /** Why a session's background fold stopped (`pending.stopped.code` in its head, src/query/named/session.mjs; 3.5 §会话读「`session --head`」):
  *  not even one row of the session fits the heap's budget, or any other error a slice threw. */
 export const FOLD_STOPS = Object.freeze(['heap-no-room', 'fold-failed'])
@@ -92,7 +96,7 @@ export const CODES_BY_PART = Object.freeze({
     'agent-list-invalid'], // ~/.trocar/agents.json cannot be read / parsed, or holds bad items (with `path` and `problems`; one per file version, D51③)
   trust: [...TRUST_REASONS],
   bundle: ['roots-changed', 'missing', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial'], // the last three: the bundles of the harnesses that are on were (re)built with no OS root, without OS roots that did not parse, without a roots source whose read failed (4.6 「合并包」)
-  note: ['ok'], // the code of an agent-trusted line
+  note: ['ok', 'restart-unread', 'start-time-unknown'], // ok: the code of an agent-trusted line; the other two: on's notes when which processes need a restart could not be listed, or one's start time not read (1.6 §3.3)
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
   engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response', 'prior-proxy-unknown',
     'trust-rejected', 'pac-peer-refused', 'pac-address-stale', 'pac-owner-unread', 'upstream-header-ignored', 'holders-unreadable', 'door-record-unreadable', 'client-left-held', 'client-left-queued'], // client-left-*: the code of the state event of that name, 4.8 §5.1: a client that left while held, or in the accept queue; no failure // the last three (4.11 P7 · P12): X-Trocar-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay); the door's durable record door-seen.json could not be read at start (its lives are not known: every live process of a harness that was on holds) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused trocar's leaf: level 'critical', one per (pid, host) (D51④)

@@ -144,10 +144,38 @@ test('1.6 §3.6: a helper still installed: exit 0, one shared left row with the 
   const again = fakeIo()
   assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(again, false)), 0, again.text())
   const r2 = JSON.parse(again.text())
-  // what the second, plain run kept is only its own record of what it did (kept, D38); the code, the PATH item and its record went
-  assert.deepEqual([fs.readFileSync(s.rc, 'utf8'), r2.left, changedFiles(before, snapshot(s.home)).filter((f) => !r2.kept.some((k) => path.join(s.home, f).startsWith(k.path + path.sep))).filter((f) => !before[f])],
-    ['alias ll="ls -l"\n', [], []], 'the second run takes out the PATH item and the code')
+  // 1.6 §3.6: --purge-data asked that nothing of trocar's stay, and the second run is clean: it starts no new record of its own (a clean result line never creates
+  // the records dir; D38 asks for failures, which always write): no ~/.trocar entry stays
+  assert.deepEqual([fs.readFileSync(s.rc, 'utf8'), r2.left, r2.kept, fs.existsSync(path.join(s.home, '.trocar'))], ['alias ll="ls -l"\n', [], [], false], 'nothing of trocar stays')
+  assert.equal(r2.log, null, 'the receipt names no record it did not write')
   assert.deepEqual([fs.existsSync(appDir(s.home)), fs.existsSync(launcherPath(s.home, 'linux'))], [false, false])
+})
+
+// D38: the same second run, failing (its PATH item record cannot be read), still writes its record, the records dir made for it
+test('1.6 §3.6 · D38: after --purge-data a second uninstall that fails writes its record, the records dir made for it', async () => {
+  const s = scriptLinux({ helper: true })
+  assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
+  assert.equal(await runUninstallCli(['--purge-data', '--yes', '--json'], s.ctx(fakeIo())), 0)
+  const dir = path.join(s.home, '.trocar', 'collector')
+  assert.equal(fs.existsSync(path.join(dir, 'flows')), false, 'the purge took the records')
+  fs.writeFileSync(path.join(dir, 'path-item.json'), '{ not json')
+  const io = fakeIo()
+  assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(io, false)), 1, io.text())
+  assert.ok(flowEvents(dir).some((e) => e.kind === 'result' && e.outcome !== 'uninstalled'), 'the failed run is recorded')
+})
+
+// D38 (4.6 §卸载 5): a warning is of the failure class: a run that is otherwise clean (outcome `uninstalled`) still writes it, the records dir made for it
+test('1.6 §3.6 · D38: after --purge-data a clean second uninstall with a warning writes it, the records dir made for it', async () => {
+  const s = scriptLinux({ helper: true })
+  assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
+  assert.equal(await runUninstallCli(['--purge-data', '--yes', '--json'], s.ctx(fakeIo())), 0)
+  const dir = path.join(s.home, '.trocar', 'collector'), ingress = path.join(dir, 'ingress.json')
+  fs.writeFileSync(ingress, '{}\n')
+  const ctx = s.ctx(fakeIo(), false), io = fakeIo()
+  const stuck = { ...fs, rmSync: (p, o) => { if (p === ingress) throw Object.assign(new Error('busy'), { code: 'EBUSY' }); return fs.rmSync(p, o) } }
+  assert.equal(await runUninstallCli(['--yes', '--json'], { ...ctx, io, deps: { ...ctx.deps, fs: stuck } }), 0, io.text())
+  const r = JSON.parse(io.text())
+  assert.deepEqual([r.log, flowEvents(dir).filter((e) => e.code === 'residue-not-removed').map((e) => e.path)], [path.join(dir, 'flows'), [ingress]], 'the warning is recorded')
 })
 
 test('D38: a PATH item record that cannot be read is said, never taken as no PATH item', async () => {

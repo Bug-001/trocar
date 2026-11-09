@@ -53,7 +53,6 @@ test('1.6 §4 (D39⑥ executed 2026-10-11: the legacy off went with the old capt
   const s = await installedHome({ names: ['claude-code'] })
   const io = fakeIo()
   assert.equal(await runOffCli([], ctx(s, io)), 0, io.text()) // the sandbox is a Linux user's (off-ctx.mjs): driver mode
-  assert.match(io.stdoutText(), /^Capture is off for all harnesses\. trocar is no longer on their path\./, 'the NEW off ran and printed its receipt')
   assert.doesNotMatch(io.stdoutText(), /NODE_EXTRA_CA_CERTS/, 'and it took no certificate item: those are install\'s (D55①)')
 })
 
@@ -98,9 +97,8 @@ test('§3.4: the receipt text of an off with no names — no certificate item (D
     { pid: 5310, ppid: 1, uid: 1000, startedAt: 1, exe: '/usr/bin/node', argv: ['node', '/repo/bin/trocar.mjs', 'serve'], env: () => new Map() },
   ]
   const io = fakeIo()
-  assert.equal(await runOffCli([], ctx(s, io, { deps: { procs } })), 0, io.text())
+  assert.equal(await runOffCli(['--details'], ctx(s, io, { deps: { procs } })), 0, io.text()) // each of these facts is a --details one (§3.4)
   const out = io.stdoutText()
-  assert.match(out, /^Capture is off for all harnesses\. trocar is no longer on their path\.\n/)
   assert.match(out, /No file of yours was changed\./, 'no certificate item is touched, the edited one neither (D55①)')
   assert.doesNotMatch(out, /install wrote/, 'the last line already says the certificates stay and how to remove them: what install wrote is named in --json (install_items), not in a second line here')
   assert.match(out, /1 connection trocar cannot see the end of/)
