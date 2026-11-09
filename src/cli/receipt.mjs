@@ -117,12 +117,12 @@ function watchLines(watch, t) {
 export function planItems(p, { home = null, platform = 'linux' } = {}) {
   const t = (x) => tilde(x, home)
   const items = []
-  const add = (what, path_, detail, dir = false) => items.push({ what, path: path_ || null, detail, ...(dir ? { dir } : {}) }) // dir: a folder, not counted as a file
+  const add = (what, path_, detail) => items.push({ what, path: path_ || null, detail })
   if (p.manifest) add('record', p.manifest, `${t(p.manifest)}: what was installed`)
   if (p.state) add('record', p.state, `${t(p.state)}: which agents are on`)
   for (const f of [].concat(p.standalone || [])) add('undo', f, `${t(f)}: ${UNDO_WORDS}`) // standaloneFiles: trocar-off, and trocar-off.cmd beside it on Windows
   for (const c of p.ca || []) add('certificate', c, `${t(c)}: in no trust store`)
-  if (p.run) add('record', p.run, `${asDir(t(p.run), platform)}: what the plugins trust`, true)
+  if (p.run) add('record', p.run, `${asDir(t(p.run), platform)}: what the plugins trust`)
   for (const f of p.files || []) add(f.harness, f.path, `${t(f.path)}: ${f.sources.length ? `the certificates of ${f.sources.map((x) => String(x).split(/[\\/]/).pop()).join(', ')} plus trocar's` : "trocar's certificate"}`)
   for (const o of p.owned || []) add(o.harness, o.path, `${t(o.path)}: trocar's ${o.role}`)
   for (const e of p.entries || []) add(e.harness, e.path, `${t(e.path)}${e.real_path ? ` -> ${t(e.real_path)}` : ''}: ${e.what || e.keys.join('.')}`)
@@ -130,7 +130,7 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   // §1.4「计划写全」: the symlink `enable` makes is a file of the user's too, so it is named as well
   if (p.unit) for (const l of p.unit.links || []) add('autostart', l, `${t(l)}: the link that enables it`)
   for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output`)
-  if (p.records) add('record', p.records, `${asDir(t(p.records), platform)}: what each run did`, true)
+  if (p.records) add('record', p.records, `${asDir(t(p.records), platform)}: what each run did`)
   else if (p.events) add('record', p.events, `${t(p.events)}: what each run did`)
   // V85 / §1.4「计划写全」: trocar's own tree is ONE line, as it is in the model install's plan — every run of trocar keeps its record, its
   // desired state and its own logs there, and `trocar uninstall` takes all of it back. Every file of YOURS is its own line, above.
@@ -138,12 +138,12 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   return items
 }
 /** The one plan item for trocar's own tree (V85): `on`'s plan on every OS ends with it. */
-export const ownTreeItem = (home, platform) => ({ what: 'trocar', path: path.join(home, '.trocar'), dir: true, detail: `${asDir(tilde(path.join(home, '.trocar'), home), platform)}: trocar's own files (its install record, what is turned on, its logs); trocar uninstall takes all of it back` })
+export const ownTreeItem = (home, platform) => ({ what: 'trocar', path: path.join(home, '.trocar'), detail: `${asDir(tilde(path.join(home, '.trocar'), home), platform)}: trocar's own files (its install record, what is turned on, its logs); trocar uninstall takes all of it back` })
 
 /** Every file `on` (or Linux `install`) would write or change, before it writes any (§1.4): the count first, then every file by full path and key. */
 export function formatPlan(p, { home = null, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
-  const items = planItems(p, { home, platform }), files = items.filter((i) => !i.dir).length // the folders it names are not files
+  const items = planItems(p, { home, platform }), files = items.length - [p.run, p.records, home].filter(Boolean).length // the folders it names (run/trust/, flows/, ~/.trocar/) are not files
   const backups = t(p.backups || path.join(home || '~', '.trocar', 'backup'))
   return fit([
     c.bold(`trocar ${command} will write ${files} file${files === 1 ? '' : 's'}:`),

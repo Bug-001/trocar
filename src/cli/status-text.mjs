@@ -206,7 +206,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
   if (!x) return [`${h}: ${unknown('it is not set up on this machine')}`, ...outOfScopeLines(doc, h)]
   // here only as forms trocar does not capture, and in no install record: nothing to turn on or fix, only why (4.6 「不采的形态」)
   if (x.present === false && !((doc.install && doc.install.harnesses) || []).includes(h) && uncapturedText(x, home).length) return [c.bold(`${h}: not captured on this machine`), '', ...uncapturedText(x, home).flatMap((s) => wrap(`Note: ${s}`, WIDTH - 2, '      ').map((t) => `  ${t}`))]
-  const verdict = x.captured === true ? ['captured', notSeenYet(x), needsSetup(x) && setupAgain(x)].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
+  const verdict = x.captured === true ? ['captured', notSeenYet(x), needsSetup(x) && 'set up again below'].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
   const lines = [c.bold(`${h}: ${DESIRED[x.desired] || unknown('its on/off state could not be read')}, ${verdict}`), ...outOfScopeLines(doc, h), '']
   const rows = []
   if (finding) {
@@ -215,6 +215,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     finding.commands.forEach((cmd, i) => rows.push([i ? '' : 'Fix', cmd.run]))
     rows.push(['Check', finding.verify])
   } else if (needsSetup(x) && x.captured !== true) rows.push(['Why', `${h} has no trocar certificate in place yet`], ...[...setupFix(x), `trocar on ${h}`].map((cmd, i) => [i ? '' : 'Fix', cmd]))
+  else if (needsSetup(x)) rows.push(...setupFix(x).map((cmd, i) => [i ? '' : 'Fix', cmd])) // captured now: the steps, a line each (1.1 ⑥); its finding's Why, when there is one, came above
   else if (x.captured === true && !notSeenYet(x)) rows.push(['Why', (x.processes || []).length ? 'every running process of it is captured' : 'no process of it is running; new ones will be captured']) // never claims processes that are not there
   const login = loginRow(doc.autostart)
   if (login) rows.push(login)
