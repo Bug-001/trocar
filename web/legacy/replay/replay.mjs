@@ -39,7 +39,7 @@ import { keyAction } from './keymap.mjs'
 import { buildLanes, anchorLane, stepsOf, nearestByTs, placeOf, stepOfMark } from './lanes.mjs'
 import { createDesk, readLedger, applyLedger, indexOf, ridAt, stepOf as deskStep, bootProbe } from './model.mjs'
 import { lineSlices, applyFile, applyHead } from './packs.mjs'
-import { get, getText, bootPass } from '../core/http.mjs'
+import { get, getText } from '../core/http.mjs'
 import { QUERY_WAIT_PROBLEMS } from '../../../src/health/codes.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
@@ -702,7 +702,7 @@ function openDesk(ctx, route0, makeView) {
       run: async () => { loadPricing().catch((e) => console.error(e)); try { return await pollOnce() } catch (e) { if (s.dead || key !== sessionKey() || (e && e.name === 'AbortError')) return; console.error(e); return { ok: false } } } }) }
   const poller = makePoller()
   // a first read that has not begun: is the worker's boot pass holding it? (1.2 §读取状态; paced, model.mjs bootProbe)
-  const probeBoot = bootProbe({ now: () => api.now(), get: (n, p, o) => api.get(n, p, o), known: bootPass })
+  const probeBoot = bootProbe({ now: () => api.now(), get: (n, p, o) => api.get(n, p, o) })
   // a reader's own read (the timer's are the poller's own, core/poll.mjs)
   function poll() {
     if (s.dead) return

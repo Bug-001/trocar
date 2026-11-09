@@ -11,6 +11,7 @@ import { barsThatFit } from '../../../web/legacy/replay/timeline.mjs'
 import { readHead } from '../../../src/query/ctx-files.mjs'
 import { bigSession } from '../../query/big-session.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
+import { QUERY_WAIT_PROBLEMS } from '../../../src/health/codes.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -144,5 +145,17 @@ test('1.5 K-32: a head behind the tip ids says so in place, with the count; 1.5 
     assert.equal(r.bars, 0, 'tier 0: no bars')
     assert.ok(r.busy >= 1 && r.ctxText === '', 'tier 0: the context window is an empty frame')
     await tier0.page.waitForSelector('[data-read-state="reading"]', { timeout: 15_000 })
+    assert.ok(tier0.requests.some((q) => q.path === '/api/overview'), 'a first read not begun asks whether the boot pass holds it (1.2 §读取状态)')
+    assert.equal(await tier0.page.$('[data-read-state="boot-pass"]'), null, 'a worker that answers: no boot-pass line')
   } finally { await tier0.context.close() }
+
+  // the boot pass holds the worker: its overview read is answered 503 still-reading, and the line says so, without a share
+  const boot = await fresh(w, { route: (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...fixture, id: w.id }) }) })
+  await boot.context.route('**/api/overview?**', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, errors: [{ where: 'daemon', code: QUERY_WAIT_PROBLEMS[0], reason: 'still reading the index rows' }] }) }))
+  try {
+    await boot.page.goto(`${w.b.url}/#/replay/${encodeURIComponent(w.project)}/${encodeURIComponent(w.id)}`)
+    const el = await boot.page.waitForSelector('[data-read-state="boot-pass"]', { timeout: 15_000 })
+    assert.doesNotMatch(await el.textContent(), /%/)
+    assert.deepEqual(boot.errors, [])
+  } finally { await boot.context.close() }
 })

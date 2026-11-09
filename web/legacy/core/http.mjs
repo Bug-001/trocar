@@ -82,13 +82,14 @@ const earlyReads = new Map()
 export function early(path, params, opts) { earlyReads.set(path + qs(params), get(path, params, opts)) }
 
 // the worker's boot pass (3.5 §行表先读): until it has read the index rows, a read that needs them waits and, past its bound, is answered
-// 503 still-reading. The last such answer says the pass runs; an answer from a name that needs the rows says it has ended (1.2 §读取状态)
+// 503 still-reading. The last such answer says the pass runs; a worker's answer from a name that needs the rows says it has ended
+// (1.2 §读取状态). Not a 304 (the daemon's stamp match, 4.4 §条件 GET) nor a stored answer (`stored`, 4.4 §存下的答案): no worker made them
 const ROW_NAMES = new Set(['/api/overview', '/api/sessions', '/api/session', '/api/lane'])
 let bootSeen = false
 export const bootPass = () => bootSeen
-function noteBoot(path, status, code) {
-  if (status === 503 && QUERY_WAIT_PROBLEMS.includes(code)) bootSeen = true
-  else if ((status === 304 || (status >= 200 && status < 300)) && ROW_NAMES.has(path)) bootSeen = false
+function noteBoot(path, status, body) {
+  if (status === 503 && QUERY_WAIT_PROBLEMS.includes(body?.errors?.[0]?.code)) bootSeen = true
+  else if (status >= 200 && status < 300 && ROW_NAMES.has(path) && !(body && body.stored)) bootSeen = false
 }
 
 // `hold:false` keeps only the ETag of the URL, and a 304 answers {ok:true, status:304, data:null}: the caller has the document;
@@ -118,7 +119,6 @@ export async function get(path, params, { signal, hold = true, cond = true, dead
   try {
     try { r = await fetch(url, { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
     if (latched(r)) return FORBIDDEN
-    noteBoot(path, r.status, null)
     if (r.status === 304) return !was ? { ok: false, status: 304, error: 'HTTP 304' } : hold ? { ok: true, data: was.data } : { ok: true, status: 304, data: null, ...tipOf(r) }
     b = await readBody(r) // inside the deadline: a body that stalls is aborted and lands in readBody's catch
   } finally {
@@ -128,7 +128,7 @@ export async function get(path, params, { signal, hold = true, cond = true, dead
   if (b.cut) return ended(CUT)
   const body = 'json' in b ? b.json : null
   // `code`: the answer's first error code (a 503 `still-reading` is a wait, not a failure: 1.5 K-29)
-  if (r.status === 503) noteBoot(path, 503, body?.errors?.[0]?.code)
+  noteBoot(path, r.status, body)
   if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status, code: body?.errors?.[0]?.code }
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
