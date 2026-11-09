@@ -65,6 +65,14 @@ test('1.2 #17: title_source unread reads the fixed word, not the untitled one', 
   expect(name.title).toContain(W.PROMPT_UNREAD_TIP)
 })
 
+test('1.2 #17: the head cuts a long title (one line, ellipsis): its hover carries the title as the server sent it, with the source and the id', () => {
+  const title = 'Refactor the session reader so '.repeat(9).trim() // ≤ 300 code points, the server's cap (4.4)
+  const name = head({ meta: { title, title_source: 'wire' } }).el.querySelector<HTMLElement>('.sh-name')!
+  expect(name.title).toContain(title)
+  expect(name.title).toContain(W.TITLE_FROM_WIRE)
+  expect(name.title).toContain('sid-1')
+})
+
 test('1.2 #3: with another session of the same title, the head is only the table\'s parts and names the title once', () => {
   const title = 'Same name'
   const other = { session_id: 'sid-2', title, harness: 'claude-code' }
@@ -92,6 +100,17 @@ test('1.2 #14: the fidelity row exists iff one of the five facts does; an unknow
   for (const [d, gap, expected] of cases) {
     const { el } = head({ desk: d, gap: gap ? [{ code: 'x' }] : null })
     expect(!!el.querySelector('.fidline:not(.readstate):not(.fidstale)'), JSON.stringify({ d, gap })).toBe(expected)
+    cleanup()
+  }
+})
+
+test('1.2 §会话保真行: capture files not re-indexed yet are their own fact, never counted as files not read in full', () => {
+  const pending = { where: 'index', code: 'index-pending', level: 'state', reason: 'r' }, lost = { where: 'segments/s', code: 'segment-unreadable', reason: 'gone' }
+  for (const [errors, files] of [[[pending], null], [[pending, lost], '1 capture file was']] as Array<[object[], string | null]>) {
+    const { el } = head({ desk: { errors } })
+    expect(el.querySelector('[data-fact="reindexing"]'), JSON.stringify(errors)).not.toBeNull()
+    const f = el.querySelector('[data-fact="files"]')
+    if (files) expect(f!.textContent!.startsWith(files)).toBe(true); else expect(f).toBeNull()
     cleanup()
   }
 })

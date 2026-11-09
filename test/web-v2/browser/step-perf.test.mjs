@@ -131,7 +131,7 @@ test('2.3 #43 · D64②: ←/→ onto a step whose reply is 20,000 characters of
   })
   assert.ok(word.size >= 8, 'the world has steps with a reply')
   for (const t of text.values()) assert.ok(t.length > 19500 && t.length <= 20000, `the reply is ${t.length} characters`)
-  // the line is for Readable's markdown: the desk opens in it (the stored desk mode; Raw is the default, D70)
+  // the line is for Readable's markdown: the desk opens in it (stored, so the case holds whatever the desk starts in)
   const b = await withBoard({ bytes: 1e5, chromium: gate.chromium, setup: (page) => page.addInitScript((k) => { localStorage.setItem(k, 'read') }, DESK_KEY) })
   try {
     const { page } = b

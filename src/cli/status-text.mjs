@@ -1,20 +1,21 @@
 // status-text.mjs — the words of `trocar status` (RFC 1.6 §3.5) and the two formatters `--failures` prints (formatStatus, formatHealth) plus the
 // install notes `doctor` prints (formatInstallNotes), which used to live in src/collector/cli.mjs. English, ASCII, 80 columns, conclusion first (D58).
 // Everything here renders from the status document (附录 C.3) and the facts it was built from; nothing is computed twice and nothing is written.
-import { columns, pairs, wrap, unknown, ago, noColor, tilde, WIDTH } from './text.mjs'
+import { columns, pairs, wrap, unknown, ago, noColor, tilde, andList, WIDTH } from './text.mjs'
 import { codeId } from '../version.mjs'
 import { renderRoutes, routeNotes } from '../netenv/topology-text.mjs'
-import { failureBrief, failureWord, squashed, statusNote } from './words.mjs'
+import { failureBrief, failureWord, squashed, statusNote, plainNote, plainFailure, plainSentence } from './words.mjs'
+import { RESTART_REASONS } from '../health/codes.mjs'
 import { carrierWords } from './receipt.mjs'
 import { setupSteps } from '../collector/core/proxymode/status-facts.mjs'
 
 // ── the summary (§3.5) ────────────────────────────────────────────────────────────────────────────────────────────
 /** The NOTE column of the summary: one short English clause for the reason a harness is not captured (the shared catalog, src/cli/words.mjs statusNote). Values are filled in; a code with no sentence there says the code is unknown, never prints a code name. */
-export const noteText = (code, opts = {}) => (code ? statusNote(code, opts) ?? unknown('no reason was recorded') : '')
+export const noteText = (code, opts = {}) => (code ? (opts.plain ? plainNote : statusNote)(code, opts) ?? unknown('no reason was recorded') : '')
 /** A captured harness whose other processes the door has not seen yet (1.6 §2 判词): the count of its rows not known, from the rows ('' when none). */
 const notSeenYet = (x) => { const n = (x.processes || []).filter((p) => p.captured === null).length; return n ? `${n} not seen yet` : '' }
 /** A harness not known: what could not be read, else its rows' own reason (only `not-seen` processes; `said` wraps it where no column says unknown), else that it could not be read. */
-const openText = (x, h, said = (t) => t) => { const mine = (x.processes || []).filter((p) => p.reason === x.reason); return (x.why || []).length ? unknown(x.why.join('; ')) : x.reason ? said(noteText(x.reason, { harness: h, pid: mine.length === 1 ? mine[0].pid ?? null : null })) : unknown('it could not be read') } // a pid only when it is the one row with that reason
+const openText = (x, h, said = (t) => t, plain = false) => { const mine = (x.processes || []).filter((p) => p.reason === x.reason); return (x.why || []).length ? (plain ? plainSentence : String)(unknown(x.why.join('; '))) : x.reason ? said(noteText(x.reason, { harness: h, pid: !plain && mine.length === 1 ? mine[0].pid ?? null : null, plain })) : unknown('it could not be read') } // a pid only when it is the one row with that reason, and only in --details
 
 const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinite(t)) return null; const s = Math.max(0, Math.round((now - t) / 1000)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m` }
 
@@ -44,7 +45,10 @@ const setupFix = (x) => (x.setup.missing || []).filter((m) => m.what !== 'root-m
 /** C.3 `out_of_scope` (4.11 CM43): why an app on this machine is not captured. */
 const outOfScopeLines = (doc, h = null) => (doc.out_of_scope || []).filter((o) => !h || o.harness === h).map((o) => `  out of scope: ${o.what} (${o.harness} is not captured)`)
 
-export function statusSummary(doc, { now = Date.now(), colors: c = noColor(), home = null } = {}) {
+/** The one-screen summary of `trocar status` (§3.5): by default the short one (§1.1 ④), with `details` the full one. `doc` is the 附录 C.3 document. */
+export function statusSummary(doc, opts = {}) { return opts.details ? summaryDetails(doc, opts) : summaryShort(doc, opts) }
+
+function summaryDetails(doc, { now = Date.now(), colors: c = noColor(), home = null } = {}) {
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
   const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(doc.harnesses[h]))
@@ -61,7 +65,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor(), ho
     for (const h of shown) {
       const x = doc.harnesses[h]
       const pid = (x.processes || []).find((p) => p.captured === false) || null
-      rows.push([h, CAPTURED(x), needsSetup(x) && x.captured !== true ? `set up first: ${setupFix(x).join(', then ')}` : x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid, cause: pid && pid.cause })])
+      rows.push([h, CAPTURED(x), noteOf(x, h, pid, false)])
     }
     lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
   }
@@ -74,6 +78,82 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor(), ho
   const first = on.find((h) => doc.harnesses[h].captured !== true) || shown[0]
   lines.push('', `More: ${[first ? `trocar status ${first}` : null, 'trocar status --failures', 'trocar doctor'].filter(Boolean).join('   ')}`)
   return lines
+}
+
+/** A harness's NOTE: what to set up, what is not seen yet, what is not known, or why it is not captured; `plain` in the default text's words, with no pid (§1.1 ④). */
+const noteOf = (x, h, pid, plain) => (needsSetup(x) && x.captured !== true ? `set up first: ${setupFix(x).join(', then ')}` : x.captured === true ? notSeenYet(x)
+  : x.captured === null ? ((x.why || []).length ? openText(x, h, undefined, plain) : notSeenYet(x) || openText(x, h, undefined, plain))
+    : noteText(x.reason, { harness: h, pid: plain ? null : pid && pid.pid, cause: pid && pid.cause, plain }))
+
+/** The agents that are on and need a restart to be captured (the reasons a restart fixes, health/codes.mjs), said once where the screen begins. */
+export const restartNames = (doc) => Object.entries((doc && doc.harnesses) || {}).filter(([, x]) => x.desired === 'on' && x.captured === false && RESTART_REASONS.includes(x.reason)).map(([h]) => h)
+export const needsRestart = (names) => (names.length ? `${andList(names)} need${names.length === 1 ? 's' : ''} a restart` : '')
+/** `46 in the last 24 hours, 34 of them pi's` (§1.1 ④ rule 8): the count, its window, and the agent with the most of them when the groups say whose;
+ *  `noun` names what is counted (`problem`, `capture failure`), '' for a row whose label names it. */
+export function problemsWords(fl, now, noun = '') {
+  const n = fl.problem, by = new Map()
+  for (const g of (fl.groups || []).filter((x) => x.level === 'problem' && x.harness)) by.set(g.harness, (by.get(g.harness) || 0) + g.count)
+  const [top, k] = [...by].sort((a, b) => b[1] - a[1])[0] || []
+  const share = top ? (k === n ? `, ${top}'s` : `, ${k} of them ${top}'s`) : ''
+  return `${n}${noun ? ` ${noun}${n === 1 ? '' : 's'}` : ''} ${windowWords(fl, now)}${share}`
+}
+
+/** The daemon in the default text: said only when it is not running this code as it should (§3.5 默认摘要), as [what is so, the step to take]. */
+function serviceClause(d) {
+  if (d.running === true) return d.runs_this_code === false ? ["trocar's service runs other code than this trocar.", 'Put it on this code: trocar install'] : []
+  if (d.running === false) return ["trocar's service is not running, so nothing is captured.", 'Start it: trocar on']
+  if (d.responding === false) return ["trocar's service does not answer, so new connections are not captured."]
+  return [plainSentence(`trocar's service: ${unknown(d.error || 'its state could not be read')}.`)]
+}
+
+function summaryShort(doc, { now = Date.now(), colors: c = noColor(), home = null } = {}) {
+  const names = Object.keys(doc.harnesses || {})
+  const installed = (doc.install && doc.install.harnesses) || []
+  const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(doc.harnesses[h]))
+  if (!shown.length) return [c.bold('No agent is set up for capture yet.'), ...outOfScopeLines(doc), '', ...readErrorLines(doc), ...((doc.out_of_scope || []).length ? [] : ['Next: trocar install'])]
+  const captured = shown.filter((h) => doc.harnesses[h].captured === true).length, open = shown.filter((h) => doc.harnesses[h].captured === null).length
+  const restart = needsRestart(restartNames(doc))
+  const [svc, step] = serviceClause(doc.daemon || {}) // rule 2: the result on its line, the step to take on the next
+  const head = [`Capturing ${captured} of ${shown.length} agent${shown.length === 1 ? '' : 's'}${open ? `; ${open} not known yet` : ''}.`, restart && `${restart}.`, svc].filter(Boolean).join(' ')
+  const lines = [...wrap(head, WIDTH).map((l) => c.bold(l)), ...(step ? [step] : []), '']
+  const rows = [['AGENT', 'CAPTURED', 'NOTE']]
+  for (const h of shown) { const x = doc.harnesses[h]; rows.push([h, CAPTURED(x), noteOf(x, h, (x.processes || []).find((p) => p.captured === false) || null, true)]) }
+  lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
+  const missing = names.filter((h) => !shown.includes(h))
+  if (missing.length) lines.push(`  not installed: ${missing.sort().join(', ')}`)
+  const unseen = names.flatMap((h) => uncapturedText(doc.harnesses[h], home).map((t) => `Note: ${h}: ${t}`))
+  if (unseen.length) lines.push('', ...unseen.flatMap((t) => wrap(t, WIDTH)))
+  lines.push(...outOfScopeLines(doc), '', ...pairs(shortPairs(doc, now)))
+  const first = shown.find((h) => doc.harnesses[h].desired === 'on' && doc.harnesses[h].captured !== true) || shown[0]
+  lines.push('', `More: trocar status ${first}   trocar status --failures`)
+  return lines
+}
+
+/** The rows under the table of the default summary (§3.5 默认摘要): each one only when it asks something of you or is not what it should be. */
+function shortPairs(doc, now) {
+  const rows = [], cert = doc.cert || null
+  if (cert && !cert.fp256 && !(doc.install && doc.install.state)) rows.push(['Certificate', 'not installed; run: trocar install'])
+  else if (cert) {
+    const root = (cert.root && cert.root.state) || 'unknown', soon = cert.expires && Date.parse(cert.expires) - now < 30 * 24 * 3600e3
+    const words = { pending: 'installed, but not trusted yet: the dialog was not answered', declined: 'installed, but you declined the trust dialog', missing: 'no longer in your trust store; run: trocar install', orphan: 'left over from an uninstall; run: trocar install', unknown: unknown((cert.root && cert.root.reason) || 'your trust store could not be read') }[root]
+    if (words || soon) rows.push(['Certificate', [words, soon && `expires ${cert.expires}`].filter(Boolean).join(', ')])
+  }
+  const r = doc.relayed, closing = r && r !== 'unknown' ? r.closing + r.waiting : 0
+  if (closing > 0) rows.push(['Connections', `${closing} from agents turned off, still closing`])
+  const crit = doc.critical || []
+  if (crit.length) {
+    const who = [...new Set(crit.map((x) => x.agent || x.harness).filter(Boolean))]
+    rows.push(['Not captured', `${who.length ? andList(who) : 'a program'} refused trocar's certificate; restart it. Which hosts: trocar status --failures --details`])
+  }
+  const fl = doc.failures
+  rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? `none ${windowWords(fl, now)}` : problemsWords(fl, now)])
+  const b = doc.board
+  if (b) rows.push(['Board', b.state === 'serving' ? b.url : plainSentence(b.state === 'unknown' ? unknown(b.reason) : `not running: ${b.reason}`)])
+  const login = loginRow(doc.autostart)
+  if (login) rows.push([login[0], plainSentence(login[1])])
+  if (doc.linger === false) rows.push(['Logging out', `capture stops when you log out; run: loginctl enable-linger ${doc.user || '<your user name>'}`])
+  else if (doc.linger === 'unknown') rows.push(['Logging out', unknown(doc.linger_reason || 'the linger state could not be read')])
+  return rows
 }
 
 /** The reason of one `errors[]` entry of the document (附录 C.5), or null. */
@@ -188,8 +268,34 @@ const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; 
 export const windowWords = (fl, now) => (Date.parse(fl.since) > now - 24 * 3600e3 + 60e3 ? `since this install (${ago(fl.since, now)})` : 'in the last 24 hours') // a minute's slack: the document is read a moment before it is printed
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
  *  groups and words), then the `Expected` section (what is not a problem by design). */
-export function failuresBlock(failures, health, { now = Date.now() } = {}) {
+export function failuresBlock(failures, health, opts = {}) {
   if (!failures || !health) return [`Problems: ${unknown('capture health could not be read')}`]
+  return opts.details ? failuresDetails(failures, health, opts) : failuresShort(failures, opts)
+}
+
+/** `--failures` by default (§3.5, §1.1 ④): the count and whose, then one row per thing that happened — the groups that say the same for the same
+ *  agent are one row, their counts added — newest first. The codes, programs, hosts and the Expected section are `--details`'. */
+const at = (ts) => Date.parse(ts) || -Infinity // a group with no time sorts last and never wins a merge
+function failuresShort(failures, { now = Date.now(), restart = [], more = false } = {}) {
+  const groups = failures.groups.filter((g) => g.level === 'problem')
+  const tail = needsRestart(restart)
+  const why = more ? ['Not everything is captured: trocar status'] : [] // D38: a non-zero exit this screen does not explain points at the one that does
+  if (!groups.length) return [[`No problems ${windowWords(failures, now)}.`, tail && `${tail}.`].filter(Boolean).join(' '), ...why]
+  const by = new Map()
+  for (const g of groups) {
+    const { text, todo } = plainFailure(g), key = `${g.harness || ''}\u0000${text}\u0000${todo}`, was = by.get(key)
+    by.set(key, was ? { ...was, count: was.count + g.count, last: at(g.last_ts) > at(was.last) ? g.last_ts : was.last } : { harness: g.harness || '-', text, todo, count: g.count, last: g.last_ts })
+  }
+  const rows = [...by.values()].sort((a, b) => at(b.last) - at(a.last))
+  const total = Number.isInteger(failures.problem) ? failures.problem : groups.reduce((n, g) => n + g.count, 0)
+  const head = [`${problemsWords({ ...failures, problem: total }, now, 'problem')}.`, tail && `${tail}.`].filter(Boolean).join(' ')
+  const cells = columns([['WHEN', 'COUNT', 'AGENT', ''], ...rows.map((r) => [ago(r.last, now), String(r.count), r.harness, ''])]).map((h) => `  ${h}`), col = Math.max(...cells.map((h) => h.length)) + 2
+  const lines = [...wrap(head, WIDTH), ...why, '', cells[0].padEnd(col) + 'WHAT HAPPENED']
+  rows.forEach((r, i) => lines.push(...wrap(`${r.text}.${r.todo ? ` ${r.todo}` : ''}`, WIDTH - col).map((t, j) => (j ? ' '.repeat(col) : cells[i + 1].padEnd(col)) + t)))
+  return [...lines, '', 'Codes, programs and hosts: trocar status --failures --details']
+}
+
+function failuresDetails(failures, health, { now = Date.now() } = {}) {
   const groups = failures.groups.filter((g) => g.level === 'problem')
   const lines = [groups.length ? `Problems ${windowWords(failures, now)}: ${groups.reduce((n, g) => n + g.count, 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : `No problems ${windowWords(failures, now)}.`]
   if (groups.length) { // §1.1⑥: each row folds inside 80 columns, under its own text

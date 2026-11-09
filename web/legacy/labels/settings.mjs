@@ -48,7 +48,8 @@ export const ASK_LOG_TITLE = 'Change to log only?', ASK_LOG_OK = 'Change to log 
   RCPT_CHANGED = (a, b) => `${a} → ${b} · applies to calls that start from now`, RCPT_ALREADY = (k) => `Already ${k}`,
   RCPT_STALE = 'The setting on this machine changed; this is the new plan', RCPT_NOT_CHANGED = 'Not changed',
   RCPT_READ_ONLY = 'The board is running read-only right now; nothing was changed',
-  RCPT_OFFLINE = 'Cannot reach the trocar service; nothing was changed'
+  RCPT_OFFLINE = 'Cannot reach the trocar service; nothing was changed',
+  RCPT_UNKNOWN = 'No answer arrived, so the change may or may not have been made; the level shown is the one the service reports now'
 
 export const RETRY = 'Retry'
 

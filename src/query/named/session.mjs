@@ -65,8 +65,10 @@ export const params = Object.freeze(Object.keys(about.params));
  *  Measured 2026-10-22 as what a cold read of a test/query/big-session.mjs live(0.48) session holds more than one of live(0.24),
  *  per call, after a forced GC, the objects each part dominates summed (a heap snapshot's dominator tree; the caches of K, the
  *  segment index rows and the blocks' columns left out): 633 B (the reduction state and its marks 346, the row and shared value
- *  index 203, the plan 84), × 1.25. */
-export const SPINE_PER_ROW = 792;
+ *  index 203, the plan 84). What a call holds is V8's object layout and moves with the Node build: spine-heap.test.mjs read 958 B on
+ *  Node 26.0, 818 on 22.23 and 701 on 26.13 for the same calls and blocks (2026-11-09). So the bound is 3.5's ceiling, 1 KiB, not one
+ *  build's reading × 1.25. */
+export const SPINE_PER_ROW = 1024;
 /** What the reduction keeps in the heap per distinct block of the session (its store's slot, its block columns and interned keys:
  *  src/view/reduce.mjs, src/query/projection.mjs): 222 B measured (after a forced GC, in a heap of the worker's size) as what a
  *  read of a test/query/big-session.mjs session holds more with 1,500 fresh tool definitions a call than with none, per block
@@ -134,6 +136,12 @@ const FITS_KEPT = 64;
 // one (its first member and the last one's last member at the same places) extends the plan by its new members; any other (a segment
 // indexed again, a store opened again) makes it afresh. So a slice and an answer cost by the new members (3.5 后台抽取与归约).
 // Exported for test/query/cut-grows.test.mjs, which grows a plan without records.
+const earlyArrays = new WeakSet(); // the member arrays of a provisional list (groupsOf)
+/** groupsOf(index) → the session groups of a request's index; a provisional list's member arrays are marked early (cutOf). */
+const groupsOf = (index) => {
+  const g = sessionGroups(index.rows);
+  return index.early ? { get: (id) => { const ms = g.get(id); if (ms) earlyArrays.add(ms); return ms; } } : g;
+};
 export function planOf(members, k, store, id, fit = fits.get(k) ?? Infinity) {
   let p = store.plan;
   if (p && p.members === members && p.n === members.length && p.fit === fit) return p;
@@ -144,7 +152,7 @@ export function planOf(members, k, store, id, fit = fits.get(k) ?? Infinity) {
   }
   const added = members.slice(p.n || 0);
   for (const r of added) { p.byId.set(String(r.id), r); sum(p.all, r); p.facts.add(r); }
-  p.members = members; p.n = members.length; p.last = String(members[members.length - 1].id);
+  p.members = members; p.n = members.length; p.last = String(members[members.length - 1].id); p.early = earlyArrays.has(members);
   p.key = `${p.all.n}:${p.first}:${p.last}:${p.all.stored + p.all.n}`;
   cut(p, fit, added);
   p.gen++;
@@ -199,7 +207,8 @@ const keyOf = ({ fs, home, writer }, id) => `${fsTag(fs)}\n${home}\n${id}\n${wri
 
 // The segment index of THIS request, read once whether version() asked first (src/query/answers.mjs) or not; the worker's
 // background reads it through here too, once per kick (src/query/worker.mjs kickedSessions).
-export async function indexed({ home, fs, once, progress }) {
+export async function indexed({ home, fs, once, progress, early }) {
+  if (early) return early; // the worker's boot pass is still reading: the rows it read so far (worker.mjs earlyRows)
   if (once && once.index) return once.index;
   const errors = [], got = { rows: await indexRows({ home, fs, errors, progress }), errors };
   if (once) once.index = got;
@@ -371,13 +380,18 @@ function sidecars(store) {
 // TROCAR_CHECKPOINT_MS, read once, shortens it for a test.
 const SAVE_MIN = 256, SAVE_PART = 8, CHECKPOINT_MS = Number(process.env.TROCAR_CHECKPOINT_MS) || 60_000;
 const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : null);
+// an early plan (members from the boot pass's provisional list, 3.5 §行表先读「先答的会话」) is named in its mark by `~` and its first
+// member: older members can still come before the mark, so a delta from an early document is taken against no other plan (a whole
+// answer). Only the mark: the fold's cut stays the cut, so the state folded early goes on under the full list.
+const markCut = (plan) => (cutOf(plan) ?? '') + (plan.early ? `~${plan.first}` : '') || null;
 /** markOn(plan, rid) → the mark on the wire (3.5 id): the frontier rid, and when the plan is cut `@` and its cut's first rid, so a
- *  mark names the cut its document was answered under. sinceAt(plan, M) → the rid M names when its cut is this plan's, else null:
- *  a document under another cut has members the cut's move let in or out that no delta carries (3.5 #19), so M is not known. */
-export const markOn = (plan, rid) => (rid == null || !cutOf(plan) ? rid : `${rid}@${cutOf(plan)}`);
+ *  mark names the cut its document was answered under (and an early plan `~` and its first member). sinceAt(plan, M) → the rid M names
+ *  when its cut is this plan's, else null: a document under another cut has members the cut's move let in or out that no delta carries
+ *  (3.5 #19), so M is not known. */
+export const markOn = (plan, rid) => (rid == null || !markCut(plan) ? rid : `${rid}@${markCut(plan)}`);
 export function sinceAt(plan, M) {
   const i = M.indexOf('@');
-  return (i < 0 ? null : M.slice(i + 1)) === cutOf(plan) ? (i < 0 ? M : M.slice(0, i)) : null;
+  return (i < 0 ? null : M.slice(i + 1)) === markCut(plan) ? (i < 0 ? M : M.slice(0, i)) : null;
 }
 // Whether a fold log was folded under this plan's cut: its last frontier's `n` (the members folded) = the members of the cut up to
 // its `f` that did not fail. A log folded under another cut would serve a reader that must cut a log folded uncut.
@@ -530,7 +544,7 @@ export const costOf = (st) => Math.max(st.meter.held, Math.min(heapBudget(), Mat
 // frontier (`writing`), and the fold takes up what came when it ends (3.5 后台抽取与归约).
 async function advance(ctx, id, { budgetMs, request, said = [] }) {
   const t0 = performance.now(), index = await indexed(ctx);
-  const members = sessionGroups(index.rows).get(id);
+  const members = groupsOf(index).get(id);
   if (!members) return null;
   const errors = [...index.errors, ...said], k = keyOf(ctx, id), progress = ctx.progress || (() => {});
   const store = storeOf(ctx, id, k);
@@ -657,7 +671,8 @@ export async function extendSession(ctx, id, budgetMs) {
 // (and cut) it was last written at is not made again while its file is there.
 const heads = new Map(); // session id → {sig, shape} of its last head write in this worker
 const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write (advance lets it go before a slice)
-const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title]);
+// the index's codes too: a head written while capture files were still re-indexed (index-pending) is written again when that ends, at the same mark
+const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title, s.indexErrors.filter((e) => e.level !== 'note').map((e) => e.code)]);
 // the parts only the head carries, in O(packs): tier, axis, the packs (with their tags) and the open span, the compactions (a new
 // chapter on the axis; one on another lane too) and whether the axis ends on a marked one (its chapter opens on the step after it,
 // which counts no compaction: 1.3 §章), the cut, pending's presence, the failures and the index's codes, and the meta the
@@ -667,7 +682,7 @@ function shapeOf(s) {
   if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code), s.title]);
   const V = s.V, ax = V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || null, meta = { ...V.meta, ...s.title };
   return JSON.stringify([1, ax && ax.lane, s.files || null, V.stats.compactions, !!ax && isMarked(V.cols.fl[V.cols.slotOf(ax.last)]), s.truncated, !!s.pending, s.failed.length,
-    s.indexErrors.filter((e) => !e.level).map((e) => e.code), META.map((k) => meta[k])]);
+    s.indexErrors.filter((e) => e.level !== 'note').map((e) => e.code), META.map((k) => meta[k])]);
 }
 // A background fold that stopped (3.5 §会话读「`session --head`」 pending.stopped, D38②): the slice that threw writes the head at once,
 // with the stop's code (FOLD_STOPS) and the first line of its message; the same stop again writes nothing. The session's next slice
@@ -685,7 +700,7 @@ async function stopped(ctx, id, e) {
   lagging.delete(id);
   if (h && h.sig === sig && hasHead(home, id, fs)) return;
   try {
-    const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
+    const index = await indexed(ctx), members = groupsOf(index).get(id);
     if (members) {
       const calls = callsNow(ctx, id, members);
       writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ ...d.pending, done, total: members.length, ...seenOf(d), calls, stopped: stop }), fs, titleOf({ home, fs, id, members })), fs);
@@ -825,8 +840,8 @@ function stateAt(ctx, r, id, reading = false) {
 export async function version(ctx) {
   const p = ctx.params;
   if (p.id == null || p.id === '') return null;
-  const { rows, errors } = await indexed(ctx);
-  const members = sessionGroups(rows).get(String(p.id));
+  const index = await indexed(ctx), { errors } = index;
+  const members = groupsOf(index).get(String(p.id));
   if (!members) return null;
   const k = keyOf(ctx, p.id), store = storeOf(ctx, String(p.id), k), plan = planOf(members, k, store, p.id);
   // a re-read answers off the disk at one frontier: its answer may not be kept past the switch

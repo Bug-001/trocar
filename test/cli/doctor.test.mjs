@@ -17,6 +17,7 @@ import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { closure } from '../helpers/imports.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
+import { COMMANDS } from '../../src/cli/commands.mjs'
 
 // a record the four questions are content with: an LLM call with its verbatim request and a reconstructed response
 const REC = { id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages', ts_request: '2026-01-01T00:00:00.000Z',
@@ -49,7 +50,7 @@ test('no record read = cannot judge: an empty capture file, or none at all, is e
   assert.ok(!/no problems\.$/.test(r.out.trim()), `an all-clear alone is not what exit 3 prints: ${r.out}`)
   r = await doctor(s, [], { source: path.join(s.home, 'nowhere') })
   assert.equal(r.exit, 3, 'a source that does not exist is not a pass either')
-  r = await doctor(plain()) // the defaults: ~/.trocar does not exist
+  r = await doctor(plain(), ['--details']) // the defaults: ~/.trocar does not exist; that it is said is a fact of --details (1.6 §1.1 ④)
   assert.equal(r.exit, 0, `§3.7: having no captured data at all is not 「cannot judge」\n${r.text}`)
   assert.match(r.out, /^File permissions: no captured data yet$/m, 'and it is said, not passed over in silence')
   capture(src, { n: 1 })
@@ -162,7 +163,7 @@ test('doctor explains the same harnesses `status` judges (the daemon\'s answer, 
   const src = path.join(s.home, 'src'); capture(src)
   const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: "trocar's settings for this agent were written after this process started; restart it once" }]
   const before = s.sys.exec.calls.length
-  const r = await doctor(s, [], { source: src, deps: { request: asDaemon(reply({ agents })) } })
+  const r = await doctor(s, ['--details'], { source: src, deps: { request: asDaemon(reply({ agents })) } }) // the pid is a fact of --details
   assert.equal(r.exit, 0, `status would say 1 here (an agent is not captured); doctor's exit is the capture's:\n${r.text}`)
   assert.match(r.out, /claude-code is not captured: pid 4388 started before capture was on\./, 'the finding says the harness, the pid and the reason')
   assert.ok(!/VPN/.test(r.out), 'no VPN software line: doctor probes none (D49)')
@@ -180,7 +181,12 @@ test('a stale standalone copy is a problem with its reason (exit 1); where nothi
   fs.appendFileSync(path.join(s.home, '.trocar', 'bin', 'trocar-off'), '\n// edited\n')
   let r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 1, r.out)
-  assert.ok((await doctor(s, ['--json'], { source: src })).io.json().findings.some((x) => x.code === 'standalone-stale' && x.class === 'problem'), r.out)
+  const stale = (await doctor(s, ['--json'], { source: src })).io.json().findings.find((x) => x.code === 'standalone-stale')
+  assert.equal(stale && stale.class, 'problem', r.out)
+  // 1.6 §1.1: its why names no source path, and no command but the fix it gives
+  const named = COMMANDS.map((c) => `trocar ${c.name}`).filter((c) => new RegExp(`\\b${c}\\b`).test(stale.why))
+  assert.doesNotMatch(stale.why, /\bsrc[\\/]/, stale.why)
+  assert.deepEqual(named.filter((c) => !stale.commands.some((x) => x.run === c)), [], stale.why)
   assert.ok(r.out.includes(path.join(s.home, '.trocar', 'bin', 'trocar-off')), 'the copy is named')
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   r = await doctor(n, [], { source: nsrc })
@@ -208,18 +214,18 @@ test('backups no manifest names are a note with their paths; the ones the manife
   let r = await doctor(s, [], { source: src })
   assert.ok(!/belong to no install record/.test(r.out), `every backup is named:\n${r.out}`)
   const stray = writeBackup({ home: s.home, file: path.join(s.home, '.zshrc'), data: 'export A=1\n' })
-  r = await doctor(s, [], { source: src })
+  r = await doctor(s, ['--details'], { source: src }) // a note is --details'
   assert.match(r.out, /^Note: 1 backup file\(s\) belong to no install record\.$/m)
   assert.ok(r.out.includes(stray)); for (const b of named) assert.ok(!r.out.includes(b), `${b} is named by an entry`)
   const j = await doctor(s, ['--json'], { source: src, io: fakeIo() })
   assert.deepEqual(j.io.json().findings.filter((x) => x.code === 'backup-unclaimed').map((x) => x.class), ['note'], 'a backup nobody claims is a note, never a problem of its own')
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   const lone = writeBackup({ home: n.home, file: path.join(n.home, '.zshrc'), data: 'x\n' })
-  r = await doctor(n, [], { source: nsrc })
+  r = await doctor(n, ['--details'], { source: nsrc })
   assert.ok(r.out.includes(lone), 'no manifest: all of them')
   fs.mkdirSync(path.join(n.home, '.trocar', 'collector'), { recursive: true })
   fs.writeFileSync(path.join(n.home, '.trocar', 'collector', 'install-manifest.json'), '{ not json')
-  r = await doctor(n, [], { source: nsrc })
+  r = await doctor(n, ['--details'], { source: nsrc })
   assert.match(r.out, /Whether any backup belongs to no install record is unknown$/m, 'a manifest that cannot be read: unknown, not "none are orphans"')
   assert.ok(r.out.includes(path.join(n.home, '.trocar', 'collector', 'install-manifest.json')), `with the file:\n${r.out}`)
 })
@@ -296,7 +302,7 @@ test('V66 wired: a process-unknown in ~/.trocar\'s flows/ reaches `doctor claude
   for (const platform of ['linux', 'darwin', 'win32']) {
     for (const [label, request] of [['no daemon', down()], ['daemon', daemon]]) {
       const what = `${platform}, ${label}`
-      const text = await doctor(s, ['claude-code'], { platform, deps: { request } })
+      const text = await doctor(s, ['claude-code', '--details'], { platform, deps: { request } }) // a note is --details'
       assert.ok(text.out.includes(line), `${what}: the text gives ${line}\n${text.out}`)
       assert.match(text.out, /used claude-code's proxy but is/, what)
       const j = await doctor(s, ['claude-code', '--json'], { platform, deps: { request } })

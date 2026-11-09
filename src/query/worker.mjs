@@ -23,7 +23,8 @@
 // THE WRITER (4.3 §4 写者): the role whose `ROLES[role].writes` (warm.mjs) is true writes the context projections (its answers' ctx carry
 // `writer` as that says; it is the main role, the one that reads the rows and runs the background). BACKGROUND
 // WORK (3.5 后台抽取), one scheduler: from boot it reads the rows, then every session's title (readRows, 3.5 §行表先读; until the rows are read a
-// request that needs them is answered `102`, ask again, and until the titles are done no slice runs); then, while no request line is waiting or being answered (the last frame written whole), it runs
+// request that needs them is answered `102`, ask again, unless it is a `session` or `lane` of a session the segments read so far name the way the
+// full list will (earlyRows), and until the titles are done no slice runs); then, while no request line is waiting or being answered (the last frame written whole), it runs
 // slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then those of the
 // sessions of the model calls the daemon kicked (`{kick: ids}` on IPC: their record ids, just indexed) and of the heads it handed out
 // still folding (`{follow: id}`: the board opened a session never folded, 3.5 §谁执行它「答案文件」), then, after IDLE_SLICE_MS with no request, those
@@ -55,7 +56,9 @@ import { answer } from './answers.mjs'
 import { ROLES } from './warm.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 import { READING_MS, extendSession, headAsked, heapHasRoom, indexed, noRoomStop, openSessions, rereadingNow, roomFor, saveIndexes, sealParts } from './named/session.mjs'
-import { indexRows, sessionGroups } from './rows.mjs'
+import { dropProvisional, indexRows, provisionalRows, sessionGroups } from './rows.mjs'
+import { segmentFiles, warmSegmentIndex } from './index-build.mjs'
+import { indexPool, needsBuild, poolSize, sweepTemps } from './index-pool.mjs'
 import { filling, pauseFill } from './usage.mjs'
 import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
 import { foldStale } from './fold-log.mjs'
@@ -97,12 +100,13 @@ const write = (status, body, enc, cpu, tag) => new Promise((done) => {
 const persist = (e) => { if (process.connected) process.send({ failure: { code: e.code, reason: e.reason } }) }
 
 async function serve(line) {
-  let status = 200, bytes, enc = '-', tag = '-', asked = null, wait = false
+  let status = 200, bytes, enc = '-', tag = '-', asked = null, wait = false, early = null
   const after = [], cpu0 = process.cpuUsage()
   try {
     const { name, params, indent, control, body, gzip: wants, etag, rows } = JSON.parse(line)
     if (role === 'control' && !control) throw new Error(`the control worker answers control verbs only, not the query ${JSON.stringify(name)}`)
-    if (!rowsRead && !control && Object.hasOwn(QUERIES, name) && (!QUERIES[name].rowFree || rows)) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null } // ask again: the daemon does (3.5 §行表先读)
+    // ask again: the daemon does (3.5 §行表先读); a session the segments read so far name the way the full list will is answered now
+    if (!rowsRead && !control && Object.hasOwn(QUERIES, name) && (!QUERIES[name].rowFree || rows) && !(early = await earlyRows(name, params))) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null }
     asked = { name, params }
     // a session waiting for room is tried by its timer, not by each ask: 102 at once, no fold (`session --head` answers its head as it stands)
     if (!control && (name === 'lane' || (name === 'session' && !headAsked(params || {}))) && waitRoom.has(String(params?.id))) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null }
@@ -122,7 +126,7 @@ async function serve(line) {
       const deps = await depsP;
       await deps.beforeServe?.(name);
       ({ status, bytes, enc, tag, wait } = await answer({ name, params: params || {}, indent, gzip: wants === true, etag: typeof etag === 'string' ? etag : null },
-        { home, fs: nodeFs, writer: writes, warmOnly: light, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
+        { home, fs: nodeFs, writer: writes, warmOnly: light, early, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
     }
   } catch (e) { // a line that is not a request
     status = 500
@@ -148,6 +152,23 @@ let busy = 0, lastAt = Date.now(), target = null, user = false, newestDone = tru
 // the idle save's parts still to seal (session.mjs sealParts): a slice at a time; a request or kick stops it, the next idle period goes on
 let sealing = false
 let rowsRead = false // the boot's pass over the rows has ended (readRows)
+const ready = new Set() // the segments the boot's pass has read the index of, the newest first (readRows): provisionalRows reads these
+/** While the pass reads, a `session` or `lane` of a session the segments read so far hold, by a key no rule decides (provisionalRows):
+ *  those rows, for this request's index (session.mjs indexed); else null, and the request is asked again (3.5 §行表先读). */
+// The list is built again once the ready segments grew by a tenth, not per segment: each build reads every ready row, and the pass
+// prepends a segment at a time (the newest first), so a build per segment would cost the pass a read of every row it has read so far.
+let earlyList = null // {n, got}: the last provisional list and how many segments were ready for it
+async function earlyRows(name, params) {
+  if (light || (name !== 'session' && name !== 'lane') || params?.id == null || !ready.size) return null
+  try {
+    if (!earlyList || ready.size >= earlyList.n * 1.1 + 1) {
+      const got = await provisionalRows({ home, fs: nodeFs, ready })
+      if (rowsRead) { dropProvisional({ home, fs: nodeFs }); return null } // the pass ended meanwhile: the full list answers (asked again)
+      earlyList = got && { n: ready.size, got }
+    }
+    return earlyList && sessionGroups(earlyList.got.rows).has(String(params.id)) ? earlyList.got : null
+  } catch (e) { say(e); return null }
+}
 let sweeping = false // a sweep, a scan or the title pass is between two sessions: it gives way to requests, not to other background work
 let rawUnlisted = false // raw/ could not be listed at the last GC: its D38 record is sent
 // The sweep (3.5 §谁执行它「答案文件」): at the first idle period of this worker's life, and again on the daemon's `{sweep: true}`, a
@@ -388,9 +409,28 @@ async function readRows() {
   let rows = []
   try {
     await (await depsP).beforeRows?.()
+    // each segment's index the newest first, so the sessions a user opens first are answered before the pass ends (earlyRows); the
+    // list after, oldest first, from those warm entries (a segment's index stands alone; the keys are the list's, in its order)
+    // a sealed segment's index is built on the pool's threads when this machine has room for them (index-pool.mjs), all queued at once, newest
+    // first; this thread reads each back in that order, and builds here what a thread did not (a plain segment, a thread that failed)
+    sweepTemps(home)
+    const segs = segmentFiles(home, nodeFs, []).reverse(), todo = segs.filter(([s, at]) => at.sealed && !at.plain && needsBuild(home, s))
+    let pool = null
+    try {
+      const threads = todo.length > 1 ? poolSize() : 1
+      if (threads > 1) try { pool = indexPool({ home, threads, deps: process.argv[3] || null, tick: progress }) } catch (e) { say(e) } // no threads: this one builds them all
+      const built = new Map(pool ? todo.map(([s]) => [s, pool.build(s)]) : [])
+      for (const [segment, at] of segs) {
+        await built.get(segment)
+        try { await warmSegmentIndex({ home, segment, fs: nodeFs, at, progress, ease }); ready.add(segment) } catch (e) { say(e) }
+        progress()
+        await ease()
+      }
+    } finally { pool?.close() }
     rows = await indexRows({ home, fs: nodeFs, errors: [], progress, ease })
   } catch (e) { say(e) }
   rowsRead = true
+  ready.clear(); earlyList = null; dropProvisional({ home, fs: nodeFs })
   if (process.connected) process.send({ rows: true }) // the daemon's word for a warm worker (4.4 刷新)
   sweeping = true
   try {

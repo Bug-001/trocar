@@ -31,7 +31,7 @@ import { channelOf, packageRoot, setupHelperCommand } from '../version.mjs'
 import { DEFAULT_REDIRECTOR_BIN } from '../collector/arch/linux/redirector-client.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
-import { formatUninstallReceipt, fit } from './receipt.mjs'
+import { formatUninstallReceipt, formatUninstallText, trustStoreWhere, fit } from './receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask, undoScheduledTask, TASK_NAME, TASK_FILE, RUN_KEY } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
@@ -147,7 +147,7 @@ function planUninstall(w, m, purgeData = false, root = packageRoot(), places = [
 
 /** `trocar uninstall` (see the header). Refuses root by throwing (R7). → `{ receipt, exit }`: 0 done · 1 not done or a problem · 2 `--purge-data` without a terminal and
  *  without `--yes` (nothing was done, the plan is in the receipt). */
-export async function runUninstall({ home = nodeOs.homedir(), env = process.env, purgeData = false, yes = false, dryRun = false, interactive = false, io = null, say = null, deps = {} } = {}) {
+export async function runUninstall({ home = nodeOs.homedir(), env = process.env, purgeData = false, yes = false, dryRun = false, interactive = false, io = null, say = null, details = false, deps = {} } = {}) {
   if ((deps.getuid || processUid)() === 0) throw new Error('trocar uninstall: run this as your own user, not as root.')
   const w = offWorld({ home, env, deps })
   const fs = w.fs
@@ -179,7 +179,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   // §3.6: uninstall always prints its plan and asks — it takes certificates out of your trust settings and removes files of yours. Not a terminal
   // and no --yes: the plan only, nothing changed, exit 2 (§1.4).
   if (!yes) {
-    if (say) say(formatUninstallReceipt({ ...receipt, ...planOf(), notes: stray.notes }, { home, platform: w.platform, tense: 'future' }))
+    if (say) say((details ? formatUninstallReceipt : formatUninstallText)({ ...receipt, ...planOf(), notes: stray.notes }, { home, platform: w.platform, tense: 'future', asking: true }))
     const ok = interactive && io ? await confirm(io, purgeData ? 'This also deletes every captured record, for good. Proceed?' : 'Proceed?') : null
     if (ok !== true) {
       plan()
@@ -412,9 +412,12 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // the outcome follows the exit code (as `off`'s does): an item that could not be undone is 'left'; any other problem — a blocked run, a state.json that could not be
     // written — is 'failed'; 'uninstalled' only when the run is clean
     const failedRun = blocked || (receipt.problems.length > 0 && !left)
-    if (!(purgeData && !purgeHeld)) { // a purge took flows/ with it: nothing to append to
+    const outcome = failedRun ? 'failed' : left ? 'left' : 'uninstalled'
+    // a purge took flows/ with it: nothing to append to. A clean run with no warning never makes the records dir for its result (1.6 §1.1, 4.6 §卸载 5): after
+    // an earlier --purge-data nothing of trocar's is to stay; a failure and a warning are what D38 keeps, and they write, the dir made for them
+    if (!(purgeData && !purgeHeld) && (outcome !== 'uninstalled' || noted.length || fs.existsSync(path.join(w.dir, 'flows')))) {
       for (const n of noted) put(n)
-      put({ kind: 'result', outcome: failedRun ? 'failed' : left ? 'left' : 'uninstalled', counts: { entries: (u.results || []).length, left, ...(receipt.left.length > left ? { shared: receipt.left.length - left } : {}), still_trusting: u.still_trusting.length, notes: noted.length }, reason: failedRun ? `uninstall did not finish: ${receipt.problems[0]}` : left ? `uninstalled, except ${left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${(u.results || []).length} trust entr${(u.results || []).length === 1 ? 'y' : 'ies'} undone, ${noted.length} note(s)` })
+      put({ kind: 'result', outcome, counts: { entries: (u.results || []).length, left, ...(receipt.left.length > left ? { shared: receipt.left.length - left } : {}), still_trusting: u.still_trusting.length, notes: noted.length }, reason: failedRun ? `uninstall did not finish: ${receipt.problems[0]}` : left ? `uninstalled, except ${left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${(u.results || []).length} trust entr${(u.results || []).length === 1 ? 'y' : 'ies'} undone, ${noted.length} note(s)` })
     }
     if (!blocked) {
       if (m && (left || receipt.kept_bundles.length)) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
@@ -441,6 +444,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (!blocked && !left && !receipt.problems.length && !helperRow) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot(), run })
     if (bare && !helperRow) receipt.notes.push(goneCount() > was ? `there was no install record for this user: only trocar's own program was left, and it is removed${receipt.scheduled.length > wasScheduled ? ' once this command exits' : ''}` : 'nothing is installed for this user')
     receipt.ok = receipt.problems.length === 0 && undone() === 0
+    // no record written (a clean run after a purge, or the purge itself): the receipt names none; Windows' scheduled step may still write its failure there
+    if (!receipt.scheduled.length && !fs.existsSync(receipt.log)) receipt.log = null
     // §3.6: a left row with its own command (the helper's) is the next step itself; only the rows without one need this line
     const bareLeft = receipt.left.filter((l) => !l.command).length
     if (bareLeft && !receipt.problems.length) receipt.problems.push(`${bareLeft} item(s) could not be undone${m ? '; the install manifest is kept' : ''}. Fix them, then run trocar uninstall again`)
@@ -455,7 +460,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
  *  subject) is removed too — with a record or without — and checked gone by a second listing; then, when the record names no root key any more, the
  *  custody's one key (P1: one key, under a fixed name). What could not be read, removed or confirmed is a left row and a problem (D38). */
 const storeOf = (w) => w.deps.rootStore || rootStore({ platform: w.platform, run: w.exec, home: w.home, env: w.env, fs: w.fs })
-const storeWhere = (w) => (w.platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(w.home, 'Library', 'Keychains', 'login.keychain-db'))
+const storeWhere = (w) => trustStoreWhere(w.platform, w.home)
 const ask = async (fn) => { try { return (await fn()) || { error: 'no answer' } } catch (e) { return { error: errText(e) } } }
 const nameOf = rootName
 // the fingerprint last, a word of its own: too long for any line, it gets one to itself, whole (1.6 §1.1⑥), and no bracket is split from it
@@ -582,8 +587,8 @@ function helperHoldsCode(w, root) {
   return { what: "trocar's code and the PATH item", path: appDir(w.home), shared: true, reason: "the capability helper is machine-wide and stays, and trocar's code and its PATH line stay with it so it can be removed. If no other account on this machine uses trocar, remove it with this line (it checks, and refuses while another account does), then run trocar uninstall once more:", command: setupHelperCommand(['--remove'], { root }) }
 }
 
-const USAGE = 'usage: trocar uninstall [--purge-data] [--dry-run] [--yes] [--json]'
-const FLAGS = new Set(['--purge-data', '--dry-run', '--yes', '--json'])
+const USAGE = 'usage: trocar uninstall [--purge-data] [--yes] [--dry-run] [--details] [--json]'
+const FLAGS = new Set(['--purge-data', '--dry-run', '--yes', '--details', '--json'])
 
 /** → the exit code. `argv` is what follows `uninstall`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo). */
 export async function runUninstallCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
@@ -602,10 +607,10 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
     // a platform without a collector reaches runUninstall the same way and finds nothing to undo (D39⑥ executed 2026-10-11: the old capture's own uninstall went with it)
     // the root's key goes last through its custody (4.11 P13): the platform's backend unless a test hands one in
     if (deps.custody === undefined && isModelOs(platform)) deps = { ...deps, custody: (await (await import('../collector/arch/model-backends.mjs')).backendsFor({ os: platform, home, run: deps.exec || null, env })).custody }
-    const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: !json && isInteractive(io), io: { ...io, prompt: io.stdout }, say: json ? null : io.out, deps: { platform, ...deps } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
+    const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), details: flags.has('--details'), interactive: !json && isInteractive(io), io: { ...io, prompt: io.stdout }, say: json ? null : io.out, deps: { platform, ...deps } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
     if (json) printJson(io, receipt)
     else if (receipt.needs_yes || receipt.declined) { for (const n of receipt.notes) io.err(n) } // the plan went out before the question was asked; what is left to say is why nothing was done (R6)
-    else io.out(formatUninstallReceipt(receipt, { home, platform: deps.platform || platform }))
+    else io.out((flags.has('--details') ? formatUninstallReceipt : formatUninstallText)(receipt, { home, platform: deps.platform || platform }))
     return exit
   } catch (e) {
     const message = errText(e)

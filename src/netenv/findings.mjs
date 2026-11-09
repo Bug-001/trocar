@@ -9,7 +9,7 @@ import { trustReasonText } from '../collector/core/codes.mjs'
 import { TRUST_REASONS, ROUTE_TRUST_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { FINDINGS_WIN32 } from './findings-win32.mjs'
 import { ago } from '../cli/text.mjs'
-import { statusReason } from '../cli/words.mjs'
+import { statusReason, plainSentence } from '../cli/words.mjs'
 import { setupHelperCommand } from '../version.mjs'
 
 const BY_CLASS = { problem: 0, expected: 1, note: 2 }
@@ -17,9 +17,11 @@ const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 
 // ── what a command is ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const trocar = (ctx, run) => ({ run, shell: ctx.sh })
-/** An install item of the form that drifted (proxy mode: the carrier, a wrapper or a plugin; 1.6 §9.3 row 31): the command its `certificate` names, `trocar install`. */
 /** 4.11 P4b: a `setup.missing[].what` → the finding that says it, one mapping for both readers (proxy mode's form certificate, driver mode's setup). */
 export const SETUP_FINDING = Object.freeze({ 'carrier-absent': 'entry-missing', 'carrier-overwritten': 'entry-changed', 'bundle-lacks-ca': 'bundle-lacks-ca', 'marked-without-record': 'marked-without-record' })
+/** An install item of the form that drifted (proxy mode: the carrier, a wrapper or a plugin; 1.6 §9.3 row 31): the command its `certificate` names, `trocar install`. */
+/** The steps that set up what a `setup.missing[].what` names: its finding's commands when it is one (`marked-without-record`), else `trocar install`. */
+export const setupSteps = (what) => (Object.hasOwn(FINDINGS, what) ? findingFor(what).commands.map((c) => c.run) : ['trocar install'])
 const installFix = (c) => (c.fm && c.fm.certificate && c.fm.certificate.command ? [trocar(c, c.fm.certificate.command)] : null)
 const os = (ctx, byPlatform) => ({ run: byPlatform[ctx.platform] || byPlatform.linux, shell: ctx.platform === 'win32' ? 'powershell' : 'sh' })
 const gui = (run) => ({ run, shell: 'gui' })
@@ -95,7 +97,7 @@ const removeSteps = (c) => (userPlaces(c).length ? userPlaces(c).flatMap((p) => 
  *  (the place the plan named in `at`, else `unknown`). A PAC the facts see and no reason of the plan's is the PAC row; nothing known is the generic row. */
 function notRoutedOf(c) {
   const r = (c.fm && c.fm.route) || {}, at = r.at || unknownValue('place', 'absent'), on = trocar(c, `trocar on ${c.h}`)
-  if (!c.fm && c.t && (c.t.branches || []).some((b) => b.form === null && b.reason === 'not-routed')) return { why: c.hf && c.hf.formsHere === false ? `None of the forms of ${c.h} that trocar sets up is on this machine; a copy of it installed another way does not go through trocar.` : `A copy of ${c.h} runs that is none of the forms trocar sets up here (installed another way); it does not go through trocar.`, commands: [gui(`Install ${c.h} with its own installer`), trocar(c, 'trocar install'), on] } // 4.11 P5
+  if (!c.fm && c.t && (c.t.branches || []).some((b) => b.form === null && b.reason === 'not-routed')) return { why: c.hf && c.hf.unmeasured ? `trocar has not been tested with ${c.h} installed this way on this system yet, so it does not set ${c.h} up; installed the way trocar has been tested with, it is captured.` : c.hf && c.hf.formsHere === false ? `None of the forms of ${c.h} that trocar sets up is on this machine; a copy of it installed another way does not go through trocar.` : `A copy of ${c.h} runs that is none of the forms trocar sets up here (installed another way); it does not go through trocar.`, commands: [gui(`Install ${c.h} with its own installer`), trocar(c, 'trocar install'), on] } // 4.11 P5
   if (r.reason === 'system-pac' || (!r.reason && c.pac)) return { why: 'The system proxy it follows is a PAC script, which trocar does not run.', commands: [...setAt(c.h, placeOf(c.hf, c.setting), unknownProxy('pac'), c.platform), on] }
   // a form the door cannot tell from the blocked one (r.via): it reaches trocar and is forwarded; the way out is the same setting's
   if (r.via && r.reason === 'blocker') return { why: `trocar cannot tell ${c.fm.id} from ${r.via}, which a setting of yours (${at}) keeps off any entry trocar can use.`, commands: [gui(`Remove the setting at ${at}`), on] }
@@ -314,13 +316,23 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     for (const fm of hf.forms || []) { const fwf = F.forwarder && F.forwarder.forms && F.forwarder.forms[fm.id]; if (fwf && fwf.source === 'unknown') add('prior-proxy-unknown', { pids: fm.procs.map((p) => p.pid) }) }
     // the certificate axis of each form (proxy mode, 1.6 §9.4): one that is not in effect gives its own code, with the form's command (4.11 §3 ⑱)
     for (const fm of hf.forms || []) { const k = fm.certificate; if (k && !k.in_effect && k.code && FINDINGS[k.code]) add(k.code, { fm }) }
-    // driver mode (Linux) has no per-form certificate: the setup `on`'s ⑪ judges says the same codes, whatever the capture state (a bundle that lacks a CA breaks the agent off too)
-    if (F.routing === 'driver' && hf.installed && hf.setup && hf.setup.state === 'needed') for (const x of hf.setup.missing || []) if (SETUP_FINDING[x.what]) add(SETUP_FINDING[x.what], { fm: { certificate: { command: 'trocar install' } } })
+    // driver mode (Linux) has no per-form certificate: the setup `on`'s ⑪ judges says the same codes, whatever the capture state (a bundle that lacks a CA breaks the agent off too).
+    // It replaces the verdict's finding of the same code (entry-missing): `on` refuses while the setup is needed, so its fix is install's
+    const setupNeeded = F.routing === 'driver' && hf.installed && hf.setup && hf.setup.state === 'needed' && (hf.setup.missing || []).some((x) => SETUP_FINDING[x.what])
+    if (setupNeeded) for (const x of hf.setup.missing) if (SETUP_FINDING[x.what]) found.set(SETUP_FINDING[x.what], make(SETUP_FINDING[x.what], { ...base, fm: { certificate: { command: 'trocar install' } } }))
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
     const listPath = F.agentList ? F.agentList.path : null
     for (const u of (F.identity && F.identity[h] && F.identity[h].unknown) || []) found.set(`process-unknown\u0000${u.name}`, make('process-unknown', { ...base, u, listPath }))
     if (named && F.desired[h] === 'on' && hf.installed !== false && ![...found.values()].some((f) => f.class !== 'note')) add('cause-unknown') // a failure or an expected finding already says why; only hints (about the data) leave it open
+    // and any other fix of this harness that runs `trocar on`, which refuses until then, has the setup's steps just before it (one way out that works, 1.6 §1.1)
+    if (setupNeeded) {
+      const steps = hf.setup.missing.filter((x) => SETUP_FINDING[x.what]).map((x) => setupSteps(x.what)).reduce((a, c) => (c.length > a.length ? c : a), []) // the longest: install is every list's last step
+      for (const [k, f] of found) {
+        const at = f.commands.findIndex((c) => c.shell !== 'gui' && /^trocar on\b/.test(c.run))
+        if (at >= 0 && f.commands.slice(Math.max(0, at - steps.length), at).map((c) => c.run).join('\n') !== steps.join('\n')) found.set(k, { ...f, commands: [...f.commands.slice(0, at), ...steps.map((r) => trocar(base, r)), ...f.commands.slice(at)] })
+      }
+    }
     out.push(...[...found.values()].sort((a, b) => BY_CLASS[a.class] - BY_CLASS[b.class]))
   }
   if (!named) {
@@ -340,21 +352,36 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
  * The findings as lines for a person (附录 B · §3.7): a problem or an expected finding is numbered, a note is prefixed `Note:`; then `Fix` with one command
  * to a line and `Check` with the one that verifies it. Wrapped to 80 columns, except a path or a command, which keeps its own line unbroken.
  */
-export function renderFindings(findings, { width = 80 } = {}) {
+// ── the default text (1.6 §3.7, §1.1 ④): a pid only in --details ─────────────────────────────────────────────────────────────────────────────────────
+const PID_COMMAND = /^(?:kill|Stop-Process -Id) \d+$/ // the commands restartSteps and collectors-online fill in with a pid
+const NO_ACTION = /^No action needed\b/ // the step of an expected finding that asks nothing of you
+/** A finding's sentence without the pids it names: `: pid N started` is `: it was started`, `(pid N, M)` goes, any other `pid N` is `a process`. */
+export const noPid = (s) => String(s).replace(/: pid \d+ started/g, ': it was started').replace(/ \(pid [^)]*\)/g, '').replace(/: pid \d+\./g, '.').replace(/\bpid \d+\b/g, 'a process')
+/** Does an expected finding ask something of you (a step that is not 「No action needed」)? Capture that is off is your choice, not a step. */
+export const needsYou = (f) => f.class === 'expected' && f.code !== 'desired-off' && f.commands.some((c) => !NO_ACTION.test(c.run))
+
+/** The findings as `doctor` prints them: numbered problems and expected findings, then notes. `short` (the default text): no why, no pid, and a
+ *  command that needs one is left to --details; a finding with `see` points there in one line instead of Fix and Check. */
+export function renderFindings(findings, { width = 80, short = false } = {}) {
   const lines = []
   let n = 0
   for (const f of fold(findings)) {
     const head = f.class === 'note' ? 'Note: ' : `${(n += 1)}. `
     const pad = ' '.repeat(head.length)
-    lines.push(...wrap(`${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
-    if (f.why) lines.push(...wrap(f.why, width - head.length).map((l) => pad + l))
-    f.commands.forEach((c, i) => {
+    if (lines.length) lines.push('') // a blank line between findings (§3.7's samples)
+    lines.push(...wrap(short ? plainSentence(noPid(f.what)) : `${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
+    if (f.why && !short) lines.push(...wrap(f.why, width - head.length).map((l) => pad + l))
+    if (f.see) { lines.push(`${pad}See    ${f.see}`); continue }
+    const dropped = short && f.commands.some((c) => PID_COMMAND.test(c.run))
+    // the step a pid fills in, said in words in its place (rule 4: the way out is whole), the command in --details
+    const cmds = short ? [...f.commands.filter((c) => !PID_COMMAND.test(c.run)), ...(dropped ? [gui('If it still runs after that, end it: its process number is in trocar doctor --details')] : [])] : f.commands
+    cmds.forEach((c, i) => {
       // a note is not a problem, so what it offers is not a `Fix` (a macOS test machine 2026-10-18: a Fix sat under the headline "no problems")
       const label = i === 0 ? `${pad}${f.class === 'note' ? 'Option' : 'Fix   '} ` : `${pad}       `
       // a command to copy is never folded (§1.1⑥): a paste of half of `sudo <node> <trocar.mjs> setup-helper` runs node alone; a step in an
       // application is prose, so it folds inside the width, two deeper than its first line (§1.1⑥, an indented line's fold)
       if (c.shell !== 'gui') lines.push(label + c.run)
-      else lines.push(...wrap(c.run, width - label.length - 2).map((l, k) => (k ? ' '.repeat(label.length + 2) : label) + l))
+      else lines.push(...wrap(short ? plainSentence(c.run) : c.run, width - label.length - 2).map((l, k) => (k ? ' '.repeat(label.length + 2) : label) + l))
     })
     if (f.verify) lines.push(`${pad}Check  ${f.verify}`)
   }

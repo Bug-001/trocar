@@ -248,7 +248,8 @@ export function askOf(humans) {
 /** A lane's first prompt (askOf over its first call), kept on the lane under a symbol key: no document carries it. */
 export const HEAD = Symbol('first prompt');
 // A sub-agent's first text often opens with what a workflow tells all its sub-agents (4.4 §看板 v2 需要的补充 `lanes[].task`): a line
-// SHARED_LANES lanes of a session hold says nothing of any of them, whatever the harness. Lines are trimmed; a lane counts a line once.
+// SHARED_LANES lanes of a session hold says nothing of any of them, whatever the harness. Lines are trimmed; a lane counts a line once
+// (once per text here; its caller adds each lane once).
 export const SHARED_LANES = 3;
 const linesOf = (text) => new Set(String(text).split('\n').map((l) => l.trim()).filter(Boolean));
 const MARKS = /^(?:(?:#{1,6}|[-*+>]|\d+[.)])(?:\s+|$))+/;
@@ -257,19 +258,25 @@ const WORD = /[\p{L}\p{N}]/u;
  *  (only the first lanes of a line that just became shared: later ones have passed it over already); words(text) → the first line of
  *  `text` that is not shared and has a letter or digit once its leading marks are gone, without them, or null. */
 export function sharedLines() {
-  const seen = new Map(); // line → { n: the lanes holding it, first: those lanes, until it is shared }
+  // line → the one lane holding it, or the lanes holding it (an array once a second lane has it), until it is shared: then null. A line
+  // only one lane holds, most of them, costs its map entry alone (the read's bound, 3.5 SPINE_PER_ROW). Lanes are the reduction's lane
+  // objects, never null nor arrays, so those two mark the states.
+  const seen = new Map();
   return {
     add(text, lane) {
       const moved = [];
       for (const l of linesOf(text)) {
-        const e = seen.get(l) || seen.set(l, { n: 0, first: [] }).get(l);
-        if (++e.n === SHARED_LANES) { moved.push(...e.first); e.first = null; } else if (e.first) e.first.push(lane);
+        const v = seen.get(l);
+        if (v === null) continue;
+        const n = v === undefined ? 0 : Array.isArray(v) ? v.length : 1;
+        if (n + 1 >= SHARED_LANES) { if (n) moved.push(...(n > 1 ? v : [v])); seen.set(l, null); }
+        else seen.set(l, !n ? lane : n > 1 ? [...v, lane] : [v, lane]);
       }
       return moved;
     },
     words(text) {
       for (const l of linesOf(text)) {
-        if ((seen.get(l)?.n || 0) >= SHARED_LANES) continue;
+        if (seen.get(l) === null) continue;
         const w = l.replace(MARKS, '');
         if (WORD.test(w)) return w;
       }

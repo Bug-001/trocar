@@ -80,6 +80,14 @@ test('(3) the capture log: one row per failures.groups[] entry, worded by the CL
   }
 })
 
+// C.3: an agent's "latest failure" is its newest problem group, as `failures.latest` is; a newer note (an upstream wait, a resolved group) is not one
+test('an agent row\'s latest failure is its newest problem, never a newer note group', () => {
+  const s = sample(), h = Object.keys(s.harnesses)[0]
+  const g = (level, last_ts) => ({ level, where: 'engine', code: level === 'note' ? 'upstream-slow' : 'tls-client-error', count: 1, first_ts: last_ts, last_ts, harness: h })
+  s.failures.groups = [g('note', '2026-10-18T12:50:00Z'), g('problem', '2026-10-18T05:00:00Z')]
+  assert.equal(agentVerdicts(s).find((r) => r.harness === harnessKey(h)).lastFailure, '2026-10-18T05:00:00Z')
+})
+
 test('(4) agent rows are the union of the five C.3 sources through harnessKey; a stopped daemon puts no row in the capturing tier', () => {
   const s = sample()
   const ids = new Set([
