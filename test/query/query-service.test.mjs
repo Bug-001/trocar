@@ -28,6 +28,7 @@ import { HEAD_FILES } from '../../src/query/ctx-key.mjs'
 import { lineFile, loadSidecar } from '../../src/query/line-file.mjs'
 import { REDUCE_V } from '../../src/view/reduce.mjs'
 import { heapFlags, workerEnv } from '../../src/query/warm.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 // A worker that answers one query (the warm-up's) and then dies on the next, which is how a caller WAITING for a
@@ -816,7 +817,7 @@ test('kick: a kicked cold fold is folded to its frontier by the one worker it fo
 // from its start by a kick of its last record id alone, with no read: its head is tier 1 at its last member, nothing pending. The
 // worker's idle period (worker.mjs IDLE_SLICE_MS) writes the head the last slice left behind.
 test('kick: a never-folded session kicked by its last record id alone is folded to its end with no read (head tier 1, pending null)', { timeout: 180_000 }, async () => {
-  const atEnd = (head, last) => head != null && head.tier === 1 && head.pending === null && head.mark === last
+  const atEnd = (head, last) => head != null && head.tier === 1 && head.pending === null && listed(head) && head.mark === last
   const { members, log } = await kickedFold({ calls: 600, wire: 'http', kicked: (ms) => [String(ms.at(-1).id)], done: ({ log, last }) => atEnd(headOf(log), last) })
   assert.equal(lastFrontier(log)?.f, String(members.at(-1).id), 'the fold log stands at the last member')
   const head = headOf(log)
