@@ -423,8 +423,8 @@ test('R21 the plan reads agents.json: a running agent of a custom name (claude-n
   const arch = { os: 'none', unit, createRedirector: async () => ({ scan: () => [nightly] }) }
   const parts = await loadParts({ env: { HOME: home }, agentList: readAgentList({ home, fs }).entries, arch, harnesses: [cc] })
   const io = fakeIo()
-  assert.equal(await runInstallCli(['--dry-run'], { ...onCtx(home, io, { deps: { parts } }), platform: 'linux' }), 0, io.text())
-  assert.match(io.text(), /7100/, 'the custom name is claude-code\'s, as the daemon will judge it: its pid is on the restart list')
+  assert.equal(await runInstallCli(['--dry-run', '--details'], { ...onCtx(home, io, { deps: { parts } }), platform: 'linux' }), 0, io.text())
+  assert.match(io.text(), /7100/, 'the custom name is claude-code\'s, as the daemon will judge it: its pid is on the restart list (a --details fact, 1.6 §1.1 ④)')
 })
 
 // R13 (1.6 V65, D48): the list file belongs to the user — `on`, a second `on`, and `off` leave ~/.trocar/agents.json byte for byte and untouched (mtime), whether it
