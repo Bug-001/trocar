@@ -104,4 +104,10 @@ test('uninstall: a refusal (capture on, or the service not answering) is one sho
     for (const s of steps.slice(1)) assert.ok(text.split('\n').includes(s), `the step ${s.trim()} is on its own line`)
     assert.match(formatUninstallReceipt(r, { home, platform: 'darwin' }), /pid/, '--details keeps the full sentence')
   }
+  // the daemon that stopped answering at the off request: a one-line problem after another one, and the desired state already written
+  const silent = receipt({ ok: false, error: { code: 'collectors-online', message: 'the daemon (pid 9) did not answer the off request' },
+    problems: ['state.json could not be written (EACCES)', 'the daemon (pid 9) did not answer the off request. Run: trocar off'] })
+  const text = formatUninstallText(silent, { home, platform: 'darwin' })
+  for (const p of silent.problems) assert.ok(text.replace(/\s+/g, ' ').includes(p), `${p}\n${text}`)
+  assert.doesNotMatch(text, /Nothing was changed/, 'it did write the desired state')
 })
