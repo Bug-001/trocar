@@ -289,7 +289,7 @@ export function checkStandalone({ home = nodeOs.homedir(), version = OFF_VERSION
   const found = m ? m[1] : null
   if (found !== expected) return no(found, found === null ? 'It carries no trocar-off version line, so trocar did not write it.' : `It is version ${found}; this trocar writes version ${expected}.`)
   let want
-  try { want = buildStandalone({ srcDir, version, fs }) } catch (e) { return no(found, `This trocar could not build its own copy to compare it with: ${(e && e.message) || e}.`) }
+  try { want = buildStandalone({ srcDir, version, fs }) } catch (e) { return no(found, `This trocar could not build its own copy to compare it with: ${String((e && e.message) || e).split(srcDir).join("trocar's own files")}.`) }
   if (text !== want) return no(found, `It says version ${found}, but its bytes differ from the copy this trocar writes.`)
   // the execute bit is a POSIX fact: on Windows nothing carries one (the file is run as `node "<path>"`, which is what the undo line says),
   // so checking it there called a good copy stale right after install (a Windows test machine 2026-10-18)

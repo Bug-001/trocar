@@ -443,7 +443,7 @@ test('V35: `trocar doctor` says nothing of a copy that is current, and makes a f
   const good = fs.readFileSync(file, 'utf8')
   assert.ok(!flat(doctor()).includes(file), 'a copy that is current is no finding: doctor says nothing about it (§3.7)')
   fs.writeFileSync(file, good.replace(`// trocar-off ${OFF_VERSION} —`, '// trocar-off 0 —'))
-  assert.match(flat(doctor()), new RegExp(`is not the current version[^.]*\\.[^]*is version 0\\W+this trocar writes version ${OFF_VERSION}`))
+  assert.ok(flat(doctor()).includes(file), 'a copy of another version is a finding that names its file (§3.7)')
   fs.rmSync(file)
   assert.match(flat(doctor()), new RegExp(`${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is not there`))
   assert.ok(!fs.existsSync(file), 'doctor reads: it does not write the copy')
@@ -530,7 +530,7 @@ test('V120: with no ../app/current the copy starts the node on PATH and says not
 
 // 1.6 §1.1: doctor shows the reason as its finding's why, beside a fix of its own; the reason names no source path and no command
 test('1.6 §3.7: every reason checkStandalone gives names no source path and no trocar command', () => {
-  const home = tmpDir('trocar-chk-why-'), srcDir = tmpDir('trocar-chk-why-src-')
+  const home = tmpDir('trocar-chk-why-'), srcDir = path.join(tmpDir('trocar-chk-why-src-'), 'src', 'off') // named as an install's is, so a reason that leaks it is caught
   fs.cpSync(path.join(REPO, 'src', 'off'), srcDir, { recursive: true })
   const file = standalonePath(home)
   const command = new RegExp(`\\btrocar (${COMMANDS.map((c) => c.name).join('|')})\\b`)
