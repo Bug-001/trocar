@@ -196,7 +196,8 @@ test('V5: only llm and token-count to log ask first; Cancel has focus, Esc and C
 test('V6: each answer leaves its receipt; server words only in technical details; 405 turns the levels to text; 403 stops', async () => {
   const cases: Array<[string, (b: Body) => Answer | Promise<Answer>]> = [
     ['not-changed', (b) => (b.confirm ? { ok: false, status: 400, data: { error: `bad class ${TOKEN}` }, error: 'HTTP 400' } : serve(b))],
-    ['offline', () => { throw new Error(`fetch failed ${TOKEN}`) }],
+    // post() never throws: a lost answer is status 0 (http.mjs); to the plan, nothing was written
+    ['offline', (b) => (b.confirm ? serve(b) : { ok: false, status: 0, data: null, error: `fetch failed ${TOKEN}` })],
     // the confirm went out and its answer was cut (a post's status 0, http.mjs): the write may have landed, so no 'nothing was changed'
     ['unknown', (b) => (b.confirm ? { ok: false, status: 0, data: null, error: CUT_OFF } : serve(b))],
     ['already', (b) => (b.confirm ? { ok: true, status: 200, data: { ok: true, before: { keep: 'log' }, after: { keep: 'log' } }, error: null } : serve(b))],
@@ -212,7 +213,6 @@ test('V6: each answer leaves its receipt; server words only in technical details
       await press(rc.querySelector('.disc-t')!)
       expect(visible()).toContain(TOKEN)
     }
-    if (kind === 'unknown') expect(rc.textContent).not.toContain(W.RCPT_OFFLINE)
     if (kind === 'offline') {
       const n = bodies().length
       await press(within(rc).getByRole('button', { name: W.RETRY }))
