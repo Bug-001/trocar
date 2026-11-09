@@ -188,7 +188,7 @@ const childRun = (script) => new Promise((resolve) => {
   c.on('close', (code, signal) => { clearTimeout(limit); resolve({ code, signal, out: out.trim(), err }) })
 })
 for (const [name, { posix, make }] of Object.entries(SHAPES)) {
-  test(`1.6 §3.1: ${name} on the lock's path is nobody's lock: the command gets the lock at once, on a regular file, and leaves nothing behind`, { skip: posix !== undefined && posix !== POSIX }, async () => {
+  test(`1.6 §3.1: ${name} on the lock's path is nobody's lock: the command gets the lock at once, on a regular file, and leaves nothing behind`, { skip: posix !== undefined && posix !== POSIX && (posix ? 'Windows has no such file type' : 'POSIX has no named pipes') }, async () => {
     const file = fileOf(); fs.mkdirSync(path.dirname(file), { recursive: true })
     const held = await make(file, path.join(path.dirname(path.dirname(file)), 'away'))
     assert.ok(fs.lstatSync(file), 'the shape is there')
