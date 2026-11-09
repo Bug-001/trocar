@@ -26,7 +26,7 @@ import { patternsOf } from '../off/signature.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, notTrocars, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256, replaceable, retireEntry, inheritDirs, MARKED_WITHOUT_RECORD } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
-import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
+import { controlEndpointFor } from '../off/control-client.mjs'
 import { appendEvent } from './core/events.mjs'
 import { readFlows } from '../health/flows.mjs'
 import { runEventWriter } from '../off/events.mjs'
@@ -161,7 +161,7 @@ export function autostartBlock({ unit, osName }) {
 const PEM_SHAPE = '-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----'
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
-export function changeText(e, prior = null) {
+function changeText(e, prior = null) {
   if (e.kind === 'text') {
     if (e.format === 'pem-block') return "trocar's certificate block added at the end"
     if (e.vars) return `trocar block added at the top (${Object.keys(e.vars).join(', ')})${prior ? `; your own ${Object.keys(prior).join(', ')} commented out` : ''}`

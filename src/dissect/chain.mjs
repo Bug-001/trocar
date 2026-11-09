@@ -50,7 +50,7 @@ export function withUnread(state, missing, unread) {
 export const linked = (plan) => Object.assign(plan, { n: (plan.up ? plan.up.n + plan.up.out.length : 0) + plan.own.length, depth: plan.up ? plan.up.depth + 1 : 0 });
 
 /** The segments of a plan's context, in order: each predecessor's own, then its reply, down to the plan's own. */
-export function segmentsOf(plan) {
+function segmentsOf(plan) {
   const path = [];
   for (let p = plan; p; p = p.up) path.push(p);
   const segs = [];

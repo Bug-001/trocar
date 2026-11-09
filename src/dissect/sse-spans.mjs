@@ -62,7 +62,7 @@ export const nodeParts = (nodes, root, field, at) => nodes.map(({ block, path })
 });
 export const scanned = (text) => { try { return typeof text === 'string' ? scanJson(text) : null; } catch { return null; } };
 // Many blocks from one addressable unit: a span only when it holds exactly one block.
-export const partsOfUnit = (blocks, field, span, why, events) => blocks.map((b) => (blocks.length === 1 ? replyPart(b, field, span, why, events) : replyPart(b, field, null, span ? FANNED : why)));
+const partsOfUnit = (blocks, field, span, why, events) => blocks.map((b) => (blocks.length === 1 ? replyPart(b, field, span, why, events) : replyPart(b, field, null, span ? FANNED : why)));
 
 // rec → [{kind, role, block, field, span, why?}] in reply order, for an SSE wire described by:
 //   keysOf(evt) → the block keys an event carries (from the wire's own fields)

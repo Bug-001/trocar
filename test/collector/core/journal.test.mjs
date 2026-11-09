@@ -4,7 +4,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { applyJsonKey, applyTextEntry, undoEntry, newManifest, readManifest, saveManifest, sha256, manifestPath, writeOwnedFile, sweepTemps, installedAt } from '../../../src/collector/core/trust/journal.mjs'
+import { sweepTemps } from '../../../src/off/fsutil.mjs'
+import { applyJsonKey, applyTextEntry, undoEntry, newManifest, readManifest, saveManifest, sha256, manifestPath, writeOwnedFile, installedAt } from '../../../src/collector/core/trust/journal.mjs'
 
 const K = ['env', 'CA_FILE']
 function box() {

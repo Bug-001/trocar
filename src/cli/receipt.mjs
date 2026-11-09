@@ -64,13 +64,12 @@ const BARE = /\u001b\[\d+m/g
  *  would paste as `sudo` alone and then a Node with no script (§1.1⑥: a command keeps its own line unbroken). */
 export const commandLine = (command) => ({ command })
 /** A line `fit` prints as it is, at column 0, never folded (HOME as `~` still): on's route line, which 附录 A.1 shortens instead of folding. */
-export const wholeLine = (whole) => ({ whole })
+const wholeLine = (whole) => ({ whole })
 
-export { tildeText } from './text.mjs'
 
 /** §1.1⑤: a command to copy shows HOME as `~` where sh, zsh and bash expand it — an unquoted word that starts with a POSIX HOME, then `/` or the word's
  *  end. A path after a `sudo` word keeps the absolute form selfCommand writes (§3.2), and a Windows HOME is never a `~`. */
-export const tildeCommand = (s, home) => (home && home.startsWith('/')
+const tildeCommand = (s, home) => (home && home.startsWith('/')
   ? s.replace(new RegExp(`(^|\\s)${escRe(home)}(?=/|\\s|$)`, 'g'), (m, pre, at) => (/(^|\s)sudo\s/.test(s.slice(0, at + pre.length)) ? m : `${pre}~`))
   : s)
 
@@ -169,7 +168,7 @@ const lingerText = ({ linger, linger_reason: why = null, user = null }) => (ling
 
 /** A label that lists paths (§1.1⑥): the label on its own line, each path on a line of its own two deeper — two paths on one line fold the second to
  *  column 0. `more`: a last item after the paths (how many are not shown). */
-export const pathList = (label, list, home, more = null) => [label, ...list.map((x) => `  ${tilde(typeof x === 'string' ? x : x.path, home)}`), ...(more ? [`  ${more}`] : [])]
+const pathList = (label, list, home, more = null) => [label, ...list.map((x) => `  ${tilde(typeof x === 'string' ? x : x.path, home)}`), ...(more ? [`  ${more}`] : [])]
 
 /** The file lines of a receipt that writes (`on`, Linux `install`): each file changed — path, what, where its backup is — then what trocar made
  *  itself. `past`: false for a dry run (what it would do). */
@@ -253,7 +252,7 @@ export const formatRefusal = (r, { home = null, paths = null } = {}) => fit([`tr
  *  lines in order as `error.commands`, and `error.command` the first. */
 export const markedRefusal = (command, e, steps = null) => ({ ...newReceipt(command), ok: false, error: { code: e.code, message: e.message, command: steps ? steps[0] : UNDO_LINE.install, ...(steps ? { commands: steps } : {}) }, problems: e.paths.map((f) => `${f} holds trocar's text, and no install record lists it`) })
 
-export function uninstallHeadline({ platform = process.platform, past = true, ok = true } = {}) {
+function uninstallHeadline({ platform = process.platform, past = true, ok = true } = {}) {
   if (past && ok === false) return 'trocar uninstall did not finish. What is left is below.'
   const linux = platform === 'linux'
   if (!past) return `trocar uninstall will take out everything install put on this machine, ${linux ? 'the certificate settings it gave your agents included' : 'and remove the root certificate from your trust settings'}.`

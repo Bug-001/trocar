@@ -531,7 +531,7 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
 const unfolded = (st, plan, F) => { for (let i = st.fp === plan ? st.fc : 0; i < F; i++) { const r = plan.members[i]; if (inCut(plan, r) && !st.R.has(String(r.id))) return true; } return false; };
 /** Thrown on the local path when `ctx.handOff` is set and this read would extract or fold a member (3.5 §谁执行它): the caller asks
  *  the daemon's worker, which is building it, instead of building it a second time beside it. */
-export class HandOff extends Error {
+class HandOff extends Error {
   constructor(id) { super(`session ${id}: its projection or fold log does not cover every member yet`); this.name = 'HandOff'; this.code = 'hand-off'; }
 }
 // What a kept state weighs in the shared ledger: the heap it was measured to hold, and at least its rows at SPINE_PER_ROW, since the

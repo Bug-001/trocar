@@ -25,7 +25,7 @@ import { loopbackWords } from '../../../cli/words.mjs'
 import { unseal, doorFp } from '../../../off/seal.mjs'
 import { errnoWords } from '../../../cli/words.mjs'
 
-export const LOOPBACK = LOOPBACK_HOSTS
+const LOOPBACK = LOOPBACK_HOSTS
 /** P10: where the daemon serves the PAC on the PAC group's door — a path carrying the install's key, derived from the doors' token (ingress.json
  *  `listenerToken`): the PAC is a capability that only this user, who can read the entry holding it, has. */
 export const pacPath = (token) => `/${createHmac('sha256', String(token)).update('trocar.pac').digest('hex').slice(0, 32)}/trocar.pac`

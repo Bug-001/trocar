@@ -10,7 +10,6 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 
 // Every file `on` will write or change, printed before it writes any (4.6): src/cli/receipt.mjs holds the words, this is where the
 // collector's callers have always found it.
-export { formatPlan } from '../cli/receipt.mjs'
 
 const loadDaemon = () => import('./daemon.mjs')
 /** The staged copies an interrupted setup-helper left and this run removed, either way: a label sentence in 80 columns, then each path alone on its line, two in

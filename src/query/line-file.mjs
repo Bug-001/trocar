@@ -20,7 +20,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
-export const SIDECAR_V = 1;
+const SIDECAR_V = 1;
 const TYPES = { f64: Float64Array, u32: Uint32Array, i32: Int32Array, u8: Uint8Array };
 /** A line file's sidecar: `<name>.idx` beside its plain files `<name>.<T>.ndjson`. */
 export const sidecarOf = (file) => file.replace(/(\.\d+)?\.ndjson$/, '') + '.idx';
@@ -96,7 +96,7 @@ const held = new FinalizationRegistry(({ fs, fd }) => { try { fs.closeSync(fd); 
 
 
 /** Plain bytes a sealed part holds at least (4.3 §4 分片, about 8 MiB, SHOULD): seal() cuts at the first line end at or past it. */
-export const PART_BYTES = 8 << 20;
+const PART_BYTES = 8 << 20;
 // brotli q9 with the smallest window that covers the frame (10..24 bits): a decoder sizes its ring buffer by the stream's window, so a
 // 256 KiB frame written with a 16 MiB window would take that much memory at each decode for no smaller output (4.3 §4 分片)
 const Z = zlib.constants, brotliOf = (n) => ({ [Z.BROTLI_PARAM_QUALITY]: 9, [Z.BROTLI_PARAM_LGWIN]: Math.min(24, Math.max(10, Math.ceil(Math.log2(n + 16)))), [Z.BROTLI_PARAM_SIZE_HINT]: n });
@@ -116,7 +116,7 @@ const undecodable = new Set();
 export function releaseParts() { decoded.clear(); decodedBytes = 0; }
 /** Plain bytes a frame of a sealed part holds at least (4.3 §4 分片): seal() cuts a part into independently decodable frames, each at
  *  the first line end at or past it, so a line lies in one frame and reading it decodes that frame only. */
-export const FRAME_BYTES = 256 << 10;
+const FRAME_BYTES = 256 << 10;
 const MAGIC = 0x31465254; // "TRF1"
 // A sealed part's bytes are the brotli of each frame of its plain bytes `raw` (a frame cut at the first line end at or past frameBytes
 // from its start), then the frame table (per frame: compressed length, plain length; u32 LE), the frame count, MAGIC.

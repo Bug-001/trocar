@@ -53,13 +53,13 @@ export function socks5Greeting(buf) {
   return { length: 2 + buf[1], methods: [...buf.subarray(2, 2 + buf[1])] }
 }
 /** SOCKS5 method selection: VER=5 METHOD. */
-export function socks5Method(buf) {
+function socks5Method(buf) {
   if (buf.length < 2) return null
   if (buf[0] !== 5) return { invalid: 'bad SOCKS5 method reply' }
   return { length: 2, method: buf[1] }
 }
 /** RFC 1929 username/password: VER=1 ULEN UNAME PLEN PASSWD (the proxy credential — stored 0600). */
-export function socks5Auth(buf) {
+function socks5Auth(buf) {
   if (buf.length < 2) return null
   if (buf[0] !== 1) return { invalid: 'bad RFC 1929 version' }
   const ulen = buf[1]; if (buf.length < 3 + ulen) return null
@@ -67,7 +67,7 @@ export function socks5Auth(buf) {
   return { length: 3 + ulen + plen }
 }
 /** RFC 1929 status: VER=1 STATUS(0 = success). */
-export function socks5AuthStatus(buf) {
+function socks5AuthStatus(buf) {
   if (buf.length < 2) return null
   if (buf[0] !== 1) return { invalid: 'bad RFC 1929 status version' }
   return { length: 2, ok: buf[1] === 0 }

@@ -30,7 +30,6 @@ import { respOf } from '../dissect/record-fields.mjs'
 import { HEAD, TASK_HEAD, taskOf, shorten } from './blockmeta.mjs'
 import { num52, numTable } from '../query/projection.mjs'
 import { mapUsage } from '../model/schema.mjs'
-export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
 
 const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 const DIR_OPS = new Set(['Glob', 'Grep', 'LS'])
@@ -79,7 +78,7 @@ export function normResp(r) {
 }
 
 // Pull a short readable label from a tool call's input.
-export function toolArg(name, input = {}) {
+function toolArg(name, input = {}) {
   if (input.file_path || input.path || input.notebook_path)
     return String(input.file_path || input.path || input.notebook_path)
   if (name === 'Bash' && input.command) return String(input.command)

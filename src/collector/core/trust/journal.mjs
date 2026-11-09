@@ -37,9 +37,9 @@ import { unseal } from '../../../off/seal.mjs'
 const realOf = (fs) => (d) => fs.realpathSync.native(d) // the file system the journal is handed decides what a path is (pathKey)
 export const samePath = (a, b, fs) => a === b || (typeof a === 'string' && typeof b === 'string' && pathKey(a, { realpath: realOf(fs) }) === pathKey(b, { realpath: realOf(fs) }))
 
-export { sha256, writeDurable, sweepTemps, missingDirs, removeEmptyDirs, editTarget } from '../../../off/fsutil.mjs'
+export { sha256, missingDirs } from '../../../off/fsutil.mjs'
 export { undoEntry, removeOwnedFile, describeEntry } from '../../../off/journal.mjs'
-export { MANIFEST, manifestPath, newManifest, readManifest, saveManifest } from '../../../off/manifest.mjs'
+export { manifestPath, newManifest, readManifest, saveManifest } from '../../../off/manifest.mjs'
 
 // 1.6 R2: a user's file is saved to ~/.trocar/backup/ before the first byte of it changes; no backup, no change. `before` null = trocar
 // creates the file: nothing to save (existed_before:false, backup:null). The throw is `backup-failed`, raised before the manifest or the
