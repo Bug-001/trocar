@@ -23,6 +23,7 @@ import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { drain, within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const SCAN_DEPS = fileURLToPath(new URL('./worker-scan-deps.mjs', import.meta.url))
 const CALLS = 1300 // past two packs, far past a slice
@@ -44,7 +45,9 @@ const ask = async (svc, name, params) => {
 }
 const serviceOf = (home) => { const r = reporting(workerFork); return { r, svc: createQueryService({ home, fork: r.fork }) } }
 const gone = (kid) => kid.exitCode !== null || kid.signalCode !== null
-const isDone = (home, id) => { const h = readHead(home, id); return !!h && h.tier === 1 && h.pending === null }
+// folded to its end from the full row list: a head written while the boot pass still builds the list says so (`index-pending`, 3.5 §行表先读) and is
+// rewritten once the pass ends, so a fold that stops before that leaves a head the next slice changes
+const isDone = (home, id) => { const h = readHead(home, id); return !!h && h.tier === 1 && h.pending === null && listed(h) }
 const rereads = (home, id) => fs.existsSync(rereadFile(home, id))
 const answerNames = (home, id) => fs.readdirSync(sessionDir(home, id)).filter((n) => /^(p\d+\.\w+\.ndjson\.gz|open\.\w+\.ndjson|head(\.pending)?\.json\.gz)$/.test(n)).sort()
 // every answer file, by the sha1 of its bytes

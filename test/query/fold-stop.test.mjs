@@ -29,6 +29,7 @@ import { drain, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { readerBudget } from './past-room.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
@@ -72,7 +73,7 @@ test('3.5 #37: a kicked fold the heap holds no room for writes pending.stopped i
   svc = createQueryService({ home, fork: r.fork, idleMs: 20_000 })
   try {
     svc.kick([recordId(segment, calls)])
-    const h = await until(home, id, r, (d) => d.tier === 1 && d.pending === null, 'the fold that fits wrote a head at its frontier')
+    const h = await until(home, id, r, (d) => d.tier === 1 && d.pending === null && listed(d), 'the fold that fits wrote a head at its frontier')
     assert.equal(h.pending, null, 'no stop is left in the head')
   } finally { svc.stop() }
 })
