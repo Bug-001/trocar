@@ -17,6 +17,7 @@ import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { closure } from '../helpers/imports.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
+import { COMMANDS } from '../../src/cli/commands.mjs'
 
 // a record the four questions are content with: an LLM call with its verbatim request and a reconstructed response
 const REC = { id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages', ts_request: '2026-01-01T00:00:00.000Z',
@@ -180,7 +181,12 @@ test('a stale standalone copy is a problem with its reason (exit 1); where nothi
   fs.appendFileSync(path.join(s.home, '.trocar', 'bin', 'trocar-off'), '\n// edited\n')
   let r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 1, r.out)
-  assert.ok((await doctor(s, ['--json'], { source: src })).io.json().findings.some((x) => x.code === 'standalone-stale' && x.class === 'problem'), r.out)
+  const stale = (await doctor(s, ['--json'], { source: src })).io.json().findings.find((x) => x.code === 'standalone-stale')
+  assert.equal(stale && stale.class, 'problem', r.out)
+  // 1.6 §1.1: its why names no source path, and no command but the fix it gives
+  const named = COMMANDS.map((c) => `trocar ${c.name}`).filter((c) => new RegExp(`\\b${c}\\b`).test(stale.why))
+  assert.doesNotMatch(stale.why, /\bsrc[\\/]/, stale.why)
+  assert.deepEqual(named.filter((c) => !stale.commands.some((x) => x.run === c)), [], stale.why)
   assert.ok(r.out.includes(path.join(s.home, '.trocar', 'bin', 'trocar-off')), 'the copy is named')
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   r = await doctor(n, [], { source: nsrc })

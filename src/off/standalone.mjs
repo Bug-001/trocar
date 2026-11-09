@@ -274,29 +274,30 @@ export function writeStandalone({ home = nodeOs.homedir(), version = OFF_VERSION
   return { path: standalonePath(home), written: due.length > 0, files: due }
 }
 
-/** Is the copy on disk what `trocar on` would write now? → `{ ok, path, found, expected, reason? }`: `found` is the version on its first lines (null: none, or no file), `expected` the
+/** Is the copy on disk what this trocar writes now? → `{ ok, path, found, expected, reason? }`: `found` is the version on its first lines (null: none, or no file), `expected` the
  *  version asked for (default OFF_VERSION). Reads only. A version that differs, a text that differs under the same version, a file that is not executable, one that is not there or cannot be read: each is `ok: false` with `reason`
- *  (and `missing: true` for one that is not there, `path` naming it). */
+ *  (and `missing: true` for one that is not there, `path` naming it). `reason` is one plain sentence on that file;
+ *  it names no command (the caller gives the fix) and no source path. */
 export function checkStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, platform = process.platform, fs = nodeFs } = {}) {
   const file = standalonePath(home), expected = String(version)
   const no = (found, reason) => ({ ok: false, path: file, found, expected, reason })
   let text, mode
   try { text = fs.readFileSync(file, 'utf8'); mode = fs.statSync(file).mode } catch (e) {
-    return e && e.code === 'ENOENT' ? { ...no(null, `${file} is not there: trocar on writes it`), missing: true } : no(null, `${file} cannot be read (${(e && e.code) || (e && e.message) || e}); trocar on writes it again`)
+    return e && e.code === 'ENOENT' ? { ...no(null, 'The file is missing.'), missing: true } : no(null, `It cannot be read (${(e && e.code) || (e && e.message) || e}).`)
   }
   const m = VERSION_LINE.exec(text.split('\n', 3).join('\n'))
   const found = m ? m[1] : null
-  if (found !== expected) return no(found, found === null ? `${file} carries no trocar-off version line: it is not a copy trocar wrote; trocar on writes it again` : `${file} is version ${found}, this trocar writes version ${expected}; trocar on writes it again`)
+  if (found !== expected) return no(found, found === null ? 'It carries no trocar-off version line, so trocar did not write it.' : `It is version ${found}; this trocar writes version ${expected}.`)
   let want
-  try { want = buildStandalone({ srcDir, version, fs }) } catch (e) { return no(found, `${file} could not be compared with what src/off generates: ${(e && e.message) || e}`) }
-  if (text !== want) return no(found, `${file} says version ${found} but its bytes differ from what src/off generates now; trocar on writes it again`)
+  try { want = buildStandalone({ srcDir, version, fs }) } catch (e) { return no(found, `This trocar could not build its own copy to compare it with: ${(e && e.message) || e}.`) }
+  if (text !== want) return no(found, `It says version ${found}, but its bytes differ from the copy this trocar writes.`)
   // the execute bit is a POSIX fact: on Windows nothing carries one (the file is run as `node "<path>"`, which is what the undo line says),
   // so checking it there called a good copy stale right after install (a Windows test machine 2026-10-18)
-  if (platform !== 'win32' && !(mode & 0o100)) return no(found, `${file} is not executable; trocar on writes it again`)
+  if (platform !== 'win32' && !(mode & 0o100)) return no(found, 'It is not executable.')
   for (const cmd of standaloneFiles(home, platform).slice(1)) {
     let have = null, gone = false
     try { have = fs.readFileSync(cmd, 'utf8') } catch (e) { gone = !!e && e.code === 'ENOENT' }
-    if (have !== STANDALONE_CMD) return { ...no(found, gone ? `${cmd} is not there: trocar on writes it` : have === null ? `${cmd} cannot be read: trocar on writes it again` : `${cmd} is not what this trocar writes; trocar on writes it again`), path: cmd, ...(gone ? { missing: true } : {}) }
+    if (have !== STANDALONE_CMD) return { ...no(found, gone ? 'The file is missing.' : have === null ? 'It cannot be read.' : 'Its bytes differ from the copy this trocar writes.'), path: cmd, ...(gone ? { missing: true } : {}) }
   }
   return { ok: true, path: file, found, expected }
 }
