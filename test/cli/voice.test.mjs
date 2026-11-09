@@ -57,8 +57,14 @@ test('uninstall: the default plan and receipt say no unsaid word, and --details 
 test('uninstall (§1.4): the default plan names every file of yours outside ~/.trocar, and never says nothing was changed before the question', () => {
   const home = HOMES.darwin
   const plan = formatUninstallText(receipt({ dry_run: true }), { home, platform: 'darwin', tense: 'future', asking: true })
-  for (const p of ['.claude/settings.json', '.config/opencode/plugins/trocar.js']) assert.ok(plan.includes(`~/${p}`), p)
-  assert.ok(plan.includes('~/.config/app/lib') && !plan.includes('a.json'), 'two files of one directory are one line with their count')
+  // the plan is the consent screen: every planned path outside ~/.trocar is there, as itself or as its directory with the count of its files
+  const r = receipt({ dry_run: true }), dot = path.join(home, '.trocar')
+  const yours = [...r.changed.map((c) => c.path), ...r.removed].filter((p) => p.startsWith(`${home}/`) && !p.startsWith(`${dot}/`))
+  for (const p of yours) {
+    const dir = path.dirname(p), n = yours.filter((q) => path.dirname(q) === dir).length
+    assert.ok(n > 1 ? plan.includes(`~${dir.slice(home.length)} (${n} files)`) : plan.includes(`~${p.slice(home.length)}`), `${p} is in the plan:\n${plan}`)
+  }
+  assert.ok(yours.length >= 4 && !plan.includes('a.json'), 'the fixture has a shared directory, and its files are one line')
   assert.ok(!plan.includes('state.json') && !plan.includes('trocar-off'), "trocar's own files under ~/.trocar are one sentence")
   assert.doesNotMatch(plan, /Nothing was changed/)
   assert.match(formatUninstallText(receipt({ dry_run: true }), { home, platform: 'darwin', tense: 'future' }), /Nothing was changed/, '--dry-run still says it')
@@ -85,4 +91,23 @@ test('uninstall (§1.4): the trust store and the root key are trocar\'s own, nev
   assert.equal(plan.split('\n').filter((l) => /\.codex\\\.env/i.test(l)).length, 1, 'one file on Windows, whatever its case')
   const mac = formatUninstallText(receipt({ dry_run: true, changed: [{ path: path.join(HOMES.darwin, 'Library/Keychains/login.keychain-db'), change: 'stray root taken out' }] }), { home: HOMES.darwin, platform: 'darwin', tense: 'future', asking: true })
   assert.doesNotMatch(mac, /Keychains/)
+})
+
+test('uninstall: a refusal (capture on, or the service not answering) is one short line and its steps; --json keeps the full message', () => {
+  const home = HOMES.darwin
+  const steps = ['Run, in order:', '    trocar off', '    trocar uninstall']
+  for (const [daemon, why] of [[{ state: 'left-running', pid: 4242 }, 'the daemon (pid 4242) is running but does not answer (timeout), so capture is not known to be off. Nothing was changed'],
+    [{}, 'capture is still on for codex; these processes still have trocar in their environment: pi (pid 5)']]) {
+    const r = receipt({ ok: false, daemon, error: { code: 'collectors-online', message: why }, problems: [[why, ...steps].join('\n')] })
+    const text = formatUninstallText(r, { home, platform: 'darwin' })
+    assert.deepEqual(unsaidIn(text), [], text)
+    for (const s of steps.slice(1)) assert.ok(text.split('\n').includes(s), `the step ${s.trim()} is on its own line`)
+    assert.match(formatUninstallReceipt(r, { home, platform: 'darwin' }), /pid/, '--details keeps the full sentence')
+  }
+  // the daemon that stopped answering at the off request: a one-line problem after another one, and the desired state already written
+  const silent = receipt({ ok: false, error: { code: 'collectors-online', message: 'the daemon (pid 9) did not answer the off request' },
+    problems: ['state.json could not be written (EACCES)', 'the daemon (pid 9) did not answer the off request. Run: trocar off'] })
+  const text = formatUninstallText(silent, { home, platform: 'darwin' })
+  for (const p of silent.problems) assert.ok(text.replace(/\s+/g, ' ').includes(p), `${p}\n${text}`)
+  assert.doesNotMatch(text, /Nothing was changed/, 'it did write the desired state')
 })

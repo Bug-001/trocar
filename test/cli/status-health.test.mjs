@@ -79,7 +79,7 @@ test('C.3 · a failure group whose newest record names its process carries proce
   assert.ok(failureBrief(g).includes('codex') && failureBrief(g).includes('4321'), failureBrief(g))
   assert.equal(failureBrief(plain).includes('pid'), false)
   const one = (t) => t.replace(/\s+/g, ' ') // a row folds inside 80 columns
-  assert.ok(one((await s.run(['status', '--failures'], { deps })).io.stdoutText()).includes(one(failureBrief(g))), 'the --failures row carries the sentence that names the program')
+  assert.ok(one((await s.run(['status', '--failures', '--details'], { deps })).io.stdoutText()).includes(one(failureBrief(g))), 'the --failures row carries the sentence that names the program')
 })
 
 test('4.6 F9: a capture health that cannot be read is no `health`, an `errors` entry with the reason, and exit 3 — never empty, never "0 failures"', async () => {

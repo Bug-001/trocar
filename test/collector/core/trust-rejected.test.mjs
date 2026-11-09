@@ -79,7 +79,7 @@ test('4.6 R9: a client that refuses trocar\'s leaf → one critical trust-reject
   const res = await s.run(['status', '--json'], { deps: { captureHealth: () => health } })
   const doc = res.io.json()
   assert.deepEqual(doc.critical.map((c) => [c.kind, c.level, c.harness, c.pid, c.host]), [['trust-rejected', 'critical', 'deepseek-dsh', 5, 'api.deepseek.com'], ['trust-rejected', 'critical', 'deepseek-dsh', 5, 'chat.deepseek.com']])
-  const text = (await s.run(['status', '--failures'], { deps: { captureHealth: () => health } })).io.stdoutText()
+  const text = (await s.run(['status', '--failures', '--details'], { deps: { captureHealth: () => health } })).io.stdoutText() // the catalog's sentence and the groups' order are the full wall's (1.6 §3.5 --failures --details)
   // the critical kind first, in English (the summary's own layout is §3.5's, guarded by test/cli/status-doctor-en.test.mjs; this sandbox has nothing installed, so the summary says so)
   // a row is its first line and the lines folded under it (§1.1⑥); the sentence is the catalog's (words.mjs)
   const rows = text.split('\n').reduce((acc, l) => { if (/^ {2}\S/.test(l)) acc.push(l); else if (/^ {3,}\S/.test(l) && acc.length) acc[acc.length - 1] += ` ${l.trim()}`; return acc }, []).map((r) => r.replace(/\s+/g, ' '))
