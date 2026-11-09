@@ -49,3 +49,27 @@ export const headersOf = (rec) => (rec && (rec.request_headers || rec.req_header
 // while the pre-D10 test fixture kept them green. Mirrors headersOf: tolerate BOTH shapes forever,
 // because old captures on disk are still the user's data (invariant 2).
 export const respOf = (rec) => (rec && (rec.resp || rec.response)) || null;
+
+// Unify the two response shapes: streamed SSE (already reconstructed into
+// response.{usage,text,tool_calls}) and non-streaming JSON (raw body in response.body). The reply's tool calls leave
+// under the neutral name `tools` (2.6 §A): `tool_calls` is a wire name the board does not read (invariant 3).
+// Without this, JSON responses (all the security-monitor calls) read as ctx=0 / no text.
+export function normResp(r) {
+  const rs = respOf(r) || {};
+  if (rs.kind === 'json' && rs.body && typeof rs.body === 'object') {
+    const c = Array.isArray(rs.body.content) ? rs.body.content : []
+    return {
+      status: rs.status,
+      usage: rs.body.usage || {},
+      text: c.filter((b) => b.type === 'text').map((b) => b.text || '').join(''),
+      thinking: c.filter((b) => b.type === 'thinking').map((b) => b.thinking || '').join('') || undefined,
+      tools: c.filter((b) => b.type === 'tool_use' || b.type === 'server_tool_use')
+        .map((b) => ({ id: b.id, name: b.name, input: b.input })),
+      stop_reason: rs.body.stop_reason,
+    }
+  }
+  return {
+    status: rs.status, usage: rs.usage || {}, text: rs.text || '',
+    thinking: rs.thinking, tools: rs.tool_calls || [], stop_reason: rs.stop_reason,
+  }
+}

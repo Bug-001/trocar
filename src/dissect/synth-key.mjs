@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto';
 import { harnessOf, sessionKeyOf, bodyOf, hintsOf } from './harnesses.mjs';
 import { boardDissectorFor } from './registry.mjs';
-import { normResp as anthropicResp } from '../view/analyze.mjs';
+import { normResp as anthropicResp } from './record-fields.mjs';
 
 export const SYNTH_GAP_MS = 30 * 60 * 1000;
 // step 2 (extension) has no window: a chain stays open for it SYNTH_TTL_MS after its last call, at most SYNTH_CAP chains per harness
