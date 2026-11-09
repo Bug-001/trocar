@@ -175,6 +175,15 @@ test('kinship by reply: live = cold in three arrival orders, cut into two segmen
   }
 })
 
+test('kinship by reply: a reply no reader can read is no reply, and its segment is read whole', async () => {
+  const r = prose(51, 900)
+  const odd = [{ status: 200, kind: 'json', body: { content: [null] } }, { status: 200, kind: 'json', body: { text: ['not', 'text'] } }]
+  const recs = [turn('messages', 0, 0, r, T0), ...odd.map((resp, i) => ({ ...turn('messages', 1 + i, 0, null, T0 + (1 + i) * MIN), resp })), summary('messages', [r], T0 + 3 * MIN)]
+  const m = await membership(homeOf([recs])) // no errors: the segment is not unreadable
+  assert.equal(m.size, recs.length, 'every call has its session')
+  assert.equal(m.get(recs[3].id), m.get(recs[0].id), 'the summary still joins by the reply it carries')
+})
+
 // past KEEP segments a build hands the rule's state from part to part (src/query/rows.mjs): the parts it keeps are copied, so a
 // later build that starts from one, after a middle segment is rewritten or a new one comes, reads what that part ended with
 test('kinship by reply: live = cold over 24 segments with replies, a middle segment rewritten, then a new one', async () => {

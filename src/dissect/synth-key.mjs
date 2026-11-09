@@ -153,8 +153,13 @@ function holds(w, at, it) {
   return false;
 }
 // the reply as the product reads it (the board's text), whatever the wire
-// a wire's own reply reader where its board dissector has one (the flat OpenAI wires); the Anthropic reply reader for the rest (the tree-folded Anthropic wire has none)
-const replyOf = (rec) => { const d = boardDissectorFor(rec), r = d && d.normResp ? d.normResp(rec) : anthropicResp(rec); return itemOf((r && r.text) || ''); };
+// a wire's own reply reader where its board dissector has one (the flat OpenAI wires); the Anthropic reply reader for the rest (the tree-folded Anthropic wire has none).
+// A reply no reader can read is no evidence: it is no reply, never a segment that cannot be read (D38 is the board's, not this rule's)
+const replyOf = (rec) => {
+  let r;
+  try { const d = boardDissectorFor(rec); r = d && d.normResp ? d.normResp(rec) : anthropicResp(rec); } catch { return null; }
+  return typeof (r && r.text) === 'string' ? itemOf(r.text) : null;
+};
 
 // ── chains (3.4 合成键) ───────────────────────────────────────────────────────────────────────────────────────────────────────
 // A call's history as cumulative hashes: c_1 = h(item_1), c_i = h(c_{i-1} + '\n' + item_i), h = the first 16 hex of SHA-256, each item
