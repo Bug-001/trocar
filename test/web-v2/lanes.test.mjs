@@ -259,3 +259,26 @@ test('1.5 K-04 · 2.1:17: the token-count row is never the anchor (it is no lane
   assert.equal(anchorLane(tc).kind, 'main')
   assert.deepEqual(tc.find((l) => l.kind === 'token-count').calls.map((c) => c.retention), ['log', 'full'], 'the drawer says how each was kept (invariant 4)')
 })
+
+test('2.1 #20 · a token-count bar is known by its time: a count that gets its size later moves no other bar; timeless counts draw none', () => {
+  for (let seed = 1; seed <= 200; seed++) {
+    const r = rng(seed), n = 1 + Math.floor(r() * 30)
+    // times with ties, and some counts with no time at all
+    const full = Array.from({ length: n }, (_, i) => ({ ts: r() < 0.15 ? null : new Date(T0 + Math.floor(r() * 8) * 1000).toISOString(), tokens: 100 + i, retention: 'full' }))
+      .sort((a, b) => (a.ts == null || b.ts == null ? 0 : a.ts.localeCompare(b.ts)))
+    const sized = full.filter(() => r() < 0.7) // the ones measured so far: the others get their size later
+    const row = (series) => buildLanes(deskOf([]), { count: n, series }).find((l) => l.kind === 'token-count')
+    const before = row(sized), after = row(full)
+    const want = full.filter((p) => p.ts != null)
+    if (!want.length) { assert.equal(after, undefined, `seed ${seed}: no count has a time, so no bar`); continue }
+    assert.deepEqual(after.calls.map((c) => c.ctx), want.map((p) => p.tokens), `seed ${seed}: the row holds exactly the counts with a time, in order`)
+    assert.equal(new Set(after.calls.map((c) => c.rid)).size, after.calls.length, `seed ${seed}: ids are distinct`)
+    assert.equal(after.count, n, `seed ${seed}: the row's number is every count`)
+    if (!before) continue
+    const now = new Map(after.calls.map((c) => [c.rid, c]))
+    for (const c of before.calls) {
+      const same = full.filter((p) => p.ts === c.ts).length === sized.filter((p) => p.ts === c.ts).length // no new count at its time
+      if (same) assert.equal(now.get(c.rid)?.ctx, c.ctx, `seed ${seed}: ${c.rid} still names the same count`)
+    }
+  }
+})
