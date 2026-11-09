@@ -20,6 +20,7 @@ import * as overview from './overview.mjs';
 import { LIMIT_DEFAULT, LIMIT_MAX } from './about.mjs';
 import { createHash } from 'node:crypto';
 import * as src from '../stamp.mjs';
+import { HARNESS_REGISTRY, readIdOf } from '../../off/harness-names.mjs';
 
 /** A name or a parameter the table does not have (1.6 §4.1 退出码 2). */
 export class QueryArgError extends Error { constructor(m) { super(m); this.name = 'QueryArgError'; } }
@@ -100,6 +101,16 @@ export function paginate(list, p = {}, { bytes = null, cap = PAGE_STORED_BYTES }
 }
 /** A list parameter: comma-separated values, or null when it was not given. */
 export const listOf = (v) => (v == null ? null : new Set(String(v).split(',').map((s) => s.trim()).filter(Boolean)));
+// every name `--harness` takes on a row query → the harness id the rows carry: the id itself, and the CLI's names and aliases (1.6 §1.6)
+const ROW_HARNESS = new Map(HARNESS_REGISTRY.flatMap((r) => [readIdOf(r), ...(r.legacy ? [] : [r.id, ...(r.aliases || [])])].map((n) => [n, readIdOf(r)])));
+/** `--harness` of a row query as the set of harness ids its rows carry, or null when it was not given; a name that is no harness is a usage error. */
+export function harnessIds(p, name) {
+  const typed = listOf(p.harness);
+  if (!typed) return null;
+  const unknown = [...typed].filter((n) => !ROW_HARNESS.has(n));
+  if (unknown.length) throw new QueryArgError(`trocar query ${name}: --harness: no agent called ${unknown.join(', ')} (known: ${[...ROW_HARNESS.keys()].join(', ')})`);
+  return new Set([...typed].map((n) => ROW_HARNESS.get(n)));
+}
 /** `--since` / `--until` as one predicate over a record's timestamp. A record with no time is kept only when neither was given. */
 export function tsFilter(p = {}, now = Date.now) {
   if (p.since == null && p.until == null) return () => true;

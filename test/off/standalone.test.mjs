@@ -19,6 +19,7 @@ import { standalonePath, standaloneFiles } from '../../src/off/paths.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
+import { COMMANDS } from '../../src/cli/commands.mjs'
 import { formatPlan } from '../../src/cli/receipt.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, onSwitch, flowEvents } from './fixtures/off-ctx.mjs'
@@ -342,7 +343,6 @@ test('V35: the check reports a copy that is stale, missing or not what src/off g
   const file = standalonePath(home)
   const missing = checkStandalone({ home, version: OFF_VERSION })
   assert.deepEqual([missing.ok, missing.path, missing.found, missing.expected], [false, file, null, String(OFF_VERSION)])
-  assert.match(missing.reason, /not there/)
   const w = writeStandalone({ home, version: OFF_VERSION })
   assert.deepEqual([w.path, w.written, fs.statSync(file).mode & 0o777, fs.readFileSync(file, 'utf8') === buildStandalone({ version: OFF_VERSION })], [file, true, 0o700, true])
   assert.deepEqual([checkStandalone({ home, version: OFF_VERSION }).ok, writeStandalone({ home, version: OFF_VERSION }).written], [true, false], 'equal to what is generated: nothing to do')
@@ -443,7 +443,7 @@ test('V35: `trocar doctor` says nothing of a copy that is current, and makes a f
   const good = fs.readFileSync(file, 'utf8')
   assert.ok(!flat(doctor()).includes(file), 'a copy that is current is no finding: doctor says nothing about it (§3.7)')
   fs.writeFileSync(file, good.replace(`// trocar-off ${OFF_VERSION} —`, '// trocar-off 0 —'))
-  assert.match(flat(doctor()), new RegExp(`is not the current version[^.]*\\.[^]*is version 0, this trocar writes version ${OFF_VERSION}`))
+  assert.ok(flat(doctor()).includes(file), 'a copy of another version is a finding that names its file (§3.7)')
   fs.rmSync(file)
   assert.match(flat(doctor()), new RegExp(`${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is not there`))
   assert.ok(!fs.existsSync(file), 'doctor reads: it does not write the copy')
@@ -526,4 +526,37 @@ test('V120: with no ../app/current the copy starts the node on PATH and says not
   const r = spawnSync('/bin/sh', [file], { encoding: 'utf8', env: { PATH: path.dirname(process.execPath) } })
   assert.equal(r.status, 0, r.stderr)
   assert.equal(r.stdout, 'ran'); assert.equal(r.stderr, '')
+})
+
+// 1.6 §1.1: doctor shows the reason as its finding's why, beside a fix of its own; the reason names no source path and no command
+test('1.6 §3.7: every reason checkStandalone gives names no source path and no trocar command', () => {
+  const home = tmpDir('trocar-chk-why-'), srcDir = path.join(tmpDir('trocar-chk-why-src-'), 'src', 'off') // named as an install's is, so a reason that leaks it is caught
+  fs.cpSync(path.join(REPO, 'src', 'off'), srcDir, { recursive: true })
+  const file = standalonePath(home)
+  const command = new RegExp(`\\btrocar (${COMMANDS.map((c) => c.name).join('|')})\\b`)
+  const reasons = []
+  const check = (spoil, args = {}) => {
+    fs.rmSync(path.dirname(file), { recursive: true, force: true })
+    writeStandalone({ home, version: OFF_VERSION, platform: args.platform || 'linux' })
+    spoil()
+    const c = checkStandalone({ home, version: OFF_VERSION, platform: 'linux', ...args })
+    assert.equal(c.ok, false, spoil.toString())
+    reasons.push(c.reason)
+  }
+  check(() => fs.rmSync(file))
+  check(() => { fs.rmSync(file); fs.mkdirSync(file) })
+  check(() => fs.writeFileSync(file, '#!/bin/sh\n'))
+  check(() => {}, { version: 'other' })
+  check(() => fs.appendFileSync(file, '// edited\n'))
+  check(() => fs.rmSync(path.join(srcDir, 'main.mjs')), { srcDir })
+  check(() => fs.chmodSync(file, 0o600))
+  const cmd = standaloneFiles(home, 'win32')[1]
+  check(() => fs.rmSync(cmd), { platform: 'win32' })
+  check(() => { fs.rmSync(cmd); fs.mkdirSync(cmd) }, { platform: 'win32' })
+  check(() => fs.writeFileSync(cmd, 'other'), { platform: 'win32' })
+  for (const r of reasons) {
+    assert.ok(typeof r === 'string' && r, 'a reason')
+    assert.doesNotMatch(r, /\bsrc[\\/]/, r)
+    assert.doesNotMatch(r, command, r)
+  }
 })

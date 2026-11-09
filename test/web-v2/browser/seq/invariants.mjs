@@ -42,9 +42,9 @@ export const LIMITS = Object.freeze({
 
 const STACK = [/^\s*at \S.*:\d+:\d+\)?\s*$/m, /FATAL ERROR/, /<--- Last few GCs --->/, /\b(?:node|v8)::\w/]
 const CJK = /[぀-ヿ㐀-鿿豈-﫿가-힯]/
-// where the board draws captured bytes, not its own words: verbatim bodies (<pre>, blocks.mjs), block rows (tag + preview) and
-// outline entries. A stack the session itself holds (a tool_result's trace) is content; I-stack reads only what is left.
-const CAPTURED = 'pre, .cblk, .navsub'
+// where the board draws captured bytes, not its own words: verbatim bodies (<pre>, blocks.mjs), block rows (tag + preview), cells in
+// either view (the drawer's too) and outline entries. A stack the session itself holds (a tool_result's trace) is content; I-stack reads only what is left.
+const CAPTURED = 'pre, .cblk, .cell, .navsub'
 
 /** What tells one bug from another of the same `<id>:<screen>`: the detail's first item with every number (and hex run holding a
  *  digit) as `#`, whitespace folded. Saved with an open regression; a violation is known only when its sig AND this match. */

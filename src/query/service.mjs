@@ -58,7 +58,14 @@ const subjectOf = (name, params = {}) => keyOf(name, params, WINDOW_PARAMS)
 /** A worker asked nothing this long leaves and gives its memory back: the board polls every 1.5 s while it is open, so it stays
  *  warm while anyone is looking; the next query after an idle exit forks a new one (3.5 谁执行它). */
 const QUERY_IDLE_MS = 120_000
-const STDERR_HEAD = 4000, STDERR_TAIL = 1000 // V8 prints its FATAL ERROR line after a few GC lines, then the native stack
+// A dying worker's stderr (D38): its cause is read off the lines as they stream, never off a bounded head or tail (V8 prints its FATAL ERROR line
+// after a few GC lines and before kilobytes of native stack, and a long-lived worker's earlier output can fill any head); the last
+// STDERR_LINES lines go to the daemon's log with the record. A worker's own report of work it handled ('trocar query worker: …', worker.mjs say)
+// is never a cause: it did not end the process.
+const STDERR_LINES = 40, LINE_MAX = 600
+// case as V8 and node print them: V8's '# Fatal error in …' banner is not the cause, the 'Check failed' line under it is; a `[cause]:` line is an
+// inner error of the one thrown; every line of trocar's own ('trocar: …', 'trocar query worker: …') is a report, never a cause
+const FATAL = /FATAL ERROR|Check failed|heap limit|out of memory/, THROWN = /\b\w*Error:/, CAUSE = /^\[cause\]:/, HANDLED = /^trocar[\w ]*:/
 /** A control verb may run install's root steps (the board's Set up, 4.4 §控制面): the OS's root prompt, then its read-back, each up to OS_PROMPT_MS,
  *  and the rest of install. A worker killed while the dialog is open would leave no receipt and the carriers unplaced. */
 const CONTROL_DEADLINE_MS = 2 * OS_PROMPT_MS + DEADLINE_MS
@@ -105,7 +112,8 @@ const mb = (n) => `${(n / 1048576).toFixed(1)} MB`
 
 export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker, deadlineMs = DEADLINE_MS, controlDeadlineMs = CONTROL_DEADLINE_MS, idleMs = QUERY_IDLE_MS, againMs = AGAIN_MS, againLimitMs = AGAIN_LIMIT_MS, handsOff = false, pauseMs = PAUSE_MS, say = logLine, now = Date.now }) {
   let asked = 0, idle = null // requests queued or in flight; the idle clock, running only while there are none
-  let child = null, pending = null, head = '', left = 0, errHead = '', errTail = '', paused = false, pauseTimer = null
+  let child = null, pending = null, head = '', left = 0, paused = false, pauseTimer = null
+  let err = null // the current worker's stderr as read so far: {part, lines, fatal, thrown, open} (stderrLine)
   let rows = false // this child said `{rows: true}`: its pass over the rows has ended (3.5 §服务队列)
   let stats = new Map(), statsTimer = null // per name: {reads, bytes, cpu, slowest} since the last line
   const waiting = [] // {name, go, gone, resolve, reject} in arrival order; pump() takes the first of the lowest rank
@@ -123,11 +131,11 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   }
 
   /** A failure of `subject`: the first of an episode writes the D38 record, the rest only lengthen its cool-down. */
-  function fault(subject, reason) {
+  function fault(subject, reason, detail = null) {
     cooling() // forget the stale ones first: a failure long after the last one is a new episode
     const ep = subject && episodes.get(subject)
     if (ep) { ep.n++; ep.at = now(); return }
-    failWorker(reason)
+    failWorker(reason, detail)
     if (subject) episodes.set(subject, { reason, at: now(), n: 1 })
   }
 
@@ -173,7 +181,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   function drop(why) {
     const c = child, p = pending
     clearTimeout(idle); clearTimeout(pauseTimer)
-    child = null; pending = null; head = ''; left = 0; errHead = ''; errTail = ''; paused = false; rows = false
+    child = null; pending = null; head = ''; left = 0; err = null; paused = false; rows = false
     if (c) { c.removeAllListeners(); try { c.kill() } catch { /* already gone */ } }
     if (p) {
       clearTimeout(p.timer)
@@ -182,15 +190,18 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     }
   }
 
-  /** What stderr says about a crash, in one line: the cause (V8's `FATAL ERROR: …` / `Check failed` / heap limit, a thrown
-   *  `…Error: …`) and the first JavaScript frame after it — never V8's native stack, which is kilobytes of addresses the board would
-   *  print (2026-10-21). With no cause line: the head and the tail. Only the dying request's stderr: run() starts it afresh. */
-  function stderrReason() {
-    const lines = errHead.split('\n').map((l) => l.trim()).filter(Boolean)
-    const at = lines.findIndex((l) => /FATAL ERROR|Check failed|heap limit|\b\w*Error:/.test(l))
-    if (at >= 0) return [lines[at], lines.slice(at + 1).find((l) => /^at\s/.test(l))].filter(Boolean).join(' · ')
-    const first = errHead.slice(0, 600).trim(), tail = errTail.trim()
-    return [first, tail && !first.includes(tail) ? `… ${tail}` : ''].filter(Boolean).join(' ')
+  /** What stderr says about a crash, in one line: the first fatal line V8 or node printed (`FATAL ERROR: …`, `Check failed`, heap limit,
+   *  out of memory), else the last error the worker threw and did not handle (`…Error: …`, not its own report of a handled one), each with
+   *  the first JavaScript frame after it; null when neither was printed — the record then says so, never another line in their place. */
+  const stderrReason = () => (err && (err.fatal || err.thrown) ? [err.fatal || err.thrown].map((x) => [x.line, x.at].filter(Boolean).join(' · '))[0] : null)
+  function stderrLine(l) {
+    const t = l.replace(/\r/g, '').trim().slice(0, LINE_MAX)
+    if (!t) return
+    err.lines.push(t); if (err.lines.length > STDERR_LINES) err.lines.shift()
+    if (/^at\s/.test(t)) { if (err.open && !err.open.at) err.open.at = t; return } // the first frame of the cause line just read
+    err.open = null
+    if (HANDLED.test(t) || CAUSE.test(t)) return
+    if (FATAL.test(t)) { if (!err.fatal) err.open = err.fatal = { line: t, at: null } } else if (THROWN.test(t)) err.open = err.thrown = { line: t, at: null }
   }
 
   function start() {
@@ -200,10 +211,14 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     // A worker the OS killed (SIGKILL, a heap OOM) breaks the pipe under the next write: EPIPE arrives here, and unheard it would be
     // an uncaught exception that takes this process down. The 'close' that follows fails the query with the exit's reason.
     c.stdin.on('error', () => {})
-    c.stderr.on('data', (b) => { // the reason a crash gives, for the D38 record: its head (bounded) and its tail
-      const t = String(b)
-      if (errHead.length < STDERR_HEAD) errHead += t.slice(0, STDERR_HEAD - errHead.length)
-      errTail = (errTail + t).slice(-STDERR_TAIL)
+    err = { part: '', lines: [], fatal: null, thrown: null, open: null }
+    c.stderr.setEncoding?.('utf8') // a character split between two chunks stays whole
+    const mine = err
+    c.stderr.on('data', (b) => { // the reason a crash gives, for the D38 record, line by line (stderrReason)
+      if (err !== mine) return
+      const ls = (mine.part + String(b)).split('\n')
+      mine.part = ls.pop().slice(0, LINE_MAX) // a line's head: where its cause is said
+      for (const l of ls) stderrLine(l)
     })
     // a worker still working says so (worker.mjs PROGRESS_MS): its silence clock starts again (3.5:42), and so does the idle
     // clock when no request is queued or in flight: a background slice is work, so a long kicked fold is not cut (3.5 后台抽取与归约)
@@ -217,16 +232,19 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     c.on('error', (e) => { if (child === c) { const why = `the query worker could not be started: ${e.message}`; fault(pending ? pending.subject : KICK, why); drop(why) } })
     c.on('close', (code, signal) => { // 'close', not 'exit': every byte it wrote to stdout and stderr has been read by then
       if (child !== c) return
-      const said = stderrReason()
-      const reason = `the query worker exited (${signal ? `signal ${signal}` : `code ${code}`})${said ? `: ${said}` : ''}`
+      if (err && err.part) { stderrLine(err.part); err.part = '' }
+      const said = stderrReason(), how = signal ? `signal ${signal}` : `code ${code}`
+      const reason = said ? `the query worker exited (${how}): ${said}` : `the query worker exited (${how}); no fatal message was captured (the last lines of its stderr are in the daemon's log)`
+      const detail = err && err.lines.length ? err.lines : null
       // with no request in flight it died on what a kick gave it: that episode is the kick's, so a crashing fold is not re-forked by every kick
-      fault(pending ? pending.subject : KICK, reason)
+      fault(pending ? pending.subject : KICK, reason, detail)
       drop(reason)
     })
     return c
   }
 
-  const failWorker = (reason) => failure('daemon', Object.assign(new Error(reason), { code: 'query-failed' }))
+  // `detail`: the dying worker's last stderr lines, for the daemon's log beside the record (cli/daemon.mjs), never in the record's reason
+  const failWorker = (reason, detail = null) => failure('daemon', Object.assign(new Error(reason), { code: 'query-failed' }, detail ? { detail } : null))
 
   // The frame reader: `<status> <len> <enc> <cpu_ms> <tag>\n` then exactly `len` bytes, straight into the response. Nothing is parsed.
   // `enc` is `gzip` when the worker compressed the bytes (the request asked it: 4.4 §服务形状) and `-` otherwise; `tag` is the
@@ -308,7 +326,6 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     const ep = cooling(subject)
     if (ep) { fail(new Error(ep.reason)); return }
     const c = child || start()
-    errHead = ''; errTail = '' // a crash's reason is THIS request's stderr: a long-lived worker's earlier noise filled the head
     const p = { res, done, fail, quiet: false, line, ms, headed: false, name, subject, file, t0: now() }
     arm(p)
     pending = p

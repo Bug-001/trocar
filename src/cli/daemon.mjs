@@ -78,7 +78,7 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   const foreground = !env.INVOCATION_ID && !!(proc.stdin && proc.stdin.isTTY) // not under systemd, at a terminal: closing it stops the daemon
   const start = deps.startDaemon || D.startDaemon
   let d
-  try { d = await start({ dir, env, foreground, log: (where, e) => io.err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) {
+  try { d = await start({ dir, env, foreground, log: (where, e) => { io.err(`[${where}] ${e && e.message ? e.message : e}`); if (e && Array.isArray(e.detail)) for (const l of e.detail) io.err(`[${where}]   | ${l}`) } }) } catch (e) {
     io.err(`trocar daemon: ${e.message}`)
     // D62 ⑥: a daemon that finds another one answering is already as asked, not a failure. It says so once (the line above goes to the daemon log, D46)
     // and exits 0, because the platform retries a non-zero exit for as long as the other daemon lives — launchd's KeepAlive {SuccessfulExit: false} every
