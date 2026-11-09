@@ -18,10 +18,11 @@ test('an override follows the block across steps that re-send it, whatever its b
   const def1 = { sec: 'messages', role: 'user', kind: 'text', key: 'K:1', text_ref: 's/main#r1::10-20', chars: 6, preview: 'abc' }
   const def2 = { ...def1, text_ref: 's/main#r9::10-20' }
   bodyCache.set(def2.text_ref, { status: 'ok', text: '"abc"', view: { r: { as: 'text', f: { body: ['text'] } }, body: { text: 'abc' } } })
-  setMode(cellOf(def1).bid, 'read')
+  const other = modeOf(cellOf(def1).bid) === 'raw' ? 'read' : 'raw' // the mode the desk default is not: only an override draws it
+  setMode(cellOf(def1).bid, other)
   const c2 = cellOf(def2)
-  assert.equal(modeOf(c2.bid), 'read')
-  assert.match(cellBodyHtml(c2, modeOf(c2.bid)), /data-mode="read"/)
+  assert.equal(modeOf(c2.bid), other)
+  assert.match(cellBodyHtml(c2, modeOf(c2.bid)), new RegExp(`data-mode="${other}"`))
   assert.equal(c2.ref, def2.text_ref, 'the bytes are located by the ref, never by the key')
 })
 
@@ -42,9 +43,9 @@ test('2.3 §逐格覆盖 · D71③: an override belongs to the session desk it w
 test('the desk default survives a reload through storage', async () => {
   const storage = memStorage()
   const a = await import(CELL + '?fresh=b1')
-  a.setDeskMode('read', { storage })
+  a.setDeskMode('raw', { storage }) // not the start, so only the stored choice gives it back
   const b = await import(CELL + '?fresh=b2')
-  assert.equal(b.deskMode({ storage }), 'read')
+  assert.equal(b.deskMode({ storage }), 'raw')
 })
 
 test('2.3 #14: a storage that throws never throws a choice back', async () => {

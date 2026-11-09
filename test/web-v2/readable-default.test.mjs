@@ -20,7 +20,7 @@ test('with no stored choice a block that has a view opens Readable, and its sect
   for (const storage of [null, memStorage()]) assert.equal(modeIn(cellBodyHtml(cell, modeOf(cell.bid, { storage }))), 'read', `storage ${storage ? 'empty' : 'absent'}`)
   const desk = deskOf([{ kind: 'main', rows: [{ rec: { request: { model: 'm' } } }], blocks: [[def]] }])
   const lanes = buildLanes(desk)
-  const s = { desk, lanes, anchor: anchorLane(lanes), playhead: 0, diffRef: null, navOpen: new Set(['cwremoved']), openBlocks: new Set([def.key ?? '']), turnFold: new Map(), turnLanded: new Set(), ctx: {} }
+  const s = { desk, lanes, anchor: anchorLane(lanes), playhead: 0, diffRef: null, navOpen: new Set(['cwremoved']), openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), ctx: {} }
   const secs = windowItems(s).items.filter((it) => it.type === 'sec')
   assert.ok(secs.length > 0 && secs.every((h) => h.claim === 'readable'), JSON.stringify(secs.map((h) => h.claim)))
 })
