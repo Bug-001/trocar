@@ -62,11 +62,11 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   // 4.11 `present`: a command typed in a terminal records the user's PATH while trocar is installed (before the run, for what it reads; after it, for
   // what `install` just installed), so every asker resolves a form's command alike — but not one whose table row says `recordsPath: false` (`daemon`:
   // the login service's PATH is not the user's; `uninstall`: it deletes that file). A command `deps.commands` replaces does nothing of its own, so it
-  // records nothing either. A failure to record never changes the answer.
+  // records nothing either, and neither does a dry run (§1.4: it writes nothing). A failure to record never changes the answer.
   // With the PATH, the variables that move a footprint place (presentEnvNames), for the same reason.
   let names = null
   const remember = async () => {
-    if (!(mutates && cmd.recordsPath !== false && run === cmd.run)) return
+    if (!(mutates && cmd.recordsPath !== false && run === cmd.run && !args.flags['dry-run'])) return
     try {
       // only driver mode (Linux) judges presence by footprint places: elsewhere no descriptor is loaded for this (it costs `on` / `off` ~50 ms)
       names = names || (platform === 'linux' ? presentEnvNames(deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses().catch(() => [])) : [])

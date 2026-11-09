@@ -10,7 +10,7 @@ import { controlRecordWire, CONTROL_DETAIL_RECORDS } from '../../view/control-wi
 import { recordsAt } from '../records.mjs';
 import { posCmp } from '../projection.mjs';
 import { asOf, indexRows } from '../rows.mjs';
-import { QueryArgError, listOf, paginate, tsFilter } from './index.mjs';
+import { QueryArgError, harnessIds, listOf, paginate, tsFilter } from './index.mjs';
 import { HARNESS, PAGE, WINDOW } from './about.mjs';
 
 export const about = Object.freeze({
@@ -33,7 +33,7 @@ export async function run({ home, fs, now, params: p, errors, progress = null })
   // `reveal` shows one credential-class header's value of one record (2.6 §保真边界 2): only with `ref`
   if (p.reveal != null && p.ref == null) throw new QueryArgError('trocar query calls: --reveal needs --ref — it shows one header of one record');
   const reveal = p.reveal != null ? String(p.reveal).trim().toLowerCase() : null;
-  const keep = tsFilter(p, now), cls = listOf(p.class), harness = listOf(p.harness), sess = listOf(p.session),
+  const keep = tsFilter(p, now), cls = listOf(p.class), harness = harnessIds(p, 'calls'), sess = listOf(p.session),
     host = listOf(p.host), ref = listOf(p.ref);
   // Through the ONE warm, stat-revalidated reading of the index (src/query/rows.mjs, which `sessions` and `session` ask too).
   const all = await indexRows({ home, fs, errors, progress });
