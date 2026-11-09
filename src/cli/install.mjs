@@ -14,7 +14,7 @@ import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, homeMismatch, accountHomeOf, collectorDir, backupDir } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
-import { fit, tilde, restartLine, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, markedRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
+import { fit, tilde, restartLine, planItems, skippedLines, formWords, carrierWords, planWords, commandLine, formatRefusal, markedRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap, andList } from './text.mjs'
 import { plainSentence } from './words.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -357,7 +357,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const why = (plan._ && plan._.drift) || [] // a bundle written again says why in the plan too (D38), not only in the receipt
   const place = pathItem && (await import('../off/path-item.mjs')).pathItemTarget({ platform, env, home })
   say([...(details ? [formatPlan({ ...plan, standalone: due }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail]), { home })]
-    : fit([...yourFiles({ paths: planned.map((i) => i.path), place, home, platform, root: false, own: true, stale, unknown: (plan.skipped || []).map((x) => `${tilde(x.what, home)}: skipped (${x.reason})`) }), ...restartLine(plan)], { home })), // 1.6 §3.3: on's line; each process and its pid are --details'
+    : fit([...yourFiles({ paths: planned.map((i) => i.path), place, home, platform, root: false, own: true, stale }), ...skippedLines(plan.skipped, (x) => tilde(x, home)), ...restartLine(plan)], { home })), // 1.6 §3.3: on's line; each process and its pid are --details'
   ...fit(why.map((n) => `Note: ${n}`), { home }), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
   if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...due, ...plan.created], skipped: plan.skipped || [], ...(why.length ? { notes: why } : {}) }); return EXIT.ok }
   if ((plan.writing || stdNew || stale || pathItem) && !flags.has('--yes')) {

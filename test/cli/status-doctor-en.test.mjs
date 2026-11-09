@@ -67,6 +67,11 @@ test('§3.5 a harness that needs setting up has its own row, says so before `on`
   // a captured harness whose setup is needed says so in its headline too, not only under Why (a Linux bundle that lacks a CA: capture works, the agent cannot verify those hosts)
   const kimi = statusDetail(doc({ harnesses: { 'kimi-code': harness(setup('needed', 'carrier-overwritten')) } }), 'kimi-code', { now: NOW })
   assert.ok(/set up again/.test(kimi[0]) && kimi.some((l) => l.trimEnd().endsWith(' trocar install')), kimi.join('|')) // the headline says it, the step is a line of its own
+  // More: points at the first agent to act on — not captured, then a needed setup — else the first row (both summaries)
+  for (const details of [false, true]) {
+    const more = statusSummary(doc({ harnesses: { 'claude-code': harness(setup('ready')), 'kimi-code': harness(setup('needed', 'carrier-overwritten')) }, install: { state: 'complete', harnesses: ['claude-code', 'kimi-code'], pending: [] } }), { now: NOW, details }).find((l) => l.startsWith('More:'))
+    assert.ok(more.includes('trocar status kimi-code'), `${details ? '--details' : 'default'}: ${more}`)
+  }
   // steps that turn it off (marked text with no record: off, uninstall, install) end with on again, as a harness not captured yet is told
   const marked = statusDetail(doc({ harnesses: { hermes: harness(setup('needed', 'marked-without-record')) } }), 'hermes', { now: NOW })
   assert.ok(marked.some((l) => l.trimEnd().endsWith(' trocar on hermes')), marked.join('|'))

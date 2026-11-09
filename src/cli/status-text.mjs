@@ -54,7 +54,6 @@ function summaryDetails(doc, { now = Date.now(), colors: c = noColor(), home = n
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
   const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(doc.harnesses[h]))
-  const on = shown.filter((h) => doc.harnesses[h].desired === 'on')
   const captured = shown.filter((h) => doc.harnesses[h].captured === true)
   // only an app trocar does not cover: install cannot help, so it is not the next step
   if (!shown.length) return [c.bold('No harness is set up for capture yet.'), ...outOfScopeLines(doc), '', ...readErrorLines(doc), ...((doc.out_of_scope || []).length ? [] : ['Next: trocar install'])]
@@ -77,10 +76,13 @@ function summaryDetails(doc, { now = Date.now(), colors: c = noColor(), home = n
   if (unseen.length) lines.push('', ...unseen.flatMap((t) => wrap(t, WIDTH)))
   lines.push(...outOfScopeLines(doc))
   lines.push('', ...pairs(summaryPairs(doc, now)))
-  const first = on.find((h) => doc.harnesses[h].captured !== true) || shown[0]
+  const first = actOn(doc, shown)
   lines.push('', `More: ${[first ? `trocar status ${first}` : null, 'trocar status --failures', 'trocar doctor'].filter(Boolean).join('   ')}`)
   return lines
 }
+
+/** The agent `More:` points at: the first to act on — on and not captured, then one whose setup is needed — else the first row. */
+const actOn = (doc, shown) => shown.find((h) => doc.harnesses[h].desired === 'on' && doc.harnesses[h].captured !== true) || shown.find((h) => needsSetup(doc.harnesses[h])) || shown[0]
 
 /** A harness's NOTE: what to set up, what is not seen yet, what is not known, or why it is not captured; `plain` in the default text's words, with no pid (§1.1 ④). */
 const noteOf = (x, h, pid, plain) => (needsSetup(x) ? (x.captured === true ? setupAgain(x) : `set up first: ${setupFix(x).join(', then ')}`) : x.captured === true ? notSeenYet(x)
@@ -126,7 +128,7 @@ function summaryShort(doc, { now = Date.now(), colors: c = noColor(), home = nul
   const unseen = names.flatMap((h) => uncapturedText(doc.harnesses[h], home).map((t) => `Note: ${h}: ${t}`))
   if (unseen.length) lines.push('', ...unseen.flatMap((t) => wrap(t, WIDTH)))
   lines.push(...outOfScopeLines(doc), '', ...pairs(shortPairs(doc, now)))
-  const first = shown.find((h) => doc.harnesses[h].desired === 'on' && doc.harnesses[h].captured !== true) || shown[0]
+  const first = actOn(doc, shown)
   lines.push('', `More: trocar status ${first}   trocar status --failures`)
   return lines
 }

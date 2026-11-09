@@ -332,6 +332,22 @@ test('Linux install: a skipped harness\'s reason is said once, not again as a no
   for (const s of dry.skipped) assert.equal(text.split(flat(s.reason)).length - 1, 1, `${s.what}: its reason said once: ${s.reason}`)
 })
 
+// 1.6 §1.1 ④: the plan names each skipped harness once; a reason several share is said once for all of them, not once a harness
+test('Linux install: the plan names each skipped harness once, a shared reason once, in the default plan and in --details', async () => {
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const linux = (await loadHarnesses()).filter((d) => d.trust)
+  const home = tmpDir('trocar-skip-named-'); seedClaude(home)
+  const run = async (argv) => { const io = fakeIo(); assert.equal(await runInstallCli(argv, { ...onCtx(home, io, { harnesses: linux }), platform: 'linux' }), 0, io.text()); return io }
+  const skipped = (await run(['--dry-run', '--json'])).json().skipped
+  const shared = skipped.filter((x) => skipped.filter((y) => y.reason === x.reason).length > 1)
+  assert.ok(shared.length > 1, `the shape: a reason two harnesses share: ${JSON.stringify(skipped)}`)
+  for (const argv of [['--dry-run'], ['--dry-run', '--details']]) {
+    const text = (await run(argv)).text().replace(/\s+/g, ' ')
+    for (const x of skipped) assert.equal(text.match(new RegExp(`(^|[\\s,(;])${x.what}(?=[\\s,;:)]|$)`, 'g'))?.length, 1, `${argv.join(' ')}: ${x.what} named once: ${text}`)
+    for (const r of new Set(shared.map((x) => x.reason))) assert.equal(text.split(r).length - 1, 1, `${argv.join(' ')}: "${r}" said once`)
+  }
+})
+
 // the same rule for a skip whose reason is the descriptor's own note: codex on PATH with no Codex home yet is skipped with that note, said once
 test('Linux install: codex on PATH with no Codex home is skipped, and its reason is not said again as a note', async () => {
   const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
