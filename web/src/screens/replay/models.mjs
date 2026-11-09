@@ -9,7 +9,8 @@ import { harnessKey, harnessName, harnessRaw, harnessIconUrl } from '../../../le
 import { cacheState, isFailed, breakCost, usageOf, priceMatch, costOf, hitTier } from '../../../legacy/core/metrics.mjs'
 import { CT_ORDER, segTax, TAX_ORDER, hasChangeLine, callFacts, refRowOf } from '../../../legacy/replay/analysis.mjs'
 import { stepRef, stepsOf } from '../../../legacy/replay/lanes.mjs'
-import { stepOf, askOrdinal, ridAt, probeCount } from '../../../legacy/replay/model.mjs'
+import { stepOf, askOrdinal, ridAt, probeCount, notBegun } from '../../../legacy/replay/model.mjs'
+import { bootPass } from '../../../legacy/core/http.mjs'
 import { chapterAt, chapterJump, problemSteps, problemTarget, landing, OVW_BARCAP, BAR_KEYS } from '../../../legacy/replay/timeline.mjs'
 import { railToggles } from '../../../legacy/replay/rails.mjs'
 import { cacheLabel, costLabel, contentRefOf, contentRefKOf, priceStateNote } from '../../../legacy/replay/stepbar.mjs'
@@ -100,7 +101,7 @@ export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {})
     project: slugOk ? { name: meta.project_path ? String(meta.project_path).split('/').filter(Boolean).pop() : meta.project_slug, path: meta.project_path || '', word: W.PROJECT } : null,
     start: ch0 && ch0.ts0 ? { ts: ch0.ts0, text: fmtWhen(ch0.ts0, now), tip: W.startTip(fmtStamp(ch0.ts0)) } : null,
     follow: { on: !!s.follow, paused: !!s.staleErr, text: W.FOLLOW, tip: s.staleErr ? W.FOLLOW_PAUSED : null },
-    read: readOf(s.desk),
+    read: readOf(s.desk, bootPass()),
     stale: s.staleErr ? { since: s.staleErr.since, r: s.staleErr.r } : null,
     facts: factsOf(s.desk, s.gap, meta.harness),
     info: () => infoRows(s),
@@ -108,13 +109,14 @@ export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {})
 }
 
 // 1.2 §会话头 读取状态 · 1.5 K-31 / K-32: words only, never a control
-function readOf(desk) {
+function readOf(desk, boot = false) {
   const p = desk && desk.pending, b = desk && desk.behind
   if (!p) return b ? { state: 'behind', n: b.n, more: !!b.more, text: W.behindBy(b.n, b.more) } : null
   if (p.stopped) return { state: 'stopped', code: p.stopped.code ?? null, reason: p.stopped.reason ?? null, text: W.FOLD_STOPPED[p.stopped.code] || W.FOLD_STOPPED['fold-failed'] }
   const done = Number(p.done) || 0, total = Number(p.total) || 0
   const share = (x) => (total > 0 ? Math.floor((x / total) * 100) : 0)
   if (p.read != null) { const pct = share(Number(p.read) || 0), n = Number(p.calls) || 0; return { state: 'updating', pct, n, text: W.updatingTo(pct, n) } }
+  if (desk.firstPending && boot && notBegun(desk)) return { state: 'boot-pass', text: W.BOOT_PASS }
   if (desk.firstPending) { const pct = share(done); return { state: 'reading', pct, text: W.readingFirst(pct) } }
   const n = p.calls ?? Math.max(0, total - done)
   return n ? { state: 'catching-up', n, text: W.catchingUp(n) } : null
