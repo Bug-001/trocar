@@ -430,3 +430,22 @@ test('uninstall text: a file is one row of Removed, however its entries spell it
     removed: [ca.replace('.trocar', '.TROCAR'), ca, `${home}\\.dsh\\trocar-cordis-plugin.mjs`] }, { home, platform: 'win32' })
   for (const name of ['trocar-ca.pem', '.env', 'trocar-cordis-plugin.mjs']) assert.equal(text.split('\n').filter((l) => l.toLowerCase().includes(name.toLowerCase())).length, 1, `${name}: ${text}`)
 })
+
+// 1.6 §1.4「只问一次」· §1.1 ④ rules 4 and 6: an interactive uninstall shows its plan and asks — nothing before the question says nothing was changed
+// or to run it with --yes (the question is the way on); with no terminal the plan is followed by the one way on, --yes
+test('§1.4: interactive uninstall asks with no "Nothing was changed" or --yes before Proceed; without a terminal it says --yes', async () => {
+  for (const flags of [[], ['--details']]) {
+    const s = await installedHome({ names: ['codex'] })
+    const io = fakeIo({ tty: true, answers: ['n'] })
+    await runUninstallCli(flags, ctxOf(s, io))
+    assert.equal(io.asked.length, 1, `asked once:\n${io.text()}`)
+    const out = io.stdoutText(), before = out.slice(0, out.indexOf(io.asked[0]) + io.asked[0].length)
+    assert.doesNotMatch(before, /Nothing was changed|--yes/, `${flags}: before the question:\n${before}`)
+    assert.doesNotMatch(io.text(), /--yes/, `${flags}: an answered question needs no --yes:\n${io.text()}`)
+
+    const t = await installedHome({ names: ['codex'] })
+    const nt = fakeIo({ tty: false })
+    assert.equal(await runUninstallCli(flags, ctxOf(t, nt)), 2, nt.text())
+    assert.equal(nt.text().split('--yes').length - 1, 1, `${flags}: no terminal: the way on, --yes, said once:\n${nt.text()}`)
+  }
+})
