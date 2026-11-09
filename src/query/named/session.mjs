@@ -199,7 +199,8 @@ const keyOf = ({ fs, home, writer }, id) => `${fsTag(fs)}\n${home}\n${id}\n${wri
 
 // The segment index of THIS request, read once whether version() asked first (src/query/answers.mjs) or not; the worker's
 // background reads it through here too, once per kick (src/query/worker.mjs kickedSessions).
-export async function indexed({ home, fs, once, progress }) {
+export async function indexed({ home, fs, once, progress, early }) {
+  if (early) return early; // the worker's boot pass is still reading: the rows it read so far (worker.mjs earlyRows)
   if (once && once.index) return once.index;
   const errors = [], got = { rows: await indexRows({ home, fs, errors, progress }), errors };
   if (once) once.index = got;
@@ -657,7 +658,8 @@ export async function extendSession(ctx, id, budgetMs) {
 // (and cut) it was last written at is not made again while its file is there.
 const heads = new Map(); // session id → {sig, shape} of its last head write in this worker
 const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write (advance lets it go before a slice)
-const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title]);
+// the index's codes too: a head written while capture files were still re-indexed (index-pending) is written again when that ends, at the same mark
+const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title, s.indexErrors.filter((e) => !e.level).map((e) => e.code)]);
 // the parts only the head carries, in O(packs): tier, axis, the packs (with their tags) and the open span, the compactions (a new
 // chapter on the axis; one on another lane too) and whether the axis ends on a marked one (its chapter opens on the step after it,
 // which counts no compaction: 1.3 §章), the cut, pending's presence, the failures and the index's codes, and the meta the

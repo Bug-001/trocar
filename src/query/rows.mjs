@@ -10,7 +10,7 @@ import path from 'node:path';
 import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { endpointClass } from '../dissect/endpoints.mjs';
-import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom } from './index-build.mjs';
+import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom, IndexPending } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag } from './warm.mjs';
 import { rowTable, heapOf, keysOf, wholeAt, cellAt } from './row-table.mjs';
@@ -78,7 +78,30 @@ export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [],
   const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
   return lists.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old)).rows;
 }
-function rowList(segs, old) {
+
+/**
+ * provisionalRows({home, fs, ready}) → {rows, errors}: the rows of the segments in `ready` (names) whose index is usable now, read as
+ * `indexRows` reads them (warmOnly: never built here), while the worker's boot pass rebuilds the rest (3.5 §行表先读「先答的会话」).
+ * A row is in a session only when the full list would put it in the same one whatever comes before it: it has a session key and no
+ * chain (`synth_hash` null) — then it is that key's, with no lane key, in the full list too. A row whose session the synthesized-key
+ * rule, kinship or a keyed session's chains decide has none here. While a segment is left out, `errors` says how many
+ * (`index-pending`), so the answer says it may lack calls.
+ */
+export async function provisionalRows({ home = trocarHome(), fs = nodeFs, ready } = {}) {
+  const errors = [], segs = [], all = segmentFiles(home, fs, errors);
+  for (const [segment, at] of all) {
+    if (!ready.has(segment)) continue;
+    let got;
+    try { got = await warmSegmentIndex({ home, segment, fs, at, warmOnly: true }); } catch (e) { if (e instanceof IndexPending) continue; throw e; }
+    for (const pr of got.problems) errors.push(problemEntry(`segments/${segment}`, pr));
+    segs.push({ segment, records: got.records, entry: recordsId(got.records) });
+  }
+  if (segs.length < all.length) errors.push({ where: 'index', code: 'index-pending', reason: `${all.length - segs.length} of ${all.length} capture files are still being re-indexed, so this read may lack calls they hold.` });
+  const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
+  return { rows: early.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old, true)).rows, errors };
+}
+const early = warmCache({ max: 1, cost: (v) => v.heap });
+function rowList(segs, old, keyedOnly = false) {
   let i = 0;
   if (old) while (i < segs.length && i < old.parts.length && old.parts[i].segment === segs[i].segment && old.parts[i].entry === segs[i].entry) i++;
   // only the newest segment grew, and its records begin with the ones its rows were built from (index-build.mjs grownFrom): its
@@ -101,12 +124,13 @@ function rowList(segs, old) {
   for (let j = i; j < segs.length; j++) {
     const { segment, records: view, entry } = segs[j], was = grown && j === i ? old.parts[i] : null;
     const start = was ? was.start : j ? parts[j - 1].end : 0, k0 = was ? was.end - was.start : 0;
-    const open = was ? copyOpen(was.open) : stateAt(parts, j), assign = createSynthAssigner({ open });
+    const open = keyedOnly ? null : was ? copyOpen(was.open) : stateAt(parts, j), assign = open && createSynthAssigner({ open });
     const derived = [];
     for (let k = k0; k < view.length; k++) {
       const r = view.at(k);
-      const got = assignRow(assign, r);
-      const sid = r.session_key ?? (got && got.key) ?? null;
+      const got = assign ? assignRow(assign, r) : null;
+      // keyedOnly (provisionalRows): only a row whose session no rule before it decides
+      const sid = keyedOnly ? (r.synth_hash == null ? r.session_key ?? null : null) : r.session_key ?? (got && got.key) ?? null;
       // a keyed call's chain (3.4 带键会话里的消息链) is no synthesized key: the session stays as it was
       derived.push({ session_id: sid, synthesized: !!got && got.key != null && !got.kin, lane_key: (got && got.lane) ?? null });
       if (sid) place(sid, start + k); // a row with no session id is in no group (sessionGroups)
