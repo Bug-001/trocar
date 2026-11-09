@@ -295,12 +295,14 @@ function unknownOnDisk(home) { // what the door wrote on the macOS and Windows t
   fs.appendFileSync(path.join(dir, `${ts.slice(0, 10)}.ndjson`), [{ event: 'daemon-start', pid: 1 }, { event: 'process-unknown', where: 'engine', harness: 'claude-code', door: 'claude-code.settings', name: 'claude-nightly', wide: false, pid: 8622, reason: 'claude-nightly (pid 8622) used the claude-code.settings door but is on no name list' }].map((r) => JSON.stringify({ ts, ...r }) + '\n').join(''))
 }
 
-test('V66 wired: a process-unknown in ~/.trocar\'s flows/ reaches `doctor claude-code` — the filled-in agents.json line in the text and in --json findings, daemon or not, on every platform\'s doctor', { skip: POSIX_WORLD }, async () => {
-  const s = await installedHome()
-  unknownOnDisk(s.home)
+test('V66 wired: a process-unknown in ~/.trocar\'s flows/ reaches `doctor claude-code` — the filled-in agents.json line in the text and in --json findings, daemon or not, on every platform\'s doctor', async () => {
+  // a Linux install for the POSIX doctors (on a Windows host its paths cannot be POSIX, so those cells skip); win32's doctor reads a home with no
+  // Linux install in it, the one shape a Windows machine has, so its cell runs on every host
   const line = JSON.stringify(NIGHTLY)
-  const daemon = asDaemon(reply({ health: captureHealth({ harnesses: HARNESS_IDS, home: path.join(s.home, '.trocar') }) })) // what the daemon serves: the same fold of the same flows/
-  for (const platform of ['linux', 'darwin', 'win32']) {
+  const worldOf = async (platform) => { const s = platform === 'win32' ? plain() : await installedHome(); unknownOnDisk(s.home); return s }
+  for (const platform of POSIX_WORLD ? ['win32'] : ['linux', 'darwin', 'win32']) {
+    const s = await worldOf(platform)
+    const daemon = asDaemon(reply({ health: captureHealth({ harnesses: HARNESS_IDS, home: path.join(s.home, '.trocar') }) })) // what the daemon serves: the same fold of the same flows/
     for (const [label, request] of [['no daemon', down()], ['daemon', daemon]]) {
       const what = `${platform}, ${label}`
       const text = await doctor(s, ['claude-code', '--details'], { platform, deps: { request } }) // a note is --details'

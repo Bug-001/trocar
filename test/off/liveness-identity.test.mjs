@@ -170,6 +170,8 @@ test('off counts a name put on agents.json after on: that live process holds the
   assert.ok(u.notes.some((n) => n.includes('agents.json') && /not counted/.test(n)), `the receipt says the list was not used: ${u.notes.join(' | ')}`)
 })
 
+// every cell, win32's too, starts from a Linux-shaped install (codexBox → installCollector), which Windows never has (it installs through the model):
+// on a Windows host those cells skip, and the win32 reader is injected, so a Windows host would add no coverage
 for (const osName of Object.keys(OS)) {
   test(`${osName}: off keeps combined-codex.pem for a codex that started after on — without the trocar CA, its pid named — and removes it once that codex is gone`, { skip: POSIX_WORLD }, async () => {
     const s = await codexBox(osName)

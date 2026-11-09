@@ -757,6 +757,7 @@ test('uninstall on darwin: a gone bundle rebuilt while a source cannot be read s
   assert.ok(certBlocks(fs.readFileSync(path.join(t.dir, 'ca', 'combined-codex.pem'), 'utf8')).length > 0, 'still rebuilt: Node\'s roots are in it')
 })
 
+// (skipped on a Windows host: its world is a Linux-shaped install, which Windows never has; the win32 store read is injected, so a Windows host adds no coverage)
 // 4.8 §6.2 in `off`: the system store through Node's own read; no helper here (the standalone undo starts none, the daemon may be gone), so a Node without
 // getCACertificates rebuilds with Node's roots and says why. Driven through undoSide: the Windows half of runOff (task kill, the run key) is not this test's.
 test('the bundle undo on win32: a gone bundle is rebuilt from the Windows system store; with no getCACertificates (Node < 22.15) and no helper, from Node\'s roots, said (4.8 §6.2, D38)', { skip: POSIX_WORLD }, async () => {
