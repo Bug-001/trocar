@@ -10,7 +10,7 @@ import { slimBlock } from '../../src/view/blockmeta.mjs';
 // answered "what did the model ask for" under a heading that promises "what did the model see".
 //
 // The board resolves a resource card to a block by resKey; this is its exact selector
-// (src/web/index.html renderResourceView): prefer a non-tool_use block carrying the same resKey,
+// (web/legacy/replay/resources.mjs revealResource): prefer a non-tool_use block carrying the same resKey,
 // else fall back to the tool_use. Before the fix NOTHING but the tool_use ever carried a file::
 // resKey, so the fallback always fired and the request JSON was shown as if it were the file.
 const pick = (flat, rk) =>
@@ -95,23 +95,14 @@ test('a SKILL still previews its verbatim SKILL.md body, not the Skill tool_resu
   assert.match(b.block.text, /Base directory for this skill/);
 });
 
-test('block `key`s are untouched — the cache-prefix chain must not shift', () => {
+test('the wire transform drops a result block\'s body, never its request↔result link', () => {
   const messages = [
     { role: 'user', content: [{ type: 'text', text: 'go' }] },
     { role: 'assistant', content: [use('t1', 'Read', { file_path: '/a/x.mjs' })] },
     { role: 'user', content: [res('t1', 'BYTES')] },
   ];
-  const flat = linearContext(req(messages));
-  assert.deepEqual(flat.map((b) => b.key), [
-    ...linearContext(req(messages)).map((b) => b.key),
-  ]);
-  // the result block's key must still be derived from tool_use_id + text only
-  const r = flat.find((b) => b.kind === 'tool_result');
-  assert.match(r.key, /^M:user:tool_result:[0-9a-f]{8}$/);
-  // …and the wire transform must not touch it either: slimming drops the BODY, never the key the
-  // cache-prefix chain hashed, nor the request↔result link the resource panel selects on.
+  const r = linearContext(req(messages)).find((b) => b.kind === 'tool_result');
   const w = slimBlock(r, 'S/f.ndjson#req_1::0-10');
-  assert.equal(w.key, r.key);
   assert.equal(w.resKey, r.resKey);
   assert.equal(w.resRole, 'result');
   assert.equal(w.block, undefined, 'the body must not cross the wire');

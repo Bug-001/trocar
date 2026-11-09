@@ -62,6 +62,32 @@ test('switch: on,on and off,off are no-ops (S6)', async () => {
   assert.deepEqual(events, ['switch', 'switch'])
 })
 
+// the CLI's `trocar on` writes desired on first (1.6 R9), then asks the running daemon: the file already says what the daemon would write
+const cliOn = (f, ids) => { const s = JSON.parse(fs.readFileSync(f, 'utf8')); const at = new Date().toISOString(); s.updated_at = at; for (const id of ids) s.harnesses[id] = { ...s.harnesses[id], desired: 'on', updated_at: at }; fs.writeFileSync(f, JSON.stringify(s, null, 2) + '\n') }
+const fileKey = (f) => { const s = fs.statSync(f); return { ino: s.ino, mtimeMs: s.mtimeMs, bytes: fs.readFileSync(f, 'utf8') } }
+
+test('switch: an on the file already says is not written again; one that changes a harness is', async () => {
+  const stateFile = tmpState(); const sw = mk(fakeRedirector(), stateFile)
+  await sw.on(); await sw.off()
+  cliOn(stateFile, IN())
+  const before = fileKey(stateFile)
+  await new Promise((res) => setTimeout(res, 15))
+  const s = await sw.on()
+  assert.deepEqual([s.desired, s.actual], ['on', 'on'])
+  assert.deepEqual(fileKey(stateFile), before, 'same bytes, same inode, same mtime: nothing was written')
+  assert.equal(s.harnesses.codex.updated_at, JSON.parse(before.bytes).harnesses.codex.updated_at)
+  // a harness the file does not yet say on, and a policy change, are written
+  await sw.off(); cliOn(stateFile, ['claude-code'])
+  const one = fileKey(stateFile)
+  await sw.on()
+  assert.notEqual(fileKey(stateFile).ino, one.ino)
+  assert.deepEqual(desiredIn(stateFile), { 'claude-code': 'on', codex: 'on' })
+  const two = fileKey(stateFile)
+  await sw.on({ policy: 'auto' })
+  assert.notEqual(fileKey(stateFile).ino, two.ino)
+  assert.equal(readState(stateFile).harnesses.codex.policy, 'auto')
+})
+
 test('switch: desired state survives a new switch instance (S9)', async () => {
   const stateFile = tmpState()
   await mk(fakeRedirector(), stateFile).on({ policy: 'all', extra_hosts: ['relay.example.com'] })

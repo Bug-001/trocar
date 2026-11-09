@@ -3,7 +3,7 @@
 // installUi(doc) is the one wiring pass, installed once by web/src/main.tsx. Nothing touches `document` at import time.
 
 import { esc } from './fmt.mjs'
-import { icon, HALF, DISC_CHEV, MENU_CHEV, glyphCss } from './icons.mjs'
+import { icon, HALF, DISC_CHEV, glyphCss } from './icons.mjs'
 import { screenBound } from './dom.mjs'
 import { MARK_TIP, READ_FAIL } from '../labels/common.mjs'
 
@@ -63,13 +63,6 @@ export function popover({ label, title, body, glyph = icon('info'), cls = '' }) 
 }
 export const infoButton = (o) => popover({ glyph: icon('info'), ...o })
 
-export function menuButton({ label, title, items }) {
-  const id = `menu-${++SEQ}`
-  return `<button type="button" class="popbtn" data-menu="${id}" aria-label="${esc(label)}" aria-haspopup="menu" aria-expanded="false" aria-controls="${id}">${esc(title)} <span class="chev" aria-hidden="true">${MENU_CHEV}</span></button>` +
-    `<div class="pop menu" id="${id}" role="menu" aria-labelledby="${id}-b" hidden>` +
-    items.map((i) => i.href ? `<a role="menuitem" href="${esc(i.href)}">${esc(i.label)}</a>` : `<button type="button" role="menuitem" data-menu-act="${esc(i.act || '')}">${esc(i.label)}</button>`).join('') + `</div>`
-}
-
 // a segmented control of links (the page head's scope control; screens with a live control pass buttons instead)
 export function segmentedHtml({ label, options = [], value }) {
   if (options.length < 2) return ''
@@ -103,7 +96,7 @@ export function readFailure(what, r, { id = 'read-fail' } = {}) {
   const status = obj && typeof r.status === 'number' ? r.status : null
   const why = obj ? r.error : r
   const rows = [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : String(why)]]
-  return { line: READ_FAIL(what, status), tech: techDetailsHtml(rows, { id }) }
+  return { line: READ_FAIL(what, status, obj && r.timedOut === true), tech: techDetailsHtml(rows, { id }) }
 }
 
 // the confirm dialog (4.6 of the visual doc): a question, the impact, what trocar will change; the default focus sits

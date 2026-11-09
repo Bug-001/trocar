@@ -7,7 +7,10 @@ import { modelFormFacts } from '../../../../src/collector/core/proxymode/status-
 import { MODEL as all, OSES, PRIOR, SYS, ROOT_OK, ctxOf, world } from '../../../netenv/fixtures/model-rows.mjs'
 import fs from 'node:fs'
 import tls from 'node:tls'
-import { sharedCertFileWorld } from '../../../helpers/model-world.mjs'
+import path from 'node:path'
+import { sharedCertFileWorld, modelWorld } from '../../../helpers/model-world.mjs'
+import { verdictOf, judgedForms, carrierAt } from '../../../../src/collector/core/proxymode/verdict.mjs'
+import { userCertFilesOf } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { renderWrapper } from '../../../../src/collector/arch/darwin/wrapper.mjs'
 import { readManifest } from '../../../../src/off/manifest.mjs'
 
@@ -44,6 +47,16 @@ for (const os of OSES) {
       const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors: {} }, root: ROOT_OK, systemProxy: null, ctx: ctxOf(os, home) })
       for (const x of out[desc.name]) assert.deepEqual([x.proxy.upstream.source, x.proxy.door_up, x.proxy.connected], ['direct', false, false])
     })
+    // the user's own NO_PROXY is recorded as a prior too: it is a bypass list, never the upstream proxy (4.11 P7 step 2 reads the proxy keys' prior)
+    for (const [rid, r] of Object.entries(desc.proxyMode.routes).filter(([, x]) => x.kind === 'json-key' && x.noProxyKeys && x.auth !== false)) {
+      test(`V70 ${os} ${desc.name}.${rid}: a NO_PROXY of the user's and no proxy of theirs — the upstream is direct, no prior`, async () => {
+        const { home, m, doors } = world(desc)
+        const own = m.entries.find((e) => e.phase === 'on' && e.route === rid)
+        m.entries.unshift({ ...own, keys: r.noProxyKeys[0], prior_value: 'corp.example' })
+        const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, systemProxy: null, ctx: ctxOf(os, home) })
+        for (const x of out[desc.name].filter((y) => y.route === rid)) assert.deepEqual([x.proxy.upstream.source, x.proxy.prior], ['direct', null], x.id)
+      })
+    }
     test(`CM31 / CM32 ${os} ${desc.name}: only present forms are listed; hostTree forms, descriptor effects and notes carry their harness-note`, async () => {
       const { home, m, doors } = world(desc)
       const none = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, ctx: ctxOf(os, home, false) })
@@ -51,9 +64,11 @@ for (const os of OSES) {
       const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, ctx: ctxOf(os, home) })
       for (const x of out[desc.name]) {
         const f = forms.find((y) => y.id === x.id)
-        assert.equal(x.notes.length, (desc.proxyMode.effects || []).length + (desc.proxyMode.notes || []).length + (f.hostTree ? 1 : 0), `${x.id}: its hostTree note, the effects and the notes, nothing else`)
+        assert.equal(x.notes.filter((n) => n.code === 'harness-note').length, (desc.proxyMode.effects || []).length + (desc.proxyMode.notes || []).length + (f.hostTree ? 1 : 0), `${x.id}: its hostTree note, the effects and the notes, nothing else`)
         for (const e of desc.proxyMode.effects || []) assert.ok(x.notes.some((n) => n.code === 'harness-note' && n.text === e.when && n.paths.length > 0), `${x.id}: effect ${e.id}`)
         for (const n of desc.proxyMode.notes || []) assert.ok(x.notes.some((y) => y.code === 'harness-note' && y.text === n.text), `${x.id}: note ${n.id}`)
+        // 1.6 §3.3: the loopback note only on a form whose route is in place, at most once
+        assert.ok(x.notes.filter((n) => n.code === 'loopback-direct').length <= (x.proxy.entry_intact ? 1 : 0), x.id)
       }
     })
     test(`1.6 §9.4 ${os} ${desc.name}: the certificate per form — its carrier, in effect, or the code and command the user acts on`, async () => {
@@ -71,6 +86,9 @@ for (const os of OSES) {
         assert.equal(y.hook, ['wrapper', 'plugin'].includes(x.certificate.carrier) ? 'entry-changed' : null, 'a hook carrier that drifted takes the form off the path (row 31)')
         assert.deepEqual(y.proxy, x.proxy, 'the two axes do not touch (D55①)')
       })
+      // the user's root store could not be read (cert.root unknown, no code): a root form's certificate is not known — in_effect null, never false (D38)
+      const unread = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: { state: 'unknown', code: null, command: null }, ctx: ctxOf(os, home) })
+      for (const y of unread[desc.name].filter((x) => x.certificate.carrier === 'root')) assert.deepEqual([y.certificate.in_effect, y.certificate.code, y.certificate.command], [null, null, null], y.id)
     })
   }
 }
@@ -95,4 +113,132 @@ test('rule U · one user file named by Claude Code and Kimi Code: both certifica
   fs.writeFileSync(w.file, `${tls.rootCertificates[1].trim()}\n`) // the user took the block out
   const gone = await facts()
   for (const h of pair) for (const c of certs(gone, h)) assert.deepEqual([c.in_effect, c.code, c.user_file.state], [false, 'entry-changed', 'changed'], h)
+})
+
+// 4.11 P4 rule U for root-carrier forms: SSL_CERT_FILE replaces the system roots for Codex and Hermes, so the root in the user's store does not carry
+// them while it names a user file — the block in that file does. The block gone → not in effect, and the reason said (entry-changed, user_file changed).
+test('rule U · one SSL_CERT_FILE named by Codex and Hermes (root carriers): in effect with the block; the block gone, not in effect with the reason', async () => {
+  const w = await sharedCertFileWorld({ userPem: `${tls.rootCertificates[1].trim()}\n`, variable: 'SSL_CERT_FILE', commands: ['codex', 'hermes'], env: {}, dirs: ['.codex', '.hermes'] })
+  const r = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r.exit, 0, JSON.stringify(r.carriers))
+  const pair = ['codex', 'hermes']
+  assert.deepEqual(r.carriers.filter((c) => c.carrier === 'pem-block').map((c) => c.harness).sort(), pair)
+  const facts = async () => modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: readManifest(w.dir), root: ROOT_OK, ctx: w.ctx })
+  const certs = (out, h) => out[h].map((x) => x.certificate)
+  const out = await facts()
+  for (const h of pair) {
+    assert.ok(certs(out, h).length, `${h}: a present form`)
+    for (const c of certs(out, h)) assert.deepEqual([c.in_effect, c.code], [true, null], `${h}: ${JSON.stringify(c)}`)
+  }
+  fs.writeFileSync(w.file, `${tls.rootCertificates[1].trim()}\n`) // the user took the block out
+  const gone = await facts()
+  for (const h of pair) for (const c of certs(gone, h)) assert.deepEqual([c.in_effect, c.code, c.user_file && c.user_file.state], [false, 'entry-changed', 'changed'], `${h}: ${JSON.stringify(c)}`)
+})
+
+// 4.11 P4 rule U · 1.6 §9.4 `certificate.in_effect` / `user_file` (D38): a read that failed is not known — never `changed`, never in effect. The user file
+// unreadable: every harness naming it reads `file-unreadable`; a setting that names it unreadable: the harnesses with such a file setting read `config-unreadable`.
+test('rule U · the user file or a setting naming it cannot be read: in_effect null with the read code, user_file unknown with a reason', async () => {
+  const w = await sharedCertFileWorld({ userPem: `${tls.rootCertificates[1].trim()}\n` })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const pair = ['claude-code', 'kimi-code']
+  const denied = () => { throw Object.assign(new Error('permission denied'), { code: 'EACCES' }) }
+  const certs = (out, h) => out[h].filter((x) => x.certificate.carrier !== 'root').map((x) => x.certificate)
+  const unknownWith = (c, code, path) => c.in_effect === null && c.code === code && c.command === null && c.user_file && c.user_file.state === 'unknown' && c.user_file.path === path && typeof c.user_file.reason === 'string' && c.user_file.reason.length > 0
+  // the file itself
+  const fsDenied = { ...fs, readFileSync: (p, ...a) => (p === w.file ? denied() : fs.readFileSync(p, ...a)) }
+  const out = await modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: readManifest(w.dir), root: ROOT_OK, ctx: w.ctx, fs: fsDenied })
+  for (const h of pair) for (const c of certs(out, h)) assert.ok(unknownWith(c, 'file-unreadable', w.file), `${h}: ${JSON.stringify(c)}`)
+  // a setting that names it
+  const { resolveLoc } = await import('../../../../src/collector/core/proxymode/sources.mjs')
+  const settingFiles = (h) => (w.harnesses.find((d) => d.name === h).proxyMode.userCertFiles || []).filter((s) => s.file).flatMap((s) => resolveLoc(s.file, w.ctx))
+  const blocked = new Set(pair.flatMap(settingFiles))
+  assert.ok(blocked.size, 'a harness here names its file in a settings file')
+  const ctx = { ...w.ctx, readFile: (p) => (blocked.has(p) ? denied() : w.ctx.readFile(p)) }
+  const out2 = await modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: readManifest(w.dir), root: ROOT_OK, ctx })
+  for (const h of pair) for (const c of certs(out2, h)) {
+    if (settingFiles(h).length) assert.ok(unknownWith(c, 'config-unreadable', null), `${h}: ${JSON.stringify(c)}`)
+    else assert.deepEqual([c.in_effect, c.user_file && c.user_file.state], [true, 'intact'], `${h}: no setting of it was unread`)
+  }
+})
+
+// 4.11 P4 rule U × P11 rule 4: a setting that matches several places names several files — Hermes's ssl_ca_cert, one per provider route (one written
+// `~/…`, so install, status and the door read it one way). install appends a block to each; status reads each in effect and the door decrypts; one
+// file losing its block → status not in effect for it (the worst file reported) and the door forwards (replace-without-ca).
+test('rule U · two routes, each its own ssl_ca_cert file: install blocks both; status in effect and the door decrypts; one block gone → not in effect, forwarded', async () => {
+  const userPem = `${tls.rootCertificates[1].trim()}\n`
+  const w = await modelWorld({ commands: ['hermes'] })
+  const a = path.join(w.home, 'certs', 'a.pem'), b = path.join(w.home, 'certs', 'b.pem')
+  fs.mkdirSync(path.dirname(a), { recursive: true }); fs.writeFileSync(a, userPem); fs.writeFileSync(b, userPem)
+  fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true })
+  fs.writeFileSync(path.join(w.home, '.hermes', 'config.yaml'), `providers:\n  one:\n    ssl_ca_cert: ${a}\n  two:\n    ssl_ca_cert: ~/certs/b.pem\n`)
+  const r = await w.install()
+  assert.equal(r.exit, 0, JSON.stringify(r.carriers))
+  assert.deepEqual(r.carriers.filter((c) => c.carrier === 'pem-block' && c.state === 'placed').map((c) => c.path).sort(), [a, b])
+  const d = w.harnesses.find((x) => x.name === 'hermes')
+  const facts = async () => (await modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: readManifest(w.dir), root: ROOT_OK, ctx: w.ctx }))[d.name].map((x) => x.certificate)
+  const door = () => judgedForms(d, 'darwin').map((f) => verdictOf({ desc: d, form: f, facts: { name: d.name, pid: 1, startedAt: Date.now() + 60e3, env: {}, cwd: '/' }, record: { carrierInstalledAt: carrierAt(readManifest(w.dir), d, f, () => userCertFilesOf(d, w.ctx)), rootFp256: r.fp256 }, issuer: { state: () => 'ready' }, host: d.hosts[0], ctx: w.ctx }))
+  for (const c of await facts()) assert.deepEqual([c.in_effect, c.code], [true, null], JSON.stringify(c))
+  for (const v of door()) assert.equal(v.decrypt, true, JSON.stringify(v))
+  fs.writeFileSync(b, userPem) // the user took the second file's block out
+  for (const c of await facts()) assert.deepEqual([c.in_effect, c.code, c.user_file && c.user_file.path], [false, 'entry-changed', b], JSON.stringify(c))
+  for (const v of door()) assert.deepEqual([v.decrypt, v.code], [false, 'replace-without-ca'], JSON.stringify(v))
+})
+
+// 4.11 P4 rule U · 1.6 §9.4 `user_file` · P11 rule 4: a file a setting names, generated over the setting's semantics (replace-marked or not) × where the
+// trocar root sits in it (in trocar's block / outside one / absent) × whether the install record holds its block. A replacing file with no block on record
+// reads as the door reads it — the root anywhere in it is in effect, none is replace-without-ca (without-root), never not-users-file; status and door agree.
+test('rule U · a replace-marked file with no block on record reads as the door does: root anywhere in effect, none replace-without-ca; an append file stays not-users-file', async () => {
+  const userPem = `${tls.rootCertificates[1].trim()}\n`
+  for (const replace of [true, false]) {
+    const w = await modelWorld({ commands: ['hermes'] })
+    const file = path.join(w.home, 'certs', 'mine.pem')
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, userPem)
+    fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true })
+    if (replace) fs.writeFileSync(path.join(w.home, '.hermes', 'config.yaml'), `providers:\n  one:\n    ssl_ca_cert: ${file}\n`)
+    else fs.writeFileSync(path.join(w.home, '.hermes', '.env'), `SSL_CERT_FILE=${file}\n`)
+    const r = await w.install()
+    assert.equal(r.exit, 0, JSON.stringify(r.carriers))
+    const blocked = fs.readFileSync(file, 'utf8')
+    const rootPem = blocked.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g).at(-1)
+    const d = w.harnesses.find((x) => x.name === 'hermes')
+    for (const [where, bytes] of [['in-block', blocked], ['outside', `${userPem}${rootPem}\n`], ['absent', userPem]]) {
+      for (const entry of [true, false]) {
+        fs.writeFileSync(file, bytes)
+        const m = readManifest(w.dir)
+        if (!entry) m.entries = m.entries.filter((e) => !(e.kind === 'text' && e.format === 'pem-block'))
+        const certs = (await modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: m, root: ROOT_OK, rootFp256: r.fp256, ctx: w.ctx }))[d.name].map((x) => x.certificate)
+        const want = entry ? (where === 'in-block' ? [true, null, 'intact'] : [false, 'entry-changed', 'changed'])
+          : !replace ? [false, 'not-users-file', 'not-users-file'] : where === 'absent' ? [false, 'replace-without-ca', 'without-root'] : [true, null, null]
+        const tag = `${replace ? 'replace' : 'append'} · root ${where} · ${entry ? 'block on record' : 'no record'}`
+        assert.ok(certs.length, `${tag}: a present form`)
+        for (const c of certs) assert.deepEqual([c.in_effect, c.code, c.user_file && c.user_file.state], want, `${tag}: ${JSON.stringify(c)}`)
+        if (want[1] !== 'replace-without-ca') continue
+        for (const f of judgedForms(d, 'darwin')) { // the door, for a process of that harness started after the carrier, says the same
+          const v = verdictOf({ desc: d, form: f, facts: { name: d.name, pid: 1, startedAt: Date.now() + 60e3, env: {}, cwd: '/' }, record: { carrierInstalledAt: carrierAt(m, d, f, () => userCertFilesOf(d, w.ctx)), rootFp256: r.fp256 }, issuer: { state: () => 'ready' }, host: d.hosts[0], ctx: w.ctx })
+          assert.deepEqual([v.decrypt, v.code], [false, 'replace-without-ca'], `${tag} · door ${f.id}: ${JSON.stringify(v)}`)
+        }
+      }
+    }
+  }
+})
+
+// 4.11 P11 / ⑩: a blocked form's blocker reaches, in status as at the door, the forms the door cannot tell from it (its program file `exe`, then
+// a word of its command line `argv`). The Z-Code desktop's CA setting: on macOS its agent is the app's Helper, so no other form reads it; on Windows
+// the CLI is the same ZCode.exe but runs `-p` where the desktop's agent runs `app-server`, so it does not either (`plan.via` would say it); the Node
+// CLI, a node process, never does.
+for (const [os, together] of [['darwin', []], ['win32', []]]) test(`4.11 P11 · ${os}: the Z-Code desktop's CA setting reaches the forms the door cannot tell from the desktop: ${together.join(', ') || 'none'}`, async () => {
+  const w = await modelWorld({ os })
+  const app = os === 'darwin' ? '/Applications/ZCode.app' : path.join(w.home, 'AppData', 'Local', 'Programs', 'ZCode')
+  const inner = w.ctx.exists
+  w.ctx.exists = (p) => p === app || inner(p)
+  fs.mkdirSync(path.join(w.home, '.zcode', 'v2'), { recursive: true })
+  fs.mkdirSync(path.join(w.home, '.zcode', 'cli'), { recursive: true })
+  assert.equal((await w.install()).exit, 0)
+  fs.writeFileSync(path.join(w.home, '.zcode', 'v2', 'setting.json'), JSON.stringify({ httpProxyCaCertPath: path.join(w.home, 'ca.pem') }))
+  const out = (await modelFormFacts({ harnesses: w.harnesses, os, manifest: readManifest(w.dir), root: ROOT_OK, ctx: w.ctx }))['z-code']
+  const plan = Object.fromEntries(out.map((x) => [x.id, x.plan]))
+  assert.equal(plan['z-code.desktop'] && plan['z-code.desktop'].reason, 'blocker', JSON.stringify(plan))
+  assert.deepEqual(out.filter((x) => x.plan && x.plan.via).map((x) => x.id), together, JSON.stringify(plan))
+  for (const id of together) assert.equal(plan[id].via, 'z-code.desktop')
+  assert.equal(plan['z-code.cli-node'], null, 'the Node CLI is a node process: the desktop setting never reaches it')
 })

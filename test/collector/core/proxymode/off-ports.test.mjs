@@ -33,7 +33,7 @@ test('V55 · proxy mode off: the door of the harness with a holder stays, forwar
   const opened = [], closed = []
   const w = { now: INSTALLED + 5, ctx: ctxOf(newWorld('darwin')), procs: [{ pid: 7001, startedAt: INSTALLED + 1 }] }
   const c = createModelCollector({
-    harnesses: pair, dir: '/nowhere', custody: stub, rootPem: STUB_PEM, proxyOf, templates: TEMPLATES, ownUid: 501,
+    harnesses: pair, dir: '/nowhere', custody: stub, rootPem: STUB_PEM, proxyOf, bypassOf: () => [], templates: TEMPLATES, ownUid: 501,
     ctx: { os: 'darwin', home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) },
     identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }),
     ownerOf: async () => ({ pid: 7001, source: 'socket-table', ms: 1 }), factsOf: async () => ({ agent: A.name, uid: 501, startedAt: INSTALLED + 1 }),

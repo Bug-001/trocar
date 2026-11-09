@@ -3,8 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../../../../helpers/tmp.mjs'
 
-export function fakeProc() {
-  const root = tmpDir('trocar-proc-')
+export function fakeProc(root = tmpDir('trocar-proc-')) { // a root given by the caller is the caller's to remove
+  fs.mkdirSync(root, { recursive: true })
   const btime = 1_700_000_000
   fs.writeFileSync(path.join(root, 'stat'), `cpu 1 2 3\nbtime ${btime}\nprocesses 9\n`)
   function add(pid, { ppid = 1, uid = 1000, exe = '/bin/true', argv = [exe], env = null, cwd = '/', startTicks = 0, comm = path.basename(exe) } = {}) {

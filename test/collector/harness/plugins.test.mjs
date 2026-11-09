@@ -181,6 +181,14 @@ test('renderPlugin fills in this user\'s CA file and marker dir as string litera
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('renderPlugin keeps a value with a replacement pattern ($& $\' $` $$ $1) byte for byte', () => {
+  for (const p of ['$&', "$'", '$`', '$$', '$1']) {
+    const caFile = `/home/a${p}b/ca.pem`, markerDir = `/home/a${p}b/run/trust`
+    const out = renderPlugin(SRC.dsh, { caFile, markerDir })
+    assert.ok(out.includes(`const CA_FILE = ${JSON.stringify(caFile)}\n`) && out.includes(`const MARKER_DIR = ${JSON.stringify(markerDir)}\n`), p)
+  }
+})
+
 for (const h of ROOT_ONLY) test(`T13 real Node (Linux): the rendered ${h} plugin puts the trocar CA into the default roots and writes the marker with this process's start time`, { skip: (process.platform !== 'linux' && 'needs /proc') || (!NODE_TLS_ROOTS && 'needs Node >= 22.19 (tls.setDefaultCACertificates)') }, async () => {
   const { spawnSync } = await import('node:child_process')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-t13r-'))

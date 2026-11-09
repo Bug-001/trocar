@@ -74,7 +74,9 @@ export async function ownerOfSocket({ exec, peer, socktablePath = nativePath(NAT
   if (addr === '' || addr.includes(':')) return none(0) // not an IPv4 loopback peer: the doors never see one (the fail-safe answer)
 
   // several holders on the peer's end is mostly a child between fork and exec (it holds a CLOEXEC copy of its parent's socket for a few ms):
-  // read again, bounded, and answer the one holder left; holders that persist are a socket a child really inherited (null, `shared`)
+  // read again, bounded, and answer the one holder left, or the one pid held on every read (a client that keeps spawning shows a different child each
+  // time, more so on a busy machine); holders that persist are a socket a child really inherited (null, `shared`)
+  let steady = null
   for (let read = 0; ; read++) {
     let answer
     try { answer = await exec(socktablePath, [], { timeoutMs }) } catch (e) {
@@ -86,7 +88,8 @@ export async function ownerOfSocket({ exec, peer, socktablePath = nativePath(NAT
     if (answer.code !== 0) return unavailable(`socktable exited with ${answer.code}${answer.err ? `: ${answer.err}` : ''}`)
     const holders = new Set()
     for (const r of parseSockTable(answer.out)) if (r.laddr === addr && r.lport === peer.port && r.pid > 0 && r.pid !== process.pid) holders.add(r.pid) // the engine's accepted socket names the peer as its FOREIGN end and is never a holder; the pid exclusion is belt and braces
-    if (holders.size === 1) return { pid: [...holders][0], source: 'socket-table', ms: Math.max(0, now() - t0), sameUser: true } // this user's: the helper lists no other
+    steady = steady ? new Set([...steady].filter((pid) => holders.has(pid))) : holders
+    if (holders.size === 1 || steady.size === 1) return { pid: [...(holders.size === 1 ? holders : steady)][0], source: 'socket-table', ms: Math.max(0, now() - t0), sameUser: true } // this user's: the helper lists no other
     if (holders.size === 0) return { ...none(), why: 'no-row' }
     if (read >= REREADS) return { ...none(), why: 'shared', sameUser: true } // the helper lists only this user's processes: every holder is this user's
     await new Promise((resolve) => setTimeout(resolve, REREAD_MS)) // awaited and 10 ms: kept ref'd, an unref'd wait would let a caller with nothing else open end mid-question

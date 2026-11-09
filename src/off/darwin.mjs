@@ -4,7 +4,7 @@
 //
 // R7 on darwin (4.9 §7): trocar never runs as root, so `on`, `daemon`, `off` and `uninstall` refuse to. `on` and `daemon` ask the arch module (arch/darwin/autostart.mjs `refuseElevated`);
 // `off` and `uninstall` cannot reach it (the standalone has no source tree), and on darwin they need no tool for it either: the uid is this process's own, read in-process — where Windows
-// has to ask `whoami /groups` (src/off/win32.mjs), darwin asks nobody.
+// has to ask `whoami` (src/off/win32.mjs), darwin asks nobody.
 //
 // The undo (`undoAutostart`) is the standalone copy of the arch module's disable / remove, the way src/off/autostart.mjs is the linux unit's (1.6 R3; the win32 side's `undoWin32` is still
 // a plan). launchd's agent is booted out FIRST — KeepAlive would pull a stopped daemon right back, so the autostart goes before the daemon process is stopped (the off order, 4.9 §4) —

@@ -4,24 +4,26 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { parseFilters, filtersToParams, applyFilters, listEntries, dayHead, captionFacts, capShotMaker, emptyBoardState, filteredAgentLine, flattenSessions, rowModel, sessionKey, titleText, titleTipOf } from '../../web/src/screens/library/model.mjs'
 import { loadSessions, freshSessions } from '../../web/legacy/library/logic.mjs'
+import { INTERVAL } from '../../web/legacy/core/poll.mjs'
 import { captureVerdict, capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
 import * as W from '../../web/legacy/labels/library.mjs'
 
 const NOW = new Date(2026, 9, 20, 12, 0, 0).getTime()
 const S = (o = {}) => ({ session_id: 'sess-1', project_slug: '_unresolved', project_path: null, harness: 'codex', harness_inferred: false, session_synthesized: false, title: null, title_source: null, entrypoint: null, calls: 3, probes: 0, logged: 0, has_subagent: false, last_ts: new Date(NOW - 60e3).toISOString(), ...o })
 
-test('(2) title rules: the hover follows title_source and carries the id, a pending title reads as not read yet; the title never carries the id', () => {
+test('(2) title rules: the hover follows title_source and carries the id, a null source is the untitled word, any other or none is not read yet; the title never carries the id', () => {
   const tips = new Set()
-  for (const [title, title_source, wantTip, wantText] of [['Fix the queue', 'wire', W.titleFromWire, 'Fix the queue'], [null, null, W.titleNoKey, W.UNTITLED], [null, 'pending', W.titlePending, W.TITLE_PENDING]]) {
+  for (const [title, title_source, wantTip, wantText] of [['Fix the queue', 'wire', W.titleFromWire, 'Fix the queue'], [null, 'unread', W.titleUnread, W.PROMPT_UNREAD], [null, null, W.titleNoKey, W.UNTITLED],
+    [null, 'pending', W.titlePending, W.TITLE_PENDING], [null, 'a-value-from-a-later-release', W.titlePending, W.TITLE_PENDING], [null, undefined, W.titlePending, W.TITLE_PENDING]]) {
     for (const harness_inferred of [false, true]) {
       const s = S({ title, title_source, harness_inferred }), tip = titleTipOf(s), why = JSON.stringify({ title_source, harness_inferred })
       assert.equal(tip, wantTip(s.session_id), why); assert.equal(titleText(s), wantText, why)
       assert.ok(tip.includes(s.session_id), why); assert.ok(!titleText(s).includes(s.session_id), why)
-      assert.deepEqual([rowModel(s, NOW).titleText, rowModel(s, NOW).titleTip], [titleText(s), tip], why)
+      assert.deepEqual([rowModel(s, NOW).titleText, rowModel(s, NOW).titleTip, rowModel(s, NOW).untitled], [titleText(s), tip, title == null], why)
       tips.add(tip)
     }
   }
-  assert.equal(tips.size, 3, 'one distinct hover per title_source')
+  assert.equal(tips.size, 4, 'one distinct hover per case: wire, unread, none, not read yet')
 })
 
 test('(3)(4)(5) row marks follow their fields, table-driven; nothing marks a false or absent field; probe-only is dim', () => {
@@ -153,6 +155,40 @@ test('(17) freshSessions: an answer that carries stored is read again 1.5 s late
   assert.equal(gone.data.stored, old.stored.at)
 })
 
+test('(17) freshSessions reads nothing while the page is hidden, and reads again once it shows (1.7)', async () => {
+  const fresh = { sessions: [], errors: [], next: null }
+  const old = { ...fresh, stored: { at: new Date(NOW - 60e3).toISOString() } }
+  let reads = 0
+  const api = { get: async () => ({ ok: true, status: 200, data: ++reads === 1 ? old : fresh }) }
+  globalThis.document = { hidden: true }
+  try {
+    const read = freshSessions(api)
+    await new Promise((d) => setTimeout(d, INTERVAL.session * 2.5))
+    assert.equal(reads, 1, 'no read while hidden')
+    globalThis.document = { hidden: false }
+    assert.equal((await read).data.stored, null)
+    assert.equal(reads, 2)
+  } finally { delete globalThis.document }
+})
+
+test('(18) until a whole list came back every page asks for the long deadline, a failed read changes nothing, afterwards none does', async () => {
+  const { loadSessions: load, FIRST_LIST_DEADLINE_MS } = await import('../../web/legacy/library/logic.mjs?first-list') // `listed` is the module's: a fresh copy
+  const pages = [{ sessions: [S({ session_id: 'a' })], errors: [], next: '1' }, { sessions: [S({ session_id: 'b' })], errors: [], next: null }]
+  let asked = [], secondFails = true
+  const api = { get: async (name, { after }, opts) => {
+    asked.push(opts?.deadlineMs)
+    return after != null && secondFails ? { ok: false, status: 0, error: 'cut' } : { ok: true, status: 200, data: pages[after == null ? 0 : 1] }
+  } }
+  assert.equal((await load(api)).ok, false)
+  assert.deepEqual(asked, [FIRST_LIST_DEADLINE_MS, FIRST_LIST_DEADLINE_MS])
+  secondFails = false; asked = []
+  assert.equal((await load(api)).ok, true)
+  assert.deepEqual(asked, [FIRST_LIST_DEADLINE_MS, FIRST_LIST_DEADLINE_MS])
+  asked = []
+  await load(api)
+  assert.deepEqual(asked, [undefined, undefined])
+})
+
 test('(17) loadSessions: a list with a stored page carries the oldest stored at; a session on two pages is listed once', async () => {
   const t1 = new Date(NOW - 120e3).toISOString(), t2 = new Date(NOW - 60e3).toISOString()
   const a = S({ session_id: 'a' }), b = S({ session_id: 'b' }), c = S({ session_id: 'c' })
@@ -167,3 +203,43 @@ test('(17) loadSessions: a list with a stored page carries the oldest stored at;
     assert.deepEqual(d.sessions.map((s) => s.session_id).sort(), ['a', 'b', 'c'])
   }
 })
+
+// 1.8 §数据与刷新 · 1.5 K-29: a 503 whose first error code is still-reading is the list still being built: the same page is asked again,
+// never a failed list; any other 503, or an aborted read (status 0), ends the read as it came
+test('(18) a page that answers 503 still-reading is asked again until it answers; another 503 or an aborted read ends the read', async () => {
+  const page = { sessions: [S({ session_id: 'a' })], errors: [], next: null }
+  const wait = { ok: false, status: 503, error: 'still reading', code: 'still-reading' }
+  for (const [answers, ok, n] of [[[wait, wait, { ok: true, status: 200, data: page }], true, 3], [[wait, { ok: false, status: 503, error: 'worker crashed', code: 'worker-exit' }], false, 2],
+    [[wait, { ok: false, status: 0, error: 'aborted' }], false, 2], [[{ ok: false, status: 503, error: 'x' }], false, 1]]) {
+    const asked = []
+    const api = { get: async (name, params) => { asked.push(params.after); return answers[asked.length - 1] } }
+    const r = await loadSessions(api)
+    assert.equal(r.ok, ok, JSON.stringify(answers.map((a) => a.code ?? a.status)))
+    assert.equal(asked.length, n)
+    assert.ok(asked.every((a) => a == null), 'the same page each time')
+    if (!ok) assert.deepEqual(r, answers.at(-1), 'the failure as it came')
+  }
+  // a later page that waits is asked again with its own cursor; a caller gone (alive false) ends the wait with the 503 as it came
+  const pages = [{ sessions: [S({ session_id: 'a' })], errors: [], next: '1' }, { sessions: [S({ session_id: 'b' })], errors: [], next: null }]
+  let asked = [], n = 0
+  const r = await loadSessions({ get: async (name, { after }) => { asked.push(after); return after != null && n++ < 2 ? wait : { ok: true, status: 200, data: pages[after == null ? 0 : 1] } } })
+  assert.deepEqual([r.ok, asked], [true, [null, '1', '1', '1']])
+  asked = []
+  const gone = await loadSessions({ get: async (name, { after }) => { asked.push(after); return wait } }, { alive: () => asked.length < 2 })
+  assert.deepEqual([gone.code, asked.length], ['still-reading', 2])
+})
+
+// 1.8 §一行 只有后台调用的会话: a row with background_only true is not listed by default; a search that finds it by id lists it; bg=1 lists
+// them all; only true hides (absent is not known to be one); bg=1 round-trips through the route params
+test('(6) background-only sessions: hidden unless asked for or found by id; only true hides; bg round-trips', () => {
+  const list = [S({ session_id: 'main-1', last_ts: new Date(NOW - 1e3).toISOString() }), S({ session_id: 'bg-77', background_only: true, last_ts: new Date(NOW - 2e3).toISOString() }),
+    S({ session_id: 'old-3', last_ts: new Date(NOW - 3e3).toISOString() }), S({ session_id: 'nope-4', background_only: false, last_ts: new Date(NOW - 4e3).toISOString() })]
+  const ids = (p) => applyFilters(list, parseFilters(p), NOW).map((s) => s.session_id)
+  assert.deepEqual(ids({}), ['main-1', 'old-3', 'nope-4'])
+  assert.deepEqual(ids({ bg: '1' }), ['main-1', 'bg-77', 'old-3', 'nope-4'])
+  assert.deepEqual(ids({ q: 'bg-7' }), ['bg-77'], 'found by id')
+  assert.deepEqual(ids({ q: 'title' }), [], 'a search that does not match its id keeps it hidden')
+  assert.deepEqual(filtersToParams(parseFilters({ bg: '1' })), { bg: '1' })
+  assert.deepEqual(filtersToParams(parseFilters({})), {})
+})
+

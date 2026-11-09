@@ -36,6 +36,20 @@ test('W4 (the wrong-pid-never rule): two pids on the peer\'s end (a socket a chi
   assert.equal(garbled.pid, 77, 'a line not of the helper\'s shape is no holder')
 })
 
+test('4.9 §5.3: a client that keeps spawning shows a different child on each read: the one pid held on every read is the answer; two held on every read stay nobody', async () => {
+  const reads = (...sets) => { let n = 0; return { exec: async () => table(...sets[Math.min(n++, sets.length - 1)].map((pid) => row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', pid))), asked: () => n } }
+  const churn = reads([501, 600], [501, 601], [501, 602])
+  const r = await ownerOfSocket({ exec: churn.exec, peer: PEER })
+  assert.deepEqual([r.pid, r.source, r.sameUser], [501, 'socket-table', true])
+  assert.equal(churn.asked(), 2, 'no read past the one that answered')
+  const late = reads([501, 600], [501, 600], [501, 601])
+  assert.equal((await ownerOfSocket({ exec: late.exec, peer: PEER })).pid, 501, 'a child seen on two reads, gone on the third')
+  const inherited = await ownerOfSocket({ exec: reads([501, 700, 600], [501, 700, 601], [501, 700, 602], [501, 700, 603], [501, 700, 604]).exec, peer: PEER })
+  assert.deepEqual([inherited.pid, inherited.why], [null, 'shared'], 'two held throughout: never a pick, whatever comes and goes beside them')
+  const disjoint = await ownerOfSocket({ exec: reads([501, 600], [502, 601]).exec, peer: PEER })
+  assert.deepEqual([disjoint.pid, disjoint.why], [null, 'shared'], 'nobody held throughout: nobody')
+})
+
 test('a fork-window co-holder (a child between fork and exec holds its parent\'s socket for a few ms) is read again: the one holder left is the answer, at any read within the bound', async () => {
   for (const transient of [1, 2, 4]) {
     let n = 0

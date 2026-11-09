@@ -12,6 +12,7 @@ import { checkRecord } from '../../src/health/codes.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
 import { snapshot } from './fixtures/on-ctx.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
+import { standalonePath } from '../../src/off/paths.mjs'
 
 function fakeIo() {
   const out = [], err = []
@@ -21,7 +22,7 @@ function fakeIo() {
 const neverStarts = { path: '/nowhere/unit', text: () => '', registered: () => ({ state: 'present' }), enable: () => { throw new Error('the unit must not be touched') }, start: () => { throw new Error('the unit must not be touched') }, startNow: () => { throw new Error('the unit must not be touched') } }
 const on = (w, os, argv, unit = neverStarts) => {
   const io = fakeIo()
-  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
   return runOnCli(argv, { io, env: w.env, home: w.home, platform: os, deps }).then((exit) => ({ exit, io }))
 }
 
@@ -57,7 +58,7 @@ for (const os of ['darwin', 'win32']) {
   test(`1.6 §3.3 (${os}): every on plan row is "path: what changes there"`, async () => {
     const w = await modelWorld({ os, commands: ['codex', 'opencode'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
-    const planned = (await on(w, os, ['--dry-run', '--json'])).io.json().planned
+    const planned = (await on(w, os, ['--dry-run', '--json'])).io.json().planned.filter((p) => p.route) // the route items; trocar's own tree is the one other (附录 C.2)
     const text = (await on(w, os, ['--dry-run'])).io.text()
     assert.ok(planned.length >= 2 && planned.every((p) => p.paths.length), JSON.stringify(planned))
     for (const f of planned.flatMap((p) => p.paths)) assert.match(text, new RegExp(`${f.replace(w.home, '~').replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}: \\S`), `${f}: the row says what changes there\n${text}`)
@@ -95,7 +96,7 @@ for (const os of ['darwin', 'win32']) {
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const lines = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')) : []).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.source === 'board')
     const gone = { ...neverStarts, registered: () => ({ state: 'absent' }) }
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => gone } } } }
+    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => gone } } } }
     const io = fakeIo()
     assert.equal(await runOn({ io, env: w.env, home: w.home, platform: os, deps, ids: null, flags: new Set(['--dry-run']), json: true, source: 'board' }), 0, io.text())
     assert.deepEqual(lines(), [], 'a dry run changed nothing and records nothing')
@@ -114,7 +115,7 @@ for (const os of ['darwin', 'win32']) {
     const w = await modelWorld({ os, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const results = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')) : []).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.kind === 'result')
-    const deps = (unit) => ({ getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, lockWaitMs: 30, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } })
+    const deps = (unit) => ({ getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, lockWaitMs: 30, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } })
     fs.writeFileSync(path.join(w.dir, 'op.lock'), JSON.stringify({ pid: process.pid, start_time: null, boot_id: null }) + '\n')
     const io = fakeIo()
     assert.equal(await runOn({ io, env: w.env, home: w.home, platform: os, deps: deps(neverStarts), ids: null, flags: new Set(['--yes']), json: true }), 1, io.text())
@@ -144,7 +145,7 @@ test('V104 proxy (darwin): the daemon opens doors for the first harness only →
     'POST /on': async ({ body }) => { asked = body; return { doors: Object.fromEntries(Object.entries(body.groups).filter(([g]) => g.startsWith(`${body.harnesses[0]}:`)).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } },
   } })
   try {
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
     const io = fakeIo()
     await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
     assert.ok(asked && asked.harnesses.length >= 2, JSON.stringify(asked))
@@ -152,6 +153,77 @@ test('V104 proxy (darwin): the daemon opens doors for the first harness only →
     assert.deepEqual(last.harnesses, [asked.harnesses[0]], JSON.stringify(last))
     assert.deepEqual(checkRecord(last), [])
   } finally { await server.close() }
+})
+
+// V104 · D38: the last save of a run can fail with the entries already in their files. The run is failed and says what failed, and its result line still names what it turned on
+test('V104 proxy (darwin): the manifest cannot be saved once an entry is written → exit 1, a problem, the result line and the receipt name the harness', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32), manifest = path.join(w.dir, 'install-manifest.json'), trocar = path.join(w.home, '.trocar')
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  let wrote = false
+  const full = new Proxy(fs, { get(t, k) {
+    if (k === 'renameSync') return (a, b) => { if (wrote && b === manifest) throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }); const r = t.renameSync(a, b); if (!b.startsWith(trocar)) wrote = true; return r }
+    return typeof t[k] === 'function' ? t[k].bind(t) : t[k]
+  } })
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  try {
+    const deps = { fs: full, getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const io = fakeIo()
+    const exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
+    assert.equal(wrote, true)
+    assert.equal(exit, 1, io.text())
+    const receipt = io.json()
+    assert.equal(receipt.ok, false)
+    assert.ok(receipt.problems.length >= 1, io.text())
+    const last = fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.kind === 'result').at(-1)
+    assert.equal(last.outcome, 'failed', JSON.stringify(last))
+    assert.deepEqual(last.harnesses, ['codex'], JSON.stringify(last))
+  } finally { await server.close() }
+})
+
+// D62①: confirmed_paths is saved when it grew; an on over the same files has nothing to add to it
+test('1.6 §1.6 (darwin): the first on records the files said yes to; an on over the same files does not save the manifest again', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32), file = path.join(w.dir, 'install-manifest.json')
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  try {
+    assert.equal((await on(w, 'darwin', ['--yes'])).exit, 0)
+    const { readManifest } = await import('../../src/off/manifest.mjs')
+    assert.ok(readManifest(w.dir).confirmed_paths.some((p) => p.endsWith('.env')))
+    const before = fs.statSync(file).ino
+    assert.equal((await on(w, 'darwin', ['--yes'])).exit, 0)
+    assert.equal(fs.statSync(file).ino, before, 'the file was not replaced')
+  } finally { await server.close() }
+})
+
+// 1.6 §3.3: a copy that cannot be written stops on and changes nothing — through the CLI, whose own write after turnOnModel (confirmed_paths) is part of the run
+test('1.6 §3.3 (darwin): the undo copy cannot be written → on exits 1, undo null, no harness named, HOME byte for byte unchanged', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  fs.rmSync(standalonePath(w.home), { force: true }); fs.mkdirSync(standalonePath(w.home), { recursive: true }) // a directory where the copy goes
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const mine = (h) => Object.fromEntries(Object.entries(snapshot(h)).filter(([k]) => !k.includes('collector/flows') && k !== 'c.sock'))
+  const before = mine(w.home)
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://${encodeURIComponent(g)}:${token}@127.0.0.1:${port}`])) }),
+  } })
+  try {
+    const r = await on(w, 'darwin', ['--yes', '--json'])
+    assert.equal(r.exit, 1, r.io.text())
+    assert.deepEqual([r.io.json().undo, r.io.json().harnesses], [null, []], r.io.text())
+  } finally { await server.close() }
+  assert.deepEqual(mine(w.home), before, 'no manifest, state.json or agent file written')
 })
 
 // 1.6 §3.3 要确认时: the plan names each setting once; "since you last said yes" is said only when there was an earlier yes, on the rows it is new for
@@ -169,4 +241,220 @@ test('1.6 §3.3: the plan of on lists every path once, and speaks of an earlier 
   const later = await planOf()
   once(later)
   assert.match(later.find((l) => l.includes(env)) || '', /new since you last said yes/, `the new row says so\n${later.join('\n')}`)
+})
+
+// 1.6 §1.6 (R12): off goes first — it writes desired off before it waits for the lock, and an on that is part way through stops when it sees that:
+// the first harness's entries were written (and are recorded, so off undoes them), the second is not started, the receipt carries stopped-by-off and
+// on exits non-zero. Then off, with the lock free, takes out everything: no entry of on is left outside ~/.trocar.
+test('1.6 §1.6 (darwin): off writes off after on wrote its first harness → on stops before the second, stopped-by-off, exit 1; off then leaves no entry', async () => {
+  const { desiredOff, offWorld, runOff } = await import('../../src/off/orchestrate.mjs')
+  const w = await modelWorld({ os: 'darwin', commands: ['codex', 'opencode'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32), trocar = path.join(w.home, '.trocar')
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const mine = (h) => Object.fromEntries(Object.entries(snapshot(h)).filter(([k]) => !k.startsWith('.trocar') && k !== 'c.sock'))
+  const before = mine(w.home)
+  let offAt = null
+  // another process's off, at the first agent file on writes: the very writer off uses when it finds the lock held
+  const full = new Proxy(fs, { get(t, k) {
+    if (k === 'renameSync') return (a, b) => { const r = t.renameSync(a, b); if (!offAt && !b.startsWith(trocar)) { offAt = b; desiredOff(offWorld({ home: w.home, env: w.env, deps: { platform: 'darwin' } }), null, ['codex', 'opencode']) } return r }
+    return typeof t[k] === 'function' ? t[k].bind(t) : t[k]
+  } })
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  let doc, exit
+  try {
+    const deps = { fs: full, getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const io = fakeIo()
+    exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
+    doc = io.json()
+  } finally { await server.close() }
+  assert.ok(offAt, 'on wrote an agent file')
+  assert.equal(exit, 1, JSON.stringify(doc))
+  assert.equal(doc.ok, false)
+  assert.equal(doc.error && doc.error.code, 'stopped-by-off', JSON.stringify(doc))
+  const started = [...new Set(doc.routes.map((r) => r.harness))]
+  assert.equal(started.length, 1, `only the first harness was started: ${JSON.stringify(doc.routes)}`)
+  const last = fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.kind === 'result').at(-1)
+  assert.deepEqual([last.outcome, last.harnesses], ['failed', started], JSON.stringify(last)); assert.deepEqual(checkRecord(last), [])
+  const st = JSON.parse(fs.readFileSync(path.join(w.dir, 'state.json'), 'utf8'))
+  assert.deepEqual(Object.values(st.harnesses).map((h) => h.desired), ['off', 'off'], 'the off on wrote stays: on does not write on over it')
+  const off = await runOff({ home: w.home, env: w.env, deps: { platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'no launchctl here' }), procs: async () => [], sleep: async () => {} } })
+  assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
+  assert.deepEqual(mine(w.home), before, 'off took out every entry on wrote')
+})
+
+// 4.11 §3 ③ (P5): `on` reads the system proxy (scutil, injected below the reader) when a form that follows it is present. A PAC system proxy → the
+// desktop app's library route is not-routed, and the door the last on wrote there is taken out
+test('4.11 §3 ③ (darwin): on over a PAC system proxy says the library route not-routed (system-pac) and takes the door the last on wrote out', async () => {
+  const w = await modelWorld({ commands: ['claude', 'codex'] })
+  fs.mkdirSync(path.join(w.home, 'Applications', 'Claude.app'), { recursive: true })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const box = { pac: false }
+  const exec = (file, args) => (file === 'scutil' && args[0] === '--proxy' ? { status: 0, stdout: `<dictionary> {\n${box.pac ? '  ProxyAutoConfigEnable : 1\n' : ''}}\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'not here' })
+  const run = async (json) => {
+    const io = fakeIo()
+    const deps = { getuid: () => 501, exec, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json })
+    return { exit, io }
+  }
+  const library = () => fs.readdirSync(w.home, { recursive: true }).map((n) => path.join(w.home, n)).filter((p) => p.includes('configLibrary') && p.endsWith('.json') && fs.statSync(p).isFile())
+  const doorIn = () => library().filter((p) => /127\.0\.0\.1:\d+/.test(fs.readFileSync(p, 'utf8')))
+  try {
+    const first = await run(true)
+    assert.equal(first.exit, 0, first.io.text())
+    assert.ok(doorIn().length, 'the first on wrote the door into the library entry')
+    box.pac = true
+    const second = await run(true)
+    const doc = second.io.json()
+    const lib = doc.routes.filter((r) => r.harness === 'claude-code' && !r.ok)
+    assert.deepEqual(lib.map((r) => [r.code, r.reason]), [['not-routed', 'system-pac']], JSON.stringify(doc.routes))
+    assert.equal(second.exit, 1)
+    assert.deepEqual(doorIn(), [], 'no library entry holds the door any more')
+  } finally { await server.close() }
+})
+
+// 1.6 §1.1: the receipt of an on that did not finish for one harness — the headline names only the harnesses that did not finish, a row says its
+// reason in words (never the closed-set code the JSON carries), and a long path is one unbroken token within 80 columns (⑥)
+test('1.6 §1.1 (darwin): on with one route not-routed → the headline names only that harness, no reason code in the text, the path unbroken', async () => {
+  const w = await modelWorld({ commands: ['claude', 'codex'] })
+  fs.mkdirSync(path.join(w.home, 'Applications', 'Claude.app'), { recursive: true })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const exec = () => ({ status: 0, stdout: '<dictionary> {\n}\n', stderr: '' })
+  const run = async (json) => {
+    const io = fakeIo()
+    const deps = { getuid: () => 501, exec, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    return { exit: await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json }), io }
+  }
+  try {
+    // the user's own applied library entry; after the first on they set an egress proxy of their own in it: the library route is not-routed there
+    const lib = path.join(w.home, 'Library', 'Application Support', 'Claude-3p', 'configLibrary'), entry = path.join(lib, 'u1.json')
+    fs.mkdirSync(lib, { recursive: true })
+    fs.writeFileSync(path.join(lib, '_meta.json'), JSON.stringify({ appliedId: 'u1' }))
+    fs.writeFileSync(entry, JSON.stringify({ inferenceProvider: 'gateway' }))
+    assert.equal((await run(true)).exit, 0)
+    fs.writeFileSync(entry, JSON.stringify({ ...JSON.parse(fs.readFileSync(entry, 'utf8')), egressProxyUrl: 'http://corp.example:8080' }))
+    const doc = (await run(true)).io.json()
+    const bad = doc.routes.filter((r) => !r.ok)
+    assert.ok(bad.length && bad.every((r) => r.harness === 'claude-code' && r.at), JSON.stringify(doc.routes))
+    const text = (await run(false)).io.text()
+    const lines = text.split('\n'), headAt = lines.findIndex((l, i) => i > 0 && !l.startsWith(' ')) // the plan's first line, then the receipt's
+    const head = lines.slice(headAt, lines.findIndex((l, i) => i > headAt && l.startsWith(' '))).join(' ')
+    assert.match(head, /claude-code/, text)
+    assert.doesNotMatch(head, /codex/, `the headline names only what did not finish\n${text}`)
+    for (const r of bad) assert.ok(!text.includes(`(${r.reason})`) && !new RegExp(`\\b${r.reason}\\b`).test(text), `no closed-set code in the text (${r.reason})\n${text}`)
+    const shown = bad[0].at.replace(w.home, '~').split('#')[0]
+    assert.ok(lines.some((l) => l.includes(shown)), `the path is one unbroken token\n${text}`)
+    for (const l of lines) assert.ok(l.length <= 80 || !l.trim().includes(' '), `within 80 columns, or one token alone\n${l}`)
+    assertEnglish(text, 'the receipt of on with a route not written')
+  } finally { await server.close() }
+})
+
+// 1.6 §3.3 · invariant 4: a route that sends loopback direct (P6 NO_PROXY) leaves requests to this computer uncaptured, so the receipt says it
+// once, naming the loopback hosts (4.11 P6); a run whose routes send loopback to the door (the P8 wrapper) says nothing of it
+test('1.6 §3.3 (darwin): an on that wrote NO_PROXY notes once that loopback requests are not captured; an on that did not, does not', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex', 'opencode', 'kimi'] })
+  const kimi = path.join(w.home, '.kimi-code', 'bin', 'kimi')
+  fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])) // a Mach-O header: the wrapper's precondition
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const hosts = ['localhost', '127.0.0.1', '::1'] // 4.11 P6: the loopback the NO_PROXY merge puts first
+  const local = (r) => r.io.json().notes.filter((n) => n && n.code === 'loopback-direct')
+  try {
+    const wrapped = await on(w, 'darwin', ['kimi-code', '--yes', '--json'])
+    assert.equal(wrapped.exit, 0, wrapped.io.text())
+    assert.deepEqual(local(wrapped), [], 'the wrapper sends loopback to the door: no note')
+    const both = await on(w, 'darwin', ['codex', 'opencode', '--yes', '--json'])
+    assert.equal(both.exit, 0, both.io.text())
+    const notes = local(both)
+    assert.equal(notes.length, 1, `said once, not per harness: ${JSON.stringify(both.io.json().notes)}`)
+    assert.deepEqual([...notes[0].hosts].sort(), [...hosts].sort())
+    assert.equal(notes[0].harness, undefined, "a note of the run, not of one harness: no harness field")
+    const text = await on(w, 'darwin', ['codex', 'opencode', '--yes'])
+    const lines = text.io.text().split('\n').filter((l) => hosts.every((h) => l.includes(h)))
+    assert.equal(lines.length, 1, text.io.text())
+    assertEnglish(text.io.text(), 'the receipt of on')
+  } finally { await server.close() }
+})
+
+// 1.6 §3.3: the note is said only for a route in place after this on; a route on did not write (not-routed: Hermes's .env absent) says nothing of it
+test('1.6 §3.3 (darwin): an on whose loopback-direct route is not routed gives no loopback note', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['hermes'] })
+  fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true }) // the Hermes home exists (the form is present), its .env does not
+  assert.equal((await w.install()).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  try {
+    const r = await on(w, 'darwin', ['hermes', '--yes', '--json'])
+    const j = r.io.json()
+    assert.ok(j.routes.some((x) => x.harness === 'hermes' && x.ok === false && x.code === 'not-routed'), JSON.stringify(j.routes))
+    assert.deepEqual(j.notes.filter((n) => n && n.code === 'loopback-direct'), [])
+    assert.equal(fs.existsSync(path.join(w.home, '.hermes', '.env')), false)
+  } finally { await server.close() }
+})
+
+// 4.11 P6 ⑤: the user's NO_PROXY of the OS's persistent environment (the backend's platform facts) is in the NO_PROXY on writes, after the
+// loopback hosts — through `trocar on` itself, not only when a caller hands it to turnOnModel
+test('4.11 P6: on writes the user\'s persistent NO_PROXY into the entries it writes, after the loopback hosts', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  try {
+    const facts = { persistentEnv: (names) => (names.includes('NO_PROXY') ? { NO_PROXY: 'corp.example,.wq.internal' } : {}) }
+    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs, facts }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const io = fakeIo()
+    assert.equal(await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: ['codex'], flags: new Set(['--yes']), json: true }), 0, io.text())
+    const line = fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8').split(/\r?\n/).find((l) => l.startsWith('NO_PROXY='))
+    assert.equal(line, 'NO_PROXY=localhost,127.0.0.1,::1,corp.example,.wq.internal')
+  } finally { await server.close() }
+})
+
+// the same through the default backends on macOS: launchd's NO_PROXY (`launchctl getenv`, by name) is the persistent one
+test('4.11 P6 ⑤ (darwin, default backends): on reads launchd\'s NO_PROXY by name and writes it after the loopback hosts', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const asked = []
+  const exec = (file, args) => { if (file === 'launchctl') asked.push(args); return file === 'launchctl' && args[0] === 'getenv' && args[1] === 'NO_PROXY' ? { status: 0, stdout: 'corp.example\n', stderr: '' } : { status: 1, stdout: '', stderr: '' } }
+  try {
+    const deps = { getuid: () => 501, exec, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const io = fakeIo()
+    assert.equal(await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: ['codex'], flags: new Set(['--yes']), json: true }), 0, io.text())
+    const line = fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8').split(/\r?\n/).find((l) => l.startsWith('NO_PROXY='))
+    assert.equal(line, 'NO_PROXY=localhost,127.0.0.1,::1,corp.example')
+    assert.ok(asked.length && asked.every((a) => a[0] === 'getenv' && a.length === 2), JSON.stringify(asked))
+  } finally { await server.close() }
 })

@@ -65,3 +65,16 @@ test('1.6 §3.5 --failures: a reason with a path keeps the path and every word; 
     assert.ok(out.some((l) => l.trim() === cmd), `the command is whole on its own line\n${out.join('\n')}`)
   }
 })
+
+// 1.6 §3.5 / §1.1⑥: --failures is the whole wall — a long reason with no path and no command is never cut to `...`; it folds inside 80 columns,
+// every word in order, for a known code and an unknown one
+test('1.6 §3.5 --failures: a long reason folds whole inside 80 columns, nothing cut', () => {
+  for (const g of [{ where: 'ingress', code: 'ingress-challenge-unanswered', process: 'Code Helper', pid: 4242 }, { where: 'engine', code: 'no-word-for-this-code' }]) {
+    const reason = words(40, 'word')
+    const out = failuresBlock({ groups: [{ level: 'problem', count: 1, last_ts: new Date(NOW - 60e3).toISOString(), reason, ...g }] }, { collector: { expected: {} } }, { now: NOW })
+    assert.ok(!out.join('\n').includes('...'), `nothing was cut\n${out.join('\n')}`)
+    assert.ok(out.every((l) => l.length <= 80), `inside 80 columns\n${out.join('\n')}`)
+    const text = out.join(' ').split(/\s+/), at = reason.split(' ').map((w) => text.indexOf(w))
+    assert.ok(at.every((x, i) => x > 0 && (!i || x > at[i - 1])), `every word of the reason, in order\n${out.join('\n')}`)
+  }
+})

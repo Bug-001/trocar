@@ -9,7 +9,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { parseTextRef } from '../../src/raw/refs.mjs'
-import { blockBodyHtml } from '../../web/legacy/replay/blocks.mjs'
+import { blockBodyHtml, blockGot } from '../../web/legacy/replay/blocks.mjs'
+import { setDeskMode } from '../../web/legacy/replay/cell.mjs'
 import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { deskFrom } from './desk-world.mjs'
 
@@ -23,6 +24,7 @@ const shown = (html) => {
 
 test('1.4 #7 · AC-1: every request block of every session, every page, is the source record\'s bytes in /api/block and on screen', { timeout: 120_000 }, async () => {
   const { userHome, home } = boardHome({ bytes: 4e5 })
+  setDeskMode('raw', { storage: null }) // AC-1 is the Raw view's claim: a block answered with its view still shows its bytes there
   const lines = new Map() // segment → its lines, read once from the file on disk
   const recordOf = (recordId) => {
     const [seg, n] = [recordId.slice(0, recordId.lastIndexOf(':')), Number(recordId.slice(recordId.lastIndexOf(':') + 1))]
@@ -50,7 +52,7 @@ test('1.4 #7 · AC-1: every request block of every session, every page, is the s
         assert.equal(block.ref, ref)
         assert.equal(block.bytes, want, `${ref}: /api/block bytes = the record's span`)
         assert.equal(block.fidelity.verbatim, true, `${ref}: a span of the stored request is verbatim`)
-        if (want.length <= 20000) assert.equal(shown(blockBodyHtml({ status: 'ok', text: block.bytes }, { text_ref: ref })), want, `${ref}: displayed as captured`)
+        if (want.length <= 20000) assert.equal(shown(blockBodyHtml(blockGot(block), { text_ref: ref })), want, `${ref}: displayed as captured`)
         checked++
       }
     }

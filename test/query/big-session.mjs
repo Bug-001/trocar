@@ -11,7 +11,8 @@
 // `subLanes` subagents run side by side (their turns taken in turn), and a subagent's call that finished up to `late` calls (seeded)
 // after the ones started after it is written then — as the collector writes a call when it ends — so its line sorts before lines
 // already written, and before lines of other subagents that ended sooner.
-// `preamble`: text every subagent's first prompt starts with (a workflow's own instructions, shared by all its subagents).
+// `preamble`: text every subagent's first prompt starts with (a workflow's own instructions, shared by all its subagents); a function:
+//   of the side-by-side subagent's index (0 … subLanes − 1), its own text.
 // `cc`: the Anthropic wires send what Claude Code sends besides the conversation — `cc` tool definitions with every request (as a
 // thread's continuation does too) and the cache markers (`cache_control` on the system block and on the last message's last block) —
 // so a request body has the size and the long keys a real one has.
@@ -51,6 +52,7 @@ import path from 'node:path'
 import { replyOf } from '../helpers/cc-threads.mjs'
 import { buildWsEnvelope } from '../../src/collector/core/record/envelope.mjs'
 import { sealSegment } from '../../src/raw/seal.mjs'
+import { taskOf } from '../../src/view/blockmeta.mjs'
 
 const MODEL = 'claude-opus-4-8'
 export function rng(seed) {
@@ -83,11 +85,11 @@ function turn(next, i, growth, reads, names) {
 /**
  * bigSession({home, id, wire, growth, seed, subEvery, subLen, segment}) → a writer of ONE session into <home>/raw/<segment>.ndjson.
  * A subagent's context starts over (a new subagent) once it holds more than `subLen` messages; the main one (a compaction: a new
- * thread or chain) once it holds more than `compactAt` characters.
+ * thread or chain) once it holds more than `compactAt` characters; `compactMark`: the main call before that is the harness's marked request.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
 export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, names = 0, freshTools = 0, hugeEvery = 0, hugeBytes = 40_000, imageEvery = 0, failEvery = 0, tools = null,
-  paths = 0, pathPool = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, quiet = null, marked = false, hold = null, seal = 64 << 10 } = {}) {
+  paths = 0, pathPool = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, quiet = null, marked = false, compactMark = false, hold = null, seal = 64 << 10 } = {}) {
   const next = rng(seed), delay = rng(seed + 1), xr = rng(seed + 2)
   let file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -123,7 +125,8 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     if (every(imageEvery) && (wire === 'http' || wire === 'threads')) lane.msgs.at(-3).content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } })
     const failed = every(failEvery) && wire !== 'ws', sentBefore = lane.sent
     if (!sub) nmain++
-    if (sub && preamble && lane.msgs.length === 3) lane.msgs[0].content[0].text = `${preamble}\n${lane.msgs[0].content[0].text}` // a subagent's first prompt
+    const pre = typeof preamble === 'function' ? preamble(lane.k) : preamble
+    if (sub && pre && lane.msgs.length === 3) lane.msgs[0].content[0].text = `${pre}\n${lane.msgs[0].content[0].text}` // a subagent's first prompt
     if (prompt && lane.msgs.length === 3) t[0].content.unshift(everyLane, remind(words(xr, prompt / 2)))
     else if (prompt) { t[2].content.push(remind(words(xr, 240))); if (n % 2) t[0].content.unshift(remind(words(xr, 160))) } // as Claude Code adds to a turn
     if (paths) {
@@ -193,7 +196,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
         : { ...(threads ? { thread: { type: 'create' } } : {}), system: sub && marked ? [...sys, { type: 'text', text: 'x-anthropic-billing-header: cc_is_subagent=true;' }] : sys, messages: mark(ask) }) }
       env = {
         ts, endpoint: '/v1/messages', method: 'POST',
-        req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-app': 'cli', 'x-claude-code-session-id': id, ...(agent ? { 'x-claude-code-agent-id': agent } : {}), 'anthropic-version': '2023-06-01' },
+        req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-app': 'cli', 'x-claude-code-session-id': id, ...(compactMark && !sub && lane.chars > compactAt ? { 'x-cc-compaction-request': '1' } : {}), ...(agent ? { 'x-claude-code-agent-id': agent } : {}), 'anthropic-version': '2023-06-01' },
         req_body: JSON.stringify(body),
         resp: failed ? { status: 529, kind: 'json', body: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } } } : threads ? replyOf(msgId, reply, usage) : { status: 200, kind: 'json', body: { id: msgId, model: MODEL, stop_reason: n % 4 ? 'tool_use' : 'end_turn', content: reply, usage } },
         id: reqId, ts_request: ts, ts_response_start: ts, ts_response_end: ts, duration_ms: 900,
@@ -256,10 +259,10 @@ export function live(scale = 1) {
     compactAt: 110_000, cc: 16, shared: 12_000, paths: 4, prompt: 12_000, writes: 1_200, bigEvery: 400, bigBytes: 2_000_000, bigRun: 4 }
 }
 
-/** firstAskOf(record, records) → what 4.4 §看板 v2 需要的补充 says a lane's `task` is, read straight off the request bytes: the first
- *  user text of the call's context that is not only <system-reminder> blocks, whitespace runs squashed to one space, trimmed, at most
- *  80 characters. A call that continues a server-held context (a `previous_*_id`) has its predecessors' messages first. */
-export function firstAskOf(rec, records = []) {
+/** firstPromptOf(record, records) → the first prompt of a lane read straight off the request bytes: the first user text of the call's
+ *  context that is not only <system-reminder> blocks, those removed. A call that continues a server-held context (a `previous_*_id`)
+ *  has its predecessors' messages first. */
+export function firstPromptOf(rec, records = []) {
   const users = [], prev = []
   const walk = (o) => {
     if (Array.isArray(o)) { for (const x of o) walk(x); return }
@@ -270,14 +273,17 @@ export function firstAskOf(rec, records = []) {
   walk(JSON.parse(rec.req_body))
   const answered = (r) => { const t = JSON.stringify(r.resp); return t.includes(`"${prev[0]}"`) || t.includes(`\\"${prev[0]}\\"`) }
   const before = prev.length ? records.find((r) => r !== rec && answered(r)) : null
-  const head = before ? firstAskOf(before, records) : null
+  const head = before ? firstPromptOf(before, records) : null
   if (head) return head
   for (const m of users) {
     const parts = typeof m.content === 'string' ? [m.content] : (m.content || []).filter((p) => p && typeof p.text === 'string').map((p) => p.text)
     for (const t of parts) {
-      const h = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/\s+/g, ' ').trim()
-      if (h) return h.slice(0, 80)
+      const h = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+      if (h) return h
     }
   }
   return null
 }
+/** firstAskOf(record, records) → what 4.4 §看板 v2 需要的补充 says the `task` of a lane that is no sub-agent is: its first prompt,
+ *  whitespace runs squashed to one space, cut as blockmeta's taskOf cuts (tested in lane-task.test.mjs). */
+export const firstAskOf = (rec, records = []) => { const p = firstPromptOf(rec, records); return p && taskOf(p.replace(/\s+/g, ' ').trim()) }

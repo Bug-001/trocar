@@ -10,7 +10,7 @@
 // URL name of its provider type); KIMI_CODE_BASE_URL (managed provider), KIMI_WEB_SEARCH / FETCH_BASE_URL.
 // Trust (D37④): plain Node, NODE_EXTRA_CA_CERTS read at start, no app-level CA. trocar's launch shim <collector>/bin/kimi
 // sets it and execs ~/.kimi-code/bin/kimi (same pid); `kimi` resolves to the shim through one sentinel PATH line
-// after the kimi installer's own PATH line, in each shell rc that has one. Installed only when the binary and such a
+// at the end of each shell rc that holds the kimi installer's own PATH line. Installed only when the binary and such a
 // line exist; otherwise an install note `shim-not-on-path`. A CA the user already gives kimi (install shell, running
 // kimi) is carried over into extra-kimi.pem, as for Claude Code (4.6).
 // The marker entry (2026-10-12, the kimi gap found on a macOS test machine): an OS that never lets the collector read another process's
@@ -28,9 +28,12 @@ import { hostOf, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
 import { normalizeName } from '../../off/identity.mjs'
+import { DOOR_ROUTES } from '../../off/marker.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
-import { envValues, envProxies, perOs } from './_common.mjs'
+import { envValues, envProxies, perOs, editorExtension } from './_common.mjs'
 import { renderShim } from './_plugins.mjs'
+
+const EXTENSION = 'moonshot-ai.kimi-code' // the VS Code extension id (its dir is `<id>-<version>[-<target>]`)
 
 const CA_VAR = 'NODE_EXTRA_CA_CERTS'
 // POSIX shell rc files the kimi installer may have put its PATH line in (trocar's line is an `export`, not for fish)
@@ -105,15 +108,15 @@ const proxyMode = {
   forms: [
     { id: 'kimi-code.cli', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: both },
     { id: 'kimi-code.acp', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: both },
-    { id: 'kimi-code.web', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: { darwin: true, win32: { reason: 'not-measured' } } },
-    { id: 'kimi-code.vscode', os: ['darwin', 'win32'], route: 'vscode', cert: 'root', trust: 'root', present: [{ base: 'home', path: '.vscode/extensions', glob: 'moonshot-ai.kimi-code-*' }], verified: both, hostTree: true,
+    { id: 'kimi-code.web', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: both },
+    { id: 'kimi-code.vscode', os: ['darwin', 'win32'], route: 'vscode', cert: 'root', trust: 'root', present: editorExtension(EXTENSION, ['desktop']), verified: both, hostTree: true,
       hosts: { processes: ['code', 'code helper (plugin)'] } }, // the host program, by D51 normalized name: VS Code (Code.exe) and its macOS extension host (Code Helper (Plugin))
-    { id: 'kimi-code.desktop', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', // D56⑥: out of scope (no door within D43)
+    { id: 'kimi-code.desktop', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', scopeWhat: 'the Kimi Code desktop app', // D56⑥: out of scope (no door within D43)
       present: [perOs({ darwin: { base: 'abs', path: '/Applications/Kimi Code.app' }, win32: { base: 'localAppData', path: 'Programs/Kimi' } })], verified: { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } } },
   ],
   routes: {
     switch: { kind: 'switch-file', absent: 'create', takesEffect: 'takes effect the next time you start kimi' },
-    vscode: { kind: 'json-key', file: { base: 'appSupport', path: 'Code/User/settings.json' }, format: 'jsonc', proxyKeys: [['http.proxy']], arrayItems: [{ keys: ['settingsSync.ignoredSettings'], value: 'http.proxy' }], value: 'door-url', absent: 'create', takesEffect: 'not measured, inferred from the model: takes effect once you reload the VS Code window' },
+    vscode: { kind: 'json-key', ...DOOR_ROUTES['kimi-code'].vscode, format: 'jsonc', value: 'door-url', absent: 'create', takesEffect: 'not measured, inferred from the model: takes effect once you reload the VS Code window' },
   },
   certs: {
     wrapper: { kind: 'wrapper', command: 'kimi', binDir: { base: 'home', path: '.kimi-code/bin' }, certVar: CA_VAR, layout: 'native-binary' },
@@ -140,6 +143,10 @@ export default {
   proxy,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY']),
+  // no { command }: after install the first `kimi` on PATH is trocar's shim; npm kimi has no carrier on Linux
+  present: [{ base: 'home', path: '.kimi-code/bin/kimi' }],
+  // its VS Code extension runs in VS Code's extension host, whose fetch trusts a fixed CA list only the login environment widens (D56⑨): no carrier (4.6 「不采的形态」)
+  uncaptured: [{ form: 'kimi-code.vscode', os: ['linux'], present: editorExtension(EXTENSION), why: "its VS Code extension's calls are not captured on Linux, because VS Code uses its own certificate list there, which only your login environment can extend, and trocar does not change that environment" }],
   inject,
   trust: {
     // the marker first (dsh's ordering): on an OS whose judge cannot read the environment, the shim's launch marker is

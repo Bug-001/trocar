@@ -70,6 +70,17 @@ test('adapter: configure/attach reach the helper; a helper death is reported as 
   } finally { await r.close(); p.done() }
 })
 
+// 4.6 §开关语义: with no helper process this instance has no links (they live on the helper's fds): status reads off, detach has nothing to take off
+test('adapter: with no helper running, status is detached with no links and detach resolves', async () => {
+  const p = fakeProc(); const { r, clients } = rig(p)
+  try {
+    const st = await r.status()
+    assert.deepEqual([st.attached, st.links], [false, []])
+    await r.detach()
+    assert.equal(clients.length, 0)
+  } finally { await r.close(); p.done() }
+})
+
 test('arch: the wired platforms answer; another is a clear error', async () => {
   assert.equal((await loadArch('linux')).os, 'linux')
   const linux = await loadArch('linux')

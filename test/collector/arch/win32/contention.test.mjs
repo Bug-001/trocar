@@ -111,3 +111,24 @@ test('the backend hands the door\'s onUnread to the helper\'s ps: facts that fai
     assert.ok(m.unresolved, `${JSON.stringify(ps)} says why`)
   }
 })
+
+// the daemon's stop and every test wait on this: a close that returns nothing leaves the helper running after it has "closed"
+test('the door parts\' close waits for the helper to go', async () => {
+  let child
+  const spawnIt = fakeSpawn({ verbs: {} })
+  const parts = await doorPartsFor({ os: 'win32', env: { ...process.env }, io: { helper: { spawn: (...a) => (child = spawnIt(...a)) } } })
+  await parts.helper.ready
+  await parts.close()
+  assert.ok(child.exitCode !== null || child.signalCode !== null, 'the helper has exited')
+})
+
+test('the door parts\' close does not wait on pipes a grandchild holds: the helper gone is enough', async () => {
+  const spawnIt = fakeSpawn({ verbs: {} })
+  let child
+  const hold = (...a) => { child = spawnIt(...a); const emit = child.emit.bind(child); child.emit = (name, ...rest) => (name === 'close' ? false : emit(name, ...rest)); return child } // 'close' never comes: the pipes stay open
+  const parts = await doorPartsFor({ os: 'win32', env: { ...process.env }, io: { helper: { spawn: hold } } })
+  await parts.helper.ready
+  const closed = await Promise.race([parts.close().then(() => 'closed'), new Promise((r) => setTimeout(() => r('still waiting'), 5000))])
+  assert.equal(closed, 'closed')
+  assert.ok(child.exitCode !== null || child.signalCode !== null, 'the helper has exited')
+})

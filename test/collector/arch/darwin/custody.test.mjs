@@ -113,7 +113,8 @@ test('installHelper: fresh → written via <dest>.new-* and renamed; same hash �
   keychainCustody({ helperPath: dest }).create({ subject: 'trocar root (test)' })
   const r = installHelper({ dest, interactive: false, fs: fsSpy })
   assert.equal(r.replaced, false)
-  assert.match(r.why, /differs/)
+  assert.match(r.why, /trocar install/, 'the way out')
+  assert.equal(r.kept, true, 'it still signs: the caller says it as a note')
   assert.equal(fs.readFileSync(dest, 'utf8'), STUB, 'non-interactive: the installed copy stays')
 
   const issued = []
@@ -131,3 +132,19 @@ test('installHelper: a packaged binary that is not the pinned one is refused bef
   assert.throws(() => installHelper({ dest, interactive: true, src }), /is not the pinned trocar-sign-helper/)
   assert.equal(fs.existsSync(dest), false)
 })
+
+// an interactive replace whose one foreground issue does not sign (the keychain box denied, timed out, or no GUI session: exit 3) leaves the OLD
+// helper in place, byte for byte, and says what to do: the new one has no access to the key, so the daemon would stop signing with it
+for (const [what, answer] of [['denied (the helper fails)', { status: 1, stdout: JSON.stringify({ error: 'failed', status: -128 }), stderr: '' }], ['unavailable (exit 3)', { status: 3, stdout: JSON.stringify({ error: 'unavailable' }), stderr: '' }], ['unavailable at exists (exit 3)', { status: 3, stdout: JSON.stringify({ error: 'unavailable' }), stderr: '' }], ['timed out', { status: null, stdout: '', stderr: '', error: Object.assign(new Error('spawnSync ETIMEDOUT'), { code: 'ETIMEDOUT' }) }]]) {
+  test(`installHelper: the replace's foreground issue ${what} → the old helper stays, and why says what to do`, () => {
+    const dest = path.join(tmpDir('trocar-bin-'), 'bin', NATIVE.signHelper)
+    fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.writeFileSync(dest, STUB, { mode: 0o755 })
+    const run = (file, args) => (args[0] === 'exists' && what !== 'unavailable at exists (exit 3)' ? { status: 0, stdout: JSON.stringify({ exists: true }), stderr: '' } : answer)
+    const r = installHelper({ dest, interactive: true, run })
+    assert.equal(r.replaced, false, JSON.stringify(r))
+    assert.match(r.why, /trocar install/)
+    assert.equal(fs.readFileSync(dest, 'utf8'), STUB, 'the old helper is back, byte for byte')
+    assert.equal(fs.statSync(dest).mode & 0o777, 0o755)
+    assert.deepEqual(fs.readdirSync(path.dirname(dest)).filter((n) => n !== NATIVE.signHelper), [], 'no temp left')
+  })
+}

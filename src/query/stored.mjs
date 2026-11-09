@@ -14,7 +14,8 @@ export const STORED_MAX = 64;
 const dirOf = (home) => path.join(indexDir(home), 'stored');
 const canonical = (params) => Object.keys(params).sort().map((k) => [k, Array.isArray(params[k]) ? params[k].map(String) : String(params[k])]);
 
-/** storedFile(home, name, params) → `<home>/index/stored/<name>.<first 16 hex of sha1 of the canonical params>.json.gz`. */
+/** storedFile(home, name, params) → `<home>/index/stored/<name>.<first 16 hex of sha1 of the canonical params>.json.gz`. No version in the
+ *  name, so the last release's answer is handed out after an update: the shape may only gain keys; anything else takes a new name prefix (3.5). */
 export const storedFile = (home, name, params = {}) =>
   path.join(dirOf(home), `${name}.${createHash('sha1').update(JSON.stringify(canonical(params))).digest('hex').slice(0, 16)}.json.gz`);
 

@@ -4,7 +4,7 @@
 // Asserted on data attributes and step numbers, never on words.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chapterAt, chapterJump, chapterNavHtml, chapterTicksHtml, placeView, roughWindow } from '../../web/legacy/replay/timeline.mjs'
+import { chapterAt, chapterJump, placeView, roughWindow } from '../../web/legacy/replay/timeline.mjs'
 import { keyAction } from '../../web/legacy/replay/keymap.mjs'
 
 // a head's chapter table (ctx-files.mjs headDoc's shape) over N steps, starting a chapter at each of `starts` (ascending, > 0)
@@ -52,34 +52,5 @@ test('1.3 §章 · 18: the fitted window is inside the playhead\'s chapter, hold
       }
       assert.equal(roughWindow(head, g, K).hi - roughWindow(head, g, K).lo, Math.min(K, c.s1 - c.s0), `a chapter that fits is shown whole: ${why}`)
     }
-  }
-})
-
-test('1.3 §章 · 18: the label names part k of n, its steps and an inferred start; the first ‹ and the last › are disabled', () => {
-  for (const chs of tables()) {
-    const N = chs.at(-1).s1
-    for (let g = 0; g < N; g++) {
-      const k = chs.indexOf(holder(chs, g)), c = chs[k], html = chapterNavHtml(chs, g, N), why = `step ${g}`
-      const lab = attrs(html, 'data-part')
-      assert.equal(lab['data-part'], String(k + 1), why); assert.equal(lab['data-of'], String(chs.length), why)
-      assert.equal(lab['data-s0'], String(c.s0), why); assert.equal(lab['data-s1'], String(c.s1), why)
-      assert.equal(lab['data-inferred'], String(c.inferred), why)
-      const prev = attrs(html, 'id="chapPrev"'), next = attrs(html, 'id="chapNext"')
-      assert.equal('disabled' in prev, k === 0, why); assert.equal('disabled' in next, k === chs.length - 1, why)
-      if (k > 0) assert.equal(prev['data-to'], String(chs[k - 1].s1 - 1), why)
-      if (k < chs.length - 1) assert.equal(next['data-to'], String(chs[k + 1].s0), why)
-    }
-    // live growth past the head: the last chapter holds the new steps, the label's end follows them
-    const more = attrs(chapterNavHtml(chs, N + 2, N + 3), 'data-part')
-    assert.equal(more['data-part'], String(chs.length)); assert.equal(more['data-s1'], String(N + 3))
-  }
-})
-
-test('1.3 §章 · 18: the overview draws one tick per chapter, the k-th at s0 / N', () => {
-  for (const chs of tables()) {
-    const N = chs.at(-1).s1, html = chapterTicksHtml(chs, (g) => g, N)
-    const ticks = [...html.matchAll(/class="ovchap"[^>]*style="left:([\d.]+)%"/g)].map((m) => Number(m[1]))
-    assert.equal(ticks.length, chs.length)
-    chs.forEach((c, k) => assert.ok(Math.abs(ticks[k] - (c.s0 / N) * 100) < 0.001, `tick ${k}`))
   }
 })

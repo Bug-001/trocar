@@ -5,9 +5,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { setImmediate as tick } from 'node:timers/promises'
 import { rawHome, writeSegment, envLine } from './raw-home.mjs'
-import { recordsAt } from '../../src/query/records.mjs'
+import { recordsAt, recordReader, releaseDecoded } from '../../src/query/records.mjs'
 import { sealSegment } from '../../src/raw/seal.mjs'
 
 const SEG = '20261018T100000Z'
@@ -106,4 +107,19 @@ test('(d) a sealed file read again after the read yielded keeps its reader: no f
     await tick()
     assert.equal(open.size, 0, 'no fd on the sealed file outlives the read')
   } finally { crypto.Hash.prototype.update = update }
+})
+
+test('(e) one record read for an answer is the plaintext record, its frames decoded off the thread', async (t) => {
+  const N = 30
+  const home = rawHome()
+  writeSegment(home, SEG, lines('e', N))
+  const at = { segment: SEG, lineNo: N }
+  const plain = json(await recordReader({ home })(at))
+  await sealSegment(path.join(home, 'raw', `${SEG}.ndjson`), { lockFile: path.join(home, 'collector', 'lock'), journal: null, frameBytes: 64 << 10 })
+  const read = recordReader({ home })
+  await read({ segment: SEG, lineNo: 1 })   // the segment's index is built here, by its own decoding
+  releaseDecoded()
+  const sync = t.mock.method(zlib, 'brotliDecompressSync')
+  assert.deepEqual(json(await read(at)), plain)
+  assert.equal(sync.mock.callCount(), 0)
 })

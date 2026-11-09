@@ -29,13 +29,26 @@ export function policyReader({ user = os.userInfo().username, run = null, env = 
   }
 }
 
+/** launchdEnv(names, { run, env }) → { <name>: value } of the variables launchd holds for this user's session (`launchctl getenv <name>`, read
+ *  only): where a variable set with `launchctl setenv` lives, which a shell started later may not have. A name it does not hold adds nothing. */
+export function launchdEnv(names, { run = null, env = process.env } = {}) {
+  const out = {}
+  for (const n of new Set(names)) { const r = execTool('launchctl', ['getenv', n], { run, env }); if (r.code === 0 && r.out) out[n] = r.out }
+  return out
+}
+
+/** persistentEnv(names, { run, env }) → { <name>: value } of launchd's user environment (`launchctl setenv`, which the apps and shells the user
+ *  starts inherit, 4.11 ⑤): each asked name and its lower-case spelling, read by name (launchdEnv) — never the whole environment. */
+export const persistentEnv = (names, o = {}) => launchdEnv(names.flatMap((x) => [x, x.toLowerCase()]), o)
+
 /** The platform facts core asks for (4.11 OS backends): environment names are case-sensitive, a path is keyed as is (after its
- *  real path), and macOS has no persistent user environment to read (ruling ⑤: no launchctl setenv / login-profile reading). */
-export const platformFacts = Object.freeze({
+ *  real path), and the persistent environment is launchd's (persistentEnv above). An uninstall with no record also asks launchd for a
+ *  certificate variable its own environment lacks (launchdEnv above). */
+export const platformFacts = ({ run = null, env = process.env } = {}) => Object.freeze({
   envCaseInsensitive: false,
   exeSuffix: '', // a command's program file name (4.11 P8)
   pathKey: (p) => pathKey(p, { platform: 'darwin' }),
-  persistentEnv: () => ({}),
+  persistentEnv: (names) => persistentEnv(names, { run, env }),
 })
 
 /** sources.mjs's ctx.dirs on macOS: `appSupport` is Electron's appData (~/Library/Application Support); no localAppData. */

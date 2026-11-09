@@ -1,9 +1,9 @@
 // core/keys.mjs — keyboard scope. One keydown listener; each screen registers its own handler. A handler never sees keys typed
-// into a form control or pressed inside a list box / menu (they own their arrows), except Escape.
+// into a form control or pressed inside a list box / menu / tab list / boundary (they own their arrows), except Escape.
 let screenKeys = null
 let installed = false
 
-const OWNS_KEYS = '[role=listbox],[role=menu]'
+const OWNS_KEYS = '[role=listbox],[role=menu],[role=tablist],[role=separator]'
 export function isTyping(e) {
   const t = e && e.target
   if (!t || e.key === 'Escape') return false

@@ -16,17 +16,18 @@ import nodeOs from 'node:os'
 export const NICE = nodeOs.constants.priority.PRIORITY_BELOW_NORMAL
 
 /**
- * lowerPriority({os, say}) → the nice in effect, or null when the OS refused.
+ * lowerPriority({os, say, nice}) → the nice in effect, or null when the OS refused. `nice` is NICE but for the uninstall stop's sealer, which asks
+ * for PRIORITY_NORMAL (4.2 §自动封存): a child of a BelowNormal daemon (Windows) inherits BelowNormal, so it must ask to be normal again.
  * Best effort and NEVER thrown: a platform or a policy that will not lower a process leaves the child at its
  * parent's priority, which costs CPU share and never an answer. It is said (D38: not silent), on the one channel
  * these children have — their stderr, which the daemon logs.
  */
-export function lowerPriority({ os = nodeOs, say = () => {} } = {}) {
+export function lowerPriority({ os = nodeOs, say = () => {}, nice = NICE } = {}) {
   try {
-    os.setPriority(0, NICE)
+    os.setPriority(0, nice)
     return os.getPriority(0)
   } catch (e) {
-    try { say(`trocar: this process could not be put at nice ${NICE} (${String((e && e.message) || e)}); it runs at its parent's priority instead`) } catch { /* no stderr: the parent is gone */ }
+    try { say(`trocar: this process could not be put at nice ${nice} (${String((e && e.message) || e)}); it runs at its parent's priority instead`) } catch { /* no stderr: the parent is gone */ }
     return null
   }
 }

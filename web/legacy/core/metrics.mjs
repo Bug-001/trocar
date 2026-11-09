@@ -27,15 +27,15 @@ export function hitRatio(u) {
   return tot > 0 ? (u.read || 0) / tot : null
 }
 export function hitPct(u) { const r = hitRatio(u); return r == null ? null : Math.round(r * 100) }
-export const hitTier = (r) => (r >= 0.7 ? 'hi' : r >= 0.3 ? 'mid' : 'lo')
-const LOW_HIT = 0.3
+export const LOW_HIT = 0.3
+export const hitTier = (r) => (r >= 0.7 ? 'hi' : r >= LOW_HIT ? 'mid' : 'lo')
 
 // ── the cache predicate ─────────────────────────────────────────────────────────────────────────────────────────────
 // The causes that say nothing changed in the cache prefix. ONE list: the predicate below and the 变化线 in the context window both
 // read it, so "the trace flags this step" and "the window says the prefix changed" can never disagree.
 export const QUIET_CAUSES = new Set(['append', 'first-call', 'volatile-nonce-only'])
 
-export const CACHE_STATES = Object.freeze(['failed', 'no-usage', 'first', 'ttl-rebuild', 'provider-contradiction', 'changed', 'low-hit', 'reused', 'unjudged'])
+export const CACHE_STATES = Object.freeze(['failed', 'no-usage', 'first', 'ttl-rebuild', 'provider-contradiction', 'changed', 'changed-hit', 'low-hit', 'reused', 'unjudged'])
 const BREAK_STATES = new Set(['ttl-rebuild', 'provider-contradiction', 'changed', 'low-hit'])
 
 // the call failed: the row's `error` is the call-row failed verdict (3.5 §访问模式 ②, failedOf)
@@ -51,7 +51,9 @@ export function refOf(calls, i) {
 }
 
 // What state a step is in. Evaluated in this order; the first match wins (plan P2.4):
-//   failed · no-usage · first · ttl-rebuild · provider-contradiction · changed · low-hit · reused
+//   failed · no-usage · first · ttl-rebuild · provider-contradiction · changed · changed-hit · low-hit · reused
+// changed-hit (2.2 row 6′): the prefix changed after the part that was cached, so the cache was still mostly read — usage wins over
+// the structure (3.3), and it is not a break. changed and low-hit then say the same thing: the cache was mostly not read.
 // `unjudged` is the one addition: the step's request was never captured, so there is no comparison to read a cause from — the step
 // is neither a break nor "reused". `ref` is the 缓存对比步 (see refOf); the verdict itself is the server's (cacheBreak, gt), computed
 // against it, so `ref` only names the step the answer is about — breakCost is where it is read.
@@ -74,7 +76,7 @@ export function cacheState(step, ref = null) {
   const gt = gtOf(step)
   if (gt === 'ttl-rebuild') return mk('ttl-rebuild', { hit })
   if (gt === 'provider-contradiction') return mk('provider-contradiction', { hit })
-  if (b.cause && !QUIET_CAUSES.has(b.cause)) return mk('changed', { hit })
+  if (b.cause && !QUIET_CAUSES.has(b.cause)) return mk(hit < LOW_HIT ? 'changed' : 'changed-hit', { hit })
   if (hit != null && hit < LOW_HIT) return mk('low-hit', { hit })
   return mk('reused', { hit, quiet: b.cause === 'volatile-nonce-only' ? 'volatile-nonce-only' : 'append' })
 }
@@ -145,20 +147,21 @@ export function costOf(row, u) {
 }
 const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || null
 // priceOf(model) → a price row, a priceMatch result, or null. A call priced through a non-exact match counts in `approx`, and `approxKeys` says which keys.
-// A failed call is not billed: it counts in `failed`, in neither `priced` nor `unpriced` (the latter means "no price or no usage").
+// A failed call is not billed: it counts in `failed`, in neither `priced` nor `unpriced` (the latter means "no price or no usage";
+// `noUsage` is the part of it with no usage, whatever the price).
 export function sessionCost(calls, priceOf) {
-  let usd = 0, priced = 0, unpriced = 0, approx = 0, failed = 0
+  let usd = 0, priced = 0, unpriced = 0, noUsage = 0, approx = 0, failed = 0
   const keys = new Set()
   for (const c of calls || []) {
     if (isFailed(c)) { failed++; continue }
     const p = priceOf(modelOf(c)), row = Array.isArray(p) ? p : p && p.row
-    const c$ = costOf(row, usageOf(c))
-    if (c$ == null) { unpriced++; continue }
+    const u = usageOf(c), c$ = costOf(row, u)
+    if (c$ == null) { unpriced++; if (!u) noUsage++; continue }
     usd += c$
     priced++
     if (p && !Array.isArray(p) && p.exact === false) { approx++; keys.add(p.key) }
   }
-  return { usd, priced, unpriced, failed, approx, approxKeys: [...keys].sort() }
+  return { usd, priced, unpriced, noUsage, failed, approx, approxKeys: [...keys].sort() }
 }
 
 // ── cost per bucket ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -168,7 +171,7 @@ export function sessionCost(calls, priceOf) {
 // null → the rows never name it; its calls are also probe-flagged, so billed() drops them from every bucket)
 export const bucketOf = (kind) => laneKind(kind).bucket ?? 'bg'
 const billed = (lane) => (lane.calls || []).filter((c) => c && !c.probe)
-const addCost = (a, b) => ({ usd: a.usd + b.usd, priced: a.priced + b.priced, unpriced: a.unpriced + b.unpriced, failed: a.failed + b.failed, approx: a.approx + b.approx, approxKeys: [...new Set([...a.approxKeys, ...b.approxKeys])].sort() })
+const addCost = (a, b) => ({ usd: a.usd + b.usd, priced: a.priced + b.priced, unpriced: a.unpriced + b.unpriced, noUsage: a.noUsage + b.noUsage, failed: a.failed + b.failed, approx: a.approx + b.approx, approxKeys: [...new Set([...a.approxKeys, ...b.approxKeys])].sort() })
 export function costBuckets(lanes, priceOf) {
   const by = { main: [], sub: [], bg: [] }
   for (const l of lanes || []) by[bucketOf(l.kind)].push(...billed(l))

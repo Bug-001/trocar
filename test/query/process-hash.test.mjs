@@ -20,6 +20,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { recordsAt, releaseDecoded } from '../../src/query/records.mjs'
+import { drain } from '../helpers/bounded.mjs'
 
 const bytesOf = (d, enc) => (typeof d === 'string' ? Buffer.byteLength(d, enc || 'utf8') : d.byteLength)
 const wireBytes = (rec) => bytesOf(rec.req_body || '')
@@ -48,7 +49,7 @@ for (const wire of ['http', 'threads']) {
       let hashed = 0, doc
       proto.update = function (data, enc) { hashed += bytesOf(data, enc); return update.call(this, data, enc) }
       try {
-        while (await extendSession({ home, writer: true }, s.id, 4)) await new Promise((ok) => setImmediate(ok))
+        await drain(async () => { const more = await extendSession({ home, writer: true }, s.id, 4); await new Promise((ok) => setImmediate(ok)); return more })
         doc = await runQuery('session', { id: s.id }, { home })
       } finally { proto.update = update }
       assert.equal(doc.pending, undefined, 'the session was folded whole')

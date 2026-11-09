@@ -23,7 +23,8 @@ export const standInUnit = (home) => ({
 /**
  * The key custody and the user root store as files under `state` (outside HOME), so the test, its daemon and the board's worker process share one
  * key and one store (Set up runs install's function in the worker, 4.4 §控制面). store.json `answer` is what an add says ('ok' | 'pending');
- * `delayMs` holds the add that long (a slow prompt); calls.log gets one line per verb. → { custody, rootStore, calls() }
+ * `delayMs` holds the add that long (a slow prompt); `gate` (a path) holds it until that file exists (a prompt open until the test answers it);
+ * calls.log gets one line per verb. → { custody, rootStore, calls() }
  */
 export function sharedTrust(state) {
   fs.mkdirSync(state, { recursive: true })
@@ -52,10 +53,12 @@ export function sharedTrust(state) {
     add: async (der) => {
       call('add'); const s = store()
       if (s.delayMs) await new Promise((res) => setTimeout(res, s.delayMs)) // an OS prompt somebody is slow to answer
+      while (s.gate && !fs.existsSync(s.gate)) await new Promise((res) => setTimeout(res, 10)) // an OS prompt open until the test opens the gate
       if (s.answer !== 'ok') return { ok: false, state: s.answer, reason: `the OS prompt was ${s.answer}` }
       write('store.json', { ...s, held: [...s.held, rootIdOf(der).fp256] }); return { ok: true }
     },
     remove: (id) => { call('remove'); const s = store(); write('store.json', { ...s, held: s.held.filter((f) => f !== id.fp256) }); return { ok: true } },
+    list: () => ({ roots: store().held.map((fp256) => ({ fp256 })) }), // only trocar's roots are ever held here
   }
   return { custody, rootStore, calls: () => { try { return fs.readFileSync(at('calls.log'), 'utf8').split('\n').filter(Boolean) } catch { return [] } }, setStore: (v) => write('store.json', v) }
 }

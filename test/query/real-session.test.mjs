@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import fs from 'node:fs'
 import { serveFace, request, withToken } from '../server/face.mjs'
-import { tmpDir } from '../helpers/tmp.mjs'
+import { sideHome } from '../helpers/real-home.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 
 const REAL = process.env.TROCAR_REAL_HOME
@@ -24,17 +24,7 @@ const skip = REAL ? (fs.existsSync(path.join(REAL, 'raw')) ? false : `TROCAR_REA
 const POLL_MS = 1500, BUILD_MS = 20 * 60_000
 
 test('the largest real session, built from scratch by the real worker, answers its session page and main lane page whole', { skip, timeout: BUILD_MS + 120_000 }, async () => {
-  const home = path.join(tmpDir('trocar-real-'), '.trocar')
-  fs.mkdirSync(home, { recursive: true, mode: 0o700 })
-  fs.symlinkSync(path.join(path.resolve(REAL), 'raw'), path.join(home, 'raw'))
-  const index = path.join(REAL, 'index')
-  if (fs.existsSync(index)) fs.cpSync(index, path.join(home, 'index'), { recursive: true, dereference: true, filter: (p) => path.relative(index, p).split(path.sep)[0] !== 'ctx' })
-  // A link left in the copy would let the worker write into the real home (a second writer beside the real one, 4.3 §4).
-  const links = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isSymbolicLink() ? [path.join(d, e.name)] : e.isDirectory() ? links(path.join(d, e.name)) : [])
-  if (fs.existsSync(path.join(home, 'index'))) {
-    assert.ok(!fs.lstatSync(path.join(home, 'index')).isSymbolicLink(), 'the side index is a copy, not a link to the real one')
-    assert.deepEqual(links(path.join(home, 'index')), [], 'the side index holds no link')
-  }
+  const home = sideHome(REAL)
   const groups = sessionGroups(await indexRows({ home }))
   let id = null, most = -1
   for (const [k, rows] of groups) { const b = rows.reduce((n, r) => n + (r.stored_bytes || 0), 0); if (b > most) { most = b; id = k } }

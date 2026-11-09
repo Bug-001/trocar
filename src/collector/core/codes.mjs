@@ -34,7 +34,8 @@ export const TRUST_REASON = Object.freeze({
   'no-marker': 'the trust plugin did not report adding the trocar CA for this process, and no known reason explains why (plugin file missing, or the process predates it)',
   'config-unreadable': 'a configuration file of this agent exists but cannot be read',
   'hook-inherited': "this process inherited trocar's proxy from its parent but did not load trocar's plugin itself, so it holds no trocar CA and is only forwarded; start it directly, with its plugins loaded",
-  'not-verified': 'this process, its form on this OS, or this host is not verified for decryption on this platform; forwarded only',
+  'not-verified': 'this process, or its form on this OS, is not verified for decryption on this platform; forwarded only',
+  'forward-only-host': 'the form lists this host as forward-only (its own sign-in, update or download host); forwarded by design',
   'outside-host-set': 'a host program carrying the agent talked to a host outside the form\'s host set; forwarded only',
 })
 
@@ -42,7 +43,7 @@ export const TRUST_REASON = Object.freeze({
 export const CODE = Object.freeze({
   configUnreadable: 'config-unreadable', // a config file the resolver needs exists but cannot be read (errno in reason)
   configUnparsable: 'config-unparsable', // … or does not parse
-  shimNotOnPath: 'shim-not-on-path', // a launch shim was not installed, or is not what `kimi` resolves to
+  shimNotOnPath: 'shim-not-on-path', // a launch shim was not installed (a kimi that did not start through an installed one is kimi-not-via-shim)
   certNotMerged: 'cert-not-merged', // a block of a user CA file that is not a CERTIFICATE block was left out
   sourceUnreadable: 'source-unreadable', // a user CA file named in the agent's config could not be read
   relativePath: 'relative-path', // a user CA path that is relative was not carried over
@@ -53,6 +54,7 @@ export const CODE = Object.freeze({
   bundleKept: 'bundle-kept', // a combined bundle kept (without the trocar CA) for processes that loaded it
   residue: 'residue-not-removed', // files an agent wrote because of trocar's plugin; reported, never deleted
   harnessNote: 'harness-note', // anything else a descriptor's inject() says the user should know
+  loopbackDirect: 'loopback-direct', // a route on writes sends loopback direct (4.11 P6 · P9 · P10): requests to this computer are not captured, said with the hosts (1.6 §3.3)
   unitNotEnabled: 'unit-not-enabled', // the autostart unit is written but the OS service manager refused to enable it
   unitNotDisabled: 'unit-not-disabled', // uninstall: systemd refused to disable the unit, or its wants link could not be removed
   unitEnvNotCarried: 'unit-env-not-carried', // the install shell's NODE_EXTRA_CA_CERTS could not be given to the autostart unit
@@ -63,16 +65,20 @@ export const CODE = Object.freeze({
   describeError: 'describe-error', // the daemon could not describe a process to the engine (the engine's own record has the same name)
   certKeyMissing: 'cert-key-missing', // the root key is not in its custody backend: no issuer, doors forward only (4.11 P2)
   certIntermediateUnavailable: 'cert-intermediate-unavailable', // the custody backend did not issue an intermediate: once per failure streak, retried hourly (4.11 P2)
+  doorUnconfirmed: 'door-unconfirmed', // on found a recorded door port held while our daemon was there (its control endpoint took the connection, or its lock lives) and did not answer GET /status: kept as its own door, not engine-port-taken
   enginePortTaken: 'engine-port-taken', // the engine's recorded port is held by another socket at daemon start: recorded, no other port picked (decision #16)
   priorProxyUnknown: 'prior-proxy-unknown', // a door's upstream: the proxy the agent had in its process env could not be recovered (parent gone, env unreadable): the system proxy, else direct (4.11 P7)
+  notTrocarsFile: 'not-trocars-file', // install left a file alone: one not trocar's is already where trocar writes its own (4.11 P4)
   notUsersFile: 'not-users-file', // install skipped a P8 install-folder wrapper: the target is not one native program in a folder this user owns, outside package-manager trees, with the layout declared (4.11 P8)
   certNotInstalled: 'cert-not-installed', // on refused: no install record with a root — run trocar install first (1.6 §1.1, D55⑥)
+  stoppedByOff: 'stopped-by-off', // on stopped: an off wrote desired off while it ran, and the off wins (1.6 §3.1, R12); its exit is 1
   setupNeeded: 'setup-needed', // on refused one harness: its setup is needed (a form's certificate carrier absent or overwritten, or the root gone; 4.11 P4b, D65④); the others go on
   installPending: 'install-pending', // on went on over an install that left an item pending or declined (the root store's prompt): the forms only the root reaches forward only, said (1.6 §1.1)
   collectorsOnline: 'collectors-online', // uninstall refused: a harness is on, or a holder may still use a door; nothing changed (1.6 §1.1, 4.11 CM24)
   upstreamHeaderIgnored: 'upstream-header-ignored', // X-Trocar-Upstream from a form whose hook does not send it: ignored, recorded without its value (4.11 P7 · ⑥)
   holdersUnreadable: 'holders-unreadable', // the holder poll could not read the process table: the doors kept for holders stay (4.11 P12)
   pacPeerRefused: 'pac-peer-refused', // the PAC door (no credentials) refused a peer that is not this user's process, or whose user could not be told (4.11 P10)
+  pacAddressStale: 'pac-address-stale', // this user's program asked for the PAC at an address without the install's key (written before it): refused; its way out follows the entry's record (4.11 P10)
   pacOwnerUnread: 'pac-owner-unread', // the PAC door could not tell whose process asked for the PAC, and served it without the door (4.11 P10)
 })
 

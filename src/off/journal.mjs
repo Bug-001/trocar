@@ -9,6 +9,7 @@ import { removeTrocarText, trocarResidue, onlySkeleton } from './text-edit.mjs'
 import { sha256, readOrNull, writeDurable, removeEmptyDirs, sweepTemps } from './fsutil.mjs'
 import { decodeText, encodeText, WHY_TEXT } from './text-codec.mjs'
 import { hideUserinfo } from './userinfo.mjs'
+import { unseal } from './seal.mjs'
 
 // Remove a file trocar owns, then the directories its write created when they are empty. `changed`: the file was
 // not what trocar wrote (removed all the same: it is trocar's, the manifest lists it; the caller says so). `unlessChanged`: a file the agent itself
@@ -36,6 +37,7 @@ export function undoWrapper(item, fs = nodeFs) {
     return { path: item.path, result: 'restored' }
   }
   if (real == null) { dirGone(); return { path: item.path, result: 'already-removed' } }
+  if (sha256(real) !== item.real_sha256) return { path: item.real, result: 'error', reason: `${item.real} is not the program trocar moved there (its bytes differ from the install manifest's record), so it was left as it is; delete it by hand if it is not yours` }
   fs.rmSync(item.real, { force: true }); dirGone()
   return { path: item.real, result: 'removed', changed: true }
 }
@@ -45,12 +47,12 @@ export function undoWrapper(item, fs = nodeFs) {
 // receipts and in the manifest's kept backups: a URL's password is never in it (1.6 §1.2「不印凭据」); the entry itself keeps the value undo needs.
 export const describeEntry = (e) => hideUserinfo(entryText(e))
 const entryText = (e) => {
+  if (e.format === 'pem-block') return 'certificate block'
   if (e.kind === 'text' || (e.kind === 'trust-entry' && e.vars)) return e.vars ? `block with ${Object.entries(e.vars).map(([k, v]) => `${k}=${v}`).join(', ')}` : `line ${JSON.stringify(e.line)}`
   if (e.kind === 'run-key') return `the Run value ${e.name ?? 'trocar-collector'} (${e.hive ?? 'HKCU'}\\${e.key ?? ''})`
   if (e.kind === 'scheduled-task') return `the scheduled task ${e.task ?? '\\trocar\\collector'}`
   if (e.kind === 'forwarder-binary') return `the kernel's copy ${e.path ?? ''}`
   if (e.kind === 'json-array-item') return `${JSON.stringify(e.item)} in ${e.keys.join('.')}`
-  if (e.format === 'pem-block') return 'certificate block'
   return `${e.keys.join('.')} = ${e.value}`
 }
 
@@ -92,6 +94,7 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
   const read = decodeText(cur)
   if (!read.ok) return done('left-unreadable', { why: read.why, reason: `${file} can no longer be read as text trocar may write back: ${WHY_TEXT[read.why]} (${read.why}); trocar did not touch it, and its ${describeEntry(entry)} may still be in it` })
   const text = read.text
+  entry = unseal(entry, text) // a sealed record gets its door password back from the file (4.6「日志」)
   const asInstalled = entry.post_sha256 == null || sha256(cur) === entry.post_sha256 // intent-only: test by reversing
   const back = asInstalled ? reverseOps(text, entry.ops) : null
   // byte for byte: the text before is written in the form the file had before (`charset`, absent = utf8); an edited file keeps the form it has now

@@ -47,15 +47,33 @@ function refuseRealTool(file, args, env) {
   throw err
 }
 
+/** On win32 a tool that PATH and PATHEXT resolve to a `.cmd` / `.bat` (npm, npx) is a batch file: spawn starts it only through cmd.exe
+ *  (Node refuses one without a shell, and a bare name never finds it — ENOENT). → `[file, args, verbatim]` to spawn: `cmd.exe /d /s /c "<line>"`
+ *  with each argument quoted, or the call unchanged elsewhere and for any other file. An argument cmd.exe cannot quote safely (`"`, `%`, `!`,
+ *  a line end) is refused, never passed on. */
+export function viaShell(file, args, { platform = process.platform, env = process.env, fs: fsx = fs } = {}) {
+  if (platform !== 'win32') return [file, args, false]
+  const PATH = env.PATH ?? env.Path ?? ''
+  const exts = String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+  const named = path.extname(file) !== '' ? [file] : exts.map((e) => file + e)
+  const dirs = /[\\/]/.test(file) ? [''] : String(PATH).split(';').filter(Boolean)
+  let hit = null
+  for (const d of dirs) { for (const f of named) { const c = d ? path.join(d, f) : f; try { if (fsx.statSync(c).isFile()) { hit = c; break } } catch { /* next */ } } if (hit) break }
+  if (!hit || !/\.(cmd|bat)$/i.test(hit)) return [file, args, false]
+  const q = (a) => { const v = String(a); if (/["%!\r\n]/.test(v)) throw Object.assign(new Error(`cannot hand ${JSON.stringify(v)} to cmd.exe safely`), { code: 'EUNSAFEARG' }); return /^[\w.:\\/=@,+-]+$/.test(v) ? v : `"${v}"` }
+  return ['cmd.exe', ['/d', '/s', '/c', `"${[`"${hit}"`, ...args.map(q)].join(' ')}"`], true]
+}
+
 /** Runs `file args…` and returns `{ code, out, err }`: the exit code (null: killed by the timeout, by more output than `maxBuffer`
  *  — spawnSync's ENOBUFS, `out` then cut short —, or never started), stdout and stderr trimmed; when stderr is empty and the spawn
  *  itself failed, `err` is that error's message. `maxBuffer` (bytes) is spawnSync's own, 1 MiB when not given: a question about the
  *  whole process table passes more. `run(file, args, opts)` replaces the spawn (it returns what `spawnSync` does: `{ status, stdout,
  *  stderr, error? }`); what it throws is not caught. `cwd` is the directory the tool runs in (this process's when not given). */
-export function execTool(file, args, { run = null, env = process.env, input = null, timeoutMs = 10000, maxBuffer = undefined, cwd = undefined } = {}) {
-  const opts = { encoding: 'utf8', env, input, timeout: timeoutMs, ...(maxBuffer ? { maxBuffer } : {}), ...(cwd ? { cwd } : {}) }
+export function execTool(file, args, { run = null, env = process.env, input = null, timeoutMs = 10000, maxBuffer = undefined, cwd = undefined, platform = process.platform } = {}) {
   if (!run && (process.env.TROCAR_TEST_SANDBOX === '1' || env.TROCAR_TEST_SANDBOX === '1')) refuseRealTool(file, args, env)
-  const r = (run || spawnSync)(file, args, opts)
+  const [f, a, verbatim] = viaShell(file, args, { platform, env }) // win32: a batch file (npm.cmd) runs through cmd.exe
+  const opts = { encoding: 'utf8', env, input, timeout: timeoutMs, ...(maxBuffer ? { maxBuffer } : {}), ...(cwd ? { cwd } : {}), ...(verbatim ? { windowsVerbatimArguments: true } : {}) }
+  const r = (run || spawnSync)(f, a, opts)
   const shape = (x) => ({ code: x.status ?? null, out: String(x.stdout || '').trim(), err: String(x.stderr || (x.error && x.error.message) || '').trim() })
   return r && typeof r.then === 'function' ? r.then(shape) : shape(r) // an async runner (runAsync) gives the same shape, later
 }

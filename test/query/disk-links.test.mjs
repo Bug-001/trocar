@@ -49,3 +49,15 @@ test('E3 a dangling top-level link is named in unreadable and in the classes err
   const doc = await runQuery('classes', {}, { home, now: () => Date.parse('2026-10-21T00:00:00Z') })
   assert.ok(doc.errors.some((e) => e.where === link))
 })
+
+// 3.5 读不全不静默: before a frame head only progress keeps the silence clock from calling a worker wedged. On a slow disk the walk is `classes`' long step.
+test('classes says it is still working during its walk over the home', async () => {
+  const home = tmpDir('trocar-disk-'), said = [], looked = []
+  fs.mkdirSync(path.join(home, 'index', 'ctx', 'a'), { recursive: true })
+  for (let i = 0; i < 8; i++) fs.writeFileSync(path.join(home, 'index', 'ctx', 'a', `f${i}`), 'x')
+  const promises = new Proxy(fs.promises, { get: (t, k) => (k === 'lstat' ? (p) => { looked.push(said.length); return t.lstat(p) } : t[k]) })
+  const doc = await runQuery('classes', {}, { home, fs: new Proxy(fs, { get: (t, k) => (k === 'promises' ? promises : t[k]) }), progress: () => said.push(1) })
+  assert.ok(doc.ok !== false)
+  assert.ok(looked.length >= 8, 'the walk ran')
+  assert.ok(looked.at(-1) - looked[0] >= looked.length - 1, `progress at every file of the walk: ${looked}`)
+})

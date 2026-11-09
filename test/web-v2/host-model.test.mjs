@@ -119,6 +119,17 @@ test('#21b each side carries its own fidelity mark, never one over both', async 
   const v = requestView(detailModel(doc))
   assert.ok(texts(v, 'req').includes(W.REQ_LEGACY) && !texts(v, 'req').includes(W.RESP_RESERIALIZED))
   assert.ok(texts(v, 'resp').includes(W.RESP_RESERIALIZED) && !texts(v, 'resp').includes(W.REQ_LEGACY))
+  // 4.1 保真边界 ②: a compressed reply stored as its decompressed text only is a response-side word, never a request or call mark
+  rec.ctl = { ...rec.ctl, labels: [{ id: 'resp-decoded-only', label: 'x' }], req: { kind: 'text', text: 'abc', bytes: 3 }, resp: { kind: 'sse', text: 'event: ping\n\n', bytes: 13 } }
+  const vd = requestView(detailModel(doc))
+  assert.ok(texts(vd, 'resp').includes(W.RESP_DECODED_ONLY) && !texts(vd, 'req').includes(W.RESP_DECODED_ONLY))
+  assert.ok(!vd.callMarks.includes('x'), 'a side label is not a call mark')
+  // 2.6 text / sse: a body shown decompressed is captioned by its coding, never as verbatim, on either side (invariant 4)
+  rec.ctl = { ...rec.ctl, labels: [], req: { kind: 'text', text: 'abc', chars: 3, bytes: 3, decoded_from: 'gzip' }, resp: { kind: 'sse', text: 'event: ping\n\n', chars: 13, bytes: 9, decoded_from: 'br' } }
+  const vz = requestView(detailModel(doc))
+  assert.deepEqual([vz.req.body.fold, vz.resp.body.fold], [W.DECOMPRESSED_CHARS('gzip', 3), W.DECOMPRESSED_CHARS('br', 13)])
+  rec.ctl = { ...rec.ctl, resp: { kind: 'binary', hex: '00', bytes: 1, decoded_from: 'gzip' } }
+  assert.equal(requestView(detailModel(doc)).resp.body.fold, W.DECOMPRESSED_FROM('gzip'))
   for (const k of ['truncated', 'partial']) {
     rec.ctl = { ...rec.ctl, labels: [], req: { kind: 'text', text: 'abc', bytes: 9, [k]: true }, resp: { kind: 'text', text: 'ok', bytes: 2 } }
     const v2 = requestView(detailModel(doc))

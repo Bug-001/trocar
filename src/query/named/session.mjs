@@ -15,10 +15,13 @@
 // opened write:false, new lines in an off-heap arena, nothing on disk) folds nothing when the log covers every member, else
 // everything in the request. The worker saves the sidecars at idle, every max(256, n/8) calls folded and every CHECKPOINT_MS (sidecars()).
 // A log folded under another cut is folded again from scratch (the worker deletes and rewrites it; the local path in memory).
+// A store or log rebuilt whole leaves the answer files alone until the fold is at its end (rereading below).
 //
 // WARM (D63 ①; 3.5 §缓存按依赖失效): per (fs, home, session, writer) the projection store stays open and the state (the reduction,
 // its log, the step-order columns) is kept; it is let go (take(): the only reference dropped) before a state from scratch, so the heap
-// never holds two. The reduction frontier of each session is kept for version().
+// never holds two. The reduction frontier of each session is kept for version(). The shared ledger may let a state go at any time
+// (letGoState): nothing here keeps it after that but a request that is answering from it, for which it is read-only (`gone`: no answer
+// file, no head, no fold: only grow() folds and it takes its state from the cache), and the session reopens at its last checkpoint.
 //
 // THE CUT (3.5 §内存有界「截断只是兜底,按实测的堆截」, a backstop): the constants below are the design bound acceptance #11 measures,
 // never a cut: a session is read whole until a fold of it in THIS process measured its live heap within half a step of the budget
@@ -28,19 +31,22 @@
 import nodeFs from 'node:fs';
 import v8 from 'node:v8';
 import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES, REDUCE_V } from '../../view/reduce.mjs';
-import { openFoldLog, LOG_BYTES } from '../fold-log.mjs';
+import { foldStale, openFoldLog, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
 import { extractMembers, extractSeed, blockAt, CHUNK_STORED, TAIL_HEAP, releaseTails } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
-import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
-import { openProjection, STORE_HEAP } from '../projection.mjs';
+import { indexRows, isModelCall, sessionGroups, sessionFacts } from '../rows.mjs';
+import { dirUse, openProjection, projectionStale, sessionDir, STORE_HEAP } from '../projection.mjs';
 import { releaseParts } from '../line-file.mjs';
 import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yieldCaches } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
+import { isMarked } from '../../view/head-cols.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { filesAt, filesParts, forget, hasHead, headDoc, packsOf, pendingHead, tier0Doc, writeFiles, writeHead, memoBytes, PACK_MEMBERS } from '../ctx-files.mjs';
+import { lineageKnown, titleOf, withLineage } from '../titles.mjs';
+import { projectFields } from '../../dissect/project.mjs';
+import { clearReread, endReread, setMtimes, filesAt, filesParts, filesReach, forget, hasHead, hasReread, headDoc, markDone, markReread, packsOf, pendingHead, readHead, seenOf, tailsReach, tier0Doc, writeFiles, writeHead, writeInFlight, memoBytes, CTX_V, PACK_MEMBERS } from '../ctx-files.mjs';
 
 export const about = Object.freeze({
   summary: "One session's outline: its calls in step order, its lanes, events, member records and totals.",
@@ -103,10 +109,14 @@ class HeapBound extends Error {
 // processes look at the same rows. The fold stops when the live heap comes within half a step of the budget or passes the ceiling.
 // What the reduction holds (`m.held`, its weight in the shared ledger: costOf) is what the heap grew by since it began (`m.base`,
 // measured for a state from scratch, and kept by a state grown across requests).
+const heapLine = () => heapBudget() - heapBudget() / BOUND_STEPS / 2;
+/** With the warm entries let go, whether the live heap is short of the line a fold stops at (a full collection): a session stopped by
+ *  heap-no-room is worth another try. The worker asks at idle, with no reader: a state kept there is no lack of room. */
+export function heapHasRoom() { yieldCaches(); return liveHeap() <= heapLine(); }
 function bounded(m, rows, bytes) {
   m.since += bytes;
   if (usedHeap() <= heapCeiling() && m.since < m.gap) return;
-  const line = heapBudget() - heapBudget() / BOUND_STEPS / 2;
+  const line = heapLine();
   let live = liveHeap();
   if (live > line) { yieldCaches(); live = liveHeap(); } // every other kept entry but the steady ones gives way before this fold is cut
   m.held = live - m.base;
@@ -202,20 +212,43 @@ function letGo(k, e) { closeStore(k); return e; }
 export const openSessions = () => [...stores.values()].map((s) => s.session);
 // Every store closes here (a hand-off, the eviction past STORES): its reduction state with it, and its `work` stays with the worker.
 function closeStore(k) { const s = stores.get(k), st = states.take(k); if (st) closeState(st); stores.delete(k); frontiers.delete(k); if (s) { works.set(k, s.work); s.close(); } }
+// ELINEPART: the session's warm store and its state (fold log, reduction) go, so the next read opens them again.
+function letLinesGo(ctx, id) { closeStore(keyOf(ctx, String(id))); lagging.delete(String(id)); }
 /** again(ctx, id, f) → f(), and f() once more when it threw ELINEPART (line-file.mjs: a part first decoded after the open, which
- *  a sidecar lets skip the scan, did not decode): the session's warm store and its state (fold log, reduction) are let go first,
- *  so the second opens them again and rebuilds that line file with its projection-rebuilt note (4.3 §4 分片). Any other error is
+ *  a sidecar lets skip the scan, did not decode, or a line the sidecar names is no whole line): a writer removed the part or that
+ *  sidecar, so the second opens them again and rebuilds that line file with its projection-rebuilt note (4.3 §4 分片). Any other error is
  *  thrown as it is. In the same request: the next one would do the same rebuild, and this answer already says it. */
 export async function again(ctx, id, f) {
   try { return await f(); } catch (e) {
     if (!e || e.code !== 'ELINEPART' || id == null) throw e;
-    closeStore(keyOf(ctx, String(id))); lagging.delete(String(id));
+    letLinesGo(ctx, id);
     return f();
   }
 }
 // session key → `pending.work` (3.5 §会话读): the members extracted and handed to a reduction for it in this worker, across its store's
 // close and reopen, so it only grows while the worker lives (3.5:43). One number per session the worker opened.
 const works = new Map();
+// THE RE-READ (3.5 §访问模式「版本变更的重读」): a session whose projection or fold log is rebuilt whole has its last version's complete
+// answer in its answer files, which stay. While it is here (the worker's alone) only extendSession writes them, once folded to the
+// end; meanwhile a slice changes the head's `pending` alone (backlog). `reread` on disk tells the next worker.
+const rereads = new Set();
+export const rereading = (ctx, id) => ctx.writer === true && rereads.has(id);
+/** rereadingNow(id) → whether this process is re-reading the session: the worker's scheduler asks at a slice's boundary. */
+export const rereadingNow = (id) => rereads.has(id);
+const isRebuilt = (e) => e.code === 'projection-rebuilt';
+// The idle save after a re-read writes the sidecars and parts of what it folded, which is no use of the session (4.3 §4 回收): they take the
+// directory's mtime once sealed (sealParts), unless its store is opened first: that is a use. session id → {home, fs, at}
+const rereadAt = new Map();
+// A rebuild just said (`rebuilt`), or the marker of a worker that was killed, with a tier-1 head of this CTX_V on disk: a re-read. With
+// any other head there is no answer to keep: the session folds as a first read, and a marker goes.
+function rereadOn(ctx, id, rebuilt) {
+  if (ctx.writer !== true) return;
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
+  if (!rebuilt && !hasReread(home, id, fs)) return;
+  const d = readHead(home, id, fs), kept = !!d && d.v === CTX_V && d.tier === 1;
+  if (kept && !rereads.has(id)) { rereads.add(id); shown.delete(id); } // its first slice writes `pending`
+  try { if (kept) markReread(home, id, dirUse(sessionDir(home, id), fs).t, fs); else clearReread(home, id, fs); } catch { /* this worker re-reads all the same; the next one by the versions */ }
+}
 // The projection store of a session, open across requests (the least recently used closed past STORES). What opening it said (a
 // rebuild) stays with the store (`opened`) until the next answer of that session says it, whoever opened it: a background slice
 // has no caller to tell.
@@ -223,22 +256,40 @@ const stores = new Map();
 function storeOf(ctx, id, k) {
   let s = stores.get(k);
   if (s) { stores.delete(k); stores.set(k, s); return s; }
+  // the marker before the open that rebuilds: a kill between the two loses no re-read
+  if (ctx.writer === true && (projectionStale({ home: ctx.home, fs: ctx.fs, key: id }) || foldStale({ home: ctx.home, fs: ctx.fs, key: id }))) rereadOn(ctx, id, true);
+  rereadAt.delete(id);
   const opened = [];
   s = openProjection({ home: ctx.home, fs: ctx.fs, key: id, write: ctx.writer === true, errors: opened });
   s.opened = opened; s.session = id;
   s.work = works.get(k) || 0; // `pending.work`, counted on the open store and kept by closeStore
   stores.set(k, s);
+  rereadOn(ctx, id, opened.some(isRebuilt));
   for (const kk of stores.keys()) { if (stores.size <= STORES) break; closeStore(kk); }
   return s;
 }
 
-const states = warmCache({ cost: (v) => v.cost });
+const states = warmCache({ cost: (v) => v.cost, drop: letGoState });
+/** How long after a request a session counts as being read (3.5 §内存有界): the worker's idle branch waits as long, so its slices find no reader. */
+export const READING_MS = 2000;
+let reading = { k: null, at: -Infinity }; // the session of the last request's read
+/** roomFor() → whether the heap has room for a session that waits for it (heapHasRoom); null while a session is read: the look would let
+ *  its state go (3.5 §内存有界「正被读」, #62). */
+export const roomFor = () => (performance.now() - reading.at < READING_MS ? null : heapHasRoom());
+// The ledger let `st` go (3.5 §内存有界): the references that would keep it in the heap go, the ones keyed by something else than this
+// state compared first. Never closed: a request may be answering from it; its descriptor goes when it is collected (line-file.mjs).
+function letGoState(st) {
+  st.gone = true;
+  if (fileLogs.get(st.store) === st) fileLogs.delete(st.store);
+  const id = st.store.session;
+  if (lagging.get(id)?.s.st === st) lagging.delete(id);
+}
 // session key → its reduction frontier (the mark its answers are at), as every new state and every fold slice leaves it: version().
 const frontiers = new Map();
 // The store's notes that are D38 records besides (4.3 盘满): the worker passes `ctx.persist`, which sends each to the daemon. The store
 // says each once per episode, so one episode is one record.
 const PERSISTED = new Set(['projection-write-failed']);
-const persisted = (ctx, errors) => { if (ctx.persist) for (const e of errors) if (PERSISTED.has(e.code)) ctx.persist(e); };
+const persisted = (ctx, errors, id) => { for (const e of errors) if (PERSISTED.has(e.code)) saidOnce(ctx, id, e); };
 // A request's slice of extraction and of folding (3.5 后台抽取与归约).
 const SLICE_MS = 50;
 
@@ -285,22 +336,30 @@ export function sealParts(deadline = Infinity) {
     }
   }
   releaseParts();
+  for (const [id, { home, fs, at }] of rereadAt) { try { setMtimes(home, id, at, fs, (n) => /^(extract|fold)\./.test(n)); } catch { /* the GC order only */ } }
+  rereadAt.clear();
   return false;
 }
 // The store's sidecar first (the log's names the projection's bytes); then, when it covers every line of the store (none while the
 // store holds `t` rows: an open cuts them off, and the state's rows with them), the fold log's: the state's step-order columns synced to
 // its frontier and, when the state is a live reduction writing into this file log (never a rebuild's, before it takes the log over),
 // that reduction's state (`r.s`, v8.serialize of R.snapshot()) and what it was folded under (`r.m`: REDUCE_V, the cut). Between adds
-// the log ends at the frontier line the sidecar covers to, so the state is the one the sidecar's indexes describe. A sidecar that
-// cannot be written is not one: the next open scans, the next fold rebuilds.
+// the log ends at the frontier line the sidecar covers to, so the state is the one the sidecar's indexes describe. A save with no
+// live reduction carries the `r.s` and `r.m` the sidecar was loaded with, so a read of a session that did not grow loses nothing;
+// with the answer files where they were it has nothing to say, and nothing is written.
+// When they cover less than the log's last frontier nothing is written: a sidecar over the whole log would say they reach it, and
+// resumed() would not cut the log back. No save was made, so `saved` and `savedAt` stand; only a cold state gets here, and it does
+// not checkpoint (fold). A sidecar that cannot be written is not one: the next open scans, the next fold rebuilds.
 function sidecars(store) {
   try { if (!store.indexed) store.saveIndex(extractSeed(store)); } catch { /* the next idle period */ }
   const st = fileLogs.get(store);
   if (!st || !store.indexed) return;
   try {
     const live = st.R && st.target == null && st.relay.cur === st.log;
-    st.log.saveIndex([...dumpColumns(sync(st.cols, st.log)),
-      ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : []),
+    const sv = st.log.saved, held = !live && sv && sv.parts['r.m'] && sv.parts['r.s'];
+    if (held && (!(sv.bytes > st.log.frontier) || filesAt(st.log) === sv.parts['w.f']?.[0])) return;
+    st.log.saveIndex([...dumpColumns(sync(st.cols, st.log, st.progress)),
+      ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : held ? [['r.s', held], ['r.m', sv.parts['r.m']]] : []),
       ...filesParts(st.log)], filesAt(st.log)); // where the answer files stand (ctx-files.mjs writeFiles)
   } catch { /* the next idle period */ }
   st.saved = st.n; st.savedAt = performance.now();
@@ -338,6 +397,7 @@ function stateOf(ctx, id, store, plan) {
   const s = { base: liveHeap(), meter: null, store, cut: cutOf(plan), n: 0, cost: 0, sink: [], hook: null, resolve: null,
     cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null, writer, open, saved: 0, savedAt: performance.now() };
   const log = open(), m = markOf(log);
+  if (s.sink.some(isRebuilt)) rereadOn(ctx, id, true);
   if (m != null && foldedUnder(log, plan, m)) {
     s.log = log; s.target = m; seed(s);
     if (writer) fileLogs.set(store, s);
@@ -364,19 +424,29 @@ function thaw(buf) {
   d.readHeader();
   return d.readValue();
 }
+// A thaw is one call that bounded() cannot stop: past the heap's limit the process dies inside it, so its room is looked at first. A
+// thawed state takes in the heap what it takes serialized (measured 1.0 on generated sessions, 2026-11-05: 113 MB, against 69 MB folded,
+// whose strings were shared). Without the room it is not thawed: the rebuild's fold is measured at every look.
+function thawFits(bytes) {
+  const fits = () => liveHeap() + bytes <= heapCeiling();
+  if (fits()) return true;
+  yieldCaches();
+  return fits();
+}
 // A cold state's reduction resumed from the state its log's sidecar holds (4.3 §4 旁索引) when it was folded under this cut and
-// REDUCE_V: it covers the log's last frontier → over the log as it is; it covers less (a worker killed after a save) and this is the
+// REDUCE_V and the heap has room for it: it covers the log's last frontier → over the log as it is; it covers less (a worker killed after a save) and this is the
 // worker → over the log opened again cut back to what it covers. The members it folded are `R.has`, so the fold cursor walks past
 // them. Else false (the local path's log past it, a mismatch, a state that does not read back or is not of this store): the caller
 // rebuilds up to the log's frontier (`target`), as without one.
 function resumed(s) {
   const sv = s.log.saved, meta = sv && sv.parts['r.m'], state = sv && sv.parts['r.s'];
-  if (sv) delete sv.parts['r.s']; // read once here, whether taken or not: not held while the state lives
+  if (sv) delete sv.parts['r.s']; // read once here, whether taken or not: not held once a reduction lives (a cold state keeps it: sidecars() carries it)
   if (!meta || !(state instanceof Uint8Array)) return false;
   let from;
   try {
     const m = JSON.parse(meta[0]);
     if (m.rv !== REDUCE_V || m.cut !== s.cut) return false;
+    if (!thawFits(state.byteLength)) return false;
     from = thaw(state);
   } catch { return false; }
   if (!(sv.bytes > s.log.frontier)) {
@@ -431,7 +501,7 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
   // a state grown across requests is held against the heap it began from; its meter is kept with it, so the live heap is looked at
   // by the stored bytes folded since the last look across slices, not once per slice
   const meter = Object.assign(st.meter ||= { base: st.base, since: 0, gap: 0, held: null }, { n: st.n });
-  st.resolve = resolve;
+  st.resolve = resolve; st.progress = progress;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
   const now = st.target == null || (!(ctx.writer === true && request) && pastOf(plan, st.target, F));
   try {
@@ -450,30 +520,33 @@ const unfolded = (st, plan, F) => { for (let i = st.fp === plan ? st.fc : 0; i <
 export class HandOff extends Error {
   constructor(id) { super(`session ${id}: its projection or fold log does not cover every member yet`); this.name = 'HandOff'; this.code = 'hand-off'; }
 }
-// What a kept state weighs in the shared ledger: the heap it was measured to hold (3.5 §内存有界: never an estimate past the budget,
-// which would leave it unkept and rebuilt from scratch every slice).
-const costOf = (st) => Math.max(0, st.meter.held);
+// What a kept state weighs in the shared ledger: the heap it was measured to hold, and at least its rows at SPINE_PER_ROW, since the
+// measure is a difference that other caches let go in between can bring to 0 or below, and the ledger would then keep it for free
+// (3.5 §内存有界: never an estimate past the budget, which would leave it unkept and rebuilt from scratch every slice).
+export const costOf = (st) => Math.max(st.meter.held, Math.min(heapBudget(), Math.max(1, st.n) * SPINE_PER_ROW));
 
 // One slice: extraction, then folding (a request: SLICE_MS of each; a background slice: half of `budgetMs` each, the fold also what
-// extraction left; the local path: everything).
-async function advance(ctx, id, { budgetMs, request }) {
+// extraction left; the local path: everything), neither while a write of the session's answer files is in flight: it goes on at its
+// frontier (`writing`), and the fold takes up what came when it ends (3.5 后台抽取与归约).
+async function advance(ctx, id, { budgetMs, request, said = [] }) {
   const t0 = performance.now(), index = await indexed(ctx);
   const members = sessionGroups(index.rows).get(id);
   if (!members) return null;
-  const errors = [...index.errors], k = keyOf(ctx, id), progress = ctx.progress || (() => {});
+  const errors = [...index.errors, ...said], k = keyOf(ctx, id), progress = ctx.progress || (() => {});
   const store = storeOf(ctx, id, k);
   if (request) errors.push(...store.opened.splice(0));
   // extraction errors are the member's own (its row says why, on every answer), not this request's
   const read = (rs) => { progress(); return recordsAt({ home: ctx.home, fs: ctx.fs, rows: rs.filter(Boolean), errors: [], remember: false }); };
   const exErrors = [], from = planOf(members, k, store, id).ex, had = store.rows.size;
   if (ctx.handOff && ctx.writer !== true) for (let i = from; i < members.length; i++) if (!store.rows.has(String(members[i].id))) throw letGo(k, new HandOff(id));
-  const ex = extractMembers({ store, members, recordsAt: read, sessionId: id, budgetMs: request ? budgetMs : Math.max(1, budgetMs / 2 - (performance.now() - t0)), errors: exErrors, from });
+  const held = writeInFlight(fileLogs.get(store)?.log);
+  const ex = held ? { done: from, total: members.length } : extractMembers({ store, members, recordsAt: read, sessionId: id, budgetMs: request ? budgetMs : Math.max(1, budgetMs / 2 - (performance.now() - t0)), errors: exErrors, from });
   passed(planOf(members, k, store, id), ex.done);
   store.work += store.rows.size - had;
-  persisted(ctx, exErrors);
+  persisted(ctx, exErrors, id);
   errors.push(...exErrors);
-  // a background slice: extraction has half of it, the fold at least the other half, so the frontier moves from the first slice
-  const foldMs = request ? budgetMs : Math.max(budgetMs / 2, budgetMs - (performance.now() - t0));
+  // a background slice: extraction has half of it, the fold at least the other half, so the frontier moves from the first slice, whatever the budget
+  const foldMs = held ? 0 : request ? budgetMs : Math.max(1, budgetMs / 2, budgetMs - (performance.now() - t0));
   // a block's text read back for a cache-break detail, or BlockUnread with a BLOCK_PROBLEMS code; a definition's ref names a record
   // this store extracted (a stitched block's too: extraction stitches from the store's own rows), so a member's
   // within the slice the records read back stay by id, their stored bytes at most CHUNK_STORED, the least recently used first out
@@ -502,6 +575,9 @@ async function advance(ctx, id, { budgetMs, request }) {
     const plan = planOf(members, k, store, id);
     lagging.delete(String(id)); // its state holds the old one: let go before this one grows (headAt keeps the new one)
     const box = { old: states.take(k) };
+    if (request) reading = { k, at: performance.now() };
+    // a background fold gives way to the session being read: the ledger keeps its state, and this fold stops where it would be cut
+    const beside = states.pin(!request && reading.k !== k && performance.now() - reading.at < READING_MS ? reading.k : null);
     const release = hold(plan.work);
     let st;
     try {
@@ -514,14 +590,26 @@ async function advance(ctx, id, { budgetMs, request }) {
       // the measured bound: the rows the stopped fold got through are the rows that fit, never fewer than half those asked for,
       // rounded down to a quarter power of two (3.5 §内存有界); the stopped state is closed and garbage by now
       const got = Math.max(e.rows, Math.floor(plan.read.length / 2)) - 1, fit = got < 1 ? 0 : Math.floor(2 ** (Math.floor(Math.log2(got) * 4) / 4));
-      if (fit < 1) throw Object.assign(new Error(`the heap holds no room for this session (${mb(heapBudget())} MB budget)`), { code: 'heap-no-room' });
+      if (fit < 1 || beside) {
+        // bounded() let every warm entry but the reader's go before it threw; this fold's state is closed and its plan holds every member (PLAN_PER_MEMBER): a live heap past the line without the plan is
+        // held by others (another session's state, the fill), and the session waits for room (heap-busy); else it does not fit with the
+        // heap otherwise free (heap-no-room, 3.5 §内存有界)
+        kept.clear();
+        const busy = beside || liveHeap() - members.length * PLAN_PER_MEMBER > heapLine();
+        throw Object.assign(new Error(`the heap holds no room for this session${beside ? ' beside the one being read' : busy ? ' while other work holds it' : ''} (${mb(heapBudget())} MB budget)`), { code: busy ? 'heap-busy' : 'heap-no-room' });
+      }
       fits.delete(k);
       fits.set(k, fit);
       if (fits.size > FITS_KEPT) fits.delete(fits.keys().next().value);
       continue;
     } finally { release(); kept.clear(); keptBytes = 0; keeping = false; }
     states.get(k, st, () => st); // kept once the work's reservation is given back: the next slice grows it
-    return { st, plan, members, ex, errors, indexErrors: index.errors };
+    // the columns go with the fold, a background slice at a time: a checkpoint (sidecars) has only what came since to bring
+    if (!request && st.writer && st.target == null) sync(st.cols, st.log, progress);
+    // the write this pass waited for went with its state (a heap retry, a moved cut): nothing holds the session back, and this pass did
+    // nothing, so the slice does its work now (3.5 #39). What this pass took off the store and the state is said by the next one.
+    if (held && !writeInFlight(st.log)) return advance(ctx, id, { budgetMs, request, said: errors.slice(index.errors.length) });
+    return { st, plan, members, ex, errors, indexErrors: index.errors, writing: writeInFlight(st.log) };
   }
 }
 
@@ -530,20 +618,36 @@ async function advance(ctx, id, { budgetMs, request }) {
  *  folding (or a cold state's rebuild, when a member lies past its log's frontier): half of `budgetMs` each, the fold also what
  *  extraction left; once no member is left past the frontier, the answer files at the state in what is left of `budgetMs`, the
  *  rest in the next slices, and the head once they reach the state (files written while members are left past the frontier would be
- *  written again at the next one); meanwhile only the head's `pending` (backlog). */
+ *  written again at the next one); meanwhile only the head's `pending` (backlog). A write in flight goes on first, whatever came. */
 export async function extendSession(ctx, id, budgetMs) {
   const end = performance.now() + budgetMs;
   let r;
   try { r = await again(ctx, id, () => advance(ctx, String(id), { budgetMs, request: false })); } catch (e) { await stopped(ctx, String(id), e); throw e; }
   if (!r) return false;
-  const { st, plan, ex } = r;
-  if (ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n)) { backlog(ctx, String(id), r); return true; }
-  const s = stateAt(r, String(id));
-  shown.delete(s.id);
-  if (!files(ctx, s, end)) return true;
-  if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
+  const { st, plan, ex, writing } = r;
+  if (!writing && (ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n))) { backlog(ctx, String(id), r); return true; }
+  let s;
+  try {
+    s = stateAt(ctx, r, String(id)); // the lane heads read lines too (viewOf)
+    shown.delete(s.id);
+    if (!toState(ctx, s, end)) return true;
+  } catch (e) { if (!e || e.code !== 'ELINEPART') throw e; letLinesGo(ctx, id); return true; }
+  if (s.st.gone) return null; // read-only since this slice: nothing written, and no end of the session, so a later turn reopens it
+  if (rereading(ctx, s.id)) {
+    stops.delete(s.id);
+    heads.delete(s.id); // what this worker wrote at this mark may be from before the rebuild
+    if ((s.mark == null || s.files) && putHead(ctx, s, null, (e) => writeFailed(ctx, s.id, e))) { // the marker goes only behind a whole answer; a write that failed ends this turn, and the next request, kick, follow, sweep or worker tries again
+      rereads.delete(s.id); writeFails.delete(s.id);
+      const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
+      try { const at = endReread(home, s.id, fs); if (at) rereadAt.set(s.id, { home, fs, at }); } catch { /* the next worker reads it once more */ }
+    }
+  } else {
+    if (s.files) writeFails.delete(s.id);
+    if (s.mark != null && !s.files) backlog(ctx, s.id, r); // a write that failed: no head lists what is not on disk, only `pending` moves
+    else if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
+  }
   releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
-  return false;
+  return writing && !!s.files && !!s.pending; // what came during the write is folded next; a write that failed ends the turn
 }
 
 // The head file (3.5 §谁执行它「答案文件」): the worker writes it at the end of a request or background slice of the session when the
@@ -553,23 +657,28 @@ export async function extendSession(ctx, id, budgetMs) {
 // (and cut) it was last written at is not made again while its file is there.
 const heads = new Map(); // session id → {sig, shape} of its last head write in this worker
 const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write (advance lets it go before a slice)
-const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated]);
+const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title]);
 // the parts only the head carries, in O(packs): tier, axis, the packs (with their tags) and the open span, the compactions (a new
-// chapter on the axis; one on another lane too), the cut, pending's presence, the failures and the index's codes, and the meta the
+// chapter on the axis; one on another lane too) and whether the axis ends on a marked one (its chapter opens on the step after it,
+// which counts no compaction: 1.3 §章), the cut, pending's presence, the failures and the index's codes, and the meta the
 // board takes from the head alone (web/legacy/replay/header.mjs) — never a count that grows with each call
-const META = ['title', 'title_source', 'session_id', 'harness', 'harnesses', 'project_slug', 'project_path'];
+const META = ['title', 'title_source', 'session_id', 'harness', 'harnesses', 'project_slug', 'project_path', 'lineage_source', 'parent_session_id', 'fork_of_session_id'];
 function shapeOf(s) {
-  if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code)]);
-  const V = s.V, ax = V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || null;
-  return JSON.stringify([1, ax && ax.lane, s.files || null, V.stats.compactions, s.truncated, !!s.pending, s.failed.length,
-    s.indexErrors.filter((e) => !e.level).map((e) => e.code), META.map((k) => V.meta && V.meta[k])]);
+  if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code), s.title]);
+  const V = s.V, ax = V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || null, meta = { ...V.meta, ...s.title };
+  return JSON.stringify([1, ax && ax.lane, s.files || null, V.stats.compactions, !!ax && isMarked(V.cols.fl[V.cols.slotOf(ax.last)]), s.truncated, !!s.pending, s.failed.length,
+    s.indexErrors.filter((e) => !e.level).map((e) => e.code), META.map((k) => meta[k])]);
 }
 // A background fold that stopped (3.5 §会话读「`session --head`」 pending.stopped, D38②): the slice that threw writes the head at once,
 // with the stop's code (FOLD_STOPS) and the first line of its message; the same stop again writes nothing. The session's next slice
 // that does not throw clears it (extendSession). A request's own failure is its answer (a 500), not a stop.
 const stops = new Set(); // the session ids whose last background slice threw
+const callsNow = (ctx, id, members) => { const store = stores.get(keyOf(ctx, id)); return callsPast({ members, n: members.length }, reachOf(ctx, id, store && fileLogs.get(store)?.log, members)); };
+/** noRoomStop(ctx, id): a session that waited for room (heap-busy) while nothing else in the heap could give way does not fit: its
+ *  heap-no-room stop, as a background slice writes it (3.5 §内存有界). */
+export const noRoomStop = (ctx, id) => stopped(ctx, id, Object.assign(new Error(`the heap holds no room for this session (${mb(heapBudget())} MB budget)`), { code: 'heap-no-room' }));
 async function stopped(ctx, id, e) {
-  if (ctx.writer !== true || e instanceof HandOff) return;
+  if (ctx.writer !== true || e instanceof HandOff || e?.code === 'heap-busy') return; // heap-busy: the session waits for room, no stop
   const stop = { code: e && e.code === 'heap-no-room' ? 'heap-no-room' : 'fold-failed', reason: String((e && e.message) || e).split('\n')[0] };
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, sig = JSON.stringify(['stopped', stop]), h = heads.get(id);
   stops.add(id);
@@ -577,72 +686,138 @@ async function stopped(ctx, id, e) {
   if (h && h.sig === sig && hasHead(home, id, fs)) return;
   try {
     const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
-    if (members) { writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ done, total: members.length, stopped: stop }), fs), fs); heads.set(id, { sig, shape: null }); }
+    if (members) {
+      const calls = callsNow(ctx, id, members);
+      writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ ...d.pending, done, total: members.length, ...seenOf(d), calls, stopped: stop }), fs, titleOf({ home, fs, id, members })), fs);
+      heads.set(id, { sig, shape: null });
+    }
   } catch { /* a head not written is written at the next stop or slice */ }
 }
 // A slice that leaves members past the frontier writes no answer file (3.5 §后台抽取与归约); the head's `pending` alone is brought to
 // the frontier (the rest of the head as written: pendingHead) on the first such slice, each time the frontier passes a multiple of
-// PACK_MEMBERS and when a stop is cleared, so the board sees pending.done grow and the stop go (D64, D69). O(1) per 512 members.
-const shown = new Map(); // session id → the pending.done this worker last put into its head while members were left
+// PACK_MEMBERS, when `calls` leaves 0 and when a stop is cleared, so the board sees pending.done grow and the stop go (D64, D69). O(1)
+// per 512 members. A re-read's head keeps its mark, so its `pending` keeps `done` there and says how far the fold is in `read`.
+const shown = new Map(); // session id → {read, called} of the pending this worker last put into its head while members were left
 function backlog(ctx, id, { st, plan, members, indexErrors }) {
-  if (ctx.writer !== true) return;
-  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, mark = markOf(st.log), done = mark == null ? 0 : posOf(plan, mark) + 1;
-  const was = shown.get(id), cleared = stops.delete(id);
-  if (!cleared && was != null && Math.floor(was / PACK_MEMBERS) === Math.floor(done / PACK_MEMBERS) && hasHead(home, id, fs)) return;
-  try { writeHead(home, id, pendingHead(home, id, members, indexErrors, () => ({ done, total: members.length }), fs), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
-  shown.set(id, done);
-  heads.set(id, { sig: JSON.stringify(['pending', done]), shape: null });
+  if (ctx.writer !== true || st.gone) return;
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, mark = markOf(st.log), read = mark == null ? 0 : posOf(plan, mark) + 1;
+  const re = rereading(ctx, id);
+  if (!re && behind(ctx, id, read, st.log, members)) return; // a stop stands with it, until the fold is past it
+  const was = shown.get(id), cleared = stops.delete(id), total = members.length, calls = callsPast(plan, reachOf(ctx, id, st.log, members));
+  if (!cleared && was && was.called === calls > 0 && Math.floor(was.read / PACK_MEMBERS) === Math.floor(read / PACK_MEMBERS) && hasHead(home, id, fs)) return;
+  const pending = (d) => (re && d.tier === 1 ? { done: markDone(d, members), total, ...seenOf(d, true), calls, read } : { done: read, total, ...seenOf(d), calls });
+  try { writeHead(home, id, pendingHead(home, id, members, indexErrors, pending, fs, titleOf({ home, fs, id, members })), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
+  shown.set(id, { read, called: calls > 0 });
+  heads.set(id, { sig: JSON.stringify(['pending', read]), shape: null });
   lagging.delete(id);
 }
 function headAt(ctx, s) {
-  if (ctx.writer !== true) return;
+  if (ctx.writer !== true || s.st.gone) return;
   const h = heads.get(s.id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (!h || h.shape !== shapeOf(s) || !hasHead(home, s.id, fs)) putHead(ctx, s);
   else lagging.set(s.id, { s, home, fs });
 }
-/** files(ctx, s, deadline) → false while the session's pack and tail files are short of the state `s` at `deadline` (the next slice
- *  goes on: ctx-files.mjs writeFiles), else true: brought to it (the worker only), their `packs` / `open` kept on `s` for its head; a
- *  write that failed is done afresh at the next slice. */
-export function files(ctx, s, deadline = Infinity) {
-  if (ctx.writer !== true || s.mark == null) return true;
-  try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch { forget(s.V.log); return true; }
+// Answer files never go back (3.5): a fold's frontier at `read` members, below what the files reach (a log cut back to its sidecar), writes
+// neither head nor tail while a tier-1 head stands on disk. With none there is no answer to keep. The end of a fold writes all the same.
+const behind = (ctx, id, read, log, members) => read < reachOf(ctx, id, log, members) && readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs)?.tier === 1;
+/** stands(ctx, s) → whether the answer on disk stands, whatever the state `s`: while the session is re-read, and while its fold is behind the files. */
+export const stands = (ctx, s) => rereading(ctx, s.id) || (ctx.writer === true && behind(ctx, s.id, s.mark == null ? 0 : s.pos(s.mark) + 1, s.V.log, s.rows));
+/** files(ctx, s) → a request's turn at the answer files: toState(), or nothing while the answer on disk stands; whether they are at the
+ *  state `s`, so a head of it may be written. */
+export function files(ctx, s) {
+  if (stands(ctx, s)) return false;
+  toState(ctx, s);
+  return ctx.writer !== true || s.mark == null || !!s.files;
+}
+// false while the session's pack and tail files are short of the state `s` at `deadline` (the next slice goes on: ctx-files.mjs
+// writeFiles), else true: brought to it (the worker only), their `packs` / `open` kept on `s` for its head; a write that failed, or a render
+// that threw, is writeFailed's and is done afresh at the session's next turn. ELINEPART (a line of the log read for them is no whole line)
+// is no write that failed: it is thrown, as at any other read, and the caller opens the session again (4.3 §4 分片). A state let go writes
+// nothing, no failure: `s.files` stays empty, so the caller answers as after a write that failed.
+function toState(ctx, s, deadline = Infinity) {
+  if (ctx.writer !== true || s.mark == null || s.st.gone) return true;
+  try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch (e) { forget(s.V.log); if (e && e.code === 'ELINEPART') throw e; writeFailed(ctx, s.id, e); return true; }
+  if (s.files && s.pending) s.pending.calls = callsPast(s.plan, reachOf(ctx, s.id, s.V.log, s.rows)); // they reach further now
   return s.files != null;
 }
-/** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs). */
-const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors)
+// What could not be written of a session, its store or an answer file or head, is one D38 record per episode, whatever turn tried it; a whole
+// write of the answer files ends the episode (3.5 §访问模式「版本变更的重读」②).
+const writeFails = new Set();
+function saidOnce(ctx, id, record) {
+  if (writeFails.has(id)) return;
+  writeFails.add(id);
+  ctx.persist?.(record);
+}
+function writeFailed(ctx, id, e) {
+  saidOnce(ctx, id, { where: 'projection', code: 'projection-write-failed', reason: `The answer files of session ${id} could not be written (${String((e && (e.code || e.message)) || e).split('\n')[0]}); its old answer stands and the next turn tries again.` });
+}
+/** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs), the same bytes
+ *  here and in the worker: the title is a function of the disk. */
+const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors, s.title)
   : headDoc({ ...s, ...(s.files || packsOf(s)), mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
-function putHead(ctx, s, doc = null) {
+// → whether the head at this state is on disk; `failed(e)` hears why it is not
+function putHead(ctx, s, doc = null, failed = () => {}) {
+  if (s.st.gone) return false;
   const h = heads.get(s.id), sig = sigOf(s), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (!(h && h.sig === sig && hasHead(home, s.id, fs))) {
-    try { writeHead(home, s.id, doc || headOf(s), fs); } catch { return; } // a head not written is written at the next slice
+    try { writeHead(home, s.id, doc || headOf(s), fs); } catch (e) { failed(e); return false; } // a head not written is written at the next slice
     heads.set(s.id, { sig, shape: shapeOf(s) });
   }
   lagging.delete(s.id);
+  return true;
+}
+
+// `calls` of a pending (3.5 归约前沿): the model calls past the members the answer files reach, never telemetry. `reach`: the tails', not
+// the head's mark, which they run past. Counted on the plan from where it last stood, so a slice pays for its new members.
+function callsPast(p, reach) {
+  const c = p.past?.reach === reach ? p.past : (p.past = { reach, n: reach, calls: 0 });
+  for (; c.n < p.n; c.n++) if (isModelCall(p.members[c.n])) c.calls++;
+  return c.calls;
+}
+// session key → how far the tails on disk reach while no writer or sidecar of this log says so (a re-read's are the last version's)
+const tailReach = new Map();
+function reachOf(ctx, id, log, members) {
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, at = filesReach(log, home, id, fs), k = keyOf(ctx, id);
+  if (at != null) { tailReach.delete(k); return at; }
+  if (!tailReach.has(k)) tailReach.set(k, tailsReach(home, id, members, fs));
+  return tailReach.get(k);
+}
+// What a head says of the title and lineage: titleOf's. A title `unread` changes no head, nor does lineage the table holds no verdict
+// on: the head on disk's stands (4.4 §人类标题的来源, 3.4 §血缘).
+function headTitle(ctx, id, said) {
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, keep = said.title_source === 'unread', known = lineageKnown({ home, fs, id });
+  const m = (keep || !known) && readHead(home, id, fs)?.meta;
+  return m ? withLineage(keep ? { title: m.title, title_source: m.title_source, ...projectFields(m.project_path ?? null) } : said, keep || !known ? m : said) : said;
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
  *  session after this request's slice (the local path: everything), read from its fold log at the reduction frontier `mark` (V:
  *  src/query/session-doc.mjs viewOf, its columns synced to that frontier), `pending:
- *  {done, total, work}` while members are above the mark (`done` = the members at or below it; `work` = the store's members
- *  extracted and handed to a reduction so far, a rebuild's included), the cut. `errors`: the index's problems
- *  and the store's notes. The state stays warm. */
+ *  {done, total, work, seen?, calls, read?}` while members are above the mark or the session is re-read (`done` = the members at or below it; `work` =
+ *  the store's members extracted and handed to a reduction so far, a rebuild's included; seenOf; callsPast; `read`: a re-read's), the cut. `errors`: the index's
+ *  problems, the store's notes and a title that could not be read. The state stays warm. */
 export async function sessionState(ctx, id) {
   const r = await advance(ctx, String(id), { budgetMs: ctx.writer === true ? SLICE_MS : Infinity, request: true });
-  return r && stateAt(r, String(id));
+  return r && stateAt(ctx, r, String(id), rereading(ctx, String(id)));
 }
-// the session state of one slice's result (advance)
-function stateAt(r, id) {
+// the session state of one slice's result (advance); `reading`: it says `pending` with nothing above the mark too
+function stateAt(ctx, r, id, reading = false) {
   const { st, plan, members, ex, errors, indexErrors } = r, mark = markOf(st.log);
   if (!(st.view && st.view.f === st.log.frontier && st.view.plan === plan && st.view.gen === plan.gen)) {
     st.view = null; // the old view let go before the new one is built
-    st.view = { f: st.log.frontier, plan, gen: plan.gen, V: viewOf({ id: String(id), log: st.log, cols: st.cols, members, plan, mark }) };
+    st.view = { f: st.log.frontier, plan, gen: plan.gen, V: viewOf({ id: String(id), log: st.log, cols: st.cols, members, plan, mark, progress: st.progress }) };
   }
   // the members at or below the mark are the first `done` of the list; any of the cut past them is above it
   const V = st.view.V, done = mark == null ? 0 : posOf(plan, mark) + 1;
   let above = ex.done < ex.total;
   for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
-  return { id, rows: members, store: st.store, mark, pending: above ? { done, total: members.length, work: st.store.work } : null,
-    truncated: plan.bound, V, failed: V.failed, errors, indexErrors, st, plan, pos: (rid) => posOf(plan, rid), cut: (row) => inCut(plan, row) };
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, said = titleOf({ home, fs, id, members, errors });
+  const { parent_session_id: _p, fork_of_session_id: _f, ...was } = V.meta; // the id keys go with the lineage said now, never an older one's
+  V.meta = { ...was, ...said };
+  const seen = above || reading ? seenOf(readHead(home, id, fs), reading) : null; // `read` goes with it: with no head to keep this is a first read
+  const pending = above || reading ? { done, total: members.length, work: st.store.work, ...seen, calls: callsPast(plan, reachOf(ctx, id, st.log, members)), ...(reading && seen ? { read: done } : null) } : null;
+  return { id, rows: members, store: st.store, mark, pending,
+    title: headTitle(ctx, id, said), truncated: plan.bound, V, failed: V.failed, errors, indexErrors, st, plan, pos: (rid) => posOf(plan, rid), cut: (row) => inCut(plan, row) };
 }
 
 /** version(ctx) → {key, errors} | null (3.5 §谁执行它 答案缓存): the session's member rows, its reduction frontier as it is now, the
@@ -654,7 +829,8 @@ export async function version(ctx) {
   const members = sessionGroups(rows).get(String(p.id));
   if (!members) return null;
   const k = keyOf(ctx, p.id), store = storeOf(ctx, String(p.id), k), plan = planOf(members, k, store, p.id);
-  return { key: JSON.stringify([plan.key, frontiers.get(k) ?? null, plan.bound]), errors };
+  // a re-read answers off the disk at one frontier: its answer may not be kept past the switch
+  return { key: JSON.stringify([plan.key, frontiers.get(k) ?? null, plan.bound, rereading(ctx, String(p.id))]), errors };
 }
 
 const one = (v) => (v == null || v === '' ? null : String(v));
@@ -673,29 +849,45 @@ function thenOf(s, M) {
   return { then: { log: T, off: T.frontier ?? -1, mark: M, added }, cands: { rids: new Set([...a.rids, ...b.rids]), lanes: new Set([...a.lanes, ...b.lanes]) }, close: () => T.close() };
 }
 
+const headKept = (ctx, id) => readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs);
+// the head a request answers while the disk's stands or a write failed: the file, else the tier-0 head (never a head that lists what is not on disk)
+const headStanding = (ctx, s) => pendingHead(ctx.home ?? trocarHome(), s.id, s.rows, s.indexErrors, (d) => d.pending, ctx.fs || nodeFs, s.title);
+/** headAsked(params) → whether a `session` request asks for the head (`--head`). */
+export const headAsked = (p) => p.head != null && p.head !== false && p.head !== 'false' && p.head !== '0';
 export async function run(ctx) {
   const { params: p, errors } = ctx;
   const id = one(p.id), since = one(p.since), before = one(p.before);
   if (id == null) throw new QueryArgError('trocar query session: --id is required (a session id; `trocar query sessions` lists them)');
   if (since != null && before != null) throw new QueryArgError('trocar query session: --since and --before cannot be given together');
-  const asHead = p.head != null && p.head !== false && p.head !== 'false' && p.head !== '0';
+  const asHead = headAsked(p);
   if (asHead && (since != null || before != null || p.limit != null)) throw new QueryArgError('trocar query session: --head cannot be given with --since, --before or --limit');
   const limit = limitOf(p.limit);
-  const s = await sessionState(ctx, id);
+  let s;
+  try { s = await sessionState(ctx, id); } catch (e) {
+    if (!asHead || e?.code !== 'heap-busy') throw e;
+    // others hold the heap: the head as it stands, the file's or the tier-0 one, with a pending of now and no stop (3.5 §内存有界); nothing written
+    const idx = await indexed(ctx), members = sessionGroups(idx.rows).get(id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
+    const doc = pendingHead(home, id, members, idx.errors, (d, done) => ({ done, total: members.length, ...seenOf(d), calls: callsNow(ctx, id, members) }), fs, titleOf({ home, fs, id, members }));
+    errors.push(...doc.errors);
+    return doc;
+  }
   if (!s) {
     const idx = await indexed(ctx);
     errors.push(...idx.errors, { where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
     return { base: null, mark: null, truncated: null, more: false, meta: null, stats: null, logged: null, probes: null, lanes: [], calls: [], events: [], records: [] };
   }
-  files(ctx, s);
+  const ready = files(ctx, s);
   if (asHead) {
-    const doc = headOf(s);
-    if (ctx.writer === true) putHead(ctx, s, doc); // the answer is the file (writeHead: the same bytes are not written)
+    const doc = ready || (rereading(ctx, id) && !headKept(ctx, id)) ? headOf(s) : headStanding(ctx, s); // a re-read's is the file (3.5 #33), the frontier's only when it is gone
+    if (ctx.writer === true && ready) putHead(ctx, s, doc); // the answer is the file (writeHead: the same bytes are not written)
     errors.push(...doc.errors);
     return doc;
   }
-  headAt(ctx, s);
+  if (ready) headAt(ctx, s);
   errors.push(...s.errors, ...s.failed.map((f) => ({ where: f.id, code: f.code, reason: f.reason })));
+  const kept = since != null && rereading(ctx, id) && headKept(ctx, id);
+  // the answer a client holds stays until the switch: nothing of the frontier, whose scalars are half way (3.5 §访问模式「版本变更的重读」①)
+  if (kept) return { base: since, mark: since, pending: s.pending, truncated: kept.truncated, meta: kept.meta, stats: kept.stats, logged: kept.logged, probes: kept.probes, calls: [], gone: [], lanes: [], lanes_gone: [], events: [], records: [] };
   const { V } = s;
   if (before != null && !V.has(before)) throw new QueryArgError(`trocar query session: --before ${JSON.stringify(before)} is not a call of this session`);
   const head = { mark: markOn(s.plan, s.mark), ...(s.pending ? { pending: s.pending } : null), truncated: s.truncated };

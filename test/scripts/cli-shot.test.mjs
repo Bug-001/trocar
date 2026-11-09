@@ -1,8 +1,7 @@
 // test/scripts/cli-shot.test.mjs — the SGR → HTML converter in scripts/cli-shot.mjs.
 //
-// Only the converter is unit-tested: everything else in that script is a browser and a file write,
-// and no-real-os.cjs blocks real OS tools in unit tests on purpose. The renderer is verified by
-// looking at the PNG (D58⑥), which is the whole point of the tool.
+// The converter is unit-tested here; cli-shot-render.test.mjs checks the PNG holds every line. What
+// the PNG looks like is still verified by looking at it (D58⑥), which is the whole point of the tool.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ansiToHtml, rowsNeeded } from '../../scripts/cli-shot.mjs'
