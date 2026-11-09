@@ -55,18 +55,31 @@ const offUntil = (ids) => (ids.length ? `${andList(ids)} ${are(ids)} not capture
 const plain = (why) => String(why).replace(/\b(?:E[A-Z][A-Z0-9_]{2,}|ERR_[A-Z0-9_]+):\s*/g, '')
 /** §1.1 ④ rule 4: an update that stopped after the code changed — where it stopped, what is not captured, and the one way out, `trocar update`;
  *  `first`: the step it cannot do itself, run before it (`where`: the directory to run it in). */
-const stoppedText = (to, what, off, { first = [], where = null, before = [] } = {}) => {
+const stoppedText = (to, what, off, { first = [], where = null, before = [], told = [] } = {}) => {
   const head = `trocar update: ${ver(to) || to} is in place, but ${what}, so the update did not finish.${off.length ? ` ${offUntil(off)}` : ''}`
-  if (before.length) return [head, ...before, 'Then run:', INDENT + 'trocar update'] // `before`: lines of their own (what a step left to do)
-  return [`${head} ${where ? `In ${where}, run:` : 'Run:'}`, ...[...first, 'trocar update'].map((c) => INDENT + c)]
+  if (before.length) return [head, ...told, ...before, 'Then run:', INDENT + 'trocar update'] // `before`: lines of their own (what a step left to do)
+  return [...(told.length ? [head, ...told, where ? `In ${where}, run:` : 'Run:'] : [`${head} ${where ? `In ${where}, run:` : 'Run:'}`]), ...[...first, 'trocar update'].map((c) => INDENT + c)]
 }
 const notRestarted = "trocar's service could not be restarted on it"
 /** The login entry starts another copy of trocar (§5.5): this copy installs itself there, then finishes — both run from this copy. */
-const elsewhereText = (to, root) => [`trocar update: ${ver(to) || to} is in place, but trocar's service starts another copy of trocar at login, so the update did not finish. Run these, in this order:`,
-  INDENT + selfCommand(['install'], { root }), INDENT + selfCommand(['update'], { root })]
+const elsewhereText = (to, root, platform) => {
+  // §1.1⑤: a Windows line never starts with a quoted string (PowerShell reads it as a value), so it names node and quotes the script alone
+  const self = (cmd) => (platform === 'win32' ? `node "${path.win32.join(root, 'bin', 'trocar.mjs')}" ${cmd}` : selfCommand([cmd], { root }))
+  return [`trocar update: ${ver(to) || to} is in place, but trocar's service starts another copy of trocar at login, so the update did not finish. Run these, in this order:`,
+    INDENT + self('install'), INDENT + self('update')]
+}
 const fold = (ls) => ls.filter(Boolean).flatMap((l) => (l.startsWith(INDENT) ? [l] : wrap(l)))
-/** What a step's receipt leaves the user to do (C.2 `pending` with its command: the Linux helper's sudo line, the desktop session's install), a line each. */
-const todos = (doc) => (doc && Array.isArray(doc.pending) ? doc.pending : []).flatMap((p) => [p.reason || p.what, ...(p.command ? [INDENT + p.command] : [])].filter(Boolean).map((l) => (l.startsWith(INDENT) ? l : plain(l))))
+/** What a step's receipt leaves the user to do, a line each and the command under it (C.2): install's `pending`; on's `blocked` with a command (the
+ *  Linux helper's sudo line), its `refused` setup-needed with the commands that fix it, and its install-pending notes. */
+const todos = (doc) => {
+  const rows = (k) => (doc && Array.isArray(doc[k]) ? doc[k] : [])
+  return [...rows('pending').map((p) => [p.reason || p.what, p.command]),
+    ...rows('blocked').filter((b) => b && b.command).map((b) => [b.reason, b.command]),
+    ...rows('refused').filter((x) => x && Array.isArray(x.commands) && x.commands.length).map((x) => [`${x.harness}: ${x.why || x.reason}`, ...x.commands]),
+    ...rows('notes').filter((n) => n && n.code === 'install-pending').map((n) => [`${n.item} is ${n.state}: ${n.why}`, n.command])]
+    .flatMap(([say, ...cmds]) => [...(say ? [plain(say)] : []), ...cmds.filter(Boolean).map((c) => INDENT + c)])
+}
+const once = (ls) => ls.filter((l, k) => l.startsWith(INDENT) || ls.indexOf(l) === k) // a to-do two receipts carry is said once
 /** Set by the update that hands over (step 3) on the process that finishes it: the plan was printed and answered there, so the finish does not print it again (§1.1: one plan per command). */
 export const HANDED_OVER = 'TROCAR_UPDATE_HANDED_OVER'
 
@@ -138,8 +151,13 @@ async function update({ io, env, home, platform, deps, flags }) {
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: r.from, on: [] }, only: 'daemon', details })
   }
 
-  const offFailed = (off, ids) => no('off-failed', `the agents being captured could not be switched off (trocar off exit ${off.exit}), so the code was left as it is`, EXIT.incomplete, null,
-    [`trocar update: capture could not be switched off for ${andList(ids)}, so nothing was changed. See why with trocar update --details.`])
+  const unwritable = (e, so) => [`trocar update: this update could not be written down (${plain((e && e.message) || e)}), so ${so}. Once ${tilde(dir, home)} can be written, run trocar update again.`]
+  const offFailed = (off, ids) => {
+    const why = reasonOf(off.doc) // off's own reason: --details below the line, and in the default text without Node's codes
+    return no('off-failed', `the agents being captured could not be switched off (trocar off exit ${off.exit}), so the code was left as it is`, EXIT.incomplete, why ? `trocar off: ${why}` : null,
+      // shortcut: off's own reason can name its internals, so it is --details' until the shared catalog words it (plainReason, lane 4)
+      [`trocar update: capture could not be switched off for ${andList(ids)}, so the code was left as it is. Run trocar update --details to see why.`])
+  }
 
   /** The handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the code says. */
   // the harness index loads only when there is a file to read: a run with none (most) does not import it
@@ -185,7 +203,7 @@ async function update({ io, env, home, platform, deps, flags }) {
     if (offExit.exit !== EXIT.ok) return offFailed(offExit, on.ids)
     try { writeHandover(handover, { from: r.from, on: on.ids }, fs) } catch (e) {
       await reOn(on.ids, { io, env, home, platform, deps })
-      return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so the code was left as it is`)
+      return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so the code was left as it is`, EXIT.incomplete, null, unwritable(e, 'the code was left as it is'))
     }
     const why = []
     if ((await runPlaceCli([staged], { io: { out: () => {}, err: (x) => why.push(String(x)) }, home, platform, deps })) !== EXIT.ok) {
@@ -240,7 +258,7 @@ async function update({ io, env, home, platform, deps, flags }) {
       [{ what: 'finish', detail: `${why}${on.ids.length ? `, and capture is switched on again for ${on.ids.join(', ')}` : ''}`, harnesses: on.ids }], running !== to ? CUT : null, false, // replaceDaemon leaves a collector on this code running
       [updateLine(from, to, 'Finish updating'), running !== to && on.ids.length ? `Open connections of ${andList(on.ids)} through trocar are cut once; they reconnect.` : null])
     if (g !== null) return g
-    try { writeHandover(handover, { from, on: on.ids }, fs) } catch (e) { return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`) }
+    try { writeHandover(handover, { from, on: on.ids }, fs) } catch (e) { return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`, EXIT.incomplete, null, unwritable(e, 'nothing was changed')) }
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from, on: on.ids }, details })
   }
   // a git checkout is the other way (D67②); anything else is told how it was installed, and nothing is touched
@@ -250,7 +268,7 @@ async function update({ io, env, home, platform, deps, flags }) {
   const waiting = await pending()
   // the process that pulled started this one (step 3): its code is the newest it saw, so it finishes — no second fetch
   if (waiting && env[HANDED_OVER] === '1') return resume(waiting)
-  const checked = checkout(git)
+  const checked = checkout(git, tilde(root, home))
   // §5.5: a finish that stopped may have stopped on a defect of the code that ran it, so newer code is pulled first and finishes it; code that
   // cannot be pulled refuses nothing — this code finishes, and the receipt says the newer code was not pulled
   const unpulled = (why) => `the newest code was not pulled: ${why}. This update was finished with the code here`
@@ -273,7 +291,7 @@ async function update({ io, env, home, platform, deps, flags }) {
     try { writeHandover(handover, { from: waiting.from, on: all }, fs) } catch (e) { return finishHere(`this update could not be written down (${(e && e.message) || e})`, 'the update could not be written down') }
     return pullAndHand(checked, all, async (why) => finishHere(why, 'the fast-forward failed'))
   }
-  if (checked.refusal) return no(checked.refusal.code, checked.refusal.message)
+  if (checked.refusal) return no(checked.refusal.code, checked.refusal.message, EXIT.incomplete, null, [checked.refusal.text])
   const { head, target } = checked
   if (head === target) {
     const running = await daemonCode({ platform, dir, env, fs, deps })
@@ -301,14 +319,15 @@ async function update({ io, env, home, platform, deps, flags }) {
   if (offExit.exit !== EXIT.ok) return offFailed(offExit, on.ids)
   try { writeHandover(handover, { from: r.from, on: on.ids }, fs) } catch (e) {
     await reOn(on.ids, { io, env, home, platform, deps })
-    return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so the code was left as it is`)
+    return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so the code was left as it is`, EXIT.incomplete, null, unwritable(e, 'the code was left as it is'))
   }
 
   // 2 · (old code) the merge, and `npm install` when what is installed changed with it; a merge that fails puts back what step 1 switched off
   return pullAndHand(checked, on.ids, async (why) => {
     await reOn(on.ids, { io, env, home, platform, deps })
     try { fs.rmSync(handover, { force: true }) } catch { /* the reason below is what matters */ }
-    return no('merge-failed', `the new code could not be merged in (${why}); the agents that were being captured are being captured again`)
+    return no('merge-failed', `the new code could not be merged in (${why}); the agents that were being captured are being captured again`, EXIT.incomplete, null,
+      [`trocar update: the new code could not be merged in (${plain(why).replace(/^git exit \d+$/, 'git failed')}), so the code was left as it is. Run trocar update again.`])
   })
 
   /** Steps 2 and 3: fast-forward to the upstream, `npm install` when the merge changed what is installed, then the new code finishes in a
@@ -332,15 +351,19 @@ async function update({ io, env, home, platform, deps, flags }) {
 /** 先查 (§5.5): → `{ head, target }`, or `{ refusal: { code, message, why, short } }` — `why` is the reason alone, `message` adds what to do,
  *  `short` says it without git's own words (the default text of a finish that could not pull).
  *  Your own changes first: a merge would carry them, and trocar does not touch what you wrote. */
-function checkout(git) {
-  const refuse = (code, why, todo = '', short = why) => ({ refusal: { code, why, short, message: todo ? `${why}. ${todo}` : why } })
+function checkout(git, where) {
+  // `text`: the default output's line (§1.1 ④): git's own words stay, its exit code is --details', and one way out
+  const refuse = (code, why, todo = '', short = why, text = `${why}${todo ? `. ${todo}` : ''}`) => ({ refusal: { code, why, short, text: `trocar update: ${text}.`, message: todo ? `${why}. ${todo}` : why } })
   const dirty = git('status', '--porcelain', '--untracked-files=no')
-  if (dirty.code !== 0) return refuse('checkout-unreadable', `this checkout could not be read (${dirty.err || `git exit ${dirty.code}`})`, '', 'this checkout could not be read')
+  if (dirty.code !== 0) return refuse('checkout-unreadable', `this checkout could not be read (${dirty.err || `git exit ${dirty.code}`})`, '', 'this checkout could not be read',
+    `this checkout could not be read${dirty.err ? ` (${dirty.err})` : ''}, so nothing was changed. Once git status works in ${where}, run trocar update again`)
   if (dirty.out) return refuse('local-changes', 'this checkout has changes of your own', 'Commit or put them aside, then run trocar update again')
   const upstream = git('rev-parse', '--abbrev-ref', '@{u}')
-  if (upstream.code !== 0) return refuse('no-upstream', 'the branch this checkout is on has no upstream, so there is nothing to update from')
+  if (upstream.code !== 0) return refuse('no-upstream', 'the branch this checkout is on has no upstream, so there is nothing to update from', '', undefined,
+    `the branch of ${where} has no upstream, so there is nothing to update from. Set its upstream with git branch --set-upstream-to, then run trocar update again`)
   const fetched = git('fetch')
-  if (fetched.code !== 0) return refuse('fetch-failed', `the newest code could not be fetched (${fetched.err || `git exit ${fetched.code}`})`, '', 'git fetch failed')
+  if (fetched.code !== 0) return refuse('fetch-failed', `the newest code could not be fetched (${fetched.err || `git exit ${fetched.code}`})`, '', 'git fetch failed',
+    `the newest code could not be fetched${fetched.err ? ` (${fetched.err})` : ''}, so nothing was changed. Once git fetch works in ${where}, run trocar update again`)
   const head = git('rev-parse', 'HEAD').out
   const target = git('rev-parse', '@{u}').out
   if (head !== target && git('merge-base', '--is-ancestor', 'HEAD', '@{u}').code !== 0) {
@@ -366,7 +389,7 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   const daemonFailed = problems.length > 0
   // the login entry runs another copy: install here would quietly point it at this one — which copy it runs is the operator's to say
   if (only === 'daemon' || replaced.elsewhere) {
-    if (daemonFailed) { r.problems = problems; return no('daemon-not-replaced', problems[0], EXIT.incomplete, null, replaced.elsewhere ? elsewhereText(r.to, root) : stoppedText(r.to, notRestarted, waiting.on)) }
+    if (daemonFailed) { r.problems = problems; return no('daemon-not-replaced', problems[0], EXIT.incomplete, null, replaced.elsewhere ? elsewhereText(r.to, root, platform) : stoppedText(r.to, notRestarted, waiting.on, { told })) }
     lines.push(details ? `trocar is now running ${r.to}.` : `trocar's service now runs ${ver(r.to) || r.to}.`)
     return done(EXIT.ok)
   }
@@ -385,16 +408,23 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
     const why = !daemonFailed && failed && reasonOf(failed.doc) // problems[0] is that step's line unless the collector's came first
     // the default text: where it stopped and `trocar update`; what the step leaves to the user (a desktop session's install) goes first
     const what = daemonFailed ? notRestarted : failed.command === 'install' ? 'trocar could not finish setting itself up' : 'capture could not be switched on again'
-    return no(daemonFailed ? 'daemon-not-replaced' : 'not-finished', problems[0], EXIT.incomplete, why ? `trocar ${failed.command}: ${why}` : null,
-      [...stoppedText(r.to, what, waiting.on, { before: daemonFailed ? [] : todos(failed.doc) }), ...told])
+    const left = daemonFailed ? [] : once([...todos(installed.doc), ...todos(r.on)])
+    // --details: the reason and the step's own, then every other note and the to-dos — all the default text says, and more (§1.1 ④ rule 10)
+    const more = [...(why ? [`trocar ${failed.command}: ${why}`] : []), ...r.notes.filter((n) => n !== problems[0]).map((n) => `Note: ${n}`), ...left]
+    return no(daemonFailed ? 'daemon-not-replaced' : 'not-finished', problems[0], EXIT.incomplete, more.length ? more.join('\n') : null,
+      stoppedText(r.to, what, waiting.on, { before: left, told }))
   }
-  try { fs.rmSync(handover, { force: true }) } catch (e) { return no('handover-not-removed', `this update finished, but it could not be written off (${(e && e.message) || e})`) }
+  try { fs.rmSync(handover, { force: true }) } catch (e) {
+    return no('handover-not-removed', `this update finished, but it could not be written off (${(e && e.message) || e})`, EXIT.incomplete, null,
+      [`trocar update: updated to ${ver(r.to) || r.to}, but ${tilde(handover, home)} could not be removed (${plain((e && e.message) || e)}). Remove it: while it is there, every trocar update finishes this one again.`])
+  }
   // §5.5: one line, then what the install and the on it ran leave to the user, a line each; the rows and every note are --details'
-  if (!details) lines.push(...fold([`Updated to ${ver(r.to) || r.to}.${waiting.on.length ? ` Capturing ${andList(waiting.on)} again.` : ''}`, ...told, ...todos(installed.doc), ...todos(r.on)]))
+  const left = once([...todos(installed.doc), ...todos(r.on)])
+  if (!details) lines.push(...fold([`Updated to ${ver(r.to) || r.to}.${waiting.on.length ? ` Capturing ${andList(waiting.on)} again.` : ''}`, ...told, ...left]))
   else lines.push(`trocar is now ${r.to}${waiting.from && waiting.from !== r.to ? ` (it was ${waiting.from})` : ''}.`, // no record of the code before: no "was"
     ...pairs([[ROW.collector, r.restarted ? 'running the new code' : 'already running this code'], [ROW.again, waiting.on.join(', ') || 'nothing was being captured']]),
     // what the install it ran says is still the user's to do, and this run's own notes (D38): the update is often the only install the user sees
-    ...[...new Set([...((installed.doc && Array.isArray(installed.doc.notes)) ? installed.doc.notes : []), ...r.notes])].flatMap((n) => wrap(`Note: ${n}`)))
+    ...[...new Set([...((installed.doc && Array.isArray(installed.doc.notes)) ? installed.doc.notes : []), ...r.notes])].flatMap((n) => wrap(`Note: ${n}`)), ...fold(left))
   return done(EXIT.ok)
 }
 

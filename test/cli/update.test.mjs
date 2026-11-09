@@ -777,6 +777,11 @@ test('§1.1 ④: the default text of every update says no unsaid word, and --det
     'a finishing process killed': { on: ['codex'], set: (s) => s.ahead('killed.md'), childExit: { signal: 'SIGKILL' } },
     'a finish whose newer code cannot be fetched': { set: (s) => { waitingFor(s); fs.rmSync(s.up, { recursive: true, force: true }) } },
     'the collector alone': { daemonCode: () => '0.0.9+1234567' },
+    'changes of your own': { on: ['codex'], set: (s) => { fs.writeFileSync(path.join(s.root, 'package.json'), '{"version":"0.1.0","mine":1}\n'); s.ahead('mine.md') } },
+    'no upstream': { on: ['codex'], set: (s) => git(s.root, 'checkout', '-b', 'side') },
+    'a fetch that fails': { on: ['codex'], set: (s) => fs.rmSync(s.up, { recursive: true, force: true }) },
+    'an off that fails': { on: ['codex'], set: (s) => s.ahead('off-fails.md'), deps: { off: failing('off') } },
+    'a merge that fails': { on: ['codex'], set: (s) => s.ahead('merge-fails.md'), deps: { exec: (f, a, o) => (a.includes('merge') ? { status: 1, stdout: '', stderr: '' } : spawnSync(f, a, o)) } },
   }
   for (const [what, c] of Object.entries(cases)) {
     const out = {}
@@ -789,28 +794,37 @@ test('§1.1 ④: the default text of every update says no unsaid word, and --det
       out[mode] = mode === '--json' ? t.io.json() : t.io.text()
     }
     assert.deepEqual(unsaidIn(out.default), [], `${what}:\n${out.default}`)
+    assert.doesNotMatch(out.default, /\bexit \d+\b/, `${what}: a command's exit code is --details' (§1.1 ④ rule 3):\n${out.default}`)
+    for (const c of out.default.split('\n').filter((l) => /^ {4}\S/.test(l))) assert.ok(out['--details'].includes(c.trim()), `${what}: --details has the command ${c.trim()}:\n${out['--details']}`)
     const same = (x) => x.replace(/\s+/g, ' ').replace(/\+[0-9a-f]{7}\b/g, '+c').replace(/trocar-update-\w+/g, 'sandbox') // each mode had a sandbox (and commits) of its own
     const details = same(out['--details']), r = out['--json']
-    const facts = [r.from, r.to, ...r.harnesses, ...r.notes, ...(r.error ? [r.error.message] : [])].filter((x) => typeof x === 'string' && x)
+    // the versions are the plan's: a refusal before any plan (no `to`) says why alone
+    const facts = [...(r.to ? [r.from, r.to] : []), ...r.harnesses, ...r.notes, ...(r.error ? [r.error.message] : [])].filter((x) => typeof x === 'string' && x)
     for (const f of facts) assert.ok(details.includes(same(f)), `${what}: --details says ${JSON.stringify(f)}:\n${out['--details']}`)
   }
 })
 
 // 1.6 §5.5 · C.2: what the install and the on an update ran leave to the user (`pending`, with the command to run) is the update's to-do: its default
 // text says each item and each command, whether the finish closed or stopped on that step
-test('§5.5: every pending item of the install and the on an update ran is in the update\'s default text, with its command', async () => {
-  const item = (who) => ({ what: `${who}-thing`, reason: `${who}-${Math.random().toString(36).slice(2, 8)} is yours to do`, command: `sudo /opt/${who}/fix --now` })
-  const doc = (command, pending, ok = true) => async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt(command), ok, problems: [], notes: [], pending })); return ok ? EXIT.ok : EXIT.incomplete }
-  for (const [what, deps, items] of [
-    ['an install that finished', (i) => ({ install: doc('install', i) }), [item('install')]],
-    ['an on that finished', (i) => ({ on: doc('on', i) }), [item('on')]],
-    ['an install that stopped', (i) => ({ install: doc('install', i, false) }), [item('install'), item('install')]],
-  ]) {
-    const s = sandbox()
-    fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
-    const t = ctx(s, { deps: deps(items) })
-    await runUpdateCli(['--yes'], t.c)
-    const text = t.io.text().replace(/\s+/g, ' ')
-    for (const p of items) for (const part of [p.reason, p.command]) assert.ok(text.includes(part), `${what}: ${part}\n${t.io.text()}`)
+test('§5.5: every to-do of the install and the on an update ran is in the update\'s default text and its --details, with its command', async () => {
+  const tag = () => Math.random().toString(36).slice(2, 8)
+  // C.2's shapes: install `pending`; on's `blocked` with a command, its setup-needed `refused` with `commands`, its install-pending notes
+  const install = (ok) => { const p = { what: 'the capability helper', reason: `install-${tag()} is yours to do`, command: `sudo /opt/i-${tag()} setup-helper` }; return { items: [[p.reason, p.command]], deps: { install: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('install'), ok, problems: [], notes: [], pending: [p] })); return ok ? EXIT.ok : EXIT.incomplete } } } }
+  const on = (ok) => {
+    const b = { what: 'trocar on', reason: `on-${tag()} blocks it`, command: `sudo /opt/b-${tag()} fix` }
+    const x = { harness: 'codex', reason: 'setup-needed', why: `setup-${tag()} is missing`, commands: [`trocar uninstall-${tag()}`, 'trocar install'] }
+    const n = { code: 'install-pending', item: 'root', state: 'pending', why: `root-${tag()} waits`, command: 'trocar install' }
+    return { items: [[b.reason, b.command], [x.why, ...x.commands], [n.why, n.command]], deps: { on: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('on'), ok, problems: [], blocked: [b], refused: [x], notes: [n] })); return ok ? EXIT.ok : EXIT.incomplete } } }
+  }
+  for (const [what, steps] of [['an install that finished', [install(true)]], ['an on that finished', [on(true)]], ['an install that stopped', [install(false)]],
+    ['an on that stopped after an install with a to-do', [install(true), on(false)]]]) {
+    for (const mode of [[], ['--details']]) {
+      const s = sandbox()
+      fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+      const t = ctx(s, { deps: Object.assign({}, ...steps.map((x) => x.deps)) })
+      await runUpdateCli(['--yes', ...mode], t.c)
+      const text = t.io.text().replace(/\s+/g, ' ')
+      for (const part of steps.flatMap((x) => x.items.flat())) assert.ok(text.includes(part), `${what} ${mode}: ${part}\n${t.io.text()}`)
+    }
   }
 })
