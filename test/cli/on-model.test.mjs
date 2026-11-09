@@ -13,6 +13,12 @@ import { assertEnglish } from '../helpers/english.mjs'
 import { snapshot } from './fixtures/on-ctx.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
+import net from 'node:net'
+import { tmpDir } from '../helpers/tmp.mjs'
+import { restartOf, formatModelOnText } from '../../src/cli/on-model.mjs'
+import { daemonReader } from '../../src/off/daemon-read.mjs'
+import { controlRequest } from '../../src/off/control-client.mjs'
+import { readManifest, saveManifest } from '../../src/collector/core/trust/journal.mjs'
 
 function fakeIo() {
   const out = [], err = []
@@ -504,4 +510,40 @@ test('1.6 §3.3 (darwin): a route this on adds says its registered side effect o
     assert.equal(times(first), 1, `--yes says it once:\n${first.io.text()}`)
     assert.equal(times(await on(w, 'darwin', ['opencode', '--yes'])), 0, 'nothing new: not said again')
   } finally { await server.close() }
+})
+
+// 1.6 §3.3 · D38 (win32): the restart list asks the running daemon's helper for the table, and that question is bounded. A daemon that never answers,
+// or answers past the bound, is not waited on: the local table answers, and when it cannot be read either the receipt says so, never "nothing to restart"
+test('1.6 §3.3 · D38 (win32): a daemon that answers the ps read late or never is not waited on; the local table answers, or "could not be read" is said', { timeout: 30_000 }, async () => {
+  const w = await modelWorld({ os: 'win32', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const m = readManifest(w.dir, fs); m.liveness.codex.on_at = new Date().toISOString(); saveManifest(w.dir, m, fs)
+  const local = { status: 0, stdout: `boot 1\n${JSON.stringify([{ p: 5530, pp: 1, n: 'codex.exe', x: 'C:\\Users\\u\\codex.exe', s: 1, c: 'codex' }])}` }
+  const late = JSON.stringify({ ok: true, data: { procs: [{ pid: 999, ppid: 1, name: 'codex.exe', exe: 'C:\\Users\\u\\codex.exe', startedAt: 1, cmdline: 'codex' }] } })
+  for (const answerAfter of [4500, null]) for (const table of [local, { status: 1, stdout: '', stderr: 'no table' }]) {
+    const sock = path.join(tmpDir('trocar-rs-'), 'c.sock'), conns = new Set(), timers = []
+    let asked = 0
+    const server = net.createServer((c) => {
+      conns.add(c)
+      c.once('data', () => {
+        asked++
+        if (answerAfter != null) timers.push(setTimeout(() => c.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(late)}\r\n\r\n${late}`), answerAfter))
+      })
+    })
+    await new Promise((r) => server.listen(sock, r))
+    try {
+      const reader = daemonReader({ platform: 'win32', request: controlRequest, socketPath: sock })
+      const t0 = Date.now()
+      const rs = await restartOf({ dir: w.dir, fs, ids: ['codex'], os: 'win32', exec: () => table, env: w.env, procs: undefined, reader })
+      const took = Date.now() - t0, what = `answer after ${answerAfter} ms, local exit ${table.status}`
+      assert.equal(asked, 1, `the daemon was asked (${what})`)
+      assert.ok(took < 4000, `returned in ${took} ms (${what})`)
+      const text = formatModelOnText({ harnesses: ['codex'], refused: [], routes: [], restart: rs.restart, notes: rs.notes, problems: [] }, 0, w.home)
+      if (table === local) assert.deepEqual(rs.restart, [{ harness: 'codex', pid: 5530 }], `the local table's process (${what})`)
+      else {
+        assert.deepEqual(rs.restart, [], what)
+        assert.match(text, /could not be read/, `the default text says the restart list could not be read (${what}):\n${text}`)
+      }
+    } finally { timers.forEach(clearTimeout); conns.forEach((c) => c.destroy()); await new Promise((r) => server.close(r)) }
+  }
 })

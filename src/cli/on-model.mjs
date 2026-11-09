@@ -68,7 +68,7 @@ export const formatModelOnText = (r, exit, home) => fit(shortReceipt(r, exit, ho
  *  a route that is read again while running, or on every request, needs no restart. A table or a manifest that cannot be read is said (D38), and so
  *  is a process whose start time is not known: it is never guessed to be one started before. On Windows the table is read again from the running
  *  daemon's helper (no process started), so a process started while the daemon came up is in it. */
-async function restartOf({ dir, fs, ids, os, exec, env, procs, reader }) {
+export async function restartOf({ dir, fs, ids, os, exec, env, procs, reader }) {
   const unread = (e) => ({ restart: [], notes: [{ harness: null, text: `which running agents need a restart could not be read (${errText(e)})` }] })
   let live, list
   try {
