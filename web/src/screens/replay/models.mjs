@@ -20,6 +20,7 @@ import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
 import { ENTRY, ENTRY_TIP } from '../../../legacy/labels/library.mjs'
 import { stepCount, partsOf, stepAt, placeSpan } from './strip-layout.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
+import { titleCase, titleText } from '../library/model.mjs'
 // no price table yet, or an unreadable one: the one reason an unpriced number gives (2.2 §「≈ $」按钮), never "no unit price"
 const tableWhy = (s) => (s.pricingErr ? priceStateNote(null, s.pricingErr) : W.PRICES_LOADING)
 
@@ -88,12 +89,12 @@ export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {})
   const slugOk = meta.project_slug && meta.project_slug !== '_unresolved'
   const hs = Array.isArray(meta.harnesses) ? meta.harnesses : null // the `sessions` multi-harness field; provider:'mixed' is never this signal (D37 ①)
   const hk = meta.harness != null ? harnessKey(meta.harness) : null
-  const unread = meta.title_source === 'unread'
+  const tc = titleCase(meta)
   return {
     back: backOf(libraryHash),
     // the title never borrows the id or the start time (the start is its own part)
-    title: { text: meta.title ?? null, fallback: meta.title != null ? null : unread ? W.PROMPT_UNREAD : W.UNTITLED, id: meta.session_id || '',
-      sourceTip: meta.title != null ? W.TITLE_FROM_WIRE : unread ? W.PROMPT_UNREAD_TIP : W.TITLE_UNTITLED_NEXT_TIP }, // a title always comes from the wire (4.4)
+    title: { text: meta.title ?? null, fallback: tc === 'title' ? null : titleText(meta), id: meta.session_id || '', // the list's rule (1.8 §标题规则)
+      sourceTip: { title: W.TITLE_FROM_WIRE, unread: W.PROMPT_UNREAD_TIP, none: W.TITLE_UNTITLED_NEXT_TIP, pending: W.TITLE_PENDING_TIP }[tc] }, // a title always comes from the wire (4.4)
     chip: { key: hk, name: harnessName(meta.harness), raw: harnessRaw(meta.harness), icon: harnessIconUrl(meta.harness),
       href: hk ? `#/capture?h=${encodeURIComponent(hk)}` : '#/capture', inferred: !!meta.harness_inferred, synthesized: !!meta.session_synthesized,
       multi: hs && hs.length > 1 ? { text: W.MULTIPLE_AGENTS, tip: W.MULTIPLE_AGENTS_TIP, inferred: hs.some((x) => x && (x.inferred || x.harness_inferred)) } : null },
