@@ -288,3 +288,81 @@ test('on --details (macOS / Windows): a written route is named by its file, not 
     for (const p of planned) assert.ok(details.includes(`~${p.paths[0].slice(home.length)}`), `${platform}: names ${p.paths[0]}:\n${details}`)
   }
 })
+
+// 1.6 §3.3「要确认时」: a dry run's default plan leaves out the agents already on with every entry intact, and names them in one line; --details and
+// --json keep the full plan. Asserted on structure (which paths and names appear), never the wording.
+const runOn = async (w, argv) => {
+  const { runOnCli } = await import('../../src/cli/on.mjs')
+  const out = [], io = { out: (s) => out.push(s), err: (s) => out.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {}, text: () => out.join('\n') }
+  const unit = { path: '/nowhere/unit', text: () => '', registered: () => ({ state: 'present' }) }
+  const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+  const exit = await runOnCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps })
+  return { exit, text: io.text() }
+}
+async function inPlaceWorld(onFirst) {
+  const fs = (await import('node:fs')).default
+  const { modelWorld } = await import('../helpers/model-world.mjs')
+  const { renderWrapper } = await import('../../src/collector/arch/darwin/wrapper.mjs')
+  const { startControlServer } = await import('../../src/collector/core/control.mjs')
+  const w = await modelWorld({ os: 'darwin', commands: ['codex', 'opencode'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const { tmpDir } = await import('../helpers/tmp.mjs')
+  const sock = path.join(tmpDir('sock'), 'c.sock'), token = 't'.repeat(32) // outside HOME: the tree's bytes are compared
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+  } })
+  const first = await runOn(w, [...onFirst, '--yes'])
+  assert.equal(first.exit, 0, first.text)
+  const planned = JSON.parse((await runOn(w, ['--dry-run', '--json'])).text).planned.filter((p) => p.route)
+  const pathsOf = (h) => planned.filter((p) => p.harness === h).flatMap((p) => p.paths)
+  const named = (text, f) => text.includes(f) || text.includes(`~${f.slice(w.home.length)}`)
+  return { w, fs, server, planned, pathsOf, named }
+}
+
+test('on --dry-run (macOS): every agent already on with its entries intact → no plan row, one line names them all, exit 0, nothing written', async () => {
+  const { snapshot } = await import('./fixtures/on-ctx.mjs')
+  const { w, server, pathsOf, named } = await inPlaceWorld(['codex', 'opencode'])
+  try {
+    assert.ok(pathsOf('codex').length && pathsOf('opencode').length)
+    const before = snapshot(w.home)
+    const dry = await runOn(w, ['--dry-run'])
+    assert.equal(dry.exit, 0, dry.text)
+    for (const f of [...pathsOf('codex'), ...pathsOf('opencode')]) assert.ok(!named(dry.text, f), `no plan row names ${f}\n${dry.text}`)
+    assert.ok(dry.text.split('\n').some((l) => l.includes('codex') && l.includes('opencode')), `one line names both\n${dry.text}`)
+    assert.deepEqual(snapshot(w.home), before, 'nothing written')
+  } finally { await server.close() }
+})
+
+test('on --dry-run (macOS): one of two agents already on → the plan rows name only the other\'s files, one line names the one already on', async () => {
+  const { w, server, pathsOf, named } = await inPlaceWorld(['codex'])
+  try {
+    const dry = await runOn(w, ['--dry-run'])
+    assert.equal(dry.exit, 0, dry.text)
+    for (const f of pathsOf('codex')) assert.ok(!named(dry.text, f), `codex is not in the plan: ${f}\n${dry.text}`)
+    for (const f of pathsOf('opencode')) assert.ok(named(dry.text, f), `opencode is in the plan: ${f}\n${dry.text}`)
+    assert.ok(dry.text.split('\n').some((l) => l.includes('codex') && !l.includes('opencode')), `one line names codex\n${dry.text}`)
+  } finally { await server.close() }
+})
+
+test('on --dry-run (macOS): an agent whose entry is no longer intact is in the plan, not named as already on', async () => {
+  const { w, fs, server, pathsOf, named } = await inPlaceWorld(['codex', 'opencode'])
+  try {
+    const f = pathsOf('codex')[0]
+    fs.writeFileSync(f, 'EDITED_BY_USER=1\n')
+    const dry = await runOn(w, ['--dry-run'])
+    assert.equal(dry.exit, 0, dry.text)
+    assert.ok(named(dry.text, f), `codex's changed file is in the plan\n${dry.text}`)
+    for (const g of pathsOf('opencode')) assert.ok(!named(dry.text, g), `opencode is still in place: ${g}\n${dry.text}`)
+  } finally { await server.close() }
+})
+
+test('on --dry-run --details / --json (macOS): agents already on keep their full plan', async () => {
+  const { w, server, planned, named } = await inPlaceWorld(['codex', 'opencode'])
+  try {
+    assert.deepEqual([...new Set(planned.map((p) => p.harness))].sort(), ['codex', 'opencode'], '--json planned is whole')
+    const details = (await runOn(w, ['--dry-run', '--details'])).text
+    for (const f of planned.flatMap((p) => p.paths)) assert.ok(named(details, f), `--details names ${f}\n${details}`)
+  } finally { await server.close() }
+})
