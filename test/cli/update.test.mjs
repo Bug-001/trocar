@@ -618,6 +618,24 @@ test('§5.5: an npm copy with nothing to finish says npm i -g <name>@latest and 
   assert.ok(lines.indexOf(`npm i -g ${name}@latest`) < lines.indexOf('trocar update'), 'npm first')
 })
 
+// §5.5 已是最新: HEAD equal to upstream is not up to date while the last install ran other code — a git pull by hand. The finish is an update's:
+// what is on goes off (this code, by the records), then the service, install and on again; install alone cannot redo the entries on wrote (D55①)
+test('§5.5: after a git pull by hand (install.code older), update switches off what is on, then finishes: install and on again', async () => {
+  const s = sandbox({ on: ['codex'] })
+  installedBy(s, '0.1.0+0000000')
+  const t = ctx(s)
+  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  const names = (calls) => calls.map((a) => a.filter((x) => !x.startsWith('--')))
+  assert.deepEqual([names(t.calls.off), t.calls.install.length, names(t.calls.on), t.calls.child], [[['codex']], 1, [['codex']], []], t.io.text())
+  assert.equal(s.handover(), null, 'finished: the file is gone')
+
+  const same = sandbox({ on: ['codex'] })
+  installedBy(same, codeId(same.root))
+  const u = ctx(same)
+  assert.equal(await runUpdateCli(['--yes'], u.c), EXIT.ok, u.io.text())
+  assert.deepEqual([u.calls.off, u.calls.install, u.calls.on], [[], [], []], 'installed on this code and the service on it: up to date, nothing changed')
+})
+
 // ── V124 · the login entry is written before the collector is replaced ─────────────────────────────────────────────────────────────
 /** The world of a finish whose daemon may run another code, on a REAL entry file: `disk` is what the file holds now (default: this copy's
  *  program line under the older text), the entry this code renders has one line more, and `install` writes that text when it runs. The login

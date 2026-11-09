@@ -32,6 +32,7 @@ import { runInstallCli } from './install.mjs'
 import { replaceDaemon, daemonCode, entryStartsThisCopy, CUT } from './replace-daemon.mjs'
 import { runPlaceCli } from './place.mjs'
 import { stopByHand } from '../off/daemon-stop.mjs'
+import { installedCode } from './refresh.mjs'
 import { PS_FILE_ARGS } from '../collector/arch/win32/custody.mjs'
 import { printJson } from './json.mjs'
 import { isProxyMode } from '../off/mode.mjs'
@@ -160,6 +161,26 @@ async function update({ io, env, home, platform, deps, flags }) {
     const why = reasonOf(off.doc) // off's own reason: --details below the line, and in the default text without Node's codes
     return no('off-failed', `the agents being captured could not be switched off (trocar off exit ${off.exit}), so the code was left as it is`, EXIT.incomplete, why ? `trocar off: ${why}` : null,
       [`trocar update: capture could not be switched off for ${andList(ids)}${said(why) ? ` (${said(why)})` : ''}, so the code was left as it is. ${said(why) ? 'Fix that, then run trocar update again.' : 'Run trocar update --details to see why.'}`])
+  }
+
+  /** §5.5: the code changed without an update (a git pull by hand): this code switches off what is on (by the records: the old code is gone), writes
+   *  the handover file, and finishes as step 4 does — the service, install, and on again, so on's entries are this code's. */
+  const pulledByHand = async (installed, running) => {
+    const on = harnessesOn({ home, fs })
+    if (on.error) return no('state-unreadable', on.error)
+    const from = installed || 'code it does not name'
+    r.from = from; r.harnesses = on.ids
+    const g = await gate([[ROW.version, `${from} -> ${r.to} (pulled without trocar update)`], [ROW.offOn, on.ids.join(', ') || 'nothing is being captured']],
+      [{ what: 'finish', detail: `install last ran on ${from}, so ${on.ids.length ? `${on.ids.join(', ')} ${on.ids.length > 1 ? 'are' : 'is'} switched off, ` : ''}${running !== r.to ? 'the collector is replaced, ' : ''}install runs again${on.ids.length ? ', and capture is switched on again' : ''}`, harnesses: on.ids }],
+      COST, false, [updateLine(installed, r.to, 'Finish updating'), offWhile(on.ids)])
+    if (g !== null) return g
+    const offExit = on.ids.length ? await step(deps.off || runOffCli, [...on.ids, '--yes', '--json'], { io, env, home, platform, deps }) : { exit: EXIT.ok }
+    if (offExit.exit !== EXIT.ok) return offFailed(offExit, on.ids)
+    try { writeHandover(handover, { from: installed, on: on.ids }, fs) } catch (e) {
+      await reOn(on.ids, { io, env, home, platform, deps })
+      return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`, EXIT.incomplete, null, unwritable(e, 'nothing was changed'))
+    }
+    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: installed, on: on.ids }, details })
   }
 
   /** The handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the code says. */
@@ -298,7 +319,10 @@ async function update({ io, env, home, platform, deps, flags }) {
   const { head, target } = checked
   if (head === target) {
     const running = await daemonCode({ platform, dir, env, fs, deps })
+    const installed = installedCode(home, fs)
     r.to = r.from
+    // §5.5 已是最新: the last install ran other code (a git pull by hand) — finished as an update is: what is on goes off, then step 4
+    if (installed !== undefined && installed !== r.from) return pulledByHand(installed, running)
     if (running === r.from) { lines.push(`trocar update: already up to date (${r.from}).`); return done(EXIT.ok) }
     return daemonOnly(running)
   }
@@ -435,17 +459,6 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
     // what the install it ran says is still the user's to do, and this run's own notes (D38): the update is often the only install the user sees
     ...[...new Set([...((installed.doc && Array.isArray(installed.doc.notes)) ? installed.doc.notes : []), ...r.notes])].flatMap((n) => wrap(`Note: ${n}`)), ...fold(left))
   return done(EXIT.ok)
-}
-
-/** The code that last ran `install` here, as its record in the install manifest names it (§5.5): undefined when install never ran; null
- *  when the record names none (a build before the field) or the manifest cannot be read — not this code either way, and `install` says
- *  what is wrong with a manifest it cannot use. */
-function installedCode(home, fs) {
-  let m
-  try { m = readManifest(collectorDir(home), fs) } catch { return null }
-  if (m && m.unsupported) return null
-  if (!m || !m.install || typeof m.install !== 'object') return undefined
-  return typeof m.install.code === 'string' && m.install.code ? m.install.code : null
 }
 
 /** `~/.trocar/collector/update.json` as written: `{ from, on: [harness…] }`, or null when there is none (or it holds no list of names).
