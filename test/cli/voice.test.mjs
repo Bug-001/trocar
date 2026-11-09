@@ -6,10 +6,10 @@ import path from 'node:path'
 import { andList, countsBy } from '../../src/cli/text.mjs'
 import { unsaidIn, loopbackWords } from '../../src/cli/words.mjs'
 import { hostTreeNote } from '../../src/collector/core/proxymode/entries.mjs'
-import { formatUninstallReceipt, formatUninstallText, formatOnReceipt, formatOnText, formatOnPlan } from '../../src/cli/receipt.mjs'
+import { formatUninstallReceipt, formatUninstallText, formatOnReceipt, formatOnText, formatOnPlan, formatPlan } from '../../src/cli/receipt.mjs'
 import { formatModelOnReceipt, formatModelOnText } from '../../src/cli/on-model.mjs'
 import { newReceipt } from '../../src/off/schema.mjs'
-import { formatOffReceipt, formatOffText } from '../../src/off/receipt.mjs'
+import { formatOffReceipt, formatOffText, endSentence } from '../../src/off/receipt.mjs'
 
 const HOMES = { darwin: '/Users/alice', linux: '/home/alice', win32: 'C:\\Users\\alice' }
 const P = (platform) => (platform === 'win32' ? path.win32 : path.posix)
@@ -238,4 +238,53 @@ test('uninstall: a refusal (capture on, or the service not answering) is one sho
   const text = formatUninstallText(silent, { home, platform: 'darwin' })
   for (const p of silent.problems) assert.ok(text.replace(/\s+/g, ' ').includes(p), `${p}\n${text}`)
   assert.doesNotMatch(text, /Nothing was changed/, 'it did write the desired state')
+})
+
+// 1.6 §3.3: the processes to restart are the subject of the sentence after them, so its verb agrees with how many there are
+test('on --details: the restart line says "it" for one process and "they" for more, on every OS', () => {
+  for (const platform of ['linux', 'darwin', 'win32']) {
+    const home = HOMES[platform]
+    for (const [restart, agree, not] of [[[{ harness: 'codex', pid: 5530 }], /\bit connects\b/, /\bthey connect\b/], [[{ harness: 'codex', pid: 5530 }, { harness: 'pi', pid: 6677 }], /\bthey connect\b/, /\bit connects\b/]]) {
+      const r = { ...onReceipt({ restart, notes: [] }, platform), routes: [] }
+      const details = (platform === 'linux' ? formatOnReceipt(r, { home, platform }) : formatModelOnReceipt(r, 0, home)).replace(/\s+/g, ' ')
+      assert.match(details, agree, `${platform}, ${restart.length}:\n${details}`)
+      assert.doesNotMatch(details, not)
+    }
+  }
+  const plan = { restart: [{ harness: 'codex', pid: 5530 }], manifest: P('linux').join(HOMES.linux, '.trocar', 'collector', 'install-manifest.json') }
+  assert.match(formatPlan(plan, { home: HOMES.linux }).replace(/\s+/g, ' '), /\bit connects\b/, 'the Linux --details plan too')
+})
+
+// §1.1: a note is a sentence, and a sentence ends in one mark — none added after one that is there
+test('on and off --details: every note ends in exactly one full stop', () => {
+  const said = ['which running agents need a restart could not be read (EPERM)', 'the start time of 1 pi process could not be read, so whether it needs a restart is not known', 'the daemon was asked twice.']
+  const flat = (s) => s.replace(/\s+/g, ' ')
+  const once = (details, n, where) => { const t = n.replace(/\.$/, ''); assert.ok(flat(details).includes(`${t}.`) && !flat(details).includes(`${t}..`), `${where}: ${t}\n${details}`) }
+  const linux = formatOnReceipt(onReceipt({ notes: said }), { home: HOMES.linux, platform: 'linux' })
+  for (const n of said) once(linux, n, 'linux on')
+  for (const platform of ['darwin', 'win32']) {
+    const details = formatModelOnReceipt({ ...onReceipt({}, platform), routes: [], notes: said.map((text) => ({ harness: null, text })) }, 0, HOMES[platform])
+    for (const n of said) once(details, n, `${platform} on`)
+    const off = formatOffReceipt(offReceipt({ notes: said }, platform), { home: HOMES[platform] })
+    for (const n of said) once(off, n, `${platform} off`)
+  }
+  assert.deepEqual(['kept at ~/.trocar/backup/aa-1', 'kept (see above.)', 'run:\n    trocar off', 'kept (~/.codex/.env)'].map(endSentence), ['kept at ~/.trocar/backup/aa-1', 'kept (see above.)', 'run:\n    trocar off', 'kept (~/.codex/.env).'], 'a path, a mark inside a closing ) and a command line end it')
+})
+
+test('off --details says once that the daemon keeps running', () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const details = formatOffReceipt(offReceipt({}, platform), { home: HOMES[platform] })
+    assert.ok(details.split('keeps running').length - 1 <= 1, `${platform}:\n${details}`)
+  }
+})
+
+// §3.3's --details sample: a route row names the file the setting is in; a route written this run carries no `at`, its plan row has the paths
+test('on --details (macOS / Windows): a written route is named by its file, not its route id', () => {
+  for (const platform of ['darwin', 'win32']) {
+    const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+    const planned = [{ harness: 'codex', route: 'env', kind: 'dotenv-block', paths: [j('.codex', '.env')] }, { harness: 'claude-code', route: 'settings', kind: 'json-key', paths: [j('.claude', 'settings.json')] }]
+    const r = { ...onReceipt({ restart: [], notes: [] }, platform), planned, routes: planned.map((p) => ({ harness: p.harness, route: p.route, ok: true })) }
+    const details = formatModelOnReceipt(r, 0, home)
+    for (const p of planned) assert.ok(details.includes(`~${p.paths[0].slice(home.length)}`), `${platform}: names ${p.paths[0]}:\n${details}`)
+  }
 })

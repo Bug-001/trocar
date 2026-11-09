@@ -5,7 +5,7 @@
 // the absolute path.
 import path from 'node:path'
 import { standaloneCommand, appDir } from '../off/paths.mjs'
-import { COMMAND_INDENT, isCommandLine, foldHang } from '../off/receipt.mjs'
+import { COMMAND_INDENT, isCommandLine, foldHang, endSentence } from '../off/receipt.mjs'
 import { noColor, WIDTH, wrap, pairs, size, tildeText, escRe, andList } from './text.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
 import { TASK_NAME } from '../off/win32.mjs'
@@ -157,7 +157,7 @@ export function formatPlan(p, { home = null, platform = 'linux', command = 'on',
     ...watchLines(p.watch, t).map((l) => `  ${l}`),
     ...(p.skipped && p.skipped.length ? [`Skipped: ${p.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`] : []),
     ...(p.edited || []).map(editedLine),
-    ...(p.restart && p.restart.length ? [`Restart to capture: ${p.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}. Until then they connect as they do now.`] : []),
+    ...(p.restart && p.restart.length ? [`Restart to capture: ${p.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}. ${untilRestart(p.restart.length)}`] : []),
   ].filter((l) => l !== null), { home }).join('\n')
 }
 
@@ -221,7 +221,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   if (lingerText(r)) lines.push(lingerText(r))
   for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(...adoptedLines(h, x, topology && topology[h]))
   if (r.daemon && !daemonBit) lines.push('The collector is not running, so nothing is captured yet.', 'Start it: trocar daemon') // the command keeps its own line: folding must not cut it (§1.1③)
-  if (r.restart.length) lines.push(`  ${c.yellow('!')} Restart to capture: ${r.restart.map((x) => `${x.harness} (pid ${x.pid} started before the certificate was there)`).join(', ')}. Until then they connect as they do now.`)
+  if (r.restart.length) lines.push(`  ${c.yellow('!')} Restart to capture: ${r.restart.map((x) => `${x.harness} (pid ${x.pid} started before the certificate was there)`).join(', ')}. ${untilRestart(r.restart.length)}`)
   const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length
   // A note is a problem exactly when the run's own `problems` list names it — never merely because the whole run failed.
   const problemNotes = r.problems ? new Set(r.problems) : null
@@ -230,7 +230,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
     if (h && fresh && !fresh.has(h)) continue // the one-time note of a harness wired before: doctor and --json carry it from here
     if (!h && nothingNew) continue // a machine-level note with nothing new done (an idempotent on repeats it)
     const isProblem = problemNotes ? problemNotes.has(n) : r.ok === false && past
-    lines.push(`${isProblem ? 'Problem' : 'Note'}: ${n}`)
+    lines.push(`${isProblem ? 'Problem' : 'Note'}: ${endSentence(n)}`)
   }
   for (const b of r.blocked || []) if (b.command) lines.push(commandLine(b.command)) // C.1 blocked[].command: the line that lifts the stop, whole on its own line (§1.1⑥)
   lines.push(`Stop: trocar off`)
@@ -384,6 +384,9 @@ export function formatUninstallText(r, { home = null, platform = process.platfor
   lines.push(...uninstallActions(r, { past, home, platform, asking, short: true }))
   return fit(lines, { home }).join('\n')
 }
+
+/** 1.6 §3.3「之后的效果」: what the `n` processes to restart do meanwhile, the verb agreeing with them (--details). */
+export const untilRestart = (n) => `Until then ${n === 1 ? 'it connects as it does' : 'they connect as they do'} now.`
 
 /** 1.6 §3.3「之后的效果」: the agents whose processes were running before capture was on, as one line (several agents in one); each process and its
  *  pid is a --details fact. → [line] or []. */
