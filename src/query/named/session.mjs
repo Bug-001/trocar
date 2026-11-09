@@ -65,8 +65,10 @@ export const params = Object.freeze(Object.keys(about.params));
  *  Measured 2026-10-22 as what a cold read of a test/query/big-session.mjs live(0.48) session holds more than one of live(0.24),
  *  per call, after a forced GC, the objects each part dominates summed (a heap snapshot's dominator tree; the caches of K, the
  *  segment index rows and the blocks' columns left out): 633 B (the reduction state and its marks 346, the row and shared value
- *  index 203, the plan 84), × 1.25. */
-export const SPINE_PER_ROW = 792;
+ *  index 203, the plan 84). What a call holds is V8's object layout and moves with the Node build: spine-heap.test.mjs read 958 B on
+ *  Node 26.0, 818 on 22.23 and 701 on 26.13 for the same calls and blocks (2026-11-09). So the bound is 3.5's ceiling, 1 KiB, not one
+ *  build's reading × 1.25. */
+export const SPINE_PER_ROW = 1024;
 /** What the reduction keeps in the heap per distinct block of the session (its store's slot, its block columns and interned keys:
  *  src/view/reduce.mjs, src/query/projection.mjs): 222 B measured (after a forced GC, in a heap of the worker's size) as what a
  *  read of a test/query/big-session.mjs session holds more with 1,500 fresh tool definitions a call than with none, per block
