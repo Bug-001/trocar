@@ -203,6 +203,15 @@ test('no-real-os: a write in the temp dir or the checkout, and a read anywhere, 
   assert.deepEqual(takeRefusals(), [])
 })
 
+// 0.1 §3: a session runtime directory the developer has (Linux) is not the test's: the socket of their running collector is under it
+test('no-real-os: a set XDG_RUNTIME_DIR is moved into the temp dir, where nothing is; an unset one stays unset', () => {
+  const real = tmpDir('trocar-xdg-'), read = (env) => spawnSync(process.execPath, ['--require', GUARD, '-e', 'process.stdout.write(JSON.stringify(process.env.XDG_RUNTIME_DIR ?? null))'], { env, encoding: 'utf8' })
+  const base = { PATH: process.env.PATH, TMPDIR: os.tmpdir() }
+  const moved = JSON.parse(read({ ...base, XDG_RUNTIME_DIR: real }).stdout)
+  assert.ok(moved && moved !== real && moved.startsWith(os.tmpdir()) && !fs.existsSync(moved), `moved to ${moved}`)
+  assert.equal(JSON.parse(read(base).stdout), null)
+})
+
 test('no-real-os: a refused write nobody acknowledged fails the process, like a refused tool', () => {
   const r = spawnSync(process.execPath, ['--require', GUARD, '-e', `try { require('node:fs').writeFileSync(${JSON.stringify(INTO)}, '') } catch {}`], { encoding: 'utf8' })
   assert.equal(r.status, 1)
