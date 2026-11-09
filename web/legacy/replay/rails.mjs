@@ -173,7 +173,7 @@ export function wireRails(el, s) {
     if (t) { const p = placeOf(s.lanes, t.dataset.rid); if (p) selectTick(s, p.lane, p.i); return }
     // anywhere on an open rail picks the nearest call IN the window, so every call is reachable, not just the drawn ticks
     const body = e.target.closest('.railbody[data-lane]')
-    if (body) { const lane = laneOf(body.dataset.lane); if (lane && lane.calls.length) selectTick(s, lane, nearestByX(lane, s.anchorTs, s.view, fracOf(body, e))) }
+    if (body) { const lane = laneOf(body.dataset.lane), i = lane && lane.calls.length ? nearestByX(lane, s.anchorTs, s.view, fracOf(body, e)) : -1; if (i >= 0) selectTick(s, lane, i) }
   }
   const onMove = (e) => {
     const body = e.target.closest && e.target.closest('.railbody[data-lane]')
