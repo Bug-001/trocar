@@ -13,6 +13,7 @@ import { renderWrapper as darwinWrapper } from '../../src/collector/arch/darwin/
 import { renderWrapper as win32Wrapper } from '../../src/collector/arch/win32/wrapper.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 import { turnOnModel } from '../../src/collector/model-on.mjs'
+import { pacAddress } from '../../src/collector/core/proxymode/entries.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
 import { readIngressConfig } from '../../src/collector/core/ingress-config.mjs'
 import { resolveLoc } from '../../src/collector/core/proxymode/sources.mjs'
@@ -121,7 +122,8 @@ test('4.6「日志」· 1.6 V106: the door password is in ingress.json and the s
     const m = JSON.parse(fs.readFileSync(mf, 'utf8'))
     const ports = readIngressConfig({ dir: w.dir }).groupPorts
     for (const x of [...m.entries, ...m.files].filter((y) => y.door_sha256)) {
-      x.door = doorOf(`${x.harness}:${x.route}`, ports[`${x.harness}:${x.route}`])
+      const d = doorOf(`${x.harness}:${x.route}`, ports[`${x.harness}:${x.route}`])
+      x.door = byName.get(x.harness).proxyMode.routes[x.route].value === 'pac-url' ? pacAddress(T(), d) : d // a PAC route's record holds the PAC address on wrote (4.11 P10)
       assert.equal(sha256(x.door), x.door_sha256, 'the clear door rebuilt is the one on record')
       for (const p of (x.secret && x.secret.fields) || []) { const o = p.slice(0, -1).reduce((a, k) => a[k], x); o[p.at(-1)] = o[p.at(-1)].split('***').join(T()) }
       delete x.door_sha256; delete x.secret

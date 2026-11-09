@@ -11,6 +11,7 @@ import { answer } from '../../src/query/answers.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { extendSession } from '../../src/query/named/session.mjs'
+import { drain } from '../helpers/bounded.mjs'
 
 // An fs that says which raw segment files were opened or read (a record read back, or the live segment indexed again).
 function counting() {
@@ -83,7 +84,7 @@ test('a session answered with pending is answered again, once the worker\'s slic
   }
   const first = tagged(await answer(req, ctx))
   assert.ok(first.pending, 'the worker\'s 50 ms slice left members above the mark')
-  while (await extendSession(ctx, A.id, Infinity));
+  await drain(() => extendSession(ctx, A.id, Infinity))
   const done = await answer(req, ctx)
   assert.equal(tagged(done).pending, undefined)
   assert.ok(done.bytes.equals((await answer(req, { home, fs: { ...fs } })).bytes), 'the local path\'s bytes')
@@ -94,7 +95,7 @@ test('a session answered with pending is answered again, once the worker\'s slic
   let pendings = 0
   for (let i = 0; i < 3; i++) if (tagged(await answer(req, again)).pending) pendings++
   assert.ok(pendings > 0, 'the new members were answered with pending')
-  while (await extendSession(again, A.id, Infinity));
+  await drain(() => extendSession(again, A.id, Infinity))
   assert.equal(tagged(await answer(req, again)).pending, undefined)
 })
 

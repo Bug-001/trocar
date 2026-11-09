@@ -263,7 +263,7 @@ test('4.4 #17 tips: the keeper\'s new model calls of a keyed session ride on x-t
   try {
     for (let i = 0; i < N; i++) {
       assert.equal(store.envelope(env(i, { endpoint: '/v1/responses', proc: { pid: 7, agent: 'codex' }, req_headers: { 'content-type': 'application/json', 'session-id': KEY }, req_body: JSON.stringify({ model: 'gpt-5', input: `turn ${i}` }) })).ok, true)
-      if (i % 4 === 0) assert.equal(store.envelope(env(i, { endpoint: '/v1/chat/completions', host: 'api.moonshot.cn', proc: { pid: 8, agent: 'kimi' }, req_body: JSON.stringify({ model: 'kimi', messages: [{ role: 'system', content: 'You are Kimi.' }, { role: 'user', content: `q ${i}` }] }) })).ok, true)
+      if (i % 4 === 0) assert.equal(store.envelope(env(i, { endpoint: '/v1/chat/completions', host: 'api.moonshot.cn', proc: { pid: 8, agent: 'kimi' }, req_body: JSON.stringify({ model: 'kimi', messages: [{ role: 'system', content: 'You are Kimi.' }, ...Array.from({ length: i / 4 + 1 }, (_, j) => ({ role: 'user', content: `q ${4 * j}` }))] }) })).ok, true)
       if (i % 10 === 9) { await pause(20); await keeper.idle() } // several passes: the table keeps the newest across them
     }
     await pause(20); await keeper.idle()
@@ -322,7 +322,7 @@ test('4.4 #17 tips · daemon: a keyed call captured through the real door → th
   const open = []
   try {
     const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
     assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 0)
     const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
     const auth = Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')

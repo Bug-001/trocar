@@ -2,14 +2,17 @@
 // recorded per call; never from the UA or the harness). The board (src/view/extract.mjs) and the ETL
 // adapters both dispatch through this, so the two readers cannot disagree about what a record is.
 // Leaf module.
-import { detect as anthropicShape, serverEdited, CC_SECTIONS } from './cc.mjs';
+import { detect as anthropicShape, serverEdited, replyEnd } from './cc.mjs';
 import { contextStateOfRequest } from './capture-labels.mjs';
 import { wireShape, RESPONSES, CHAT } from './openai.mjs';
 import { isWsHandshake } from './ws-handshake.mjs';
 import { hintsOf } from './harnesses.mjs';
 import { RESPONSES_WS } from './openai-ws.mjs';
+import { ANTHROPIC } from './anthropic-board.mjs';
 import { CC_THREADS, isContinuation } from './cc-threads.mjs';
-import { endpointOf, pathOf } from './endpoints.mjs';
+import { endpointOf, pathOf, failedOf } from './endpoints.mjs';
+import { respOf } from './record-fields.mjs';
+import { sharesBody } from './request-body.mjs';
 
 export { isWsHandshake };
 
@@ -43,11 +46,12 @@ export function wireFormatOf(rec) {
   return anthropicShape(rec) ? 'anthropic' : null;
 }
 
-// Board dissectors for the flat-lane wires (D25: dissector = adapter; the shared assembler only calls
-// them). The Anthropic wire is assembled by the multi-lane analyzer (src/view/analyze.mjs), so it has no
-// row here. Adding a wire = one dissector object + one row. The WebSocket row's object also carries the
-// cross-record hooks (prepare → a planner with context(rec) / admits / laneOf / failed, src/dissect/openai-ws.mjs).
-const BOARD = { 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-responses-ws': RESPONSES_WS };
+// Board dissectors (D25: dissector = adapter; the shared assembler only calls them). Every wire is a row;
+// its `fold` says how the board folds it: 'flat' (one lane per call, the OpenAI wires) or 'tree' (lanes with
+// sub-agents, the Anthropic wire, ./anthropic-board.mjs). Adding a wire = one dissector object + one row. The
+// WebSocket row's object also carries the cross-record hooks (prepare → a planner with context(rec) / admits /
+// laneOf / ended, src/dissect/openai-ws.mjs).
+const BOARD = { anthropic: ANTHROPIC, 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-responses-ws': RESPONSES_WS };
 export function boardDissectorFor(rec) {
   return BOARD[wireFormatOf(rec)] || null;
 }
@@ -56,6 +60,23 @@ export const boardDissectorOf = (format) => BOARD[format] || null;
 // The cross-record context hooks of the Anthropic wire (Message Threads, src/dissect/cc-threads.mjs), which the
 // multi-lane assembler calls the way the flat-lane one calls a board dissector's prepare.
 export const MULTI_LANE_CONTEXT = CC_THREADS;
+
+// The reply's own terminal (3.1 `ended`) of a record, read from its own `resp`: 'ok' | 'failed' | null.
+export function replyEndOf(rec) {
+  if (wireFormatOf(rec) === 'anthropic') return replyEnd(respOf(rec));
+  const d = boardDissectorFor(rec);
+  return d && d.ended ? d.ended(d.normResp(rec), rec) : null;
+}
+// 3.5 §访问模式 ②: a reply the client closed after its own success terminal — an error envelope (`error`, the reply under resp.partial)
+// that is not failed once read as that reply. → the record as that reply (resp = the partial, `error` kept, the request body shared) | null.
+// A status ≥ 400 never qualifies; nor does a partial with no named terminal (cut at the cap, not decoded).
+export function closedAfterEnd(rec) {
+  const r = respOf(rec);
+  if (!r || r.kind !== 'error' || !r.partial || typeof r.partial !== 'object') return null;
+  const copy = sharesBody({ ...rec, resp: r.partial, _closed: true }, rec); // `_closed`: read as the reply of an error envelope
+  if (rec._stream) Object.defineProperty(copy, '_stream', { value: rec._stream, enumerable: false, configurable: true });
+  return failedOf({ status: r.status, ws: rec.transport === 'ws', error: true, ended: replyEndOf(copy), cut: true }) ? null : copy;
+}
 
 // The lane of a call on a flat-lane wire (the OpenAI wires), ONE rule for the board and the ETL: the dissector's
 // own lane (a warm-up, 3.1:37), else the harness table's hint (3.4), else main (gate G15). Claude Code's
@@ -68,9 +89,7 @@ export function flatLaneOf(d, rec) {
 
 // The request's top-level keys that become context blocks, per wire format; every other top-level key is a
 // non-block key the board lists one by one (4.6 R2 「不成块的顶层键逐个列出」).
-const ANTHROPIC_BLOCK_KEYS = Object.freeze(CC_SECTIONS.map((x) => x.id));
 export function blockKeysOf(format) {
-  if (format === 'anthropic') return ANTHROPIC_BLOCK_KEYS;
   return (BOARD[format] && BOARD[format].blockKeys) || [];
 }
 

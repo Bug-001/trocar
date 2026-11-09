@@ -5,6 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HOOK_ENV, SOURCES, isTrocarDoorUrl, upstreamFor } from '../../../../src/collector/core/proxymode/chain.mjs'
+import { translateBypass } from '../../../../src/collector/arch/darwin/upstream.mjs'
 import { bypassHit } from '../../../../src/collector/core/upstream-shape.mjs'
 import { CODE } from '../../../../src/collector/core/codes.mjs'
 import { CODES } from '../../../../src/health/codes.mjs'
@@ -193,6 +194,40 @@ test('CM20 unidentified process at a door: its own hook value first, then 2, 4, 
       assert.equal(unread.url, sp ? VERGE.url : null, `${label}: the system proxy when there is one`)
     }
   }
+})
+
+// P7 step 1 / ⑥ for an unidentified child of an agent (curl run by an agent whose proxy is only in the shell it started from): with no hook value of
+// its own and no recorded prior, step 3 runs for its nearest routed agent ancestor (`ancestor()`, the collector's walk), with that ancestor's NO_PROXY
+// (both spellings) as the bypass — what the child would have inherited without trocar (invariant 6). No ancestor, or one that throws: as before.
+test('CM20 unidentified child: step 3 by its routed agent ancestor, that ancestor\'s NO_PROXY the bypass; no ancestor is as before', async () => {
+  const bypassOf = (t) => translateBypass(t, 'no-proxy').bypass
+  const INTRA = 'svc.intra.corp'
+  let n = 0
+  for (const d of descs) for (const name of d.proxy.env) for (const noName of ['NO_PROXY', 'no_proxy']) for (const prior of [null, PARENT]) for (const sp of [null, VERGE]) {
+    const child = (env, ancestor) => ({ pid: 100, start: 1, env, hookOnly: true, ...(ancestor === undefined ? {} : { ancestor: async () => { if (ancestor instanceof Error) throw ancestor; return ancestor } }) })
+    const at = (env, anc) => upstreamFor({ desc: d, facts: child(env, anc), recordedPrior: prior, systemProxy: sp, isTrocarDoor: isDoor, bypassOf })
+    const pick = (r) => ({ source: r.source, url: r.url, code: r.code })
+    const today = pick(await at({ [name]: DOOR }))
+    const label = `${d.name} ${name} ${noName} prior=${prior} sp=${!!sp}`
+    const agentEnv = { [name]: CORP, [noName]: `localhost,.intra.corp` }
+    for (const [how, anc] of [['parent', facts(agentEnv)], ['a door in the ancestor, the user\'s value above it', facts({ [name]: DOOR, [noName]: '.intra.corp' }, facts(agentEnv))]]) {
+      const r = await at({ [name]: DOOR }, anc)
+      if (prior) { assert.deepEqual([r.source, r.url], ['config-prior', PARENT], `${label} ${how}: a recorded prior comes first`); continue }
+      assert.deepEqual([r.source, r.url], ['process-env', CORP], `${label} ${how}: the ancestor's own value`)
+      assert.equal(bypassHit(r.bypass, INTRA), true, `${label} ${how}: the ancestor's NO_PROXY goes direct`)
+      assert.equal(bypassHit(r.bypass, 'api.example'), false, `${label} ${how}`)
+      n++
+    }
+    const hooked = await at({ [HOOK_ENV]: HOOKED, [name]: DOOR }, new Error('the walk is not asked when the child has its own hook value'))
+    assert.deepEqual([hooked.source, hooked.url], ['hook', HOOKED], `${label}: the child's own hook value first`)
+    for (const [how, anc] of [['no ancestor', null], ['the walk failed', new Error('EPERM')]]) assert.deepEqual(pick(await at({ [name]: DOOR }, anc)), today, `${label} ${how}: as before`)
+    const unread = await at({ [name]: DOOR }, facts(null))
+    if (prior) assert.equal(unread.source, 'config-prior', label)
+    else assert.deepEqual([unread.source, unread.code], ['unknown', CODE.priorProxyUnknown], `${label}: the ancestor's environment unread is unknown (D38)`)
+    const own = await upstreamFor({ desc: d, facts: facts(agentEnv), systemProxy: sp, isTrocarDoor: isDoor, bypassOf })
+    assert.deepEqual([own.url, own.bypass], [CORP, []], `${label}: an identified agent applies its own NO_PROXY before the door`)
+  }
+  assert.ok(n >= descs.length * 2, `cases: ${n}`)
 })
 
 // P7 step 3 with the agent's own proxy files: name by name in the agent's order, an `override` file's value, else the environment's, else a `fill` file's

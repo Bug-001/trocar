@@ -46,17 +46,24 @@ export const HEALTH_READ = Object.freeze({
   partial: ' · partly unreadable',
   agents: (n) => `${n} agent${n === 1 ? ' is' : 's are'} not fully captured`,
   others: (n) => `${n} other problem${n === 1 ? '' : 's'} open`,
-  groups: (n) => `${n} failure group${n === 1 ? '' : 's'} in the last 24 hours`,
+  groups: (n) => `${n} failure group${n === 1 ? '' : 's'}`, // the window is the capture log's `since` (1.6 C.3), not a fixed 24 h
 })
 
 // the words more than one screen shows the same way
 // a failed /api read (1.5 K-29): what could not be read + the cause class, in the board's own words — never the server's text.
-// status 0 = no full answer (cannot connect, cut, timed out); a number = the code the service answered; none = no class known
-export const READ_FAIL = (what, status) => `${what} could not be read${status === 0 ? ': cannot reach the trocar service'
-  : typeof status === 'number' ? `: the trocar service returned ${status}` : ''}`
+// status 0 = no full answer (cannot connect, cut); `late` = the read deadline ended it (status 0 too: the service is there, it did not
+// answer in time); a number = the code the service answered; none = no class known
+export const READ_FAIL = (what, status, late = false) => `${what} could not be read${late ? ': trocar did not answer in time'
+  : status === 0 ? ': cannot reach the trocar service' : typeof status === 'number' ? `: the trocar service returned ${status}` : ''}`
 export const READING = 'Reading…' // the content area while a screen module loads (web/src/LegacyScreen.tsx)
+// a first read of the list that is taking long (1.8 §载入). True with no update too: a deleted index is built the same way
+export const LIST_WAIT = 'Building the session list. This can take a few minutes.'
 export const WINDOW_LABEL = Object.freeze({ '24h': '24 hours', '7d': '7 days', all: 'All' })
-export const UNTITLED = 'Untitled session'
-// a title the answer does not know yet (title_source 'pending', 1.8 §标题规则): not the same as no title
+export const UNTITLED = 'No prompt captured'
+// a title this read could not take from its record (1.8 §标题规则): a read failure, not a fact about the session; the next read tries again
+export const PROMPT_UNREAD = 'Prompt could not be read'
+// a title the answer does not hold: a title_source the board does not know, or none, as in a list stored by the release before
+// (title_source 'pending', 1.8 §标题规则 rule 4): not a fact about the session
 export const TITLE_PENDING = 'Title not read yet'
 export const TITLE_PENDING_TIP = 'The title is still being read from the captured requests; it shows on the next refresh'
+export const PROMPT_UNREAD_TIP = 'The record that holds this session\'s first prompt could not be read. The next read tries again'

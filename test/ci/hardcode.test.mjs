@@ -71,7 +71,8 @@ export function identityFindings(descs) {
         if (ARCH.test(n)) out.push(`${where}: name ${JSON.stringify(n)} pins a CPU architecture`)
         if (at.startsWith('names') && WIDE.has(n) && x.args == null && x.entry == null) out.push(`${where}: ${n} is an interpreter name; the item needs an args or entry pattern`)
       }
-      for (const k of ['args', 'entry']) if (x[k] != null && overfit(String(x[k]))) out.push(`${where}.${k}: ${x[k]} pins a version or a CPU architecture`)
+      for (const k of ['args', 'entry', 'exe']) if (x[k] != null && overfit(String(x[k] instanceof RegExp ? x[k].source : x[k]))) out.push(`${where}.${k}: ${x[k]} pins a version or a CPU architecture`)
+      if (x.exe != null && /^\^/.test(x.exe instanceof RegExp ? x.exe.source : String(x.exe))) out.push(`${where}.exe: ${x.exe} is anchored at the start, an install location; match the part inside the app bundle`)
     }
     for (const os of ['darwin', 'win32']) {
       const t = d[os]
@@ -96,6 +97,7 @@ test('2 · the guard goes red on each kind of bad descriptor, naming harness.pat
     { name: 'h5', processes: { names: [{ name: 'node', args: String.raw`openai\.chatgpt-26\.1002\.51308-darwin-aarch64` }] } },
     { name: 'h6', processes: { names: [{ name: 'h6' }] }, darwin: { forms: [{ id: 'h6.cli', g: 'h6.env', supported: true, match: { image: 'h6' } }] } },
     { name: 'h7', processes: { names: [{ name: 'h7' }] }, win32: { processes: { names: [{ name: 'h7' }] }, forms: [] } },
+    { name: 'h8', processes: { names: [{ name: 'h8' }], exclude: [{ name: 'h8', exe: /^\/Applications\/H8\.app\/Contents\/MacOS\/H8$/ }] } },
   ]
   for (const d of bad) {
     const got = identityFindings([d])

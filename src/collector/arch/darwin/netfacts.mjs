@@ -94,6 +94,6 @@ export async function darwinNetFacts(ctx, deps = {}) {
     // the `HTTPS*` keys are the hop an HTTPS request takes (the `HTTP*` ones alone send HTTPS direct, WinINET's own rule); the value is kept beside the PAC flag, and the topology prefers the flag
     systemProxy = { value: scutil.HTTPSEnable === true && scutil.HTTPSProxy ? `http://${scutil.HTTPSProxy}${scutil.HTTPSPort != null && scutil.HTTPSPort !== '' ? `:${scutil.HTTPSPort}` : ''}` : null, pac: scutil.ProxyAutoConfigEnable === true }
   } else { systemProxy = { unknown: { reason: scutil.reason, detail: `scutil --proxy: ${scutil.detail}` } }; unknowns.push({ fact: 'systemProxy', reason: scutil.reason, detail: `scutil --proxy: ${scutil.detail}` }) }
-  const model = await modelNetForms({ os: 'darwin', home, env, status, settings, harnesses, procs, systemProxy, chainSp: scutil.ok ? chainSystemProxy(scutil) : { ok: false }, dirs: dirsOf(home), fs: deps.fs })
+  const model = await modelNetForms({ os: 'darwin', home, env, status, settings, harnesses, procs, systemProxy, chainSp: scutil.ok ? chainSystemProxy(scutil) : { ok: false }, dirs: dirsOf(home), fs: deps.fs || (ctx.deps && ctx.deps.fs) })
   return { routing: 'proxy', listeners, procs, systemProxy, ...model, unknowns }
 }

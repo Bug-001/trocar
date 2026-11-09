@@ -1,7 +1,7 @@
 // replay/rails.mjs — the overlay rows under the main track (1.3 §叠加轨; the track parts themselves are 2.1's): the
-// 子 agent group, the 后台调用 group (both collapsed by default — a collapsed group draws only the failed × and, since
-// S13, the flagged marks) and the token 计数 row (mini bars, open by default, at most 300 drawn). Words come from the
-// lane kind table (labels/replay.mjs) — never the server's icon or note (the note rides into the drawer's 技术细节).
+// 子 agent group, the 后台调用 group (both collapsed by default — a collapsed group draws only the failed ×) and the token
+// 计数 row (mini bars, open by default, at most 300 drawn). Words come from the lane kind table (labels/replay.mjs) — never
+// the server's icon or note (the note rides into the drawer's 技术细节).
 // Every count the rows name is the full truth; only what is drawn is windowed and sampled.
 // `el` is #rails; `s` is the replay desk's state object.
 import { esc, kf, usd } from '../core/fmt.mjs'
@@ -10,20 +10,16 @@ import { attrSel } from '../core/dom.mjs'
 import { when } from './analysis.mjs'
 import { xOf, windowCalls, nearestByX, nearestByTs, turnsReviewed, placeOf } from './lanes.mjs'
 import { usageOf, priceMatch, costOf, isFailed as failOf } from '../core/metrics.mjs'
-import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, ONLY_MAIN } from '../labels/replay.mjs'
+import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, BG_ROW_HINT, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, ONLY_MAIN } from '../labels/replay.mjs'
 import { L } from '../core/labels.mjs'
 
 // only the lanes that read the conversation get the review bracket (2.1 ⑤)
 export const reviewing = (lane) => lane.kind === 'monitor' || lane.kind === 'token-count'
 
 // ── ticks ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-// a call a monitor verdict flagged: the verdict lives in its held lane's `events` (type monitor, 3.5 §会话读); a lane that is
-// not held says nothing per call (its header's `flagged` marks the row name)
-const flaggedOf = (s, lane, c) => { const h = s.desk && s.desk.held.get(lane.id), e = h && (h.events.get(c.rid) || []).find((x) => x.type === 'monitor'); return !!(e && e.flagged === true) }
-
 // ticks outside the brush window are culled, not piled at the edges; a tick names its call by data-rid, never by a place in the lane:
 // the lanes can move on before the tick is drawn again (2.3 §播放头是调用).
-// A failed call draws ×; a monitor verdict flagged true carries the mark.
+// A failed call draws ×. No safety-review mark until the server reads its verdicts right (2.1 §边界情况 安全审查的结论).
 export function renderTicks(lane, s) {
   const win = windowCalls(lane, s.anchorTs, s.view)
   const x = (c) => (xOf(s.anchorTs, s.view, c.ts) * 100).toFixed(2)
@@ -40,44 +36,42 @@ export function renderTicks(lane, s) {
     }).join('')
   }
   return win.map(({ c, i }) =>
-    `<span class="tick ${flaggedOf(s, lane, c) ? 'flag' : ''} ${failOf(c) ? 'errtick' : ''}" data-lane="${esc(lane.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(tip(c, i))}"></span>`).join('')
+    `<span class="tick ${failOf(c) ? 'errtick' : ''}" data-lane="${esc(lane.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(tip(c, i))}"></span>`).join('')
 }
 
-// the marks a collapsed group still draws: the failed × of every member lane, and its flagged monitor calls —
-// each one clickable, opening that call in the drawer
+// the marks a collapsed group still draws: the failed × of every member lane, each one clickable, opening that call in the drawer
 function collapsedMarks(lanes, s) {
   const x = (c) => (xOf(s.anchorTs, s.view, c.ts) * 100).toFixed(2)
-  return lanes.flatMap((l) => windowCalls(l, s.anchorTs, s.view).filter((o) => failOf(o.c) || flaggedOf(s, l, o.c)).map((o) => ({ ...o, l })))
-    .map(({ c, i, l }) => {
-      const head = `${laneWord(l.kind)} · call ${i + 1} · ${when(c.ts)}`
-      return failOf(c)
-        ? `<span class="tick errtick" data-lane="${esc(l.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(head + ' · call failed')}"></span>`
-        : `<span class="tick flag" data-lane="${esc(l.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(head + ' · ' + FLAGGED_WORD)}"></span>`
-    }).join('')
+  return lanes.flatMap((l) => windowCalls(l, s.anchorTs, s.view).filter((o) => failOf(o.c)).map((o) => ({ ...o, l })))
+    .map(({ c, i, l }) => `<span class="tick errtick" data-lane="${esc(l.id)}" data-rid="${esc(c.rid)}" style="left:${x(c)}%" title="${esc(`${laneWord(l.kind)} · call ${i + 1} · ${when(c.ts)} · call failed`)}"></span>`).join('')
 }
 
-// one lane's own row. Background kinds are named by their word + the full call count; a subagent is named by its task
+// one lane's name. Background kinds are named by their word + the full call count; a subagent is named by its task
 // (S4) or the server's label as-is, with the call count and the ≈ cost of the whole lane.
+function railName(l, s, sub) {
+  if (!sub) return laneTimes(laneWord(l.kind), l.count ?? l.calls.length)
+  const model = (c) => (c.rec && c.rec.request && c.rec.request.model) || ''
+  let sum = 0, priced = 0, from = false
+  for (const c of l.calls) {
+    if (failOf(c)) continue // a failed call is not billed
+    const u = usageOf(c), m = u && s.pricing ? priceMatch(s.pricing, model(c)) : null
+    const v = m ? costOf(m.row, u) : null
+    if (v == null) { if (u) from = true; continue }
+    sum += v; priced++; if (m.exact === false) from = true
+  }
+  const task = String(l.task != null && l.task !== '' ? l.task : l.label || '')
+  // no call priced (or no table yet): no ≈ $ at all, never a $0 (1.3 子 agent 行名)
+  return `${task} · ${callsWord(l.count ?? l.calls.length)}` + (priced ? ` · ≈ ${from ? 'from ' : ''}${usd(sum)}` : '')
+}
+
+// one lane's own row
 function railHtml(l, s, { sub = false } = {}) {
   const col = s.collapsedRails.has(l.id)
   const hint = laneKind(l.kind).hint
-  let name
-  if (sub) {
-    const model = (c) => (c.rec && c.rec.request && c.rec.request.model) || ''
-    let sum = 0, from = false
-    for (const c of l.calls) {
-      if (failOf(c)) continue // a failed call is not billed
-      const u = usageOf(c), m = u && s.pricing ? priceMatch(s.pricing, model(c)) : null
-      const v = m ? costOf(m.row, u) : null
-      if (v == null) { if (u) from = true; continue }
-      sum += v; if (m.exact === false) from = true
-    }
-    const task = String(l.task != null && l.task !== '' ? l.task : l.label || '')
-    name = `${task} · ${callsWord(l.count ?? l.calls.length)}` + (sum > 0 || from ? ` · ≈ ${from ? 'from ' : ''}${usd(sum)}` : '')
-  } else name = laneTimes(laneWord(l.kind), l.count ?? l.calls.length)
+  const name = railName(l, s, sub)
   // the row name ellipsizes in the gutter; its hover carries the whole of it, the lane's own label and the kind's hint
   const lab = String(l.label || '')
-  const tip = [name, lab && !name.includes(lab) ? lab : '', l.flagged === true ? FLAGGED_WORD : '', hint].filter(Boolean).join(' · ')
+  const tip = [name, lab && !name.includes(lab) ? lab : '', hint].filter(Boolean).join(' · ')
   return `<div class="rail k-${esc(l.kind)} tkrow">` +
     `<div class="tgut railname ${col ? 'col' : ''}" data-toggle="${esc(l.id)}" title="${esc(tip)}"><span class="tw">${discChev(!col)}</span> <span class="tn">${esc(name)}</span></div>` +
     (col ? '<div class="tlane"></div>' : `<div class="tlane railbody" data-lane="${esc(l.id)}">${renderTicks(l, s)}</div>`) + `</div>`
@@ -92,18 +86,38 @@ function tcRailHtml(l, s) {
   return `<div class="rail k-token-count tkrow"><div class="tgut railname ${col ? 'col' : ''}" data-toggle="token-count" title="${esc(hint)}"><span class="tw">${discChev(!col)}</span> <span class="tn">${esc(TC_ROW(l.count || l.calls.length))}</span></div>${col ? '<div class="tlane"></div>' : body}</div>`
 }
 
-// < 900 px the subagent / 后台调用 / 全程 rows fold into one closed row (1.2 §窄屏); the fold state is a viewport fact,
-// not session data, so it is never reset with a session switch
-const narrowScreen = () => typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches
-const foldRowHtml = (folded) => `<div class="railunfold tkrow" data-railunfold="1" role="button" tabindex="0" aria-label="Overlay rows"><div class="tgut railname"><span class="tw">${discChev(!folded)}</span> <span class="tn">Overlay rows</span></div><div class="tlane"></div></div>`
+// the overlay lanes by the row they sit in
+function rowsOf(s) {
+  const rl = s.lanes.filter((l) => l !== s.anchor)
+  const of = (row) => rl.filter((l) => laneKind(l.kind).row === row)
+  return { subs: of('sub'), bgs: of('bg'), tcs: of('tc') }
+}
+// whether the gutter has any row to open or close (the Tracks menu shows only then): one pass, no rows built
+export const hasRails = (s) => s.lanes.some((l) => l !== s.anchor && ['sub', 'bg', 'tc'].includes(laneKind(l.kind).row))
+const bgCalls = (bgs) => bgs.reduce((n, l) => n + (l.count ?? l.calls.length), 0)
+
+// what can be opened and closed, in the order renderRails draws it: the gutter draws these rows, the Tracks menu lists them
+export function railToggles(s) {
+  const { subs, bgs, tcs } = rowsOf(s)
+  const lane = (l, name) => ({ id: l.id, name, open: !s.collapsedRails.has(l.id) })
+  const out = []
+  if (subs.length > 1) out.push({ id: 'group:sub', name: SUBAGENT_ROW(subs.length), open: s.subgroupOpen })
+  if (subs.length === 1 || s.subgroupOpen) for (const l of subs) out.push(lane(l, railName(l, s, true)))
+  if (bgs.length) out.push({ id: 'group:bg', name: BG_ROW(bgCalls(bgs)), open: s.bgOpen })
+  if (s.bgOpen) for (const l of bgs) out.push(lane(l, railName(l, s, false)))
+  for (const l of tcs) out.push(lane(l, TC_ROW(l.count || l.calls.length)))
+  return out
+}
+
+// one row of railToggles opened or closed; the caller draws
+export function flipRail(s, id) {
+  if (id === 'group:sub') s.subgroupOpen = !s.subgroupOpen
+  else if (id === 'group:bg') s.bgOpen = !s.bgOpen
+  else if (!s.collapsedRails.delete(id)) s.collapsedRails.add(id)
+}
 
 export function renderRails(el, s) {
-  const narrow = narrowScreen()
-  if (s.railsFolded) { el.innerHTML = foldRowHtml(true); return }
-  const rl = s.lanes.filter((l) => l !== s.anchor)
-  const subs = rl.filter((l) => laneKind(l.kind).row === 'sub')
-  const bgs = rl.filter((l) => laneKind(l.kind).row === 'bg')
-  const tcs = rl.filter((l) => laneKind(l.kind).row === 'tc')
+  const { subs, bgs, tcs } = rowsOf(s)
   subs.forEach((l) => { if (!s.subSeeded.has(l.id)) { s.subSeeded.add(l.id); s.collapsedRails.add(l.id) } }) // a fan-out never buries the main track
   let html = ''
   if (subs.length > 1) {
@@ -116,12 +130,11 @@ export function renderRails(el, s) {
   if (bgs.length) {
     const open = s.bgOpen
     html += `<div class="rail tkrow">` +
-      `<div class="tgut railname group ${open ? '' : 'col'}" data-grouptoggle="bg" title="${esc(laneKind('aux').hint)}"><span class="tw">${discChev(open)}</span> <span class="tn">${esc(BG_ROW(bgs.reduce((n, l) => n + (l.count ?? l.calls.length), 0)))}</span></div>` +
+      `<div class="tgut railname group ${open ? '' : 'col'}" data-grouptoggle="bg" title="${esc(BG_ROW_HINT)}"><span class="tw">${discChev(open)}</span> <span class="tn">${esc(BG_ROW(bgCalls(bgs)))}</span></div>` +
       `<div class="tlane">${open ? '' : `<div class="railbody groupbody">${collapsedMarks(bgs, s)}</div>`}</div></div>` +
       (open ? `<div class="bgkids">${bgs.map((l) => railHtml(l, s)).join('')}</div>` : '')
   }
   for (const l of tcs) html += tcRailHtml(l, s)
-  if (narrow) html = foldRowHtml(false) + html
   el.innerHTML = html || `<div class="railsonly">${esc(ONLY_MAIN)}</div>`
   if (s.selTick) { const t = el.querySelector(`[data-rid="${attrSel(s.selTick)}"]`); if (t) t.classList.add('sel') }
 }
@@ -152,16 +165,10 @@ export function wireRails(el, s) {
   const laneOf = (id) => s.lanes.find((l) => l.id === id)
   const fracOf = (body, e) => { const r = body.getBoundingClientRect(); return (e.clientX - r.left) / Math.max(1, r.width) }
   const onClick = (e) => {
-    const uf = e.target.closest('[data-railunfold]')
-    if (uf) {
-      s.railsFolded = !s.railsFolded
-      s.paintFrame() // the desk's view opens or folds the rows around the rails
-      renderRails(el, s); return
-    }
     const gt = e.target.closest('[data-grouptoggle]')
-    if (gt) { if (gt.dataset.grouptoggle === 'sub') s.subgroupOpen = !s.subgroupOpen; else s.bgOpen = !s.bgOpen; renderRails(el, s); return }
+    if (gt) { flipRail(s, 'group:' + gt.dataset.grouptoggle); renderRails(el, s); return }
     const tg = e.target.closest('[data-toggle]')
-    if (tg) { const id = tg.dataset.toggle; if (s.collapsedRails.has(id)) s.collapsedRails.delete(id); else s.collapsedRails.add(id); renderRails(el, s); return }
+    if (tg) { flipRail(s, tg.dataset.toggle); renderRails(el, s); return }
     const t = e.target.closest('.tick, .pbar')
     if (t) { const p = placeOf(s.lanes, t.dataset.rid); if (p) selectTick(s, p.lane, p.i); return }
     // anywhere on an open rail picks the nearest call IN the window, so every call is reachable, not just the drawn ticks

@@ -46,6 +46,8 @@ const olderOff = (routes) => ({ ...routes, 'POST /off': async (q) => {
   if (by !== undefined && !OLD_BY.includes(by)) throw Object.assign(new Error(`"by" names the command stopping the daemon: one of ${OLD_BY.join(', ')}`), { status: 400 })
   return routes['POST /off'](q)
 } })
+const pause = (ms) => new Promise((r) => setTimeout(r, ms))
+const brief = (ms) => pause(Math.min(ms, 25))
 for (const platform of ['darwin', 'win32']) for (const kase of [null, 'older', ...Object.keys(FAILS)]) {
   const fail = FAILS[kase] ? kase : null
   const older = kase === 'older'
@@ -56,11 +58,11 @@ for (const platform of ['darwin', 'win32']) for (const kase of [null, 'older', .
     let boxB = null
     const exec = (file, args) => ({ status: 0, stdout: /ForEach-Object/.test([file, ...args].join(' ')) ? 'boot 1740000000000\n' : '', stderr: '' })
     const deps = {
-      getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs },
+      getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx,
       harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: boxA.unit, exec,
       identity: () => ({ start_time: '111', boot_id: 'boot-1' }), // what the daemons' lock stub wrote
       kill: () => { throw Object.assign(new Error('no'), { code: 'ESRCH' }) }, // never signal the test process
-      drainMs: 1000, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 25))),
+      drainMs: 1000, sleep: brief,
     }
     const status = () => { const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env }); return ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 5000 }) } // the daemon now answering, at its real endpoint
     await withScratchCwd(platform, async () => {
@@ -75,7 +77,10 @@ for (const platform of ['darwin', 'win32']) for (const kase of [null, 'older', .
         const rootB = otherCopy()
         boxB = await liveUnit({ w, platform, daemon: { code: fail === 'elsewhere' ? '9.9.9+fffffff' : codeId(rootB) } }) // what the login entry starts once A is gone
         const nothing = () => ({ code: 0 })
-        const depsB = { ...deps, root: rootB, unit: fail === 'never-up' ? { ...boxB.unit, enable: nothing, start: nothing, startNow: nothing } : boxB.unit }
+        // the replacement waits for B with true pauses: its come-back poll counts pauses (ensureDaemonUp), so a shortened pause shortens the
+        // wait itself and a loaded machine fails a B that is only slow; the drain and stop waits are bounded by the clock, not by the pause.
+        // never-up has nothing coming back, so its wait is kept short
+        const depsB = fail === 'never-up' ? { ...deps, root: rootB, unit: { ...boxB.unit, enable: nothing, start: nothing, startNow: nothing } } : { ...deps, root: rootB, unit: boxB.unit, sleep: pause }
 
         const dry = fakeIo()
         assert.equal(await runInstallCli(['--dry-run', '--json'], { io: dry, env: w.env, home: w.home, platform, deps: depsB }), 0, dry.text())

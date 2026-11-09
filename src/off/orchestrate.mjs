@@ -8,7 +8,7 @@
 //      that cannot be stopped: its entries are undone all the same (the new connections are direct by its stale heartbeat), exit 1, the pid is given
 //   4  the entries: by the manifest (undoHarnesses), or, with no readable manifest, by trocar's own marks (planByMarker) after a yes (R3);
 //      5.1's held requests through `deps.releaseHeld` (5.1 is not built: a seam)
-//   5  with no names: the daemon was asked to exit once drained (step 3) and nothing else — the login registration is install's and off never touches it (D61),
+//   5  nothing: the daemon is never asked to exit (D62 ⑥) and stays, idle; the login registration is install's and off never touches it (D61),
 //      so `on` and `off` are the same after a reboot as before it
 //   6  the receipt (R1) and the `off-note` lines of `flows/`, the last of them `kind:'result'`; exit 0 only when the routing is confirmed off and every
 //      entry is undone (connections that are still draining do not count against it)
@@ -23,9 +23,10 @@ import { collectorDir, stateFile, opLockFile } from './paths.mjs'
 import { readStateFile, setDesired, writeStateAtomic, emptyState } from './state.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
 import { readManifest, refuseOldManifest, unknownItems, undoByHand, MANIFEST_VERSION, OFF_VERSION, PHASES } from './manifest.mjs'
-import { undoHarnesses, undoRootKeys } from './undo.mjs'
+import { undoHarnesses, undoRootKeys, OWNED_ROLES } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
-import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
+import { pathKey } from './fsutil.mjs'
+import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock, stopByHand, WIN_FIND_DAEMON, SUPERVISE_FIRST } from './daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from './control-client.mjs'
 import { unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { isProxyMode } from './mode.mjs'
@@ -41,7 +42,7 @@ import { describeEntry } from './journal.mjs'
 import { orphanBackups } from './backup.mjs'
 import { osRootsFor } from './os-roots.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from './names.mjs'
-import { textLines, labelLines } from './receipt.mjs'
+import { textLines, labelLines, COMMAND_INDENT } from './receipt.mjs'
 
 export const OFF_LOCK_WAIT_MS = 10_000 // 1.6 R12: the lock is waited for at most this long
 const OFF_ASK_MS = 5000 // a daemon that does not answer this fast is stuck (1.6 §1.4 第 2 步)
@@ -78,8 +79,16 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
 /** What the user does when a daemon that answers cannot be made to confirm that its routing is off (1.6 §1.5 「确认不了就不撤」 leaves the entries alone, so the way out is said):
  *  stopping the daemon takes its helper and the links with it, and then the command is run again. On darwin the agent is booted out first — a daemon stopped under a loaded LaunchAgent is pulled right back by KeepAlive (4.9 §4). */
 const wayOut = (w, pid) => w.unitManaged()
-  ? (w.platform === 'darwin' ? `To go on, stop the autostart (launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}), so the daemon is not started again, then run the command again` : `To go on, stop the daemon (systemctl --user stop trocar-collector.service), which takes its links off with it, then run the command again`)
-  : `To go on, stop the daemon (${Number.isInteger(pid) ? `kill ${pid}` : "no pid is on record: find it with pgrep -f 'trocar.* (daemon|collector start)'"}), which takes its links off with it, then run the command again`
+  ? (w.platform === 'darwin' ? withCommands('To go on, stop the autostart, so the daemon is not started again, then run the command again:', [`launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}`]) : withCommands('To go on, stop the daemon, which takes its links off with it, then run the command again:', ['systemctl --user stop trocar-collector.service']))
+  : Number.isInteger(pid) ? killBy(w, pid, 'To go on, stop the daemon, which takes its links off with it, then run the command again:')
+    : withCommands(`To go on, stop the daemon, which takes its links off with it, then run the command again. No pid is on record; find it with:`, findDaemon(w), w.platform === 'win32' ? SUPERVISE_FIRST : null)
+/** A sentence that ends in ":" and the commands it names, each on a line of its own at COMMAND_INDENT, so the receipt prints them whole (1.6 §1.1⑥), then an optional closing sentence. */
+const withCommands = (sentence, commands, after = null) => [sentence, ...commands.map((c) => `${COMMAND_INDENT}${c}`), ...(after ? [after] : [])].join('\n')
+// the commands of this OS that find and stop a daemon by hand: Windows has no pgrep and no kill <pid>. On Windows the daemon is the child of a
+// `daemon --supervise` parent that starts it again after any non-zero exit (arch/win32/autostart.mjs superviseChild), so the supervisor goes
+// first, as stopDaemon does it (daemon-stop.mjs stopByHand): its pid from a supervisor.lock whose holder still runs, else the process to end named by its command line.
+const findDaemon = (w) => (w.platform === 'win32' ? WIN_FIND_DAEMON : ["pgrep -f 'trocar.* (daemon|collector start)'"])
+const killBy = (w, pid, sentence) => { const { commands, after } = stopByHand({ platform: w.platform, dir: path.dirname(w.lockFile), pid, fs: w.fs, run: w.exec, env: w.env }); return withCommands(sentence, commands, after) }
 
 /** Is the autostart going to bring the daemon back the moment it is stopped — systemd's Restart=on-failure mid-wait, or launchd's KeepAlive with the agent still loaded (4.9 §4)? A tool that cannot be asked says no: the lock decides. */
 const unitIsUp = (w) => {
@@ -111,6 +120,15 @@ export function desiredOff(w, ids, installed) {
   return { wrote: true, ids: flips }
 }
 
+/** The harnesses whose desired state is on, other than `ids` (null: every one): the ones the daemon goes on serving after this off. A state file
+ *  that cannot be read counts as all off (1.6 §1.5), so it names none. */
+export function stillOn(w, ids, installed) {
+  let read
+  try { read = readStateFile(w.stateF, { fs: w.fs, installed, now: w.clock() }) } catch { return [] }
+  if (ids === null) return []
+  return Object.entries(read.state.harnesses).filter(([id, e]) => e && e.desired === 'on' && !ids.includes(id)).map(([id]) => id)
+}
+
 // the daemon's connection counts: POST /off answers {closing, waiting, cut}, GET /status {closing, waiting} (nothing is cut by a status read), so `cut` is optional
 const count = (v) => Number.isInteger(v) && v >= 0
 const counts = (r) => (r && count(r.closing) && count(r.waiting) && (r.cut === undefined || count(r.cut)) ? { closing: r.closing, waiting: r.waiting, cut: r.cut ?? 0 } : null)
@@ -118,7 +136,7 @@ const counts = (r) => (r && count(r.closing) && count(r.waiting) && (r.cut === u
 // replaces, counts only harnesses whose state.json says off, and an update leaves the file on, so its 0 does not mean drained (1.6 §5.2)
 const statusCounts = (r) => (r && r.scope === 'memory' ? counts(r) : null)
 
-const EXIT_WAIT_MS = 10_000 // a daemon asked to exit at once stops within its stop grace (2 s) and the half second its `now` exit waits; past this the caller's stop takes over
+const EXIT_WAIT_MS = 10_000 // a daemon asked to exit at once stops within its stop grace (2 s) and the half second its `now` exit waits; past this much SILENCE the caller's stop takes over (its sealing progress restarts it, 1.6 §3.6)
 export const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
 
 // The daemon was asked to exit once drained: wait until the connections it can see the end of are closed (`closing` is 0), it has gone, or `boundMs` is up.
@@ -139,9 +157,12 @@ async function waitForDrain(w, first, boundMs, socketPath) {
  *  on until what it can see the end of is closed; one still there then is asked to go at once (`now`: what it relays is cut) and waited on
  *  until its pid has exited, so the stop that follows never lands inside its barrier. `uninstall` and `update`'s daemon replacement both go through this, naming themselves in `by` (the daemon's rows and daemon-stop say which command stopped it, §5.2) — the caller stops it
  *  afterwards (`routing.stop` when switchRoutingOff already had to). → `{ routing (switchRoutingOff's), drained ({rel, gone}, null when no
- *  daemon answered) }`. The socket is the one that answered: `w.socketPath` is null with $XDG_RUNTIME_DIR unset. */
-export async function drainDaemon(w, { drainMs = DRAIN_MS, by } = {}) {
-  const routing = await switchRoutingOff(w, { ids: null, now: false, exit: true, by })
+ *  daemon answered) }`. The socket is the one that answered: `w.socketPath` is null with $XDG_RUNTIME_DIR unset.
+ *  The wait for the pid is bounded by silence (1.6 §3.6): each change of the lock's `sealing` progress starts it again and goes to `onSealing`. `seal: false`
+ *  (uninstall --purge-data) asks an uninstall stop not to seal. */
+export async function drainDaemon(w, { drainMs = DRAIN_MS, by, keepUnanswering = false, seal = true, onSealing = () => {} } = {}) {
+  const lockOf = () => { try { return JSON.parse(w.fs.readFileSync(w.lockFile, 'utf8')) || {} } catch { return {} } } // gone or unreadable: nothing said
+  const routing = await switchRoutingOff(w, { ids: null, now: false, exit: true, by, keepUnanswering, seal })
   if (!(routing.confirmed && routing.how === 'daemon-reply')) return { routing, drained: null }
   const drained = await waitForDrain(w, routing.relayed, drainMs, routing.socket)
   const pid = routing.daemon.pid
@@ -149,10 +170,18 @@ export async function drainDaemon(w, { drainMs = DRAIN_MS, by } = {}) {
     // the drain wait is up and the daemon is still there (a WebSocket mid-call has no end to wait for; a holder keeps a proxy-mode daemon): it
     // is asked to go at once, so it cuts what it still relays and stops through its own barrier, and the caller's stop never has to kill it
     // (win32's stop is `taskkill /F`, which runs no barrier and leaves the lock for the next start to read as an unclean stop, V99)
-    try { await w.request({ socketPath: routing.socket, method: 'POST', path: '/off', body: { exit: true, now: true, ...(by ? { by } : {}) }, timeoutMs: OFF_ASK_MS }) } catch { /* it is already stopping: the wait below covers it */ } // what it still relayed (drained.rel) is what was cut
+    try { await w.request({ socketPath: routing.socket, method: 'POST', path: '/off', body: { exit: true, now: true, ...(by ? { by } : {}), ...(by && seal === false ? { seal } : {}) }, timeoutMs: OFF_ASK_MS }) } catch { /* it is already stopping: the wait below covers it */ } // what it still relayed (drained.rel) is what was cut
   }
   // a daemon asked to exit stops itself (its barrier, then exit 0): the caller's stop comes after that, not in the middle of it
-  if (!drained.gone && Number.isInteger(pid)) { for (const end = w.ms() + EXIT_WAIT_MS; w.alive(pid) && w.ms() < end;) await w.sleep(100) }
+  // (also when the status poll found the control socket closed: a stopping daemon closes it first, and may still be sealing)
+  let said = null
+  if (Number.isInteger(pid)) {
+    for (let end = w.ms() + EXIT_WAIT_MS; w.alive(pid) && w.ms() < end;) {
+      await w.sleep(100)
+      const s = lockOf().sealing, key = s ? JSON.stringify(s) : null
+      if (key && key !== said) { said = key; end = w.ms() + EXIT_WAIT_MS; onSealing(s) }
+    }
+  }
   return { routing, drained }
 }
 
@@ -160,13 +189,19 @@ export async function drainDaemon(w, { drainMs = DRAIN_MS, by } = {}) {
  *  how, socket (the control socket a daemon was found on, or the one that was to be asked), daemon: {pid, state}, relayed, relayed_reason?, stop?, refused? ({status, message}:
  *  the daemon answered the request with an error status and changed nothing), problems: [],
  *  notes: [], failures: [{code, reason}], events: [{kind, reason, …}] }`. */
-export async function switchRoutingOff(w, { ids = null, now = false, exit = false, by = null } = {}) {
+export async function switchRoutingOff(w, { ids = null, now = false, exit = false, by = null, keepUnanswering = false, seal = true } = {}) {
   const r = { confirmed: false, unstoppable: false, state: null, how: null, socket: null, daemon: { pid: null, state: 'none' }, relayed: 'unknown', problems: [], notes: [], failures: [], events: [] }
   const st = await w.daemonState()
   r.state = st.state
   r.socket = st.socket || w.socketPath || null // the one a daemon was found on (the lock names it when XDG_RUNTIME_DIR is unset): the caller asks the same one again
   const lock = st.lock || null
   const fail = (code, reason) => { r.problems.push(reason); r.failures.push({ code, reason }) }
+  // `keepUnanswering` (uninstall, 1.6 §3.6): a daemon alive that does not answer is not off, so it is left running and the routing is not confirmed
+  const stopUnanswering = async (why) => {
+    if (!keepUnanswering) return stopIt(why)
+    r.daemon = { pid: lock && lock.pid, state: 'left-running' } // not 'unresponsive': nothing tried to stop it, and its next step is `trocar off`, not a kill (附录 C)
+    fail('collectors-online', `the daemon (pid ${lock && lock.pid}) ${why}, so capture is not known to be off; it was left running. Run: trocar off`)
+  }
   const stopIt = async (why) => {
     const s = await w.stopDaemon({ unitManaged: w.unitManaged() })
     r.stop = s; r.how = s.how
@@ -176,23 +211,23 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.relayed = 'unknown'; r.relayed_reason = `the daemon ${why}, so it could not say how many connections it relayed; it was stopped and they went with it`
     } else {
       r.unstoppable = true; r.daemon = { pid: s.pid, state: 'unresponsive' }; r.relayed_reason = 'the daemon does not answer'
-      fail('stop-failed', `the daemon (pid ${s.pid}) ${why} and could not be stopped${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, new connections are direct while its heartbeat is stale; stop it by hand: kill -9 ${s.pid}`)
+      fail('stop-failed', killBy(w, s.pid, `the daemon (pid ${s.pid}) ${why} and could not be stopped${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, new connections are direct while its heartbeat is stale. Stop it by hand:`))
     }
   }
   if (st.state === 'running') {
     try {
-      const reply = await w.request({ socketPath: r.socket, method: 'POST', path: '/off', body: { ...(ids ? { harnesses: ids } : {}), ...(now ? { now: true } : {}), ...(exit ? { exit: true } : {}), ...(exit && by ? { by } : {}) }, timeoutMs: OFF_ASK_MS })
+      const reply = await w.request({ socketPath: r.socket, method: 'POST', path: '/off', body: { ...(ids ? { harnesses: ids } : {}), ...(now ? { now: true } : {}), ...(exit ? { exit: true } : {}), ...(exit && by ? { by } : {}), ...(exit && by && seal === false ? { seal } : {}) }, timeoutMs: OFF_ASK_MS })
       r.relayed = counts(reply && reply.relayed) || 'unknown'
       if (r.relayed === 'unknown') r.relayed_reason = 'the daemon\'s reply did not carry the connection counts'
       r.daemon = { pid: Number.isInteger(reply && reply.pid) ? reply.pid : (lock && lock.pid) ?? null, state: exit ? 'draining' : 'running' }
       r.confirmed = ids === null ? reply.actual === 'off' && reply.confirmed !== false : reply.confirmed === true // 1.6 §3.1: a nameless off takes the whole routing off and reads it back (`actual`), whether or not the daemon was asked to exit
       r.how = 'daemon-reply'
-      if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that ${isProxyMode(w.platform) ? `its doors are shut${exit ? ' and it is exiting' : ''}` : `the kernel's watch table${exit ? ' and links' : ''} are off`} (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are. ${wayOut(w, r.daemon.pid)}`)
+      if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that ${isProxyMode(w.platform) ? `its doors are shut${exit ? ' and it is exiting' : ''}` : `the kernel's watch table and links are off`} (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are. ${wayOut(w, r.daemon.pid)}`)
     } catch (e) {
       if (e && e.status) { r.refused = { status: e.status, message: errMessage(e) }; fail('control-error', `the daemon refused the off request (${errMessage(e)}); the entries are left as they are. ${wayOut(w, lock && lock.pid)}`) }
-      else await stopIt(`did not answer the off request (${errMessage(e)})`)
+      else await stopUnanswering(`did not answer the off request (${errMessage(e)})`)
     }
-  } else if (st.state === 'unresponsive' || st.state === 'starting') await stopIt(st.reason || 'does not answer')
+  } else if (st.state === 'unresponsive' || st.state === 'starting') await stopUnanswering(st.reason || 'does not answer')
   else if (st.state === 'none' || st.state === 'stale') {
     r.relayed = { closing: 0, waiting: 0, cut: 0 } // there is no engine: nothing is relayed
     if (st.state === 'stale' && !lock && st.reason) { r.notes.push(st.reason); r.events.push({ kind: 'note', reason: st.reason }) } // a lock cut short: said, not hidden
@@ -204,9 +239,10 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.stop = s; r.how = s.how
       r.events.push({ kind: 'daemon-stop', how: s.how, signals: s.signals, stopped: s.stopped, pid: s.pid, reason: `no daemon is running, but the autostart would bring one back (${w.platform === 'darwin' ? 'the LaunchAgent is loaded: launchd KeepAlive' : 'the unit is up or about to restart: systemd Restart=on-failure'}); ${s.stopped ? (w.platform === 'darwin' ? 'booted out (launchctl bootout)' : 'stopped (systemctl stop, reset-failed)') : `NOT stopped${s.error ? `: ${s.error}` : ''}`}` })
       if (s.stopped) { r.confirmed = true; r.daemon = { pid: null, state: 'none' } } // there was no engine: nothing was relayed, and what the stop did is on `stop`
-      else { r.unstoppable = true; fail('stop-failed', w.platform === 'darwin' ? `the LaunchAgent could not be booted out${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but launchd may bring a daemon back with nothing attached; run: launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}, then run trocar off again` : `systemd keeps the autostart unit up or restarting${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but a daemon may come back with nothing attached; stop it: systemctl --user stop trocar-collector.service, then run trocar off again`) }
+      else { r.unstoppable = true; fail('stop-failed', w.platform === 'darwin' ? withCommands(`the LaunchAgent could not be booted out${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but launchd may bring a daemon back with nothing attached. Run this, then trocar off again:`, [`launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}`]) : withCommands(`systemd keeps the autostart unit up or restarting${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but a daemon may come back with nothing attached. Stop it with this, then run trocar off again:`, ['systemctl --user stop trocar-collector.service'])) }
     } else { r.confirmed = true; r.how = 'no-daemon'; r.daemon = { pid: null, state: 'none' } }
-  } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no trocar daemon runs (pgrep -f 'trocar.* (daemon|collector start)' finds none), delete ${w.lockFile} and run trocar off again; if one does, stop it by hand first`)
+  } else fail('control-error', withCommands(`${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. Look for a trocar daemon with:`, findDaemon(w),
+    `If it finds none, delete ${w.lockFile} and run trocar off again; if it finds one, stop it by hand first${w.platform === 'win32' ? ` (${SUPERVISE_FIRST.replace(/\.$/, '')})` : ''}.`))
   return r
 }
 
@@ -229,6 +265,11 @@ export const MARKER_TEXT = { block: "trocar's block removed", line: 'the line tr
 const SKIP_REASON = { 'already-restored': 'already as it was before install', missing: 'the file is gone; nothing of trocar is in it', 'left-user-value': 'this key now holds a value you set, so it was left as it is', 'already-removed': "trocar's text is no longer in this file" }
 const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 'left-user-value': 'left-user-value' } // the results that are in the closed set of codes (src/health/codes.mjs)
 const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
+/** 1.6 §3.6 「记录没列的标记」: the marked files at planByMarker's places that none of `listed` (the record's paths) names — what uninstall undoes by marks
+ *  beside the record, and so what its plan names (§1.4 「计划写全」). */
+export const marksNotListed = (w, listed, places = []) => { const keys = new Set([...listed].map(pathKey)); return planByMarker({ home: w.home, fs: w.fs, env: w.env, platform: w.platform, phases: PHASES, places }).filter((p) => !keys.has(pathKey(p.path))) }
+/** A marker plan as plan rows: a file trocar created is `removed`, any other `changed` — the rows the run's receipt puts them in. */
+export const markRows = (plan) => ({ changed: perFile(plan.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) }))), removed: [...new Set(plan.filter((p) => p.how === 'owned-file').map((p) => p.path))] })
 /** What a marker-only off asks about (R3), as the off receipt lays text out (1.6 §1.1②⑥): a sentence, then each file an item, its harness the label and the path
  *  with what would be done to it the value (labelLines: one value column, folds in it, past the command column), HOME as ~. */
 export const markerListing = (plan, home) => [...textLines("There is no install record to go by. By trocar's own marks, these would be undone:", home),
@@ -287,6 +328,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     const at = w.clock()
     const label = (e) => { try { return `${e.harness}\0${e.path}\0${describeEntry(e)}` } catch { return `${e.harness}\0${e.path}` } }
     const before = new Map(manifest.entries.map((e) => [label(e), { ...e }]))
+    const manifestPaths = new Set([...manifest.entries, ...manifest.files].map((e) => e && e.path).filter(Boolean)) // before the undo drops what it took out
     let out, stopped = null
     try {
       const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? () => rebuildRoots(w) : null)
@@ -298,6 +340,11 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       }
       out = e.partial; stopped = e // it stopped after the files were changed (the last write of the manifest): what it did is in the receipt all the same, below
     }
+    // 1.6 §3.6 「记录没列的标记」: uninstall also takes out, by trocar's marks, what the record does not list — only at the places planByMarker reads
+    if (dropCa && ids == null && !stopped) {
+      const extra = marksNotListed(w, manifestPaths, places)
+      if (extra.length) takeByMarker(w, u, extra)
+    }
     const note = (code, extra, reason) => u.events.push({ kind: code, code, ...extra, reason }) // `kind` = `code`: one line per thing the operator should know (4.6 安装 / 卸载不静默)
     u.raw = out // what the undo did, for a receipt if what follows throws (undoSide)
     u.results = out.results
@@ -307,12 +354,12 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       const e = before.get(`${r.harness}\0${r.path}\0${r.what}`)
       if (r.backup && !r.backup_kept) u.dropped_backups.push(r.backup)
       if (r.result === 'restored' || r.result === 'reverted-not-identical') {
-        const gone = !w.fs.existsSync(r.real_path || r.path)
-        if (gone) { u.removed.push(r.path); r.change = offChangeText(e, r.result) } // the file held nothing else and went with it: what was taken out is still said (1.6 §3.6)
-        else u.changed.push({ path: r.path, change: offChangeText(e, r.result), backup: r.backup_kept || null, result: r.result, ...(r.backup && !r.backup_kept ? { backup_dropped: true } : {}), ...(r.result === 'reverted-not-identical' ? { not_identical: true } : {}), ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
-      } else if (SKIP_REASON[r.result]) u.skipped.push({ what: r.path, reason: SKIP_REASON[r.result] })
+        const gone = r.gone ?? !w.fs.existsSync(r.real_path || r.path) // a registry value or a task is no file: its undo says whether it is gone
+        if (gone) { u.removed.push(r.path); r.change = r.change || offChangeText(e, r.result) } // the file held nothing else and went with it: what was taken out is still said (1.6 §3.6)
+        else u.changed.push({ path: r.path, change: r.change || offChangeText(e, r.result), backup: r.backup_kept || null, result: r.result, ...(r.backup && !r.backup_kept ? { backup_dropped: true } : {}), ...(r.result === 'reverted-not-identical' ? { not_identical: true } : {}), ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
+      } else if (SKIP_REASON[r.result]) u.skipped.push({ what: r.path, reason: r.why || SKIP_REASON[r.result] })
       if (r.result === 'reverted-not-identical') note('reverted-not-identical', { ...withHarness(r.harness), path: r.path }, `${r.path} was edited after install: only trocar's ${r.what} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the file is not byte for byte what it was before install, the rest is as the user left it${r.backup_kept ? `; the file as it was is kept at ${r.backup_kept}` : ''}`)
-      else if (!['restored', 'left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error'].includes(r.result)) note(SKIP_CODE[r.result] || 'harness-note', { ...withHarness(r.harness), path: r.path }, UNDO_NOTE[r.result] || r.result)
+      else if (!['restored', 'left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error'].includes(r.result)) note(SKIP_CODE[r.result] || 'harness-note', { ...withHarness(r.harness), path: r.path }, r.why || UNDO_NOTE[r.result] || r.result)
     }
     u.removed.push(...out.removed)
     for (const r of out.restored || []) u.changed.push({ path: r.path, change: MARKER_TEXT[r.role] || `trocar's ${r.role} undone`, backup: null, result: 'restored', ...withHarness(r.harness) }) // a file put back as it was (the real program in place of the wrapper)
@@ -401,18 +448,24 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     u.problems.push(`trocar's own record of what it wrote ${manifestError ? 'cannot be read' : 'is missing'}, so the ${items.length} file${items.length === 1 ? '' : 's'} above ${items.length === 1 ? 'was' : 'were'} left as ${items.length === 1 ? 'it is' : 'they are'}.`, `Undo ${items.length === 1 ? 'it' : 'them'} by the marks trocar left in ${items.length === 1 ? 'it' : 'them'}: trocar off --yes`)
     return u
   }
+  takeByMarker(w, u, plan)
+  return u
+}
+
+/** Undoes a planByMarker plan and puts each result in the receipt `u`: a file undone is `changed` (`result: undone-by-marker`, `prior_left` for a value
+ *  that could not be put back) or `removed`, one no longer marked `skipped`, one that could not be undone `left` with its failure. */
+function takeByMarker(w, u, plan) {
   for (const r of undoByMarker(plan, { home: w.home, fs: w.fs })) {
     if (r.result === CODE_OFF.undoneByMarker) {
       u.undone_by_marker = true
       if (r.how === 'owned-file' || r.deleted) u.removed.push(r.path) // a file trocar created, deleted
       else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
-      u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by trocar's mark; there is no manifest to say what it was before)` })
+      u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by trocar's mark; no install record lists it to say what it was before)` })
     } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: "trocar's mark is no longer in this file" })
     else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...(r.command ? { command: r.command } : {}), ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: trocar cannot read it; trocar's value may still be in it` }) }
   }
   u.changed = perFile(u.changed)
   u.removed = [...new Set(u.removed)]
-  return u
 }
 
 /** The writer of a run's `flows/` lines: `put(rec)` appends `{ts, event, where, run, …rec}` (a rec may bring its own `event`, e.g. 'failure'); a line that cannot be
@@ -469,7 +522,7 @@ function shapeReceipt(receipt) {
 export async function runOff({ home = nodeOs.homedir(), env = process.env, ids = null, now = false, yes = false, dryRun = false, interactive = false, io = null, say = null, deps = {}, source }  = {}) {
   const w = offWorld({ home, env, deps })
   const run = w.clock().toISOString()
-  const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, undo: UNDO_LINE.off, log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], planned: [], user_processes: [], notes: [], problems: [] }
+  const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, still_on: [], undo: UNDO_LINE.off, log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], planned: [], user_processes: [], notes: [], problems: [] }
   const put = flowWriter(w, run, receipt.notes, { source })
   // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write — no lock, no state, no flows record; the receipt names the tools that undo it
   const old = refuseOldManifest({ home, platform: w.platform, fs: w.fs })
@@ -488,15 +541,21 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   if (dryRun) { // R6: the same receipt in the future tense, nothing written, nothing asked of the daemon, exit 0
     const mine = (x) => x.phase === 'on' && (ids == null || ids.includes(x.harness)) // off spares what install wrote (D55①), so its plan does too
     const items = manifest && !manifest.unsupported ? manifest : { entries: [], files: [] }
-    const gone = items.files.filter((f) => mine(f) && ['plugin', 'shim', 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
+    const gone = items.files.filter((f) => mine(f) && [...OWNED_ROLES, 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
     const marks = manifest && !manifest.unsupported ? [] : planByMarker({ home, ids, fs: w.fs, env: w.env, platform: w.platform, notes: receipt.notes })
     receipt.dry_run = true
-    receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...perFile(marks.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) })))]
-    receipt.removed = [...gone, ...marks.filter((p) => p.how === 'owned-file').map((p) => p.path)]
+    const rows = markRows(marks)
+    receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...rows.changed]
+    receipt.removed = [...gone, ...rows.removed]
+    // 附录 C.2: what this off would do, record or not; the board's plan is these bytes (4.4), so a record changed between its two requests makes its plan_id stale
+    receipt.planned = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, how: e.kind, change: offChangeText(e), ...withHarness(e.harness) })),
+      ...items.files.filter((f) => gone.includes(f.path)).map((f) => ({ path: f.path, how: 'owned-file', change: MARKER_TEXT['owned-file'], ...withHarness(f.harness) })),
+      ...perFile(marks.map((p) => ({ path: p.path, how: p.how, change: MARKER_TEXT[p.how], ...withHarness(p.harness) })))]
     if (manifest && manifest.unsupported) receipt.notes.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read: no entry would be touched`)
     else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by trocar's own marks, after a yes` : 'no file holds trocar\'s marks'}`)
     for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'trocar has nothing on its path (it was never set up, or it is already off)' })
-    receipt.daemon = { pid: null, state: ids === null && !isProxyMode(w.platform) ? 'draining' : 'running' } // D62 ⑥: proxy mode's daemon keeps running
+    receipt.daemon = { pid: null, state: 'running' } // D62 ⑥: off never asks the daemon to exit
+    receipt.still_on = stillOn(w, ids, installed)
     if (!hadAnything && !receipt.changed.length && !receipt.removed.length) { receipt.nothing_installed = true; receipt.log = null } // said as it is; nothing would be written, so there is no log to point at
     return { receipt: shapeReceipt(receipt), exit: EXIT.ok }
   }
@@ -534,15 +593,16 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     const failed = again.error || (early && early.error && !again.r ? early.error : null)
     if (failed) { receipt.problems.push(`state.json could not be written (${errMessage(failed)}); a daemon that reads it again may switch back on`); put({ event: 'failure', code: (failed && failed.code) || 'state-unparsable', reason: `off could not write ${w.stateF}: ${errMessage(failed)}` }) }
     if (wrote) put({ kind: 'desired-off', harnesses: wrote.ids, reason: `desired state off for ${wrote.ids.join(', ')}${wrote.unreadable ? ` (the state file could not be read: ${wrote.unreadable}; it was written again with everything off)` : ''}` })
+    receipt.still_on = stillOn(w, ids, installed)
     if (w.deps.releaseHeld) await w.deps.releaseHeld(ids) // 5.1: held requests are released unchanged (a seam; 5.1 is not built)
 
     // 3 · the routing
-    // D62 ⑥: only driver mode's daemon is asked to exit by an `off` with no names — there the exit IS what takes the kernel's watch table and links off.
-    // In proxy mode the doors are the whole of it: the daemon idles on (one state, the one D61's login start already leaves), and the next `on` asks it
-    // directly instead of waiting out launchd's ThrottleInterval. `uninstall` passes `exit: true` itself, on either mode.
-    const routing = await switchRoutingOff(w, { ids, now, exit: ids === null && !isProxyMode(w.platform) })
+    // D62 ⑥: off never asks the daemon to exit, in either mode. Proxy mode closes its doors; driver mode takes the watch table and links off, and the
+    // helper exits on its own once no harness is on and the drain is done (4.6). The daemon idles on (the state D61's login start already leaves), and
+    // the next `on` asks it directly. `uninstall` and `update` pass `exit: true` themselves.
+    const routing = await switchRoutingOff(w, { ids, now })
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
-    receipt.daemon = routing.daemon && routing.daemon.state === 'draining' ? { ...routing.daemon, exits_after: routing.relayed && routing.relayed !== 'unknown' ? routing.relayed.closing : null } : routing.daemon // C.2 `daemon:{state, pid, exits_after}`
+    receipt.daemon = routing.daemon // C.2 `daemon:{pid, state}`
     receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason
     if (routing.stop) receipt.daemon_stop = { how: routing.stop.how, signals: routing.stop.signals, stopped: routing.stop.stopped }
@@ -576,11 +636,9 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       // (The Windows kernel arm that stood here — a daemon that did not answer left the kernel preferring its dead engine, so the standalone off made it
       // forward-only or stopped it through its controller — went with the kernel itself, D47's win32 twin: the engine's doors die with the daemon, nothing
       // outlives them to be steered, and uninstall's purge list still cleans kernel-era residue: kernel\, kernel-archive\, forwarder\.)
-      // 5 · the login registration is NOT touched (D61): `on` rewrote the agents' config files, so a machine that came
-      // up without the daemon left every harness that was on unable to reach anything. In driver mode the daemon was asked in step 3 to exit once drained
-      // and exits 0 (systemd's Restart=on-failure and launchd's KeepAlive {SuccessfulExit: false} leave a clean exit down); in proxy mode it was not asked
-      // at all (D62 ⑥) and goes on idling with every door shut. Either way the next login starts it and it opens the doors the persisted desired state asks
-      // for (none, after this off). `install` registers it, `uninstall` takes it out.
+      // 5 · the login registration is NOT touched (D61): `on` rewrote the agents' config files, so a machine that came up without the daemon left
+      // every harness that was on unable to reach anything. The daemon was not asked to exit (D62 ⑥) and idles on with nothing routed; the next login
+      // starts it and it routes what the persisted desired state asks for (nothing, after this off). `install` registers it, `uninstall` takes it out.
     } else outcome = 'failed'
     let list = []
     try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errMessage(e)}), so the trocar processes you started yourself are not listed`) }

@@ -28,7 +28,7 @@ const proc = (pid, exe, { startedAt = Date.now() + 5000, env = {}, argv = [exe],
 // a replace-semantics harness (Codex / Hermes shape): a dotenv block naming its own combined bundle
 const repH = (b, name, extra = {}) => ({
   name, runtime: 'rust', processes: { names: [{ name }] }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], ...extra },
-  inject: (ctx) => ({
+  present: [{ base: 'home' }], inject: (ctx) => ({
     entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${name}`, '.env'), vars: { SSL_CERT_FILE: b.ca(`combined-${name}.pem`) }, semantic: 'replace' }],
     files: [{ path: b.ca(`combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }],
   }),
@@ -36,12 +36,12 @@ const repH = (b, name, extra = {}) => ({
 // an append-semantics harness (Claude Code shape): a JSON key naming an extra file that carries the user's CA
 const jsonH = (b) => ({
   name: 'jj', runtime: 'node', processes: { names: [{ name: 'jj' }] }, hosts: [], trust: { chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }], rereadsEntry: true },
-  inject: (ctx) => ({ entries: [{ kind: 'json-key', path: path.join(ctx.home, '.jj', 'settings.json'), keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: b.ca('extra-jj.pem'), semantic: 'append' }], files: [{ path: b.ca('extra-jj.pem'), certsFrom: [path.join(ctx.home, 'corp.pem')] }] }),
+  present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'json-key', path: path.join(ctx.home, '.jj', 'settings.json'), keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: b.ca('extra-jj.pem'), semantic: 'append' }], files: [{ path: b.ca('extra-jj.pem'), certsFrom: [path.join(ctx.home, 'corp.pem')] }] }),
 })
 // a plugin-style harness: a plugin file in the agent's directory, a YAML row loading trocar's plugin dir, a path the agent may write because of it
 const plugH = (b) => ({
   name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'trocar:marker', semantic: 'append' }] },
-  inject: (ctx) => ({
+  present: [{ base: 'home' }], inject: (ctx) => ({
     owned: [{ path: path.join(ctx.home, '.config', 'plug', 'plugins', 'trocar-ca.js'), role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }, { path: path.join(b.dir, 'plugins', 'plug', 'index.js'), role: 'plugin', data: 'export {}\n', mode: 0o644 }],
     entries: [{ kind: 'text', format: 'yaml-list', path: path.join(ctx.home, '.plug', 'patch.yml'), line: `- insert: [{ name: ${JSON.stringify(path.join(b.dir, 'plugins', 'plug', 'index.js'))} }] ${lineComment('plug trust plugin')}`, semantic: 'append' }],
     watch: [{ path: path.join(ctx.home, '.config', 'plug', 'node_modules'), why: 'plug installs its SDK on first run' }],
@@ -136,7 +136,7 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
   const at = new Date(0).toISOString()
   m.entries.push({ phase: 'on', kind: 'json-array-item', harness: 'aa', path: arr, keys: ['list'], item: 'http.proxy', created_array: false, existed_before: true, mode: 0o644, pre_sha256: 'x', post_sha256: 'y', ops: [], backup: null, installed_at: at },
     { phase: 'install', kind: 'root-key', harness: null, path: 'keychain:trocar-root', custody: { kind: 'keychain', id: 'trocar-root' }, fp256: 'AB:CD', installed_at: at })
-  m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: 'aa', path: sw }, { phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg, sha256: sha(cfg) },
+  m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: 'aa', path: sw, sha256: sha(sw) }, { phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg, sha256: sha(cfg) },
     { phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
   const removed = [], installed = m.entries.concat(m.files).filter((x) => x.phase === 'install'), bytes = () => installed.filter((x) => x.path && fs.existsSync(x.path)).map((x) => [x.path, sha(x.path)])
   const before = bytes()
@@ -161,7 +161,7 @@ test('off reports no process as still trusting, nor a harness whose trust it can
   const s = await setup((b) => [repH(b, 'aa'), jsonH(b)])
   const m = readManifest(s.b.dir)
   delete m.liveness.aa.identity
-  for (const h of ['aa', 'jj']) m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: h, path: write(s.b, `.trocar/collector/switch/${h}`, 'http://127.0.0.1:47011\n') })
+  for (const h of ['aa', 'jj']) { const sw = write(s.b, `.trocar/collector/switch/${h}`, 'http://127.0.0.1:47011\n'); m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: h, path: sw, sha256: sha(sw) }) }
   const off = await s.run({ manifest: m, phases: ['on'], procs: async () => [proc(6, '/x/jj', { startedAt: 1 }), proc(7, '/x/aa')] })
   assert.deepEqual([off.left, off.still_trusting, off.trust_unknown], [[], [], []])
 })
@@ -203,13 +203,13 @@ test('P13 uninstall: a wrapper the agent updated over is left in place and only 
   const m = readManifest(s.b.dir)
   const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.trocar-real/aa', 'OLD PROGRAM')
   m.files.push({ phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
-  m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'file:/k', custody: { kind: 'file', id: '/k' }, fp256: 'AB' })
+  m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'keychain:trocar-root', custody: { kind: 'keychain', id: 'trocar-root' }, fp256: 'AB' })
   fs.writeFileSync(bin, 'NEW PROGRAM') // the agent's update replaced it by name
   const r = await s.run({ manifest: m, dropCa: true })
   assert.deepEqual([fs.readFileSync(bin, 'utf8'), fs.existsSync(real), r.removed.includes(real), r.left], ['NEW PROGRAM', false, true, []])
   const k = await undoRootKeys({ dir: s.b.dir, manifest: readManifest(s.b.dir) })
-  assert.deepEqual(k.left.map((l) => [l.path, l.result]), [['file:/k', 'error']])
-  assert.match(k.left[0].reason, /no custody backend.*by hand: rm \/k/)
+  assert.deepEqual(k.left.map((l) => [l.path, l.result]), [['keychain:trocar-root', 'error']])
+  assert.match(k.left[0].reason, /no custody backend.*by hand: open Keychain Access/)
 })
 
 test('P13 liveness.<h> may carry on_at / off_at or not: the judgement is the same and the fields are kept', async () => {
@@ -248,15 +248,14 @@ test('an entry of a kind this build does not know is left alone, and so is a man
   await assert.rejects(undoHarnesses({ dir: s.b.dir, home: s.b.home, manifest: { version: 3, unsupported: true, entries: [], files: [] }, ids: null }), /version 3.*nothing was changed/)
 })
 
-test('residue and changed plugins are reported, not deleted: a path the agent wrote because of the plugin; a plugin file edited since install (removed all the same)', async () => {
+test('residue and changed plugins are reported, not deleted: a path the agent wrote because of the plugin; a plugin file edited since install is left, listed with its reason (4.11 §4)', async () => {
   const s = await setup((b) => [plugH(b)])
   fs.mkdirSync(path.join(s.b.home, '.config', 'plug', 'node_modules', 'sdk'), { recursive: true })
   const plugin = path.join(s.b.home, '.config', 'plug', 'plugins', 'trocar-ca.js'); fs.appendFileSync(plugin, '// edited\n')
   const r = await s.run()
   assert.deepEqual(r.residue, [{ harness: 'plug', path: path.join(s.b.home, '.config', 'plug', 'node_modules'), why: 'plug installs its SDK on first run' }])
   assert.ok(fs.existsSync(path.join(s.b.home, '.config', 'plug', 'node_modules', 'sdk')), 'never deleted')
-  assert.deepEqual([r.changed, r.removed.includes(plugin), fs.existsSync(plugin)], [[{ harness: 'plug', path: plugin, role: 'plugin' }], true, false])
-  assert.deepEqual(r.manifest.watched, [], 'reported once: the harness has nothing left')
+  assert.deepEqual([r.removed.includes(plugin), fs.existsSync(plugin), r.left.some((x) => x.path === plugin)], [false, true, true])
 })
 
 test('bundle: a process of the harness that started after install, one that re-reads its entry, or a child whose environ names it keeps the bundle without the trocar CA; one from before install does not; the next run removes it', async () => {
@@ -495,7 +494,7 @@ test('trocar\'s text in a shape the removal cannot read is NOT "already removed"
 test('before a bundle is removed the entry files of its harness are read again: an entry reported as the user\'s own value whose file still names the bundle (the key was moved) keeps it — without the CA, the entry put back among the ones left', async () => {
   const repJson = (b, name) => ({
     name, runtime: 'rust', processes: { names: [{ name }] }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'json-key', path: path.join(ctx.home, `.${name}`, 'settings.json'), keys: ['env', 'SSL_CERT_FILE'], value: b.ca(`combined-${name}.pem`), semantic: 'replace' }], files: [{ path: b.ca(`combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }),
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'json-key', path: path.join(ctx.home, `.${name}`, 'settings.json'), keys: ['env', 'SSL_CERT_FILE'], value: b.ca(`combined-${name}.pem`), semantic: 'replace' }], files: [{ path: b.ca(`combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }),
   })
   const b = box()
   write(b, 'corp.pem', CORP.certPem); write(b, '.jr/settings.json', '{\n  "model": "m"\n}\n')
@@ -551,3 +550,38 @@ for (const removed of [true, false]) {
     assert.deepEqual([k.removed, k.left, readManifest(s.b.dir).entries.filter((e) => e.kind === 'root-key')], [['keychain:trocar-root'], [], []])
   })
 }
+
+// 4.11 §4: an owned file goes only while its bytes are the ones the manifest recorded, so a damaged manifest never costs the user a file. Generated over
+// role × bytes: trocar's go; changed, unreadable or with no recorded hash they stay, listed under `left` with the record kept for the next run (D38) — but a
+// changed config-library entry is the user's settings now and leaves the manifest with a note (D48②)
+for (const role of ['plugin', 'shim', 'switch', 'config-entry']) {
+  for (const bytes of ['trocar', 'changed', 'unreadable', 'no-record']) {
+    test(`owned file guard · ${role} · ${bytes}`, async () => {
+      const s = await setup((b) => [repH(b, 'aa')])
+      const m = readManifest(s.b.dir)
+      const f = write(s.b, `.aa/owned/${role}`, 'trocar wrote this\n'), rec = sha(f)
+      m.files.push({ phase: 'on', kind: 'owned-file', role, harness: 'aa', path: f, ...(bytes === 'no-record' ? {} : { sha256: rec }) })
+      if (bytes === 'changed') fs.writeFileSync(f, 'the user wrote this\n')
+      const want = fs.readFileSync(f)
+      if (bytes === 'unreadable') fs.chmodSync(f, 0)
+      const off = await s.run({ manifest: m })
+      if (bytes === 'unreadable') fs.chmodSync(f, 0o600)
+      const userOwns = role === 'config-entry' && bytes !== 'unreadable' // a changed config-library entry, or one with no hash to judge it by
+      assert.equal(fs.existsSync(f), bytes !== 'trocar', 'only trocar\'s own bytes are deleted')
+      if (bytes !== 'trocar') assert.deepEqual(fs.readFileSync(f), want, 'a file left is byte for byte as it was')
+      const left = bytes !== 'trocar' && !userOwns
+      assert.equal(off.left.some((x) => x.path === f), left, 'left, with its reason, when it stays and is not the user\'s')
+      assert.equal(readManifest(s.b.dir).files.some((x) => x.path === f), left, 'its record stays for the next run exactly when it is left')
+    })
+  }
+}
+
+test('owned file guard · wrapper: a moved real program whose bytes are not the ones trocar recorded is left, not deleted', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.trocar-real/aa', 'REAL PROGRAM')
+  m.files.push({ phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
+  fs.writeFileSync(bin, 'an update replaced the wrapper'); fs.writeFileSync(real, 'SOMETHING ELSE')
+  const un = await s.run({ manifest: m, dropCa: true })
+  assert.deepEqual([fs.readFileSync(real, 'utf8'), un.left.some((x) => x.path === real || x.path === bin)], ['SOMETHING ELSE', true])
+})

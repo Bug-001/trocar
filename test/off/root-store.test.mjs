@@ -1,5 +1,5 @@
 // test/off/root-store.test.mjs — CM7, the argv half (RFC 4.11 P3): the user root store's commands, generated over
-// platform × op with an injected runner. Exact argv; never `-p` (an unrestricted root, M7 / M8); `-user` on every certutil call;
+// platform × op with an injected runner. Exact argv; never `-p` (an unrestricted root); `-user` on every certutil call;
 // never LocalMachine or a system keychain; the certificate file it hands the tool is gone afterwards.
 import test from 'node:test'
 import assert from 'node:assert/strict'

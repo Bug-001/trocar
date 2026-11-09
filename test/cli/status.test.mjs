@@ -163,7 +163,9 @@ test('V32 the certificate step: after the world and the entry, before the start 
   const form = (in_effect, code = null, carrier = 'root') => ({ certificate: { in_effect, carrier, code } })
   assert.equal(certOfForms([form(true, null, 'config-key'), form(true)]), true)
   assert.equal(certOfForms([form(true, null, 'config-key'), form(false, 'cert-root-pending')]), 'cert-root-pending', 'one form whose certificate is not in effect is enough')
-  assert.equal(certOfForms([form(false, null)]), null, 'not in effect with no code (the root store unreadable): not known')
+  assert.equal(certOfForms([form(null, null)]), null, 'the root store unreadable (in_effect null, no code): not known')
+  assert.equal(certOfForms([form(null, 'file-unreadable', 'config-key'), form(true)]), null, 'in_effect null (a certificate file not read): not known, never in effect')
+  assert.equal(certOfForms([form(null, 'file-unreadable', 'config-key'), form(false, 'cert-root-pending')]), 'cert-root-pending', 'a form known not in effect still decides')
 })
 
 test('a process the daemon has not judged: no start time is start-time-unknown, no installed_at to compare with is 不知道, an entry that is not intact comes first (a restart would not help)', () => {
@@ -185,7 +187,8 @@ import { runStatusCli } from '../../src/cli/status.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 
-const run = runStatus
+// these cases are about the harnesses trocar's records know: no other harness is on this machine (the rows of the ones present: status-setup-linux.test.mjs)
+const run = (s, argv, o = {}) => runStatus(s, argv, { ...o, deps: { presentForms: async () => ({}), ...o.deps } })
 
 test('the daemon answers: each agent is captured or says why, and the exit code is 1 while one is not; every agent captured is exit 0', async () => {
   const s = await installedHome()
@@ -250,8 +253,9 @@ test('the entry on disk decides when no process does: intact when the value is t
   const cur = JSON.parse(fs.readFileSync(settings, 'utf8'))
   fs.writeFileSync(settings, JSON.stringify({ ...cur, env: { ...cur.env, NODE_EXTRA_CA_CERTS: '/elsewhere/ca.pem' } }))
   assert.deepEqual(await verdict(), [false, 'entry-changed', 1])
-  // the summary says it in words, once (§3.5: one short clause per row, no code name)
-  assert.match((await run(s, [], { request: asDaemon(reply()) })).text, /^ {2}claude-code {2}no {8}the setting that points at trocar holds something else$/m)
+  // the summary says it in words, once (§3.5: one short clause per row, no code name). On Linux that setting is install's certificate carrier, so setup
+  // is needed too, and the row gives the step that puts it back (1.6 §3.5: needed → set up first: trocar install)
+  assert.match((await run(s, [], { request: asDaemon(reply()) })).text, /^ {2}claude-code {2}no {8}set up first: trocar install$/m)
   fs.writeFileSync(settings, JSON.stringify({ theme: 'dark' }))
   assert.deepEqual(await verdict(), [false, 'entry-missing', 1])
   fs.rmSync(settings)
@@ -270,7 +274,7 @@ test('no daemon: nothing is captured (daemon-not-running), read from the disk, w
   const h = doc.harnesses['claude-code']
   assert.deepEqual([h.captured, h.reason], [false, 'daemon-not-running'])
   assert.deepEqual(h.processes.map((p) => [p.pid, p.reason]).sort((a, b) => a[0] - b[0]), [[5000, 'daemon-not-running'], [5001, 'daemon-not-running']])
-  assert.match(r.text, /^ {2}Problems {5}(none in the last 24 hours|\d)/m, 'and the capture health read from disk follows (the summary names it; the wall is --failures)')
+  assert.match(r.text, /^ {2}Problems {5}(none |\d)/m, 'and the capture health read from disk follows (the summary names it; the wall is --failures)')
 })
 
 test('the daemon answers but has not listed a process of a harness (it started since the daemon last looked): the entry and when it started decide (V32) — older than the entry: config-after-start and told to restart; newer: captured, and said to be by entry and start time; entry gone: entry-missing; a pid the daemon lists is not added twice', async () => {
@@ -356,6 +360,14 @@ test('a daemon that does not answer is daemon-not-responding; --json is one docu
   assert.deepEqual(doc.restart, [{ harness: 'claude-code', pid: 4388, reason: 'config-after-start' }])
   assert.deepEqual(Object.entries(doc.harnesses).map(([h, x]) => [h, x.captured, x.reason]), [['claude-code', false, 'config-after-start'], ['codex', true, null]])
   assert.equal(j.io.stderrText(), '', 'stdout carries the one JSON, nothing leaks to stderr')
+})
+
+// 1.6 附录 C: Linux has no key custody (4.11 P1: it reads its CA files), so cert.key names none
+test('Linux: cert.key.custody is null and the key state is still said', async () => {
+  const s = await installedHome()
+  const key = (await run(s, ['--json'])).io.json().cert.key
+  assert.equal(key.custody, null)
+  assert.ok(['present', 'missing'].includes(key.state), JSON.stringify(key))
 })
 
 test('status writes nothing at all (§3.5), and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', async () => {
@@ -716,7 +728,7 @@ test('one `status` asks the OS each question once: on Windows the whole process 
   assert.equal(calls.filter((c) => /Win32_Process \| ForEach-Object/.test(c)).length, 1, 'the process table: one question for the whole command')
   assert.equal(calls.filter((c) => /Win32_Process -Filter/.test(c)).length, 0, 'and not one identity question of its own: the table\'s answer carries the pid\'s creation time and the machine\'s boot time')
   assert.deepEqual([doc.daemon.running, doc.daemon.responding], [null, false], 'the identity the table gave matched the lock byte for byte: a daemon that holds the lock and does not answer (a mismatch would read as a stale lock, [false, null])')
-  assert.deepEqual(doc.errors.filter((e) => /read question/.test(e.reason)), [], 'and with no daemon answering, the read it could not answer is NOT an error of the user\'s machine: a control.json left behind by a stopped daemon is the normal no-daemon state')
+  assert.deepEqual(doc.errors.filter((e) => e.where === 'the process table'), [], 'and with no daemon answering, the read it could not answer is NOT an error of the user\'s machine: a control.json left behind by a stopped daemon is the normal no-daemon state')
   assert.equal(exit, EXIT.ok, io.stdoutText())
 })
 
@@ -763,9 +775,9 @@ test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no Power
   const cold = await once(false)
   assert.equal(cold.verbs[0], 'ps', 'the daemon was asked')
   assert.deepEqual(cold.shells.map((c) => (/ForEach-Object/.test(c) ? 'table' : 'identity')), ['table'], 'and when it cannot answer that read, the one local question is asked — once, and no identity question of its own')
-  const asked = cold.doc.errors.filter((e) => /did not answer the read question/.test(e.reason))
+  const asked = cold.doc.errors.filter((e) => e.where === 'the process table')
   assert.deepEqual(asked.map((e) => e.where), ['the process table'], 'the fallback is never silent (D38), under the closed-set name of the question (src/health/codes.mjs DOC_WHERE)')
-  assert.match(asked[0].reason, /ps: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
+  assert.match(asked[0].reason, /the process list: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
   const sameSide = (d) => [d.daemon, d.holders, d.harnesses]
   assert.deepEqual(sameSide(cold.doc), sameSide(hot.doc), 'and what the table decides — the daemon\'s verdict, the holders, the harnesses — is the same, whichever side answered')
 

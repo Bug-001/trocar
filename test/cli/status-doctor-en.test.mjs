@@ -48,6 +48,40 @@ test('§3.5 the summary: conclusion first, one row per harness, the three facts 
   assert.ok(fresh.includes('Next: trocar install'))
 })
 
+test('§3.5 a harness that needs setting up has its own row, says so before `on` refuses it, and stays out of `not installed`', () => {
+  const setup = (state, ...what) => ({ setup: { state, missing: what.map((w) => ({ form: 'f', what: w })) } })
+  const off = { desired: 'off', captured: false, reason: 'desired-off' }
+  const lines = statusSummary(doc({
+    harnesses: {
+      'claude-code': harness(setup('ready')),
+      hermes: harness({ ...off, ...setup('needed', 'carrier-absent') }), // trocar was installed before it
+      codex: harness({ captured: false, reason: 'config-after-start', ...setup('needed', 'carrier-overwritten') }), // on the install record, its carrier overwritten by its own update
+      'kimi-code': harness(setup('needed', 'carrier-overwritten')), // a process from before the update, still captured: what is wrong now is not this row's
+      opencode: harness({ ...off, ...setup('ready') }), // new, its certificate is the root: nothing to set up
+      pi: harness({ ...off, ...setup('unknown') }),
+      'z-code': harness({ ...off, ...setup('needed', 'root-missing') }), // the root is one row for the whole machine, not one per harness
+    },
+    install: { state: 'complete', harnesses: ['claude-code', 'codex', 'kimi-code'], pending: [] },
+  }), { now: NOW })
+  clean(lines, 'status')
+  const row = (h) => lines.find((l) => l.startsWith(`  ${h} `))
+  for (const h of ['hermes', 'codex']) assert.ok(row(h).includes('trocar install'), `${h}: ${row(h)}`)
+  for (const h of ['claude-code', 'kimi-code']) assert.ok(row(h) && !row(h).includes('trocar install'), `${h}: ${row(h)}`)
+  const out = lines.find((l) => l.startsWith('  not installed:'))
+  assert.deepEqual(out.replace('  not installed: ', '').split(', ').sort(), ['opencode', 'pi', 'z-code'], 'a harness needing setup is not said to be not installed, nor is setup asked of the others')
+  const detail = statusDetail(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'carrier-absent') }) } }), 'hermes', { now: NOW })
+  clean(detail, 'status <harness>')
+  for (const cmd of ['trocar install', 'trocar on hermes']) assert.ok(detail.some((l) => l.includes(cmd)), `the detail names ${cmd}: ${detail.join('|')}`)
+  // 附录 B: trocar's marked text with no record is not set up by install alone; the steps are the finding's, each a line of its own, then on
+  const mwr = statusDetail(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'marked-without-record') }) } }), 'hermes', { now: NOW })
+  const steps = [...findingFor('marked-without-record').commands.map((c) => c.run), 'trocar on hermes']
+  const at = steps.map((s) => mwr.findIndex((l) => l.trimEnd().endsWith(` ${s}`)))
+  assert.ok(at.every((x, i) => x >= 0 && (i === 0 || x > at[i - 1])), `the steps, in order, a line each: ${mwr.join('|')}`)
+  const note = statusSummary(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'marked-without-record') }) }, install: { state: 'complete', harnesses: [], pending: [] } }), { now: NOW }).join(' ')
+  const named = steps.slice(0, -1).map((s) => note.indexOf(s))
+  assert.ok(named.every((x, i) => x >= 0 && (i === 0 || x > named[i - 1])), `the NOTE names the steps in order: ${note}`)
+})
+
 test('§1.1 · §3.5 a long NOTE folds under its own column: every line of the summary inside 80 columns, for every reason and harness name', () => {
   const names = ['pi', 'opencode', 'a-harness-of-twenty'] // the HARNESS column's width moves where NOTE starts; each name is also in its own note
   for (const code of STATUS_REASONS) {
@@ -187,7 +221,7 @@ test('§3.5 exit codes: 0 every harness that is on is captured, 1 one of them is
 
 test('附录 B · §3.7: every code in the catalogue renders as English sentences with Fix and Check, every value filled in, inside 80 columns', () => {
   const ctx = { platform: 'linux', h: 'codex', hf: { behaviour: { fileKeys: [{ path: '/home/alice/.codex/.env', key: 'HTTPS_PROXY', format: 'dotenv' }], restart: {} }, procs: [], forms: [] },
-    t: { nodes: [], edges: [], branches: [] }, F: { routing: 'proxy', harnesses: {}, desired: {} }, user: 'alice', setting: { scheme: 'socks5', host: '127.0.0.1', port: 1080 },
+    t: { nodes: [], edges: [], branches: [] }, F: { routing: 'proxy', harnesses: {}, desired: {}, autostart: { entry: 'the systemd user unit trocar-collector.service', state: 'absent', reason: 'the systemd user unit trocar-collector.service is not registered' } }, user: 'alice', setting: { scheme: 'socks5', host: '127.0.0.1', port: 1080 },
     dead: { addr: '127.0.0.1', port: 7890 }, u: { name: 'node', pid: 42 }, listPath: '/home/alice/.trocar/agents.json', file: { path: '/home/alice/.trocar/agents.json', state: 'ok', problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'this name needs an args pattern' }] }, pid: 5530, port: 17992, upPort: 7890 }
   for (const code of FINDING_CODES) {
     const found = findingFor(code, ctx)

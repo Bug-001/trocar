@@ -10,8 +10,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createModelCollector } from '../../../../src/collector/core/proxymode/collector.mjs'
 import { HOLDER_POLL_MS } from '../../../../src/collector/core/proxymode/holders.mjs'
-import { verdictOf } from '../../../../src/collector/core/proxymode/verdict.mjs'
-import { upstreamFor } from '../../../../src/collector/core/proxymode/chain.mjs'
+import { verdictOf, judgedForms } from '../../../../src/collector/core/proxymode/verdict.mjs'
+import { pacPath, pacAddress } from '../../../../src/collector/core/proxymode/entries.mjs'
+import { upstreamFor, MAX_DEPTH } from '../../../../src/collector/core/proxymode/chain.mjs'
+import { translateBypass } from '../../../../src/collector/arch/darwin/upstream.mjs'
 import { certPem } from '../../../../src/collector/core/tls/cert.mjs'
 import { TEMPLATES } from '../../../../src/collector/harness/templates/index.mjs'
 import { loadIngressConfig } from '../../../../src/collector/core/ingress-config.mjs'
@@ -26,11 +28,14 @@ import { serializeSignature } from '../../../../src/off/signature.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { ROOT, INSTALLED, descs, newWorld, ctxOf, worldOf, combos, makeRoot } from './verdict-world.mjs'
 import { CERT_VARS } from '../../../../src/collector/core/proxymode/upstream-trust.mjs'
+import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
+import { pemBlock } from '../../../../src/off/text-edit.mjs'
 
 const TOKEN = 'ab'.repeat(16)
 const iso = (ms) => new Date(ms).toISOString()
 const PEER = { address: '127.0.0.1', port: 50000 }
 const proxyOf = (u) => { const x = new URL(u); return { kind: x.protocol.startsWith('socks') ? 'socks5' : 'http', host: x.hostname, port: Number(x.port) } }
+const bypassOf = (t) => translateBypass(t, 'no-proxy').bypass
 const dialOf = (up, host) => (up.url == null || (up.bypass || []).some((b) => b.value === host) ? { kind: 'direct' } : proxyOf(up.url))
 const stub = custodyStub(); stub.create()
 const STUB_PEM = certPem(stub.rootDer)
@@ -39,14 +44,15 @@ const ready = { state: () => 'ready' }
 const manifestOf = (h, { on = [], liveness = {} } = {}) => ({ ...newManifest(), entries: [{ phase: 'install', harness: h, kind: 'json-key', path: '/x', installed_at: iso(INSTALLED) }, { phase: 'install', harness: null, kind: 'system-root', installed_at: iso(INSTALLED) }, ...on], liveness })
 
 /** One collector over one harness: `w` is what the injected readers answer now (facts, env, cwd, verdict ctx, manifest, process table). */
-async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget, holds, doorHangMs, dir = tmpDir() } = {}) {
+async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget, holds, drain, doorHangMs, dir = tmpDir() } = {}) {
   const asked = {}, gate = (q, x) => w.wait?.(q, x, asked[`${q}\0${x}`] = (asked[`${q}\0${x}`] ?? 0) + 1) // w.wait(question, pid, nth of that question of that pid): a promise holds it
+  const of = (by, q, all) => (by && Object.hasOwn(by, q) ? by[q] : all) // a reader's answer for one pid (w.factsBy / w.envBy), else the world's one answer
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
   w.ctx ||= ctxOf(newWorld(os))
-  const c = createModelCollector({ harnesses: [desc, ...others], dir, ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, doorHangMs, record: (r) => records.push(r),
-    identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => { await gate('ownerOf'); return { pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) } }, factsOf: async (q, o) => { await gate('factsOf', q); if (w.facts == null && w.factsWhy && o && o.onUnread) o.onUnread(w.factsWhy); return w.facts },
-    proc: { envOf: async (q, names) => (await gate('envOf', q), w.envCalls = (w.envCalls || 0) + 1, w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async (q) => (await gate('cwdOf', q), w.cwd ?? null), parentOf: async (q) => (await gate('parentOf', q), w.parent ? w.parent(q) : null) }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
-    readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}), ...(holds ? { holds } : {}) })
+  const c = createModelCollector({ harnesses: [desc, ...others], dir, ctx, custody, rootPem, proxyOf, bypassOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, doorHangMs, record: (r) => records.push(r),
+    identify: (f) => (f.pending ? { reason: 'pending' } : f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => { await gate('ownerOf'); return { pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) } }, factsOf: async (q, o) => { await gate('factsOf', q); const f = of(w.factsBy, q, w.facts); if (f == null && w.factsWhy && o && o.onUnread) o.onUnread(w.factsWhy); return f },
+    proc: { envOf: async (q, names) => { await gate('envOf', q); w.envCalls = (w.envCalls || 0) + 1; const e = of(w.envBy, q, w.env); return e == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(e).filter(([k]) => names.includes(k)))) }, cwdOf: async (q) => (await gate('cwdOf', q), w.cwd ?? null), parentOf: async (q) => (await gate('parentOf', q), w.parent ? w.parent(q) : null) }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
+    readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}), ...(holds ? { holds } : {}), ...(drain ? { drain } : {}) })
   c.bindDoors({ open: async (l) => { for (const x of l) { if (taken.has(x.port)) throw Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }); opened.push(x) } }, close: async (ids) => { opened.push(...ids.map((id) => ({ closed: id }))) } })
   await c.start()
   return { c, w, records }
@@ -75,6 +81,7 @@ for (const { d, f, os } of CASES) {
       const meta = await r.c.lookupIngress({ peer: PEER, user: g, target: { address: cs.host, port: 443 } })
       const want = verdictOf({ desc, form, facts: { ...facts, pid }, record: { carrierInstalledAt: INSTALLED, rootFp256: STUB_FP }, issuer: cs.issuer ? ready : null, host: cs.host, hostSet: cs.hostSet, ctx: r.w.ctx })
       assert.equal(meta.decrypt, want.decrypt, `${f.id} · ${os} · ${JSON.stringify(over)}: ${JSON.stringify(want)}`)
+      if (!want.decrypt && cs.known) assert.equal(meta.skip && meta.skip.reason, want.code, `${f.id} · ${os} · ${JSON.stringify(over)}: the forward-only row carries P11's code`) // off the list: the door's own class, before P11
     }
     for (const r of Object.values(rigs)) { for (const x of r.records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x)); r.c.close() }
   })
@@ -107,6 +114,39 @@ for (const d of descs) for (const os of ['darwin', 'win32']) {
     r.c.close()
   })
 }
+
+// 4.11 P11, the forms a process may be: of its route's forms, those whose `exe` names the process's program file (on macOS both Z-Code forms
+// retitle to zcode-cli before they connect, so argv tells nothing there, ZCode 3.14.4), then on Windows, where both are ZCode.exe and the command
+// line stays the one they were spawned with, those whose `argv` words match it (the desktop's app-server, the CLI's -p, ZCode 3.14.5); none matching →
+// all of them (forwarded rather than broken). The desktop's CA setting blocks z-code.desktop only: a process the door can tell is not the desktop
+// decrypts, one it cannot (the interactive CLI on Windows, with neither word) is forwarded.
+const ZC = descs.find((d) => d.name === 'z-code')
+const HELPER = '/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper', WIN_EXE = 'C:\\Users\\u\\AppData\\Local\\Programs\\ZCode\\ZCode.exe'
+const WIN_CJS = 'C:\\Users\\u\\AppData\\Local\\Programs\\ZCode\\resources\\glm\\zcode.cjs', TITLE = ['zcode-cli']
+const ZC_EXE = { // [program file, argv, decrypt]
+  darwin: [[HELPER, TITLE, false], ['/Users/u/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper', TITLE, false],
+    [HELPER, [HELPER, '/x/glm/zcode.cjs', '-p', 'hi'], false], // the exe decides on macOS: the CLI's word in a Helper's argv changes nothing
+    ['/Applications/ZCode.app/Contents/MacOS/ZCode', TITLE, true], ['/opt/homebrew/bin/node', TITLE, true], ['/bin/x', TITLE, false]],
+  win32: [[WIN_EXE, [WIN_EXE, WIN_CJS, '-p', 'hi'], true], [WIN_EXE, [WIN_EXE, WIN_CJS, 'app-server', '--stdio'], false],
+    [WIN_EXE, [WIN_EXE, WIN_CJS], false], // the interactive CLI: neither word, judged with the desktop
+    [WIN_EXE, [WIN_EXE, WIN_CJS, 'app-server', '-p', 'x'], false], // both words: both forms
+    [WIN_EXE, null, false], // a command line not read: both forms
+    ['C:\\Program Files\\nodejs\\node.exe', ['node', WIN_CJS, '-p', 'hi'], true], ['C:\\x\\x.exe', TITLE, false],
+    ['C:\\x\\x.exe', ['x', WIN_CJS, '-p', 'hi'], false]], // a program file no form names: every form, its -p notwithstanding
+}
+for (const os of ['darwin', 'win32']) test(`4.11 P11 · z-code · ${os}: the desktop's CA setting keeps off only the processes the door cannot tell from the desktop, by the program file and on Windows its command line`, async () => {
+  const r = await rig({ desc: ZC, os, upstreamRoots: { os: async () => STUB_PEM, node: [STUB_PEM], extra: [] } })
+  await r.c.on({ harnesses: ['z-code'], groups: { 'z-code:cli-config': 18500 } })
+  const i = ZC.proxyMode.blockers.findIndex((b) => b.at.keys && b.at.keys.includes('httpProxyCaCertPath'))
+  const { w, facts } = worldOf(ZC, ZC.proxyMode.forms.find((f) => f.id === 'z-code.cli'), os, { blocker: i })
+  const base = ctxOf(w)
+  for (const [exe, argv, decrypt] of ZC_EXE[os]) {
+    Object.assign(r.w, { pid: ++pid, facts: { exe, argv, uid: 501, agent: 'z-code', startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile: (p) => base.readFile(p).replace(ROOT.pem, STUB_PEM) } })
+    const meta = await r.c.lookupIngress({ peer: PEER, user: 'z-code:cli-config', target: { address: ZC.hosts[0], port: 443 } })
+    assert.equal(meta.decrypt, decrypt, `${exe} ${JSON.stringify(argv)}: ${JSON.stringify(meta)}`)
+  }
+  r.c.close()
+})
 
 // CM22 at the door, the host tree (4.8 §3, W69): for every shipped hostTree form, a process named only by the form's hosts.processes (on no name list) is
 // its harness's at a host of the harness's own set — the door's decrypt is then that form's verdict — and forwarded `outside-host-set` anywhere else.
@@ -227,6 +267,88 @@ test('CM20 / ⑥ · an unidentified process at a credentialed door (an agent\'s 
   }
 })
 
+// ⑥ / invariant 6: curl run by an agent whose proxy is only in the shell it was started from inherits the door; without trocar it would have inherited
+// the agent's proxy and NO_PROXY. Generated over each credentialed darwin form × the walk's shapes; the oracle is the rule (the ancestor's value, its
+// NO_PROXY direct) or, where it does not apply, the answer without an ancestor. The row stays the child's: untracked · not-an-agent, nothing in status.
+test('⑥ · an unidentified child dials its nearest routed agent ancestor\'s upstream, that ancestor\'s NO_PROXY direct; anything else is as before', async () => {
+  const CORP = { kind: 'http', host: 'proxy.corp', port: 3128 }, AT = INSTALLED + 1, C = 7000, S = 7100, A = 7200, B = 7300
+  const plain = { exe: '/bin/sh', uid: 501, agent: null, startedAt: AT }
+  for (const d of descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))) {
+    const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false)
+    const g = `${d.name}:${f.route}`, door = `http://${g}:${TOKEN}@127.0.0.1:18105`
+    const other = descs.find((x) => x.name !== d.name)
+    const agentOf = (name) => ({ exe: '/bin/agent', uid: 501, agent: name, startedAt: AT })
+    const agentEnv = { [d.proxy.env[0]]: 'http://proxy.corp:3128', NO_PROXY: '.intra.corp' }
+    const links = (...pids) => (q) => { const i = pids.indexOf(q); return i >= 0 && i + 1 < pids.length ? { ppid: pids[i + 1], startedAt: AT } : null }
+    const deep = Array.from({ length: MAX_DEPTH + 1 }, (_, i) => S + i)
+    for (const [label, w, want] of [
+      ['the parent is the agent', { parent: links(C, A), factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'ancestor'],
+      ['the agent two levels up', { parent: links(C, S, A), factsBy: { [S]: plain, [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'ancestor'],
+      ['no agent above', { parent: links(C, S), factsBy: { [S]: plain }, envBy: { [S]: agentEnv } }, 'before'],
+      ['the agent above is not on', { parent: links(C, A), factsBy: { [A]: agentOf(other.name) }, envBy: { [A]: agentEnv } }, 'before'],
+      ['an agent on above an agent off', { parent: links(C, B, A), factsBy: { [B]: agentOf(other.name), [A]: agentOf(d.name) }, envBy: { [B]: { [d.proxy.env[0]]: door }, [A]: agentEnv } }, 'ancestor'],
+      ['the chain ends at the root', { parent: () => null, factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'before'],
+      ['the parent unread', { parent: () => { throw new Error('ps timed out') }, factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'unknown'],
+      ['an ancestor\'s facts unread', { parent: links(C, S, A), factsBy: { [S]: null, [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'unknown'],
+      ['the agent past the walk\'s limit', { parent: links(C, ...deep, A), factsBy: { ...Object.fromEntries(deep.map((q) => [q, plain])), [A]: agentOf(d.name) }, envBy: { [A]: agentEnv } }, 'before'],
+      ['a recorded prior', { parent: links(C, A), factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv }, prior: 'http://prior.corp:3' }, 'prior'],
+      ['the agent\'s environment unread', { parent: links(C, A), factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: null } }, 'unknown'],
+      ['the child\'s own hook value', { parent: links(C, A), factsBy: { [A]: agentOf(d.name) }, envBy: { [A]: agentEnv }, env: { TROCAR_PRIOR_PROXY: 'http://hooked.corp:9' } }, 'hook'],
+    ]) {
+      const on = w.prior ? [{ phase: 'on', harness: d.name, route: f.route, kind: 'json-key', prior_value: w.prior }] : []
+      const { c, records } = await rig({ desc: d, others: [other], w: { pid: C, facts: plain, env: { [d.proxy.env[0]]: door }, ...w, manifest: manifestOf(d.name, { on }) } })
+      await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
+      const dial = async (host) => c.lookupIngress({ peer: PEER, user: g, target: { address: host, port: 443 } })
+      const api = await dial('api.example'), intra = await dial('svc.intra.corp')
+      const before = await upstreamFor({ desc: d, facts: { pid: C, start: AT, env: w.env || { [d.proxy.env[0]]: door }, hookOnly: true }, recordedPrior: w.prior || null })
+      const expect = { ancestor: [CORP, { kind: 'direct' }], before: [dialOf(before, 'api.example'), dialOf(before, 'svc.intra.corp')], prior: [proxyOf(w.prior || 'http://x:1'), proxyOf(w.prior || 'http://x:1')], unknown: [{ kind: 'direct' }, { kind: 'direct' }], hook: [proxyOf('http://hooked.corp:9'), proxyOf('http://hooked.corp:9')] }[want]
+      assert.deepEqual([api.upstream, intra.upstream], expect, `${d.name} · ${label}`)
+      for (const m of [api, intra]) assert.deepEqual([m.decrypt, m.skip], [false, { not_captured: 'untracked', reason: 'not-an-agent' }], `${d.name} · ${label}: the row is the child's`)
+      assert.deepEqual(c.upstreams()[g] || [], [], `${d.name} · ${label}: status lists no answer for a process it could not tell`)
+      assert.deepEqual(records.map((r) => r.code), want === 'unknown' ? ['prior-proxy-unknown'] : [], `${d.name} · ${label}: ${JSON.stringify(records)}`)
+      for (const x of records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x))
+      c.close()
+    }
+  }
+})
+
+// ⑥ with the registry's `pending` (a wide name whose command line is not read yet, 4.8 W78): the ancestor is unread, not "not an agent" — that
+// connection is unknown (recorded), and the answer is not kept, so the next connection of the same pid + start reads the agent's proxy.
+test('⑥ · a pending ancestor is unread and asked again: the next connection gets that agent\'s upstream', async () => {
+  const AT = INSTALLED + 1, C = 7000, A = 7200
+  const d = descs.find((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))
+  const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false), g = `${d.name}:${f.route}`
+  const w = { pid: C, facts: { exe: '/bin/sh', uid: 501, agent: null, startedAt: AT }, env: { [d.proxy.env[0]]: `http://${g}:${TOKEN}@127.0.0.1:18105` }, parent: (q) => (q === C ? { ppid: A, startedAt: AT } : null),
+    factsBy: { [A]: { exe: '/bin/agent', uid: 501, agent: d.name, startedAt: AT, pending: true } }, envBy: { [A]: { [d.proxy.env[0]]: 'http://proxy.corp:3128' } } }
+  const { c, records } = await rig({ desc: d, w })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
+  const first = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.deepEqual([first.upstream, records.map((r) => r.code)], [{ kind: 'direct' }, ['prior-proxy-unknown']])
+  w.factsBy[A] = { ...w.factsBy[A], pending: false }
+  const second = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.deepEqual(second.upstream, { kind: 'http', host: 'proxy.corp', port: 3128 })
+  c.close()
+})
+
+// P12 / ⑥: after off a door stays for a live agent; a tool that agent starts inherits the door and still dials the agent's own proxy.
+test('⑥ · a door kept after off: the agent\'s child still dials the agent\'s upstream', async () => {
+  const AT = INSTALLED + 1, C = 7000, A = 7200
+  const d = descs.find((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))
+  const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false), g = `${d.name}:${f.route}`
+  const w = { pid: A, facts: { exe: '/bin/sh', uid: 501, agent: null, startedAt: AT }, env: { [d.proxy.env[0]]: `http://${g}:${TOKEN}@127.0.0.1:18105` }, parent: (q) => (q === C ? { ppid: A, startedAt: AT } : null),
+    factsBy: { [A]: { exe: '/bin/agent', uid: 501, agent: d.name, startedAt: AT } }, envBy: { [A]: { [d.proxy.env[0]]: 'http://proxy.corp:3128' } }, procs: [{ pid: A, startedAt: AT }] }
+  const { c } = await rig({ desc: d, w })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
+  await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  w.manifest = manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(INSTALLED) } } })
+  w.now = INSTALLED + 10
+  assert.equal((await c.off({ harnesses: [d.name] })).holders, 1)
+  w.pid = C
+  const m = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.deepEqual([m.upstream, m.skip], [{ kind: 'http', host: 'proxy.corp', port: 3128 }, { not_captured: 'untracked', reason: 'not-an-agent' }])
+  c.close()
+})
+
 test('CM20 · X-Trocar-Upstream counts only from a form whose hook sends it; from anyone else it is ignored and recorded without its value', async () => {
   const hooked = descs.find((d) => d.proxyMode.forms.every((f) => TEMPLATES[(d.proxyMode.certs[f.cert] || {}).template]?.sendsUpstreamHeader))
   const plain = descs.find((d) => d !== hooked && d.proxyMode.forms.some((f) => f.os.includes('darwin')))
@@ -256,19 +378,35 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   for (const address of ['127.0.0.1', 'LocalHost', 'door.localhost', '127.0.0.2', '::1']) assert.equal(await c.lookupIngress({ peer: PEER, user: pacG, target: { address, port: 18103 } }), null, `${address}: a loop through the door (chain.mjs isLoopbackHost), not a flow`)
   // what one servePac call recorded (P10: a refusal and a door-less answer are one record each, with the requester's peer; a door PAC is none)
   const wrote = async (req) => { const n = records.length, res = await c.servePac(req); const got = records.slice(n); for (const x of got) assert.deepEqual(checkRecord(x), [], JSON.stringify(x)); return { res, got } }
-  const pacReq = { peer: PEER, user: pacG, path: '/trocar.pac' }
+  const pacReq = { peer: PEER, user: pacG, path: pacPath(TOKEN) }
   const { res: on, got: onRec } = await wrote(pacReq)
   assert.deepEqual(onRec, [], 'this user\'s process gets the door PAC: nothing to record')
+  // P10 · D38: this user's own app asking at an address without the key (written by an earlier version, before an update that did not turn capture off and
+  // on) is refused too, but filed under its own code with its way out — not as a stranger
+  const stale = await wrote({ ...pacReq, path: '/trocar.pac' })
+  assert.equal(stale.res, null, 'refused: no compatibility path')
+  assert.deepEqual(stale.got.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-address-stale', PEER]], 'this user\'s program: its own code')
+  assert.match(stale.got[0].reason, /trocar on\b/, 'with the way out')
   assert.equal(on.status, 200); assert.match(on.body, /PROXY 127\.0\.0\.1:18103; PROXY sys\.corp:8080/)
   w.facts = { uid: 502, startedAt: INSTALLED + 1 }
   const refused = await wrote(pacReq)
   assert.equal(refused.res, null, 'another user, for certain: refused')
   assert.deepEqual(refused.got.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-peer-refused', PEER]], 'exactly one pac-peer-refused, with the peer')
+  assert.deepEqual((await wrote({ ...pacReq, path: '/trocar.pac' })).got.map((r) => r.code), ['pac-peer-refused'], 'another user without the key: a stranger, not a stale address')
   const n0 = records.length
   const other = await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })
   assert.equal(other && other.refuse && other.refuse.code, 'pac-peer-refused', 'a CONNECT from another user is refused — an answer of its own, not null (null is "unknown user": 407)')
   assert.equal(records.length, n0, 'the lookup writes nothing itself: the ingress writes the one record of that connection')
   w.pid = null // the owner could not be read
+  // P10: the PAC is a capability, not an owner check. Without the install's key (another user cannot read the entry that holds it) a requester whose
+  // owner cannot be read — which on macOS is how another user's process looks — is refused, recorded, and gets no byte of the owner's way out
+  for (const path of ['/trocar.pac', `/${'0'.repeat(32)}/trocar.pac`, `${pacPath(TOKEN)}x`, pacPath(TOKEN).replace('/trocar.pac', '')]) {
+    const stranger = await wrote({ ...pacReq, path })
+    assert.equal(stranger.res, null, `${path}: refused`)
+    assert.deepEqual(stranger.got.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-peer-refused', PEER]], `${path}: one refusal, with the peer`)
+    assert.ok(!JSON.stringify(stranger.got).includes('sys.corp'), 'nothing of the way out in the record')
+  }
+  assert.notEqual(pacPath(TOKEN), pacPath(`${TOKEN.slice(1)}0`), 'the key is the install\'s own')
   const { res: unread, got: unreadRec } = await wrote(pacReq)
   assert.deepEqual(unreadRec.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-owner-unread', PEER]], 'exactly one record that the PAC was served without the door, with the peer')
   assert.equal(unread.status, 200); assert.doesNotMatch(unread.body, /18103/, 'no door'); assert.match(unread.body, /return "PROXY sys\.corp:8080"/, 'the app keeps the user\'s system proxy')
@@ -298,16 +436,34 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   w.facts = { uid: 501, agent: pacDesc.name, startedAt: INSTALLED + 1 }
   w.manifest = manifestOf(pacDesc.name, { liveness: { [pacDesc.name]: { on_at: iso(INSTALLED), off_at: iso(INSTALLED + 10) } } })
   w.procs = [{ pid: 77, startedAt: INSTALLED + 1 }]
-  await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' }) // the app took the PAC: it read the entry, a holder after off (P12)
+  await c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN) }) // the app took the PAC: it read the entry, a holder after off (P12)
   await c.off({ harnesses: [pacDesc.name] })
-  const after = await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
+  const after = await c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN) })
   assert.match(after.body, /return "PROXY sys\.corp:8080"/, 'after off only the app\'s own way')
-  assert.equal((await c.servePac({ peer: PEER, user: pacG, path: '/other' })).status, 404)
+  assert.equal(await c.servePac({ peer: PEER, user: pacG, path: '/other' }), null, 'any other path is refused, this user\'s process too')
   c.close()
 })
 
 // P10 at the door: the PAC says `PROXY <door>; DIRECT` for a bypass-list host and `PROXY <door>; <own leg>` for the rest, so the door must dial exactly
 // that own leg. The door group's descriptor chain is the CLI form's (it may not follow the system proxy, and it reads the process env): wrong for a PAC.
+
+// P10: the way out of a stale PAC address is read off the record of the entry. Its tag is the address on writes now: on already rewrote it, and the
+// program still holds the address it read at start (the Claude desktop app reads it once), so restarting it is the way out, not trocar on (which ran).
+// Its tag is another address: the entry still holds trocar's old one, and trocar on <harness> rewrites it.
+test('P10 · pac-address-stale names the way out the entry needs: restart the program when on already wrote the new address, else trocar on <harness>', async () => {
+  const routeId = pacG.split(':')[1], door = 'http://127.0.0.1:18103'
+  for (const [tag, way, not] of [[pacAddress(TOKEN, door), /restart/i, /trocar on\b/], [`${door}/trocar.pac`, new RegExp(`trocar on ${pacDesc.name}\\b`), /restart/i]]) {
+    const m = manifestOf(pacDesc.name)
+    m.entries.push({ phase: 'on', harness: pacDesc.name, route: routeId, kind: 'json-key', path: '/lib', keys: [['egressProxyPacUrl']], value: tag, door_sha256: crypto.createHash('sha256').update(tag).digest('hex'), installed_at: iso(INSTALLED) })
+    const { c, records } = await rig({ desc: pacDesc, w: { pid: 77, facts: { uid: 501, startedAt: INSTALLED + 1 }, manifest: m } })
+    await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18103 } })
+    assert.equal(await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' }), null, 'refused all the same')
+    const r = records.filter((x) => x.code === 'pac-address-stale')
+    assert.equal(r.length, 1)
+    assert.match(r[0].reason, way); assert.doesNotMatch(r[0].reason, not)
+    c.close()
+  }
+})
 test('CM19 / P10 · the PAC door dials the own leg its PAC names: a bypass-list host direct, any other the fixed system proxy, whatever the process env holds', async () => {
   const sp = { url: 'http://sys.corp:8080', bypass: [{ kind: 'domain-suffix', value: 'corp.example' }] }
   const env = Object.fromEntries(pacDesc.proxy.env.map((n) => [n, 'http://env.corp:1']))
@@ -318,7 +474,7 @@ test('CM19 / P10 · the PAC door dials the own leg its PAC names: a bypass-list 
     assert.deepEqual(await dial('gw.corp.example'), { kind: 'direct' }, `${agent}: a bypass-list host is dialled direct, never through the env's proxy`)
     assert.deepEqual(await dial('api.example'), proxyOf(sp.url), `${agent}: any other host through the user's fixed system proxy, the PAC's own leg`)
     if (agent) assert.equal(c.upstreams()[pacG][0].source, 'system-proxy', 'status reads the same answer')
-    const pac = (await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })).body
+    const pac = (await c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN) })).body
     assert.match(pac, /corp\.example/); assert.match(pac, /"PROXY 127\.0\.0\.1:18104; PROXY sys\.corp:8080"/)
     w.sp = null
     assert.deepEqual(await dial('api.example'), { kind: 'direct' }, 'no system proxy: direct, as the PAC then says')
@@ -521,6 +677,23 @@ for (const by of ['uninstall', null]) {
   })
 }
 
+// ---- 1.6 §1.1: off --now after a plain off cuts what the first off left draining -------------------------------------------------------------------
+test('a nameless off --now after a plain off cuts the connections the first off left draining', async () => {
+  const { d } = rootForm
+  const flows = [{ agent: d.name, state: 'open' }] // one streaming connection of the harness, as the engine holds it
+  const drain = async ({ harnesses, now }) => { // the engine's drain: the connections of those harnesses (null: every one) are asked to close, or cut on now
+    const out = { closing: 0, waiting: 0, cut: 0 }
+    for (const x of flows) if ((!harnesses || harnesses.includes(x.agent)) && x.state !== 'cut') { x.state = now ? 'cut' : 'closing'; out[x.state]++ }
+    return out
+  }
+  const { c } = await rig({ desc: d, drain })
+  await c.on({ harnesses: [d.name], groups: { [`${d.name}:${rootForm.f.route}`]: 18109 } })
+  assert.deepEqual((await c.off({})).relayed, { closing: 1, waiting: 0, cut: 0 })
+  assert.equal((await c.off({ now: true })).relayed.cut, 1, 'the second off cuts the stream the first one let run')
+  assert.deepEqual((await c.off({ now: true })).relayed, { closing: 0, waiting: 0, cut: 0 }, 'nothing left relayed: nothing to cut, no error')
+  c.close()
+})
+
 // ---- the door's durable record (P12 「门的持久记录」) ------------------------------------------------------------------------------------
 const doorRows = (dir) => readDoorSeen({ dir }).rows
 const fireAll = async (pending, rounds = 4) => { for (let i = 0; i < rounds; i++) { for (const fn of pending.splice(0)) await fn(); await new Promise((r) => setImmediate(r)) } }
@@ -592,7 +765,7 @@ test('PAC GETs are counted per life: two from one life are one kind:\'pac\' row 
   const dir = tmpDir(), S1 = INSTALLED + 1, S2 = INSTALLED + 500
   const { c, w } = await rig({ desc: pacDesc, dir, w: { pid: 81, facts: { agent: pacDesc.name, uid: 501, startedAt: S1 }, now: INSTALLED + 10 } })
   await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18113 } })
-  const get = () => c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
+  const get = () => c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN) })
   await get(); w.now = INSTALLED + 20; await get()
   w.facts = { ...w.facts, startedAt: S2 }; w.now = INSTALLED + 600; await get()
   c.close()
@@ -614,7 +787,7 @@ test('4.11 ① · on / off / restore / lookup write none of state, ingress or th
     if (typeof fn !== 'function' || !/write|rename|mkdir|unlink|rm|copy|chmod|append|truncate|symlink|utimes/i.test(String(k))) return fn
     return (...a) => { writes.push(typeof a[0] === 'string' ? a[0] : fds.get(a[0]) ?? `fd ${a[0]}`); return fn.apply(t, a) }
   } })
-  const c = createModelCollector({ harnesses: [d], dir, fs: rec, ctx: { os: 'darwin', home: '/h', dirs: {}, readFile: () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, readdir: () => [] }, custody: 'unavailable', proxyOf,
+  const c = createModelCollector({ harnesses: [d], dir, fs: rec, ctx: { os: 'darwin', home: '/h', dirs: {}, readFile: () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, readdir: () => [] }, custody: 'unavailable', proxyOf, bypassOf,
     identify: () => ({ reason: 'match', agent: d.name }), ownerOf: async () => ({ pid: 9 }), factsOf: async () => ({ startedAt: INSTALLED + 1 }) })
   c.bindDoors({ open: async () => {}, close: async () => {} })
   const port = JSON.parse(fs.readFileSync(path.join(dir, 'ingress.json'), 'utf8')).groupPorts[g]
@@ -666,6 +839,43 @@ test('1.6 V32 `attached` · the daemon\'s own answer: every group ingress.json r
   const absent = await rig({ desc: d, ingress: { missing: true }, w: { ...on } })
   assert.equal(absent.c.attached(d.name), false, 'no ingress.json: nothing recorded for it, so no (not 不知道)')
   absent.c.close()
+})
+
+// 4.8 §5.3 W16 (trust verdict): at one door of a group with two forms (claude-code:settings), each process is judged on its own facts against
+// every form of the route — one whose settings trust the root decrypts, one whose settings do not is forwarded untrusted. CM22 checks one
+// process per door of the shipped descriptor; this adds a second, failing process at the same multi-form door.
+test('two processes at one door of a two-form group are each judged on their own facts: the trusted one decrypts, the other is forwarded untrusted', async () => {
+  const d = descs.find((x) => x.name === 'claude-code'), g = 'claude-code:settings'
+  const forms = d.proxyMode.forms.filter((f) => f.route === 'settings' && f.os.includes('darwin'))
+  assert.ok(forms.length >= 2, 'the group carries two forms')
+  const r = await rig({ desc: d })
+  await r.c.on({ harnesses: [d.name], groups: { [g]: 18400 } })
+  const t = d.proxyMode.trusts[forms[0].trust]
+  const ask = async (p, { c: cs, w, facts }) => {
+    const base = ctxOf(w)
+    Object.assign(r.w, { pid: p, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile: (q) => base.readFile(q).replace(ROOT.pem, STUB_PEM) } })
+    return r.c.lookupIngress({ peer: PEER, user: g, target: { address: cs.host, port: 443 } })
+  }
+  const trusted = await ask(7101, worldOf(d, forms[0], 'darwin', {}))
+  const other = await ask(7102, worldOf(d, forms[1], 'darwin', { sources: t.sources.map(() => 'lacks') }))
+  assert.deepEqual([trusted.decrypt, other.decrypt, other.skip && other.skip.not_captured], [true, false, 'untrusted'])
+  r.c.close()
+})
+
+// 4.8 §3: a group gets a door only while its harness is on (or a holder of it lives: V55); the PAC group, which takes no credentials, likewise
+test('a recorded group whose harness is off and has no holder gets no door; the PAC group has its door only while its harness is on', async () => {
+  const cc = descs.find((x) => x.name === 'claude-code'), other = descs.find((x) => x.name === 'codex')
+  const groupsOf = (d, base) => Object.fromEntries(Object.keys(d.proxyMode.routes).map((rt, i) => [`${d.name}:${rt}`, base + i]))
+  const ccGroups = groupsOf(cc, 18500), otherGroups = groupsOf(other, 18520)
+  const gPac = Object.keys(ccGroups).find((g) => cc.proxyMode.routes[g.split(':')[1]].auth === false)
+  assert.ok(gPac, 'claude-code has a group that takes no credentials')
+  const { c } = await rig({ desc: other, others: [cc], ingress: { groupPorts: { ...ccGroups, ...otherGroups }, listenerToken: TOKEN }, w: { state: { harnesses: { [other.name]: { desired: 'on' }, [cc.name]: { desired: 'off' } } } } })
+  assert.deepEqual(c.doors(), otherGroups, 'at start: the on harness\'s doors only')
+  await c.on({ harnesses: [cc.name], groups: { [gPac]: ccGroups[gPac] } })
+  assert.equal(c.doors()[gPac], ccGroups[gPac], 'the PAC door opens with its harness')
+  await c.off({ harnesses: [cc.name] })
+  assert.deepEqual(c.doors(), otherGroups, 'off with no holder: the PAC door is closed, the other harness\'s doors stay')
+  c.close()
 })
 
 // 4.6 §开关 proxy mode (D38): at start, a harness desired on whose ingress.json cannot be read opens no door and leaves one failure record with a known
@@ -775,6 +985,115 @@ test('4.8 §5.5 · a key the engine no longer holds anything under is dropped: n
   assert.deepEqual([reads, pending.length, forgot], [0, 0, []], 'nothing held under the key: no table read, no timer, nothing to forget')
   r.c.close()
 })
+
+// 4.11 P4 rule U · P11 rule 3: one block in a user certificate file serves every harness whose setting names that file, but is recorded under the
+// first. For each shipped harness with an env setting among its userCertFiles, the block is recorded under another harness, later than this harness's
+// own items: a process started between the two is config-after-start; one started after both is not. Over the descriptors as they ship, darwin.
+for (const d of await loadHarnesses()) {
+  const v = (d.proxyMode && d.proxyMode.userCertFiles || []).find((s) => typeof s.env === 'string')
+  const f = v && judgedForms(d, 'darwin')[0]
+  if (!f) continue
+  for (const by of ['another-harness', d.name]) test(`rule U · ${d.name}, block recorded under ${by}: the shared block's install time is its carrier time too`, async () => {
+    const file = '/h/certs/mine.pem', g = `${d.name}:${f.route}`
+    const manifest = { ...manifestOf(d.name), entries: [...manifestOf(d.name).entries, { phase: 'install', harness: by, kind: 'text', format: 'pem-block', path: file, installed_at: iso(INSTALLED + 10) }] }
+    const r = await rig({ desc: d, os: 'darwin', w: { pid: 7070, manifest, env: { [v.env]: file }, cwd: '/' } })
+    await r.c.on({ harnesses: [d.name], groups: Object.fromEntries([...new Set(d.proxyMode.forms.map((x) => x.route))].map((rt, i) => [`${d.name}:${rt}`, 18600 + i])) })
+    for (const [start, late] of [[INSTALLED + 5, false], [INSTALLED + 20, true]]) {
+      Object.assign(r.w, { pid: r.w.pid + 1, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: start }, now: INSTALLED + 30 })
+      const meta = await r.c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
+      const why = meta.skip && meta.skip.reason
+      if (late) assert.notEqual(why, 'config-after-start', `${d.name}: started after the block`)
+      else assert.equal(why, 'config-after-start', `${d.name}: started after its own items, before the shared block: ${JSON.stringify(meta.skip)}`)
+    }
+    r.c.close()
+  })
+}
+
+// 4.11 P4 rule U · P11 (D38): a setting that may name rule U's file cannot be read, so whether the recorded block is this process's carrier, and its time,
+// is not known — forwarded with config-unreadable and a failure record, never judged as if the setting named nothing. Every shipped harness with a file
+// setting among its userCertFiles, darwin; the block recorded under another harness after this one's own items.
+for (const d of await loadHarnesses()) {
+  const s = (d.proxyMode && d.proxyMode.userCertFiles || []).find((x) => x.file)
+  const f = s && judgedForms(d, 'darwin')[0]
+  if (!f) continue
+  test(`rule U · ${d.name}: a setting naming the user certificate file cannot be read — forwarded only, with config-unreadable on record`, async () => {
+    const g = `${d.name}:${f.route}`
+    const manifest = { ...manifestOf(d.name), entries: [...manifestOf(d.name).entries, { phase: 'install', harness: 'another-harness', kind: 'text', format: 'pem-block', path: '/h/certs/mine.pem', installed_at: iso(INSTALLED + 10) }] }
+    const base = ctxOf(newWorld('darwin'))
+    const blocked = new Set(resolveLoc(s.file, { os: 'darwin', home: '/h', dirs: {}, join: path.posix.join, env: {}, cwd: '/' }))
+    const readFile = (p) => { if (blocked.has(p)) throw Object.assign(new Error('permission denied'), { code: 'EACCES' }); return base.readFile(p) }
+    const r = await rig({ desc: d, os: 'darwin', w: { pid: 7171, manifest, env: {}, cwd: '/', ctx: { ...base, readFile } } })
+    await r.c.on({ harnesses: [d.name], groups: Object.fromEntries([...new Set(d.proxyMode.forms.map((x) => x.route))].map((rt, i) => [`${d.name}:${rt}`, 18650 + i])) })
+    Object.assign(r.w, { facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: INSTALLED + 20 }, now: INSTALLED + 30 })
+    const meta = await r.c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
+    assert.deepEqual(meta.skip, { not_captured: 'untrusted', reason: 'config-unreadable' }, JSON.stringify(meta))
+    assert.ok(r.records.some((x) => x.event === 'failure' && x.code === 'config-unreadable'), 'the forward is on record')
+    r.c.close()
+  })
+}
+
+// 4.11 P11 rule 4 at the door: a userCertFiles setting marked replace (as shipped: Hermes's per-route ssl_ca_cert) naming a file without the trocar root is
+// forwarded on its first connection, replace-without-ca on record, never decrypted first; the verdict is kept (its evidence was read), so a second
+// connection of that life reads nothing again. The same file with install's marked block decrypts. Real bytes in a tmp dir.
+for (const d of (await loadHarnesses()).filter((x) => (x.proxyMode.userCertFiles || []).some((s) => s.semantics === 'replace' && s.file))) {
+  const s = d.proxyMode.userCertFiles.find((x) => x.semantics === 'replace' && x.file)
+  const f = judgedForms(d, 'darwin')[0]
+  test(`P11 rule 4 at the door · ${d.name}: a replacing user certificate file without the root is forwarded before any decrypt; with install's block it decrypts`, async () => {
+    for (const [text, want] of [[makeRoot('a corporate root').pem, 'replace-without-ca'], [pemBlock(makeRoot('a corporate root').pem, STUB_PEM).text, null]]) {
+      const dir = tmpDir('trocar-door-replace-'), ca = path.join(dir, 'corp.pem')
+      fs.writeFileSync(ca, text)
+      const env = {}, loc = s.file.perOs ? s.file.perOs.darwin : s.file
+      if (loc.env) env[loc.env] = dir
+      const at = resolveLoc(s.file, { os: 'darwin', home: dir, dirs: {}, join: path.join, env, cwd: dir })[0]
+      const tree = s.keys.reduceRight((v, k) => ({ [k === '*' ? 'corp' : k]: v }), ca)
+      const yaml = (o, ind = '') => Object.entries(o).map(([k, v]) => (typeof v === 'object' ? `${ind}${k}:\n${yaml(v, ind + '  ')}` : `${ind}${k}: ${v}\n`)).join('')
+      fs.mkdirSync(path.dirname(at), { recursive: true }); fs.writeFileSync(at, yaml(tree))
+      let reads = 0
+      const base = ctxOf(newWorld('darwin'))
+      const readFile = (p) => { if (!p.startsWith(dir)) return base.readFile(p); reads++; return fs.readFileSync(p, 'utf8') }
+      const r = await rig({ desc: d, os: 'darwin', w: { pid: 7272, env, cwd: dir, ctx: { ...base, readFile }, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: INSTALLED + 20 }, now: INSTALLED + 30 } })
+      await r.c.on({ harnesses: [d.name], groups: { [`${d.name}:${f.route}`]: 18700 } })
+      const ask = () => r.c.lookupIngress({ peer: PEER, user: `${d.name}:${f.route}`, target: { address: d.hosts[0], port: 443 } })
+      const meta = await ask()
+      assert.equal(meta.decrypt, want === null, JSON.stringify(meta))
+      if (want) {
+        assert.equal(meta.skip && meta.skip.reason, want)
+        assert.ok(r.records.some((x) => x.event === 'failure' && x.code === want), 'the forward is on record')
+        const n = reads
+        assert.equal((await ask()).decrypt, false)
+        assert.equal(reads, n, 'the verdict from read evidence is kept: nothing read again for the same life')
+      }
+      for (const x of r.records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x))
+      r.c.close()
+    }
+  })
+}
+
+// 4.11 P4 expand: a replacing setting written `${NAME}` is read with NAME asked of the process, which the descriptor's data does not name: set to a file
+// without the root → forwarded; not set in the process → the setting is not in effect, decrypt. A process env reader answers only the names asked.
+for (const d of (await loadHarnesses()).filter((x) => (x.proxyMode.userCertFiles || []).some((s) => s.semantics === 'replace' && s.file && s.expand === 'env'))) {
+  const s = d.proxyMode.userCertFiles.find((x) => x.semantics === 'replace' && x.file && x.expand === 'env')
+  const f = judgedForms(d, 'darwin')[0]
+  test(`P11 rule 4 at the door · ${d.name}: a \${NAME} setting is read with NAME asked of the process`, async () => {
+    for (const [set, want] of [[true, 'replace-without-ca'], [false, null]]) {
+      const dir = tmpDir('trocar-door-ref-'), ca = path.join(dir, 'corp.pem')
+      fs.writeFileSync(ca, makeRoot('a corporate root').pem)
+      const env = set ? { CORP_REF_CA: ca } : {}, loc = s.file.perOs ? s.file.perOs.darwin : s.file
+      if (loc.env) env[loc.env] = dir
+      const at = resolveLoc(s.file, { os: 'darwin', home: dir, dirs: {}, join: path.join, env, cwd: dir })[0]
+      const tree = s.keys.reduceRight((v, k) => ({ [k === '*' ? 'corp' : k]: v }), '${CORP_REF_CA}')
+      const yaml = (o, ind = '') => Object.entries(o).map(([k, v]) => (typeof v === 'object' ? `${ind}${k}:\n${yaml(v, ind + '  ')}` : `${ind}${k}: ${v}\n`)).join('')
+      fs.mkdirSync(path.dirname(at), { recursive: true }); fs.writeFileSync(at, yaml(tree))
+      const base = ctxOf(newWorld('darwin'))
+      const readFile = (p) => (p.startsWith(dir) ? fs.readFileSync(p, 'utf8') : base.readFile(p))
+      const r = await rig({ desc: d, os: 'darwin', w: { pid: 7273, env, cwd: dir, ctx: { ...base, readFile }, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: INSTALLED + 20 }, now: INSTALLED + 30 } })
+      await r.c.on({ harnesses: [d.name], groups: { [`${d.name}:${f.route}`]: 18701 } })
+      const meta = await r.c.lookupIngress({ peer: PEER, user: `${d.name}:${f.route}`, target: { address: d.hosts[0], port: 443 } })
+      assert.deepEqual([meta.decrypt, (meta.skip && meta.skip.reason) || null], [want === null, want], JSON.stringify(meta))
+      r.c.close()
+    }
+  })
+}
 
 // ---- forwarding by design is no failure event; the switch is the in-memory one (4.6 §连接行 · §开关) -------------------------------------
 test('4.6 §连接行 · a not-verified verdict writes no failure event (the row carries it); config-after-start writes one, once', async () => {
@@ -938,7 +1257,7 @@ test('MA17 · the PAC file: an owner or facts question that hangs takes the pac-
     const { c, w, records } = await rig({ desc: pacDesc, doorHangMs: HANG_MS, w: { pid: 77, facts: { uid: 501, startedAt: INSTALLED + 1 }, sp: { url: 'http://sys.corp:8080', bypass: [] } } })
     await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18109 } })
     w.wait = (x) => (x === q ? NEVER : undefined)
-    const res = await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
+    const res = await c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN) })
     assert.equal(res.status, 200); assert.doesNotMatch(res.body, /18109/, 'no door')
     assert.deepEqual(records.filter((r) => r.code === 'pac-owner-unread').map((r) => r.peer), [PEER], q)
     c.close()
@@ -950,7 +1269,7 @@ test('MA17 · the PAC file: its limit runs from the accept too', async () => {
   await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18111 } })
   w.wait = (x) => (x === 'ownerOf' ? NEVER : undefined)
   const t0 = performance.now()
-  await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac', acceptedAt: INSTALLED + 5 - limit * 0.9 })
+  await c.servePac({ peer: PEER, user: pacG, path: pacPath(TOKEN), acceptedAt: INSTALLED + 5 - limit * 0.9 })
   assert.ok(performance.now() - t0 < limit / 2, 'the time left, not the whole limit')
   assert.equal(records.filter((r) => r.code === 'pac-owner-unread').length, 1)
   c.close()

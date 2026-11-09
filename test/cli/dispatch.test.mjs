@@ -13,6 +13,8 @@ import { COMMANDS, helpText, commandNamed, usageLine } from '../../src/cli/comma
 import { WIDTH } from '../../src/cli/text.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { presentEnvNames } from '../../src/off/user-path.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
@@ -180,7 +182,7 @@ test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cann
   assert.equal((await s.run(['daemon'], { deps: { startDaemon: async () => { throw new Error('the port is taken') } } })).exit, 1)
 })
 
-test('the real bin: --version, help, help off, an unknown command and `daemon --bogus` (sandbox HOME, no OS tool)', () => {
+test('the real bin: --version, help, help off, an unknown command, `daemon --bogus` and `classes set` of an unknown class (sandbox HOME, no OS tool)', () => {
   const home = tmpDir('trocar-bin-')
   const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', TROCAR_TEST_SANDBOX: '1' }
   const run = (...args) => spawnSync(process.execPath, [BIN, ...args], { env, encoding: 'utf8' })
@@ -189,7 +191,18 @@ test('the real bin: --version, help, help off, an unknown command and `daemon --
   const o = run('help', 'off'); assert.equal(o.status, 0); assert.match(o.stdout, /trocar off \[<harness>\.\.\.\]/); assert.ok(!/trocar serve/.test(o.stdout))
   const n = run('nope'); assert.equal(n.status, 2); assert.equal(n.stdout, ''); assert.match(n.stderr, /unknown command 'nope'/)
   const d = run('daemon', '--bogus'); assert.deepEqual([d.status, d.stdout], [2, '']); assert.match(d.stderr, /trocar daemon: unknown option '--bogus'/)
+  const c = run('classes', 'set', 'nope', 'log'); assert.deepEqual([c.status, c.stdout], [2, '']); assert.ok(c.stderr.trim()) // 4.6 classes #5
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written')
+})
+
+// 4.6 present: a command typed in a terminal records, with the PATH, the value of every variable that moves a footprint place (null when unset)
+test('4.6 present: install records the footprint variables of the terminal it ran in', async () => {
+  const names = presentEnvNames(await loadHarnesses())
+  const s = sandbox(), env = { ...s.ctx().env, [names[0]]: path.join(s.home, 'elsewhere') }
+  for (const k of names.slice(1)) delete env[k]
+  assert.equal((await s.run(['install', '--yes'], { env })).exit, 0)
+  const vars = JSON.parse(fs.readFileSync(path.join(s.dir, 'user-path.json'), 'utf8')).vars
+  assert.deepEqual(vars, Object.fromEntries(names.map((k, i) => [k, i === 0 ? env[k] : null])))
 })
 
 // 4.11 present / 1.6 V7: uninstall records no PATH — it deletes that file, so recording it first made a second uninstall report removing what it

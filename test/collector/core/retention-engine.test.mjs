@@ -75,5 +75,5 @@ test('K2 through the engine: the class and level the daemon\'s callback names ar
 })
 
 // K2 parity with the old MITM went with src/capture/mitm.mjs (D39⑥ executed 2026-10-11): the second leg of the
-// comparison is gone, and the collector's own shape is what the cells above pin. The parity that still matters — the old
-// capture path that survives writes the same envelope contract — is test/capture/non-llm-verbatim.test.mjs.
+// comparison is gone, and the collector's own shape is what the cells above pin. The record path and the test carrier
+// build their envelopes with the one buildEnvelope (src/collector/core/record/envelope.mjs imports src/capture/envelope.mjs).

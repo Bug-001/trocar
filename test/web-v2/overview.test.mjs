@@ -7,14 +7,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import {
-  overviewItems, recentRows, firstUse, capCard, itemsCard, statsCard, recentCard, agentRows,
+  overviewItems, recentRows, firstUse, capCard, itemsCard, statsCard, recentCard, agentRows, readFail,
 } from '../../web/src/screens/overview/model.mjs'
 import { capHealthPatch, captureVerdict } from '../../web/legacy/core/capture-verdict.mjs'
 import { INTERVAL } from '../../web/legacy/core/poll.mjs'
 import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../web/legacy/labels/replay.mjs'
 import { FILES_NOT_READ } from '../../web/legacy/labels/overview.mjs'
-import { UNTITLED, TITLE_PENDING, TITLE_PENDING_TIP } from '../../web/legacy/labels/common.mjs'
+import { UNTITLED, PROMPT_UNREAD, PROMPT_UNREAD_TIP } from '../../web/legacy/labels/common.mjs'
 import { ERR_WHERE, COMMANDS } from '../../web/legacy/labels/capture.mjs'
 import { fmtWhen, bytes } from '../../web/legacy/core/fmt.mjs'
 
@@ -187,6 +187,14 @@ test('#5 the hit carries the 「?」 mark when a main row\'s cache figures are n
   assert.ok(card.asOf.includes(fmtWhen(Date.parse(doc.as_of), NOW)), 'the card says 截至 <as_of>')
 })
 
+test('#5 no price table yet: no model is said to lack a unit price (that is not known before the table is read)', () => {
+  const doc = { as_of: iso(H), sessions: { total: 1 }, calls: { llm: 3 }, harnesses: [{ harness: A, sessions: 1, calls: 3, last_ts: iso(H) }],
+    usage: { rows: [{ harness: A, model: 'zz-unpriced-model', lane: 'main', sessions: 1, calls: 3, failed: 0, no_usage: 0, input: 10, output: 5, cache_read: 30, cache_write: 10, cache_known: true }], coverage: { sessions_read: 1, sessions_in_window: 1 } } }
+  const loading = statsCard(stateOf(quiet(), { stats: statsOk(doc), pricing: { data: null, ok: null, err: null } }), NOW)
+  assert.equal(loading.unpriced, null); assert.equal(loading.cost.text, '≈ —')
+  assert.ok(statsCard(stateOf(quiet(), { stats: statsOk(doc) }), NOW).unpriced, 'with the table read, the unpriced model is named')
+})
+
 test('#6 the coverage line names the agents with sessions in the window that the overview document lacks, and only those', () => {
   const stats = statsOk({ as_of: iso(H), sessions: { total: 1 }, calls: { llm: 1 }, harnesses: [{ harness: HARNESS_ORDER[2], sessions: 1, calls: 1, last_ts: iso(H) }], usage: { rows: [], coverage: {} } })
   const sessions = ok({ sessions: [session(1, { harness: A }), session(30, { harness: B }), session(2, { harness: HARNESS_ORDER[2] })], errors: [] })
@@ -203,9 +211,15 @@ test('#7 no session in the window: the empty line, never a row of 0s or a cost',
   assert.equal(statsCard(stateOf(quiet(), { stats: { ...failed(), other: false } }), NOW).kind, 'failed')
 })
 
-test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled without a time, a pending title as not read yet, the probe-only mark, the replay href', () => {
+test('#11 recent sessions: a title that could not be read says so, with its own hover', () => {
+  const rows = [session(1, { title: null, title_source: 'unread' })]
+  const [r] = recentCard(stateOf(quiet(), { sessions: ok({ sessions: rows, errors: [] }) }), NOW).rows
+  assert.equal(r.title, PROMPT_UNREAD); assert.ok(r.titleTip.includes(PROMPT_UNREAD_TIP), r.titleTip)
+})
+
+test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled without a time, the probe-only mark, the replay href', () => {
   const rows = [session(3), session(1, { title: null, title_source: null }), session(6), session(2),
-    session(4, { calls: 0, probes: 3 }), session(7), session(5, { title: null, title_source: 'pending' })]
+    session(4, { calls: 0, probes: 3 }), session(7)]
   const want = [...rows].sort((a, b) => Date.parse(b.last_ts) - Date.parse(a.last_ts)).slice(0, 5)
   assert.deepEqual(recentRows({ sessions: rows }).map((r) => r.id), want.map((r) => r.session_id))
   const card = recentCard(stateOf(quiet(), { sessions: ok({ sessions: rows, errors: [] }) }), NOW)
@@ -215,19 +229,13 @@ test('#11 recent sessions: the five newest by last_ts, the hover by title_source
     assert.equal(r.id, `${m.project_slug}::${m.session_id}`)
     assert.equal(r.href, `#/replay/${m.project_slug}/${m.session_id}`)
     if (m.title != null) assert.ok(r.titleTip.includes(TITLE_FROM_WIRE), r.titleTip)
-    else if (m.title_source === 'pending') {
-      assert.equal(r.title, TITLE_PENDING, 'a title not read yet is not drawn as untitled')
-      assert.equal(r.pending, true)
-      assert.ok(r.titleTip.includes(TITLE_PENDING_TIP), r.titleTip)
-    } else {
+    else {
       assert.equal(r.title, UNTITLED)
-      assert.equal(r.pending, false)
       assert.ok(!r.title.includes(fmtWhen(Date.parse(m.last_ts), NOW)), 'the untitled title carries no time: the row has its last-active column')
     }
     assert.equal(r.calls.tip != null, m.calls === 0 && m.probes > 0, `probe-only mark · ${m.session_id}`)
     assert.doesNotMatch(r.title, /[0-9a-f]{6,}/)
   })
-  assert.ok(want.some((m) => m.title_source === 'pending'), 'the five newest hold the pending row')
   assert.equal(recentCard(stateOf(quiet(), { sessions: ok({ sessions: [], errors: [] }) }), NOW).kind, 'none')
 })
 
@@ -345,5 +353,22 @@ test('an agent row with no session and no model call links to its traffic, not t
     const by = (h) => agents.find((a) => a.chip === h)
     assert.equal(by(B).trafficOnly, true); assert.equal(by(B).href, `#/traffic?h=${encodeURIComponent(B)}&window=${w}`)
     assert.equal(by(A).href, `#/sessions?h=${encodeURIComponent(A)}&window=${w}`)
+  }
+})
+
+test('a proxy address in a reason reaches the overview with its user and password hidden (1.9 §保真边界)', () => {
+  const R = 'upstream http://alice:s3cret@proxy.example:8080 refused'
+  const p = capHealthPatch({ ok: true, status: 200, data: { errors: [{ where: 'capture health', reason: R }] } }, NOW)
+  const s = stateOf(quiet())
+  s.caph.data.health = { state: 'unknown', reason: R }; s.caph.data.daemon.error = R
+  s.caph.data.critical = [{ kind: 'k', reason: R }]
+  s.caph.data.cert.root = { state: 'bad', code: 'ca-invalid', reason: R }
+  s.caph.data.agent_list.problems = [{ code: 'bad-json', reason: R }]
+  s.caph.data.failures.groups = [group({ where: 'zz-new', code: 'zz-new', reason: R })]
+  const out = [capCard({ data: p.capH, okAt: p.capHOkAt, err: null, ok: true }, NOW), capCard({ data: { health: { state: 'unknown', reason: R } }, okAt: NOW, err: null, ok: true }, NOW), overviewItems(s, NOW), itemsCard(s, NOW), readFail('x', { status: 502, error: R }), readFail('x', R)]
+  for (const o of out) {
+    const j = JSON.stringify(o)
+    assert.doesNotMatch(j, /alice|s3cret/, j)
+    assert.match(j, /proxy\.example/, j)
   }
 })

@@ -193,17 +193,28 @@ test('a daemon that exits by itself while it drains is not cut: no connection wa
   assert.deepEqual(r.receipt.relayed, { closing: 0, waiting: 0, cut: 0 })
 })
 
-test('1.6 「守护进程卡死」: a stuck daemon is stopped first, then the entries; one that cannot be stopped leaves every file of trocar\'s in place — the entries are undone all the same, exit 1, the pid and kill -9 are given — and the next uninstall finishes', async () => {
+// 1.6 §3.6 「活着却不应答的,算作没关,拒绝」 and §1.5 「守护进程卡死或还在启动」: the lock is alive and the control endpoint times out (stuck) or refuses (starting):
+// uninstall refuses before it writes anything — no stop signal, no systemctl, the manifest and every file stay — exit 1, a failure record with the code
+for (const [why, request] of [['times out', (s) => hangsOnStatus(s)], ['refuses', () => async () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }]]) {
+  test(`1.6 §3.6 · linux: a daemon alive whose control endpoint ${why} is not off: uninstall refuses, stops nothing, changes nothing, exit 1`, async () => {
+    const s = await installedHome({ names: ['claude-code'] }); writeDaemonLock(s)
+    const t = procTable(DAEMON_ROWS); const from = s.sys.exec.calls.length
+    const before = snapshot(s.home)
+    const r = await s.uninstall({ yes: true, deps: { request: request(s), alive: t.alive, identity: t.identity, kill: t.kill, isHelper: t.isHelper, stopDaemon: async () => assert.fail('the daemon is not stopped') } })
+    assert.deepEqual([r.exit, r.receipt.error && r.receipt.error.code], [1, 'collectors-online'])
+    assert.deepEqual([t.sent, s.sys.exec.calls.slice(from).filter((c) => /systemctl/.test(c))], [[], []], 'no stop signal, the autostart is not touched')
+    const after = snapshot(s.home)
+    for (const k of Object.keys(after)) if (k.includes(`${path.sep}flows${path.sep}`)) delete after[k]
+    for (const k of Object.keys(before)) if (k.includes(`${path.sep}flows${path.sep}`)) delete before[k]
+    assert.deepEqual(after, before, 'not one file changed')
+    assert.ok(flowEvents(s.dir).some((e) => e.event === 'failure' && e.code === 'collectors-online'), 'the record names why (D38)')
+  })
+}
+
+test('1.6 §1.5: after the operator stops a stuck daemon, the next uninstall finishes', async () => {
   const s = await installedHome({ names: ['claude-code'] }); writeDaemonLock(s)
-  const stuck = procTable(DAEMON_ROWS, { survives: { 4242: ['SIGTERM', 'SIGKILL'] } }); const c = fakeClock()
-  const r = await s.uninstall({ yes: true, deps: { request: hangsOnStatus(s), alive: stuck.alive, identity: stuck.identity, kill: stuck.kill, isHelper: stuck.isHelper, ...c } })
-  assert.equal(r.exit, 1)
-  assert.match(r.receipt.problems.join('\n'), /pid 4242.*could not be stopped.*kill -9 4242/)
-  assert.match(r.receipt.problems.join('\n'), /trocar's own files were left in place: the daemon is still running/)
-  assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('trocar'), 'the entry is out all the same')
-  assert.deepEqual(['ca', 'state.json', 'install-manifest.json'].map((n) => fs.existsSync(path.join(s.dir, n))), [true, true, true], 'the CA, the state and the manifest stay: the daemon still runs')
-  assert.deepEqual(flowEvents(s.dir).filter((e) => e.event === 'failure').map((e) => [e.where, e.code]), [['uninstall', 'stop-failed']])
-  assert.equal(flowEvents(s.dir).at(-1).outcome, 'failed')
+  const stuck = procTable(DAEMON_ROWS)
+  assert.equal((await s.uninstall({ yes: true, deps: { request: hangsOnStatus(s), alive: stuck.alive, identity: stuck.identity, kill: stuck.kill, isHelper: stuck.isHelper } })).exit, 1)
   const again = await s.uninstall({ yes: true, deps: { procs: async () => [] } }) // the operator stopped it by hand; nothing answers any more
   assert.equal(again.exit, 0, JSON.stringify(again.receipt.problems))
   assert.deepEqual(trocarFiles(s), [])
@@ -266,11 +277,12 @@ test('uninstall: the drain is polled on the socket that answered — with XDG_RU
 
 test('1.6 §1.5: a daemon that does not confirm the routing off leaves every entry and every file as it is, exit 1 (the same rule as off)', async () => {
   const s = await installedHome({ names: ['claude-code'], daemon: { onOff: async () => ({ desired: 'off', actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 4242, unwatched: [], agents: [], helper: { ok: true } }) } })
-  const before = s.userFiles()
+  const before = s.userFiles(), unitFile = path.join(s.home, '.config', 'systemd', 'user', 'trocar-collector.service'), unit = fs.readFileSync(unitFile)
+  const from = s.sys.exec.calls.length
   const r = await s.uninstall({ yes: true })
   assert.equal(r.exit, 1)
+  assert.deepEqual([fs.existsSync(unitFile) && fs.readFileSync(unitFile).equals(unit), s.sys.exec.calls.slice(from).filter((c) => /systemctl .*(disable|stop|mask)/.test(c))], [true, []], 'invariant 5: the agents still point at the door, so the autostart and the daemon stay')
   assert.match(r.receipt.problems[0], /did not confirm/)
-  assert.match(r.receipt.problems[0], /To go on, stop the daemon \(systemctl --user stop trocar-collector\.service\).*then run the command again/, 'semantics 5: an uninstall that stops here says how to get past it')
   assert.deepEqual([s.userFiles(), trocarFiles(s).includes('install-manifest.json')], [before, true])
   assert.deepEqual(flowEvents(s.dir).filter((e) => e.event === 'failure').map((e) => e.code), ['state-mismatch'])
   assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'failed'])
@@ -306,6 +318,66 @@ test('R12: an uninstall that cannot get the op lock has written desired off firs
   const after = snapshot(s.home)
   assert.deepEqual(Object.keys(after).filter((k) => after[k] !== before[k] && !k.includes('flows') && !k.endsWith('state.json') && !k.endsWith('op.lock')), [], 'every other file is as it was')
   assert.equal(flowEvents(s.dir).at(-1).outcome, 'failed')
+})
+
+// 1.6 §3.6: a refusal changes nothing — the unanswering daemon is found before any write, the desired-off R12 has a waiting `off` write included:
+// the op lock is busy and its holder goes while uninstall waits; state.json and every other file stay as they were
+test('§3.6: an uninstall that must wait for the op lock and finds an unanswering daemon refuses before it writes desired off', async () => {
+  const s = await installedHome({ names: ['claude-code'] }); writeDaemonLock(s)
+  fs.writeFileSync(path.join(s.dir, 'op.lock'), JSON.stringify({ pid: 5555, start_time: '9', boot_id: 'boot-1' }))
+  const t = procTable(DAEMON_ROWS); let holderChecks = 0
+  const before = snapshot(s.home)
+  const alive = (pid) => (pid === 5555 ? holderChecks++ < 1 : t.alive(pid))
+  const identity = (pid) => (pid === 5555 ? { start_time: '9', boot_id: 'boot-1' } : t.identity(pid))
+  const r = await s.uninstall({ yes: true, deps: { lockWaitMs: 1000, request: hangsOnStatus(s), alive, identity, kill: t.kill, isHelper: t.isHelper, stopDaemon: async () => assert.fail('the daemon is not stopped') } })
+  assert.deepEqual([r.exit, r.receipt.error && r.receipt.error.code], [1, 'collectors-online'])
+  const after = snapshot(s.home)
+  assert.deepEqual(Object.keys(after).filter((k) => after[k] !== before[k] && !k.includes(`${path.sep}flows${path.sep}`)), [], 'not one file changed, state.json included')
+})
+
+// 1.6 §3.6 「记录没列的标记」: the record lists codex's file and not Claude Code's settings (marked by trocar, its value backed up): one uninstall takes
+// both out — the unlisted one by trocar's marks at the places planByMarker reads, its old value from the backup — and the receipt names it as undone by marker
+test('§3.6: uninstall also takes out a marked file the record does not list, by its marks, the value from its backup; one run clears both', async () => {
+  const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
+  const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
+    fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+  } })
+  const settings = path.join(s.home, '.claude', 'settings.json')
+  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  assert.notEqual(fs.readFileSync(settings, 'utf8'), settingsOriginal, 'trocar\'s value is in')
+  const mf = path.join(s.dir, 'install-manifest.json')
+  const m = JSON.parse(fs.readFileSync(mf, 'utf8'))
+  m.entries = m.entries.filter((e) => e.path !== settings); m.files = m.files.filter((f) => f.path !== settings)
+  fs.writeFileSync(mf, JSON.stringify(m))
+  const r = await s.uninstall({ yes: true })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.equal(fs.readFileSync(settings, 'utf8'), settingsOriginal, 'the unlisted file: trocar\'s value out, the old one back from the backup')
+  assert.equal(fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8'), codexOriginal, 'the listed file: undone by the record')
+  assert.ok(r.receipt.changed.some((c) => c.path === settings && c.result === 'undone-by-marker'), JSON.stringify(r.receipt.changed))
+  assert.deepEqual(trocarFiles(s), [])
+})
+
+// 1.6 §1.4 「计划写全」, V85: the plan (--dry-run, and the one shown before a yes) names the unlisted marked file too, and writes nothing
+test('§1.4: uninstall --dry-run plans the marked file the record does not list beside the one it lists; the home is unchanged', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+  } })
+  const settings = path.join(s.home, '.claude', 'settings.json'), codexEnv = path.join(s.home, '.codex', '.env')
+  const mf = path.join(s.dir, 'install-manifest.json')
+  const m = JSON.parse(fs.readFileSync(mf, 'utf8'))
+  m.entries = m.entries.filter((e) => e.path !== settings); m.files = m.files.filter((f) => f.path !== settings)
+  fs.writeFileSync(mf, JSON.stringify(m))
+  const snap = snapshot(s.home)
+  for (const argv of [['--dry-run', '--json'], ['--json']]) { // the dry run, and the plan a run without a yes stops at
+    const { io } = await cli(s, argv, { ask: true })
+    const r = io.json()
+    for (const p of [settings, codexEnv]) {
+      assert.ok(r.planned.some((x) => x.path === p), `${argv}: planned names ${p}: ${JSON.stringify(r.planned)}`)
+      assert.ok(r.changed.some((x) => x.path === p), `${argv}: changed names ${p}`)
+    }
+  }
+  assert.deepEqual(snapshot(s.home), snap)
 })
 
 test('V24 (uninstall): with the install manifest gone and no terminal, uninstall takes the routing off, stops the daemon, undoes nothing, removes nothing of trocar\'s and exits 1; with --yes it undoes the entries by their marks and removes trocar\'s own files by name — the CA, the unit, the state, every backup', async () => {
@@ -386,7 +458,7 @@ test('V8 (uninstall): every backup goes, the ones of files the user edited after
   assert.ok(fs.existsSync(bk), 'it is still there')
 })
 
-test('V27 (uninstall): over a stuck daemon, an uninstall signals the daemon and its helper only, never restarts or starts anything, and lists — never stops — the agents and the foreground trocar processes', async () => {
+test('V27 (uninstall): an uninstall signals the daemon and its helper only, never restarts or starts anything, and lists — never stops — the agents and the foreground trocar processes', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); writeDaemonLock(s)
   const t = procTable({ ...DAEMON_ROWS, 5000: { start_time: '5', boot_id: 'boot-1' } }, { survives: { 4242: ['SIGTERM'] } })
   const agents = [
@@ -394,7 +466,7 @@ test('V27 (uninstall): over a stuck daemon, an uninstall signals the daemon and 
     { pid: 7002, ppid: 1, uid: 1000, startedAt: 1, exe: '/usr/bin/node', argv: ['node', '/repo/bin/trocar.mjs', 'capture'], env: () => new Map() },
   ]
   const calls = s.sys.exec.calls.length
-  const r = await s.uninstall({ yes: true, deps: { procs: async () => agents, request: hangsOnStatus(s), alive: (pid) => t.alive(pid) || agents.some((a) => a.pid === pid), identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...fakeClock() } })
+  const r = await s.uninstall({ yes: true, deps: { procs: async () => agents, alive: (pid) => t.alive(pid) || agents.some((a) => a.pid === pid), identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...fakeClock() } })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
   assert.ok(t.sent.every(([pid]) => pid === 4242 || pid === 4243), `signals went to the daemon and its helper only: ${JSON.stringify(t.sent)}`)
   assert.deepEqual(s.sys.exec.calls.slice(calls).filter((c) => /restart|start|enable|kill/.test(c)), [], 'no restart, no start')
@@ -541,10 +613,97 @@ test('§3.6: a plain uninstall lists every place it keeps — flows/, audit/, re
   assert.deepEqual([p.io.json().kept, ['flows', 'audit', 'replays'].filter((d) => fs.existsSync(path.join(purged.dir, d)))], [[], []])
 })
 
-test('the text receipt says a file once: two entries of one file with the same change, or a file named twice as removed, are one row', () => {
+test('the text receipt says a file once: the entries of one file, whatever each changed, or a file named twice as removed, are one row', () => {
   const file = path.join('/h', 'Library', 'Application Support', 'Code', 'User', 'settings.json') // one file, two json entries (a proxy key and an array item)
   const rows = (r) => formatUninstallReceipt({ command: 'uninstall', ok: true, removed: [], ...r }, { home: '/h' }).split('\n').filter((l) => l.includes('settings.json')).length
   assert.equal(rows({ changed: [{ path: file, change: 'restored' }, { path: file, change: 'restored' }] }), 1)
-  assert.equal(rows({ changed: [{ path: file, change: 'restored' }, { path: file, change: 'trocar\'s lines removed' }] }), 2)
+  assert.equal(rows({ changed: [{ path: file, change: 'restored' }, { path: file, change: 'trocar\'s lines removed' }] }), 1)
   assert.equal(rows({ removed: [file, file] }), 1)
+})
+
+test('formatUninstallReceipt: each left row names its file once, whether or not its reason starts with the path', () => {
+  const home = '/home/u'
+  const left = [
+    { path: '/home/u/.config/systemd/user/trocar.service', result: 'error', reason: '/home/u/.config/systemd/user/trocar.service could not be removed: EACCES' },
+    { path: '/home/u/.trocar/ca/root.key', result: 'error', reason: '/home/u/.trocar/ca/root.key, named as the CA key, is not inside /home/u/.trocar' },
+    { path: '/home/u/.codex/.env', result: 'left-unparsable', reason: 'no longer valid' },
+  ]
+  const text = formatUninstallReceipt({ ok: false, left, problems: [], notes: [], kept: [] }, { home, platform: 'linux' })
+  for (const l of left) {
+    const name = path.posix.basename(l.path) // the text may fold a row and tildes the path: its file name is what is counted
+    assert.equal(text.split(name).length - 1, 1, `${l.path} is named once:\n${text}`)
+  }
+})
+
+test('formatUninstallReceipt (win32): the scheduled task it deleted is not printed as a path relative to the current drive', () => {
+  const home = 'C:\\Users\\u', task = '\\trocar\\collector' // what autostart.removed carries on Windows: a task name, never a file
+  const text = formatUninstallReceipt({ ok: true, removed: [task, `${home}\\.trocar\\collector\\ca`], autostart: { disabled: true, removed: [task] }, problems: [], notes: [], kept: [] }, { home, platform: 'win32' })
+  const rows = text.split('\n').filter((l) => /^ {2}\S/.test(l))
+  assert.ok(rows.some((l) => l.includes(task)), `the task is said:\n${text}`)
+  for (const l of rows) assert.ok(!/^ {2}\\(?!\\)/.test(l), `no Removed row starts with a drive-relative path: ${l}`)
+})
+
+// 1.6 §3.6 「封最后一段」 (V127): the daemon uninstall stops seals the segment it was writing (its lock's `segment`) before it exits; the receipt says what
+// came of it — the sealed row with the sizes of the journal's seal line, or that the segment stays unsealed — and --purge-data asks it not to seal.
+const SEG = '20261107T100000Z'
+async function sealingUninstall({ seals, argv = [] }) {
+  const s = await installedHome({ names: ['claude-code'] })
+  writeDaemonLock(s, { segment: SEG })
+  const raw = path.join(s.home, '.trocar', 'raw'); fs.mkdirSync(raw, { recursive: true })
+  fs.writeFileSync(path.join(raw, `${SEG}.ndjson`), '{"id":"r1"}\n')
+  const t = procTable(DAEMON_ROWS), offs = []
+  const asked = () => offs.length > 0
+  const request = async (q) => {
+    if (q.method === 'POST' && q.path === '/off') {
+      if (seals && !asked()) { // what the daemon does before it exits: the sealed file in place, then the plaintext gone, then the journal line
+        fs.writeFileSync(path.join(raw, `${SEG}.sealed`), 'sealed'); fs.rmSync(path.join(raw, `${SEG}.ndjson`))
+        fs.appendFileSync(path.join(raw, 'journal.jsonl'), JSON.stringify({ op: 'seal', outcome: 'ok', segment: SEG, bytes: 3 * 2 ** 20, sealedBytes: 2 ** 19 }) + '\n')
+      }
+      offs.push(q.body)
+    }
+    return s.sys.daemon.request(q)
+  }
+  const { exit, io } = await cli(s, argv, { deps: { request, alive: (pid) => !asked() && t.alive(pid), identity: t.identity, isHelper: t.isHelper, kill: t.kill, ...fakeClock() } })
+  return { s, exit, io, offs, raw }
+}
+
+test('uninstall: the segment the daemon sealed before it exited is a row of the receipt, with its sizes (V127)', async () => {
+  const { exit, io } = await sealingUninstall({ seals: true, argv: ['--json'] })
+  assert.equal(exit, 0, io.text())
+  const r = io.json()
+  assert.deepEqual(r.sealed, [{ segment: SEG, bytes: 3 * 2 ** 20, sealed_bytes: 2 ** 19 }])
+  assert.deepEqual(validateReceipt(r), [], 'sealed is a key of the uninstall receipt (附录 C.2)')
+})
+
+test('uninstall: a segment the daemon did not seal stays plaintext, and the receipt says it stays unsealed until trocar runs again (V127)', async () => {
+  const { exit, io, raw } = await sealingUninstall({ seals: false, argv: ['--json'] })
+  assert.equal(exit, 0, io.text())
+  const r = io.json()
+  assert.equal(r.sealed, undefined)
+  assert.ok(r.notes.some((n) => n.includes(`${SEG} stays unsealed until trocar runs again`)), JSON.stringify(r.notes))
+  assert.equal(fs.readFileSync(path.join(raw, `${SEG}.ndjson`), 'utf8'), '{"id":"r1"}\n', 'its bytes are intact')
+})
+
+test('uninstall --purge-data asks the daemon not to seal, and says nothing of the segment it deletes (V127)', async () => {
+  const { exit, io, offs } = await sealingUninstall({ seals: false, argv: ['--purge-data', '--json'] })
+  assert.equal(exit, 0, io.text())
+  assert.ok(offs.length && offs.every((b) => b.seal === false), JSON.stringify(offs))
+  assert.ok(!io.json().notes.some((n) => n.includes(SEG)))
+})
+
+test('uninstall: a sealed segment never hides how to stop a daemon that did not answer (1.6 §3.6)', async () => {
+  const { io } = await sealingUninstall({ seals: true, argv: ['--json'] })
+  const json = io.json()
+  const r = { ...json, daemon: { state: 'unresponsive', pid: 4321 }, problems: [...(json.problems || []), 'the daemon (pid 4321) could not be stopped:\n    kill -9 4321'] }
+  assert.ok(r.sealed && r.sealed.length)
+  assert.ok(formatUninstallReceipt(r, {}).split('\n').includes('    kill -9 4321'), 'the stop command, whole on its own line')
+})
+
+// A daemon `off` already stopped leaves its lock when it could not remove it (a forced end on Windows): this uninstall stopped nothing and must not say it did.
+test('1.6 §3.6: a lock left by a daemon already gone is no daemon stopped', async () => {
+  const s = await installedHome()
+  const r = await s.uninstall({ yes: true, deps: { daemonState: async () => ({ state: 'stale', lock: { pid: 13496 } }), stopDaemon: async () => ({ stopped: true, how: 'none', pid: 13496, helper_pid: null, signals: [] }) } })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.deepEqual(r.receipt.daemon, { pid: null, state: 'none' })
+  assert.doesNotMatch(formatUninstallReceipt(r.receipt, { home: s.home }), /was stopped/)
 })

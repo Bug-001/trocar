@@ -93,6 +93,20 @@ test('the failure recorder never goes back a day when the clock does (4.6 §记�
 
 // D1-1 (4.6 §事件与码): a negative-cache write is a condition per (pid, host). Folding it by where + code kept only the
 // first and the last pair of a window: the ones between were on neither the disk nor the board.
+// C.3: a group is one harness, so the fold under it must not hide a harness behind another's line
+test('failure recorder: a burst across harnesses keeps each one: its own line and its own folded count', () => {
+  const b = box()
+  const rec = createFailureRecorder(b.dir, { setTimer: () => ({ unref() {} }), clearTimer: () => {} })
+  const lines = () => fs.readFileSync(path.join(b.dir, 'flows', fs.readdirSync(path.join(b.dir, 'flows'))[0]), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  try {
+    for (const agent of ['codex', 'hermes', 'codex', 'codex']) rec.event({ where: 'engine', code: 'leaf-error', agent, reason: 'no leaf' })
+    rec.event({ where: 'engine', code: 'leaf-error', harness: 'kimi-code', reason: 'no leaf' }) // the field some failures name it by
+    rec.flush()
+    const count = (who) => lines().filter((l) => (l.agent ?? l.harness) === who).reduce((n, l) => n + (l.folded ? 0 : 1) + (l.suppressed || 0), 0)
+    assert.deepEqual(['codex', 'hermes', 'kimi-code'].map(count), [3, 1, 1], JSON.stringify(lines()))
+  } finally { rec.flush(); b.done() }
+})
+
 test('failure recorder: negative-cache writes are never folded — every (pid, host) inside one window is its own line and its own condition (D1-1)', () => {
   const b = box()
   const rec = createFailureRecorder(b.dir, { setTimer: () => ({}), clearTimer: () => {} })

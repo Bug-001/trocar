@@ -99,6 +99,7 @@ const IMG = {
   dshDesktop: String.raw`C:\Users\u\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe`,
   opencode: String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode.exe`,
   opencodeDesk: String.raw`C:\Users\u\AppData\Local\@opencode-aidesktop\OpenCode.exe`,
+  opencodeCore: String.raw`C:\Users\u\AppData\Local\@opencode-aidesktop\resources\opencode-cli.exe`,
   zcode: String.raw`C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe`,
   svchost: String.raw`C:\Windows\System32\svchost.exe`,
 }
@@ -119,11 +120,12 @@ test('W76 the registry finds the harness of a process of each Windows form by it
     [IMG.codexNpm, {}, 'codex'], [IMG.codexApp, {}, 'codex'],
     [IMG.hermesPy, { cmdline: HERMES_CMD }, 'hermes'], [IMG.hermesPy, { cmdline: HERMES_RERUN_CMD }, 'hermes'], [IMG.kimi, {}, 'kimi-code'],
     [IMG.node, { cmdline: DSH_CMD }, 'deepseek-dsh'], [IMG.dshDesktop, {}, 'deepseek-dsh'],
-    [IMG.opencode, {}, 'opencode'], [IMG.opencodeDesk, {}, 'opencode'],
+    [IMG.opencode, {}, 'opencode'], [IMG.opencodeCore, {}, 'opencode'],
     [IMG.zcode, { cmdline: ZCODE_CMD }, 'z-code'], [IMG.zcode, { cmdline: ZCODE_NET_CMD }, 'z-code'],
   ]
   for (const [exe, extra, harness] of rows) assert.deepEqual(REG.match(winFacts(10, exe, extra)), { agent: harness, descriptor: one(harness), reason: 'match' }, `${exe} ${extra.cmdline || ''}: the registry finds ${harness}`)
   assert.equal(REG.match(winFacts(11, IMG.svchost)).agent, null, 'a process on no list is no agent')
+  assert.deepEqual([REG.match(winFacts(15, IMG.opencodeDesk)).reason, REG.match(winFacts(15, IMG.opencodeDesk)).harness], ['excluded', 'opencode'], 'the OpenCode desktop app\'s own OpenCode.exe is not the agent; its core opencode-cli.exe is')
   assert.deepEqual([REG.match(winFacts(13, IMG.zcode)).agent, REG.match(winFacts(14, IMG.hermesPy)).agent], [null, null], 'the Z-Code GUI itself (no zcode.cjs, no network-service args) and a bare python are no agent')
   assert.equal(REG.match(winFacts(12, IMG.node, { cmdline: null, argv: [], cmdlineState: 'pending' })).agent, null, 'a command line not known yet judges nothing')
   for (const d of ALL) assert.ok(d.processes && !d.signatures, `${d.name}: one name list for every OS (D51), no per-OS signatures`)

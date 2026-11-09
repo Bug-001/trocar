@@ -5,11 +5,20 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createDesk, applySession, applyLane, listOf, stepOf, laneEvents, askOrdinal, applyLedger, ledgerAsk, ledgerDone,
-  readLedger, seenFiles } from '../../web/legacy/replay/model.mjs'
+  readLedger, seenFiles, compactionNumbers, newHeld } from '../../web/legacy/replay/model.mjs'
+import { applyHead } from '../../web/legacy/replay/packs.mjs'
 import { world, readLane, deskFrom } from './desk-world.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const SEEDS = Array.from({ length: 40 }, (_, i) => i + 1)
+
+test('1.5 K-31: a session answer with pending.seen is not a first read; plain pending is, and no pending ends it', () => {
+  for (const [pending, first] of [[{ done: 1, total: 4, seen: true }, false], [{ done: 1, total: 4 }, true], [null, false]]) {
+    const desk = createDesk()
+    applySession(desk, { ...fx.session_full, pending })
+    assert.equal(desk.firstPending, first, JSON.stringify(pending))
+  }
+})
 
 test('2.3 #22: lane pages materialise to lists whose every bid is defined and whose copies stay in the parent', async () => {
   const desk = createDesk()
@@ -227,6 +236,35 @@ test('2.4 #1 #9: seenFiles = the lane\'s seen minus the files it opened (any spe
   assert.ok(saw.dropped > 0 && saw.kept > 0, `absolute spellings dropped ${saw.dropped}, same name elsewhere kept ${saw.kept}`)
 })
 
+test('2.4 还在读: a ledger answered behind the fold is not done, whichever way it came; the next answer without pending is', () => {
+  const pending = { done: 1, total: 4, calls: 0 }
+  const page = (o) => ({ lane: 'L', base: null, prev: null, next: null, steps: [], defs: [], resources: [], seen: [], events: [], ledger_next: null, ...o })
+  for (const apply of [(d, a) => applyLane(d, a), (d, a) => applyLedger(d, 'L', null, a)]) {
+    const desk = createDesk()
+    desk.held.set('L', newHeld())
+    apply(desk, page({ pending }))
+    assert.equal(ledgerDone(desk, 'L'), false)
+    apply(desk, page())
+    assert.equal(ledgerDone(desk, 'L'), true)
+  }
+})
+
+test('2.4: a pack whose tag moved starts the ledger over; a head that only adds a pack does not', () => {
+  const heads = (...tags) => ({ mark: 'S:1', lanes: [], packs: tags.map((tag, n) => ({ n, s0: n * 512, s1: (n + 1) * 512, tag })) })
+  const desk = createDesk()
+  desk.held.set('L', newHeld())
+  applyHead(desk, heads('a'))
+  applyLedger(desk, 'L', null, { base: null, resources: [], seen: [], events: [], ledger_next: null })
+  applyHead(desk, heads('a'))
+  applyHead(desk, heads('a', 'b'))
+  assert.equal(ledgerDone(desk, 'L'), true, 'the same tags and a new pack leave it')
+  applyLedger(desk, 'L', null, { base: null, resources: [], seen: [], events: [], ledger_next: 'c1' })
+  assert.deepEqual(ledgerAsk(desk, 'L'), { lane: 'L', ledger: 'c1' })
+  applyHead(desk, heads('a2', 'b'))
+  assert.equal(ledgerDone(desk, 'L'), false)
+  assert.equal(ledgerAsk(desk, 'L'), null, 'a cursor of the old ledger is not read on')
+})
+
 test('3.5 ledger_next: the chain gives the whole ledger at mark, ledgerDone turns true only at its end, a ledger page touches no step', async () => {
   let chains = 0, older = 0
   for (const seed of SEEDS) {
@@ -284,4 +322,27 @@ test('3.5 tail page: a reset holds the tail page only, prev pages restore every 
     for (const [b, d] of desk.defs) assert.equal(d.bid, b)
   }
   assert.ok(resent > 0, 'some --from answer resends a held definition')
+})
+
+// 2.4 压缩行: a harness's request shows the numbers of its landing, an inferred compaction its own, in whatever order the events arrived.
+test('2.4 compactionNumbers: marked landed, marked unlanded, inferred, two in a row, shuffled', () => {
+  const marked = (step, from) => ({ type: 'compaction', step, from, to: from + 1, inferred: false })
+  const inferred = (step, from, to) => ({ type: 'compaction', step, from, to, inferred: true })
+  const landed = (step, from, to) => ({ type: 'compaction-landed', step, from, to })
+  const others = [{ type: 'summarize', step: 1, out: 9 }, { type: 'user', step: 2 }]
+  const m1 = marked(3, 40), m2 = marked(6, 12), m3 = marked(9, 30), i1 = inferred(12, 50, 5), l1 = landed(4, 41, 12), l2 = landed(7, 13, 3), late = landed(13, 5, 2)
+  for (const [events, want] of [
+    [[m1, l1], [[m1, 41, 12]]],
+    [[m1], [[m1, 40, null]]],
+    [[i1], [[i1, 50, 5]]],
+    [[i1, late], [[i1, 50, 5]]],
+    [[m1, m2, l2], [[m1, 40, null], [m2, 13, 3]]],
+    [[m1, l1, m2, l2, m3, i1, late], [[m1, 41, 12], [m2, 13, 3], [m3, 30, null], [i1, 50, 5]]],
+  ]) for (let turn = 0; turn < events.length; turn++) {
+    const list = [...events.slice(turn), ...others, ...events.slice(0, turn)]
+    const got = compactionNumbers(list, (e) => e.step)
+    assert.deepEqual([...got.keys()].filter((e) => e.type !== 'compaction'), [])
+    assert.deepEqual(want.map(([e]) => got.get(e)), want.map(([, from, to]) => ({ from, to })))
+    assert.equal(got.size, want.length)
+  }
 })

@@ -80,7 +80,7 @@ const said = (j, pid) => { const p = j.harnesses.codex.processes.find((x) => x.p
 // the case the spec's P11 `status` order gives for each cell (4.11 P11 status 3–5, 1.6 A.2 rows 32–33)
 function expected(start, since, anc) {
   if (start === 'before-carrier') return [false, 'config-after-start']
-  if (start === 'window') return [true, null]
+  if (start === 'window') return [null, 'not-seen'] // Codex's entry place reads CODEX_HOME, which the macOS table never shows (4.11 P11 status step 4)
   if (start === 'window-before-move') return [null, 'not-seen']
   if (start === 'before-window' && !since) return [null, 'not-seen']
   return anc ? [null, 'not-seen'] : [false, 'config-after-start'] // a known gap: what a routed ancestor may have handed down
@@ -172,8 +172,8 @@ test('status half: a Chromium host (no --type) shows its network service\'s door
 
 test('1.6 §2 判词: captured + not-seen → the harness is captured (exit 0); only not-seen → unknown (exit 3); doctor gives no config-after-start for not-seen rows', async () => {
   const c = await codexOn()
-  setWorld(c, liveness(c, { since: false }), [])
   const inWindow = proc(c, 9001, ON_AT + MIN), unseen = proc(c, 9002, START['before-window'])
+  setWorld(c, liveness(c, { since: false }), [accept(c, inWindow)]) // the door saw it decrypted
   for (const [table, captured, exit] of [[[inWindow, unseen], true, EXIT.ok], [[unseen], null, EXIT.unknown]]) {
     const { exit: e, j } = await run(c, table)
     assert.deepEqual(validateReceipt(j), [])

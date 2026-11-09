@@ -10,7 +10,7 @@ import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 import { turnOnModel } from '../../src/collector/model-on.mjs'
-import { startControlServer } from '../../src/collector/core/control.mjs'
+import { startControlServer, controlEndpointFor } from '../../src/collector/core/control.mjs'
 import { daemonMayStart, readManifest } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
@@ -34,24 +34,76 @@ async function installed({ kimiOnly = false } = {}) {
 }
 
 /** A real control server at the endpoint the resolver gives for this HOME: control.json names a socket in the tmp HOME, with a token. */
-async function daemon(w, { auth = false } = {}) {
+async function daemon(w, { onPost = null, auth = false } = {}) {
   const sock = path.join(w.home, 'c.sock')
   fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token: TOKEN }))
   const asked = []
   const server = await startControlServer({ socketPath: sock, token: TOKEN, routes: {
     'GET /status': async () => ({ doors: {} }),
-    'POST /on': async ({ body }) => { asked.push(body); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, auth ? `http://${encodeURIComponent(g)}:${TOKEN}@127.0.0.1:${port}` : `http://127.0.0.1:${port}`])) } },
+    'POST /on': async ({ body }) => { asked.push(body); if (onPost) return onPost(body); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, auth ? `http://${encodeURIComponent(g)}:${TOKEN}@127.0.0.1:${port}` : `http://127.0.0.1:${port}`])) } },
   } })
   return { asked, close: () => server.close() }
 }
+/** Every file under HOME outside ~/.trocar, path → bytes (base64): where an agent's entries live. */
+function outside(w) {
+  const out = {}
+  const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.lstatSync(p); if (st.isDirectory()) { if (p !== path.join(w.home, '.trocar')) walk(p) } else if (st.isFile()) out[p] = fs.readFileSync(p, 'base64') } }
+  walk(w.home)
+  return out
+}
+const switches = (w) => { try { return fs.readdirSync(path.join(w.dir, 'switch')) } catch { return [] } }
 const on = (w, over = {}) => turnOnModel({ os: 'darwin', home: w.home, env: w.env, harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook, ...over })
 
+// D62①: a route already in place has nothing to record, so a second on leaves the manifest as it is (a save is two fsyncs)
+test('an on that finds every route in place does not save the install manifest', async () => {
+  const w = await modelWorld({ commands: ['codex', 'opencode'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const d = await daemon(w)
+  try {
+    assert.equal((await on(w)).exit, 0)
+    const file = path.join(w.dir, 'install-manifest.json'), before = fs.statSync(file)
+    assert.equal((await on(w)).exit, 0)
+    assert.equal(fs.statSync(file).ino, before.ino, 'the file was not replaced')
+  } finally { await d.close() }
+})
+
+// D62①: one route's result is saved with the next one's intent, so the last route's result is what the run saves at its end
+test('after on, every record on disk is finished: each of the on records has its post_sha256', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const d = await daemon(w)
+  try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
+  const m = JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8'))
+  const ons = m.entries.filter((x) => x.phase === 'on')
+  assert.ok(ons.length >= 1, JSON.stringify(m.entries.map((x) => x.path)))
+  assert.deepEqual(ons.filter((x) => typeof x.post_sha256 !== 'string').map((x) => x.path), [])
+})
+
 // V85 (on): the files `on` writes outside ~/.trocar are the ones its plan names — a plug-in route's own file included
+// the save at the end of the run runs in a finally: when it fails too, the error that stopped the run is the one the caller gets, with what turned on before it
+test('a run stopped by an error, whose last save fails too: the original error goes on, carrying the harness turned on before it', async () => {
+  const w = await modelWorld({ commands: ['codex', 'opencode'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const d = await daemon(w)
+  const manifest = path.join(w.dir, 'install-manifest.json'), trocar = path.join(w.home, '.trocar')
+  let wrote = false
+  const full = new Proxy(fs, { get(t, k) {
+    if (k === 'renameSync') return (a, b) => { if (wrote && b === manifest) throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }); const r = t.renameSync(a, b); if (!b.startsWith(trocar)) wrote = true; return r }
+    return typeof t[k] === 'function' ? t[k].bind(t) : t[k]
+  } })
+  const boom = new Error('the plan broke')
+  // the second harness of the run throws at its plan, after the first one's entries are in their files
+  const harnesses = w.harnesses.map((h) => (h.name === 'opencode' ? Object.defineProperty({ ...h }, 'proxyMode', { get() { if (wrote) throw boom; return h.proxyMode } }) : h))
+  try {
+    await assert.rejects(on(w, { harnesses, fs: full, ctx: { ...w.ctx, fs: full }, ids: ['codex', 'opencode'] }), (e) => e === boom && e.turnedOn.includes('codex') && !e.turnedOn.includes('opencode'))
+  } finally { await d.close() }
+})
+
 test('V85: on writes outside ~/.trocar only the paths its plan names', async () => {
   const w = await modelWorld({ commands: ['codex', 'opencode'] })
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
   const paths = (await on(w, { dryRun: true })).planned.flatMap((p) => p.paths)
-  const mine = () => { const out = {}; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.lstatSync(p); if (st.isDirectory()) walk(p); else if (st.isFile()) out[p] = fs.readFileSync(p, 'base64') } }; walk(w.home); return Object.fromEntries(Object.entries(out).filter(([k]) => !k.startsWith(path.join(w.home, '.trocar') + path.sep))) }
+  const mine = () => outside(w)
   const before = mine()
   const d = await daemon(w)
   try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
@@ -59,6 +111,49 @@ test('V85: on writes outside ~/.trocar only the paths its plan names', async () 
   const written = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((k) => before[k] !== after[k])
   assert.ok(written.length >= 2, JSON.stringify(written))
   assert.deepEqual(written.filter((f) => !paths.some((p) => f === p || f.startsWith(p + path.sep))), [], 'written but not in the plan')
+})
+
+// 4.8 §3 (on <h>): the command line writes an entry only once the daemon has opened the door and answered it back; a door that does not open
+// leaves no entry and `on` fails; an `on` cut off after the door opened and before any entry is completed by the next `on`
+test('on writes no entry and no switch file before the daemon has opened the door and read it back', async () => {
+  const w = await installed() // codex (an entry in its own config), dsh and kimi (switch files)
+  const before = outside(w), atDoor = []
+  const d = await daemon(w, { onPost: (body) => { atDoor.push([outside(w), switches(w)]); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } } })
+  try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
+  assert.deepEqual(atDoor, [[before, []]], 'nothing outside ~/.trocar and no switch file was written while the door was being opened')
+  assert.notDeepEqual(outside(w), before, 'the entries were written after the door answered')
+  assert.ok(switches(w).length > 0, 'and the switch files')
+})
+
+test('a door that cannot open (its port taken): on writes no entry and no switch file, and exits 1', async () => {
+  const w = await installed()
+  const before = outside(w)
+  const d = await daemon(w, { onPost: (body) => ({ doors: {}, skipped: Object.keys(body.groups).map((g) => ({ g, reason: 'engine-port-taken' })) }) })
+  try { assert.equal((await on(w)).exit, 1) } finally { await d.close() }
+  assert.deepEqual(outside(w), before, 'no entry written')
+  assert.deepEqual(switches(w), [], 'no switch file')
+})
+
+test('an on cut off after the door opened and before any entry: the next on completes, its entries lead to the doors', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const before = outside(w)
+  const d = await daemon(w)
+  try {
+    const ep = controlEndpointFor({ platform: 'darwin', dir: w.dir, env: w.env })
+    // the daemon opens the door and answers; the command line dies before it reads the answer
+    const cut = async (q) => { const r = await ep.request(q); if (q.method === 'POST') throw new Error('killed'); return r }
+    assert.equal((await on(w, { ids: ['codex'], request: cut })).exit, 1)
+    assert.equal(d.asked.length, 1, "the daemon took the cut run's request: its door is open")
+    assert.deepEqual(outside(w), before, 'the cut run wrote no entry')
+    const r = await on(w, { ids: ['codex'] })
+    assert.equal(r.exit, 0, JSON.stringify(r))
+    const doors = Object.values(r.doors)
+    assert.ok(doors.length > 0)
+    const written = Object.entries(outside(w)).filter(([k, v]) => before[k] !== v).map(([, v]) => Buffer.from(v, 'base64').toString('utf8'))
+    assert.ok(written.length > 0, 'entries written')
+    for (const u of doors) assert.ok(written.some((t) => t.includes(new URL(u).host)), `an entry leads to ${u}`)
+  } finally { await d.close() }
 })
 
 test('1.6 §1.1: on without an install record refuses with cert-not-installed, exit 1, and writes nothing', async () => {
@@ -132,7 +227,7 @@ for (const [name, drift] of Object.entries(DRIFTS)) {
     const d = await daemon(w)
     try {
       const r = await on(w)
-      assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), [['kimi-code', 'setup-needed', 'trocar install']])
+      assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.commands]), [['kimi-code', 'setup-needed', ['trocar install']]])
       assert.ok(r.on.includes('deepseek-dsh') && r.on.includes('codex') && !r.on.includes('kimi-code'))
       assert.equal(fs.existsSync(path.join(w.dir, 'switch', 'kimi-code')), false)
       assert.ok(fs.existsSync(path.join(w.dir, 'switch', 'deepseek-dsh')))
@@ -174,7 +269,7 @@ test('CM28 · ⑪: every item install placed, its record dropped from the manife
         const r = await on(w)
         // P4b: a form no longer on this machine is not counted (the file was its only `present` place): nothing to set up, so not refused
         const present = w.harnesses.find((d) => d.name === h).proxyMode.forms.some((f) => f.os.includes('darwin') && isPresent(f, w.ctx))
-        assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), present ? [[h, 'setup-needed', 'trocar install']] : [], `${h} ${p.kind} ${p.path} (file too: ${fileToo})`)
+        assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.commands]), present ? [[h, 'setup-needed', ['trocar install']]] : [], `${h} ${p.kind} ${p.path} (file too: ${fileToo})`)
         assert.ok(present ? !r.on.includes(h) && r.on.length > 0 : r.on.length > 0)
       } finally { await d.close() }
     }
@@ -215,6 +310,26 @@ test('1.6 §1.1: an install record with no root on record (the custody was unrea
   assert.deepEqual([r.code, r.exit], ['cert-not-installed', 1])
 })
 
+// 4.8 §3 (on / off <h>): turning one harness off takes that harness's entries only; every other harness's entries and switch files stay byte for byte
+test('off of one harness takes only its own entries: the other harnesses\' entries stay on record and byte for byte', async () => {
+  const w = await installed()
+  const d = await daemon(w)
+  try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
+  const onItems = (h) => { const m = readManifest(w.dir); return [...m.entries, ...m.files].filter((x) => x.phase === 'on' && (h == null || x.harness === h)) }
+  const others = () => onItems().filter((x) => x.harness !== 'codex').map((x) => ({ ...x, bytes: x.path && fs.existsSync(x.path) ? fs.readFileSync(x.path, 'base64') : null }))
+  const codexPaths = new Set(onItems('codex').map((x) => x.path))
+  assert.ok(codexPaths.size > 0 && others().length > 0, 'codex and another harness both wrote entries')
+  const before = { others: others(), outside: outside(w) }
+  const off = await undoHarnesses({ dir: w.dir, home: w.home, manifest: readManifest(w.dir), ids: ['codex'], procs: async () => [] })
+  assert.deepEqual(off.left, [])
+  assert.deepEqual(onItems('codex'), [], 'codex\'s entries are taken')
+  assert.deepEqual(others(), before.others, 'every other harness\'s entry is on record and its file unchanged')
+  const after = outside(w)
+  const changed = [...new Set([...Object.keys(before.outside), ...Object.keys(after)])].filter((k) => before.outside[k] !== after[k])
+  assert.ok(changed.length > 0)
+  assert.deepEqual(changed.filter((k) => !codexPaths.has(k)), [], 'outside ~/.trocar only codex\'s files changed')
+})
+
 // the review of T20, item 1, on the model: install, on, off (undoHarnesses as off runs it: phase on only), then on again with no install — every byte
 // install wrote is as it was, its records are all there, and the second on turns every harness on again (exit 0)
 test('D55① · model: after install → on → off, every phase-install item is byte for byte and on record, and the next on needs no install', async () => {
@@ -232,6 +347,23 @@ test('D55① · model: after install → on → off, every phase-install item is
     assert.equal(JSON.parse(fs.readFileSync(mf, 'utf8')).files.filter((f) => f.phase === 'on').length, 0, 'and took every item on wrote')
     const again = await on(w)
     assert.deepEqual([again.exit, again.refused, again.on.sort()], [0, [], [...first.on].sort()], JSON.stringify(again.refused))
+  } finally { await d.close() }
+})
+
+// a second off with nothing left to undo writes nothing: the install record keeps its bytes and its mtime
+test('off · model: an off right after an off leaves the install manifest unwritten', async () => {
+  const w = await installed()
+  const mf = path.join(w.dir, 'install-manifest.json')
+  const d = await daemon(w)
+  try {
+    assert.equal((await on(w)).exit, 0)
+    const off = () => undoHarnesses({ dir: w.dir, home: w.home, manifest: readManifest(w.dir), ids: null, procs: async () => [] })
+    await off()
+    const old = new Date(Date.now() - 3600e3)
+    fs.utimesSync(mf, old, old)
+    const before = [sha256(fs.readFileSync(mf)), fs.statSync(mf).mtimeMs]
+    assert.deepEqual((await off()).left, [])
+    assert.deepEqual([sha256(fs.readFileSync(mf)), fs.statSync(mf).mtimeMs], before)
   } finally { await d.close() }
 })
 
@@ -304,4 +436,74 @@ test('P12 · an on over a full windows list trims the earliest and deletes since
     assert.ok(p, `a process of ${h}`)
     assert.deepEqual(holdersOf({ manifest: readManifest(w.dir), procs: [p] }).filter((x) => x.harness === h).map((x) => x.why), ['history-unknown'])
   } finally { await d.close() }
+})
+
+// 1.6 §1.6 (R12): an off that came in after the caller took the lock and before turnOnModel wrote desired on (while the daemon was being started) is
+// not written over: on stops with stopped-by-off before its first write, exit 1, and the state file keeps the off
+test('1.6 §1.6: a harness on at lock time and off by the time on writes → stopped-by-off, nothing written, the off kept', async () => {
+  const { desiredOff, offWorld } = await import('../../src/off/orchestrate.mjs')
+  const w = await modelWorld({ commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const d = await daemon(w)
+  try {
+    assert.equal((await on(w)).exit, 0)
+    await undoHarnesses({ dir: w.dir, home: w.home, manifest: readManifest(w.dir), ids: null, procs: async () => [] })
+    const env = path.join(w.home, '.codex', '.env'), was = fs.existsSync(env) ? fs.readFileSync(env) : null
+    desiredOff(offWorld({ home: w.home, env: w.env, deps: { platform: 'darwin' } }), null, ['codex'])
+    d.asked.length = 0
+    const r = await on(w, { wasOn: ['codex'] })
+    assert.deepEqual([r.exit, r.error && r.error.code, r.turnedOn], [1, 'stopped-by-off', []], JSON.stringify(r))
+    assert.deepEqual(d.asked, [], 'the daemon was not asked to open doors')
+    assert.equal(JSON.parse(fs.readFileSync(path.join(w.dir, 'state.json'), 'utf8')).harnesses.codex.desired, 'off')
+    assert.deepEqual(fs.existsSync(env) ? fs.readFileSync(env) : null, was, 'no entry written')
+  } finally { await d.close() }
+})
+
+// 4.6 §代理模式的门 · 4.11 §3 ①: a recorded port that is held is `engine-port-taken` only when it is not trocar's own door. When GET /status gets no
+// answer while something listens on the control endpoint (a daemon still starting: the control server is up before the doors and the lock) or the lock
+// says a daemon lives (stuck), the held ports are its doors as far as on can tell: kept, recorded `door-unconfirmed`. With no listener and no live
+// lock, a held port is another program's: moved, `engine-port-taken`.
+test('a held door port while our daemon is there but does not answer GET /status is door-unconfirmed and kept; with no daemon it is engine-port-taken and moved', async () => {
+  const net = await import('node:net')
+  const { controlRequest } = await import('../../src/off/control-client.mjs')
+  const { checkRecord } = await import('../../src/health/codes.mjs')
+  const flows = (w) => { const d = path.join(w.dir, 'flows'); return fs.existsSync(d) ? fs.readdirSync(d).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [] }
+  const ports = (w) => JSON.parse(fs.readFileSync(path.join(w.dir, 'ingress.json'), 'utf8')).groupPorts
+  const cases = [
+    { at: 'starting: a listener that accepts and stays silent, no lock', silent: true, lock: false, own: true },
+    { at: 'stuck: a live lock, the endpoint refuses', code: 'ECONNREFUSED', lock: true, own: true },
+    { at: 'no daemon: the endpoint refuses, no lock', code: 'ECONNREFUSED', lock: false, own: false },
+    { at: 'no daemon: no socket, no lock', code: 'ENOENT', lock: false, own: false },
+  ]
+  for (const c of cases) {
+    const w = await modelWorld({ commands: ['codex'] })
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    const d = await daemon(w)
+    try { assert.equal((await on(w)).exit, 0) } finally { await d.close() }
+    const was = ports(w), seen = flows(w).length, sock = path.join(w.home, 'd.sock') // not the first daemon's path: http's agent may still pool a socket to it
+    if (c.lock) fs.writeFileSync(path.join(w.dir, 'lock'), JSON.stringify({ pid: process.pid, engine_port: null, socket: sock }))
+    fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token: TOKEN }))
+    const held = []
+    const silent = c.silent ? net.createServer((s) => held.push(s)) : null
+    if (silent) await new Promise((res) => silent.listen(sock, res))
+    try {
+      const request = async (o) => {
+        if (o.method !== 'GET') return { doors: Object.fromEntries(Object.entries(o.body.groups).map(([g, p]) => [g, `http://127.0.0.1:${p}`])) }
+        if (silent) return controlRequest({ ...o, token: TOKEN })
+        throw Object.assign(new Error(c.code), { code: c.code })
+      }
+      const r = await on(w, { request, isFree: async (p) => !Object.values(was).includes(p) })
+      const recs = flows(w).slice(seen).filter((x) => x.event === 'failure' && x.where === 'ingress')
+      assert.ok(recs.every((x) => checkRecord(x).length === 0), JSON.stringify(recs.map(checkRecord)))
+      assert.deepEqual(recs.map((x) => x.harness), recs.map(() => 'codex'), `${c.at}: each record names its harness, which status says it under`)
+      if (c.own) {
+        assert.deepEqual(ports(w), was, `${c.at}: the ports are kept`)
+        assert.deepEqual(recs.map((x) => x.code), Object.keys(was).map(() => 'door-unconfirmed'), c.at)
+        assert.ok(!r.notes.some((n) => n.code === 'engine-port-taken'), c.at)
+      } else {
+        assert.ok(Object.keys(was).every((g) => ports(w)[g] !== was[g]), `${c.at}: every held port moved`)
+        assert.deepEqual(recs.map((x) => x.code), Object.keys(was).map(() => 'engine-port-taken'), c.at)
+      }
+    } finally { if (silent) { for (const s of held) s.destroy(); await new Promise((res) => silent.close(res)) } }
+  }
 })

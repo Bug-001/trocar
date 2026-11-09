@@ -14,12 +14,15 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { FLAG, opensPart } from '../../src/view/head-cols.mjs'
+import { query, homeWith } from '../helpers/session-doc.mjs'
+import { laneOf, fateOf, askedOf, lanes, failLanes, SID } from '../helpers/compaction-lane.mjs'
 
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 // 3.5 §会话读 `session --head`: the closed set of its keys; tier 0 has `buckets` besides
 const CLOSED = ['schema', 'command', 'ok', 'errors', 'v', 'id', 'tier', 'mark', 'markTs', 'pending', 'truncated', 'failed', 'meta', 'stats', 'logged',
   'probes', 'unknown', 'axis', 'steps', 'peak', 'cols', 'bucket', 'chapters', 'packs', 'open', 'lanes', 'lanesMore', 'last']
-const CHAPTER = ['k', 's0', 's1', 'rid0', 'ts0', 'ts1', 'inferred', 'peakCtx']
+const CHAPTER = ['k', 's0', 's1', 'rid0', 'ts0', 'ts1', 'inferred', 'peakCtx', 'prompts']
 const COMPACTION = 1 // the flag byte's lowest bit (3.5: 压缩 first)
 const HEAD_GZ_MAX = 160 << 10
 
@@ -91,6 +94,46 @@ test('3.5 §会话读 `session --head`: the keys are the closed set, the fixture
   assert.equal(doc.lanes[0].lane, doc.axis, 'the axis lane first')
   assert.equal(doc.last.rid, doc.lanes[0].last, 'last = the axis lane\'s last step')
   assert.ok(fs.statSync(headFileOf(home, id)).size <= HEAD_GZ_MAX)
+})
+
+test('1.3 #18: over every pair of step flags a chapter opens after a marked compaction and on an inferred one, and nowhere else', () => {
+  const rest = [0, FLAG.cacheBreak, FLAG.user | FLAG.failed, FLAG.summarize | FLAG.spawn, FLAG.noUsage]
+  const marked = rest.map((f) => f | FLAG.compaction), inferred = rest.map((f) => f | FLAG.compaction | FLAG.inferred)
+  for (const prev of [...rest, ...marked, ...inferred]) for (const f of [...rest, ...marked, ...inferred])
+    assert.equal(opensPart(prev, f), marked.includes(prev) || inferred.includes(f), `${prev} → ${f}`)
+})
+
+// the steps that open a chapter by 3.4's fate of each step (1.3 §章)
+const opensOf = (fate) => fate.flatMap((x, i) => (i > 0 && (fate[i - 1] === 'marked' || x === 'inferred') ? [i] : []))
+const answers = async (home, id) => { const [doc, full] = await Promise.all([query(home, 'session', { id, head: true }), query(home, 'session', { id })]); return JSON.parse(JSON.stringify({ doc, full })) }
+
+test('1.3 #18, 3.5 `chapters[].prompts` and 车道头 `parts`: over generated lanes, failed calls among them, chapters tile the steps, a marked compaction is its chapter\'s last step, an inferred one its first, `inferred` and `prompts` per chapter, and the axis lane\'s `parts` is the chapter count', async () => {
+  for (const wire of ['anthropic', 'flat']) for (const steps of [...lanes(wire).flatMap((body) => [body, [...body, 'mark']]), ...failLanes(), ...['grow', 'ask', 'mark', 'drop'].flatMap((a) => ['dropask', 'dropremind'].map((d) => ['grow', a, d, 'grow', 'ask']))]) {
+    const fate = fateOf(steps), why = steps.join(' ')
+    const { doc, full } = await answers(homeWith(laneOf(wire, steps)), SID)
+    const asked = wire === 'anthropic' ? askedOf(steps) : [] // 1.3: the chat wire has no prompt events
+    assert.equal(doc.steps, steps.length, why)
+    assert.deepEqual(doc.chapters.map((c) => c.s0), [0, ...opensOf(fate)], why)
+    doc.chapters.forEach((c, k) => {
+      assert.equal(c.s1, doc.chapters[k + 1]?.s0 ?? doc.steps, why)
+      assert.equal(c.inferred, fate[c.s0] === 'inferred' && k > 0, why)
+      assert.equal(c.prompts, asked.filter((i) => i >= c.s0 && i < c.s1).length, why)
+    })
+    for (const d of [doc, full]) assert.equal(d.lanes.find((l) => l.lane === doc.axis).parts, doc.chapters.length, why)
+  }
+})
+
+test('3.5 车道头 `parts`: a sub-agent\'s lane counts its own chapters, in `session` and `--head`, whatever the main lane does', async () => {
+  const main = ['grow', 'grow', 'grow', 'mark', 'drop', 'grow']
+  for (const steps of lanes('anthropic')) {
+    const records = [...laneOf('anthropic', main), ...laneOf('anthropic', steps, { agent: 'agent-7' })].sort((a, b) => a.ts.localeCompare(b.ts))
+    const { doc, full } = await answers(homeWith(records), SID), why = steps.join(' ')
+    for (const d of [doc, full]) {
+      const lane = (kind) => d.lanes.find((l) => l.kind === kind)
+      assert.equal(lane('subagent').parts, 1 + opensOf(fateOf(steps)).length, why)
+      assert.equal(lane('main').parts, 1 + opensOf(fateOf(main)).length, why)
+    }
+  }
 })
 
 // Two small sessions in one home: `a` gets a head before the worker starts, `b` has none.

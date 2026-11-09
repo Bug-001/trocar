@@ -10,6 +10,23 @@ import { CONTROL_FILE } from './control-client.mjs'
 
 /** ~/.trocar (D27; the v0 prototype's ~/.atrace is read, never written, and is not here). */
 export const trocarHome = (home = os.homedir()) => path.join(home, '.trocar')
+/** 1.6 §1.5: on macOS and Windows the login entry (launchd, the scheduled task) starts the daemon with the account's own home — the user
+ *  record's, the profile directory — never this shell's HOME / USERPROFILE. → that home, or null when it cannot be read, on Linux (systemd
+ *  --user uses its manager's HOME, and enabling the unit by name there fails aloud when that is another home), or when `home` is not the
+ *  one the environment gave this process (a caller's sandbox HOME is not asked about). */
+export function accountHomeOf(home, platform = process.platform) {
+  if (platform === 'linux' || home !== os.homedir()) return null
+  try { return os.userInfo().homedir || null } catch { return null }
+}
+/** `install` and `uninstall` before they read or write anything (1.6 §1.5, V126): this run's home and the account's (`account`, null = not
+ *  known: no refusal) compared as real paths, without case on Windows. → null, or `{ code: 'home-mismatch', message }`. */
+export function homeMismatch({ home, account, platform = process.platform, fs = nodeFs }) {
+  if (!account) return null
+  const real = (p) => { let r; try { r = fs.realpathSync(p) } catch { r = path.resolve(p) } return platform === 'win32' ? r.toLowerCase() : r }
+  if (real(home) === real(account)) return null
+  const v = platform === 'win32' ? 'USERPROFILE' : 'HOME'
+  return { code: 'home-mismatch', message: `${v} is ${home}, but the collector that starts at login uses your account's home, ${account}. Nothing was changed. Run it again with ${v} unset, or set to that home.` }
+}
 /** ~/.trocar/collector: the manifest, state.json, the lock, the CA, the daemon's records. */
 export const collectorDir = (home = os.homedir()) => collectorIn(trocarHome(home))
 /** The same directory named from the TROCAR home instead of the user's (whoever already holds ~/.trocar: the board's
@@ -23,6 +40,8 @@ export const backupDir = (home = os.homedir()) => path.join(trocarHome(home), 'b
 export const standalonePath = (home = os.homedir()) => path.join(trocarHome(home), 'bin', 'trocar-off')
 /** ~/.trocar/app: what the install script places (4.5 §A, D74): `<version>/`, `node/<id>/`, the pointer `current`. The one resolver of it. */
 export const appDir = (home = os.homedir()) => path.join(trocarHome(home), 'app')
+/** ~/.trocar/compile-cache: Node's compiled code of trocar's modules, kept between runs (D62; module.enableCompileCache). Only an installed machine has one, and `uninstall` removes it. */
+export const compileCacheDir = (home = os.homedir()) => path.join(trocarHome(home), 'compile-cache')
 /** ~/.trocar/bin/trocar (Windows trocar.cmd): the launcher that reads `app/current` and runs the version it names. */
 export const launcherPath = (home = os.homedir(), platform = process.platform) => path.join(trocarHome(home), 'bin', platform === 'win32' ? 'trocar.cmd' : 'trocar')
 const cmdBeside = (p) => `${p}.cmd`

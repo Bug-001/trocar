@@ -23,7 +23,7 @@ export const OPENAI_SECTIONS = [
 ];
 
 import { parsedRequestBody } from './request-body.mjs';
-import { endpointOf } from './endpoints.mjs';
+import { endpointOf, endOf } from './endpoints.mjs';
 import { streamParts } from './sse-spans.mjs';
 
 // ── detection ───────────────────────────────────────────────────────────────────────────────
@@ -89,20 +89,6 @@ export function wireShape(rec) {
 }
 export function detect(rec) { return wireShape(rec) !== null; }
 
-// ── small self-contained content hasher (a stable per-block key for prefix-diffing / cacheBreak;
-// scheme is OpenAI-local — cacheBreak only ever compares blocks within one OpenAI session) ─────
-function blockText(b) {
-  if (b == null) return '';
-  if (typeof b === 'string') return b;
-  if (b.type === 'text') return b.text || '';
-  if (b.type === 'thinking') return b.thinking || b.signature || '';
-  if (b.type === 'tool_use') return (b.name || '') + '::' + JSON.stringify(b.input || {});
-  if (b.type === 'tool_result') return (b.tool_use_id || '') + '::' + (typeof b.content === 'string' ? b.content : JSON.stringify(b.content));
-  if (b.type === 'image') return 'image:' + (b.source && (b.source.media_type || b.source.type) || '');
-  return JSON.stringify(b);
-}
-function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
-const okey = (prefix, b) => prefix + hash(blockText(b).slice(0, 4096));
 const safeJson = (s) => { if (typeof s !== 'string') return s || {}; try { return JSON.parse(s); } catch { return { _unparsed: s }; } };
 
 // ── shared classifiers ────────────────────────────────────────────────────────────────────────
@@ -122,6 +108,8 @@ export function resourceRef(block) {
   if ((block.name || '').startsWith('mcp')) return 'mcp::' + (String(block.name).split(/[._]/)[1] || block.name);
   return '';
 }
+// the board's per-block rules for a reply on the OpenAI wires (resource links, faithfulness)
+export const REPLY_RULES = Object.freeze({ resourceRef, faith: (bl) => (bl.type === 'thinking' ? faithfulness(bl) : undefined) });
 // a short label for the (single) Codex instructions block.
 export function sysLabel(text) {
   const t = text || '';
@@ -134,6 +122,24 @@ export function sysLabel(text) {
 const partsText = (s) => (Array.isArray(s) ? s.map((x) => (x && (x.text || x.summary_text)) || '').filter(Boolean).join('\n\n') : typeof s === 'string' ? s : '');
 // a reasoning item's readable text: its summary, then its content (reasoning_text parts); '' when only ciphertext came
 const reasoningText = (item) => [partsText(item.summary), partsText(item.content)].filter(Boolean).join('\n\n');
+const TEXT_PARTS = new Set(['text', 'input_text', 'output_text']);
+const IMAGE_PARTS = new Set(['image', 'image_url', 'input_image']);
+// where an image's bytes are: a base64 data URL is its data, anything else stays the URL it is
+function imageSource(url) {
+  const comma = url.indexOf(',');
+  const head = comma < 0 ? null : /^data:([^;,]*)(?:;[^;,]*)*;base64$/i.exec(url.slice(0, comma));
+  return head ? { type: 'base64', media_type: head[1], data: url.slice(comma + 1) } : { type: 'url', url };
+}
+// one content part → its block, on either OpenAI wire and in a tool's result alike. A part of no known kind, or an image with no
+// URL, is shown as the JSON it is, so nothing it carried is lost. A text part's annotations are its citations and stay with it, as an
+// Anthropic text block's `citations` do; most text parts carry an empty list, which says nothing.
+function partBlock(c) {
+  if (!c || typeof c !== 'object') return { type: 'text', text: String(c ?? '') };
+  if (TEXT_PARTS.has(c.type) || (c.type == null && c.text != null)) return { type: 'text', text: c.text || '', ...(c.annotations && c.annotations.length ? { annotations: c.annotations } : null) };
+  if (c.type === 'refusal') return { type: 'text', text: c.refusal || '' };
+  const url = IMAGE_PARTS.has(c.type) ? (c.image_url && c.image_url.url) || c.image_url : null;
+  return typeof url === 'string' && url ? { type: 'image', source: imageSource(url) } : { type: 'text', text: JSON.stringify(c) };
+}
 // returns [{ role, block, sub }] — one per rendered block (a message may fan out to several content blocks, none without content).
 // `sub` = the JSON path of the block's bytes WITHIN the item (the board's text_ref locator, 4.2:40).
 export function itemToBlocks(item) {
@@ -146,21 +152,14 @@ export function itemToBlocks(item) {
     const arr = Array.isArray(item.content);
     // no content (absent or null) is no block, as content: [] is: request and reply side alike (RFC 3.1)
     const content = arr ? item.content : item.content == null ? [] : [{ type: 'input_text', text: String(item.content) }];
-    return content.map((c, ci) => {
-      const sub = arr ? ['content', ci] : ['content'];
-      if (!c || typeof c !== 'object') return { role, block: { type: 'text', text: String(c ?? '') }, sub };
-      if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { role, block: { type: 'text', text: c.text || '' }, sub };
-      if (c.type === 'input_image' || c.type === 'image') return { role, block: { type: 'image', source: { media_type: c.image_url || c.detail || 'image' } }, sub };
-      if (c.type === 'refusal') return { role, block: { type: 'text', text: c.refusal || '' }, sub };
-      return { role, block: { type: 'text', text: JSON.stringify(c) }, sub };
-    });
+    return content.map((c, ci) => ({ role, block: partBlock(c), sub: arr ? ['content', ci] : ['content'] }));
   }
   // tools, by the wire's own naming (no tool names): `*_call_output` is a call's result; `*_call` with a call_id is a call the
   // client runs, without one a call the server ran. Anything else is shown as the JSON it is, never as assistant text.
   const ty = typeof t === 'string' ? t : '';
   if (ty.endsWith('_call_output')) {
     const out = item.output;
-    const content = typeof out === 'string' ? out : (out && out.content) || JSON.stringify(out ?? '');
+    const content = typeof out === 'string' ? out : Array.isArray(out) ? out.map(partBlock) : (out && out.content) || JSON.stringify(out ?? '');
     return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: item.call_id || '', content }, sub: [] }];
   }
   if (ty.endsWith('_call')) {
@@ -173,14 +172,33 @@ export function itemToBlocks(item) {
 }
 
 // ── board projection: raw Responses request → flat block descriptors (same vocab as CC linearContext).
+const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
+const isToolList = (x) => Array.isArray(x) && x.every(isObj);
+// Codex offers tools in an `additional_tools` item of input[]: tool definitions, not a conversation item. A tool list of another shape stays a json block.
+const isToolsItem = (it) => isObj(it) && it.type === 'additional_tools' && isToolList(it.tools) && it.tools.length > 0;
+// every tool entry of a Responses request and where it stands: tools[], then each additional_tools item. A `namespace` entry is one
+// (its name and description); its tools follow, each one of its own.
+function toolEntries(req) {
+  const out = [];
+  const walk = (list, path) => list.forEach((t, i) => {
+    const at = [...path, i], inner = isObj(t) && isToolList(t.tools) ? t.tools : null;
+    // a namespace's block is its own words (description, else name): its tools' bytes are theirs, never counted twice
+    const own = inner ? (typeof t.description === 'string' ? [...at, 'description'] : typeof t.name === 'string' ? [...at, 'name'] : at) : at;
+    out.push({ t, at: own, inner, input: path[0] === 'input' });
+    if (inner) walk(inner, [...at, 'tools']);
+  });
+  if (Array.isArray(req && req.tools)) walk(req.tools, ['tools']);
+  if (Array.isArray(req && req.input)) req.input.forEach((it, i) => { if (isToolsItem(it)) walk(it.tools, ['input', i, 'tools']); });
+  return out;
+}
 // Downstream board code (context window, callComp, flatBlockText, cacheBreak) reads sec/kind/role/name/
 // desc/schema/text/block — identical to CC — so Codex renders with ZERO board changes.
 export function boardFlat(req) {
   const flat = [];
-  const tools = Array.isArray(req && req.tools) ? req.tools : [];
-  tools.forEach((t, i) => {
-    const name = t.name || t.type || ('tool_' + i);         // built-in tools (tool_search/web_search) have no name
-    const schema = t.parameters !== undefined ? t.parameters : t;
+  for (const { t, at, inner, input } of toolEntries(req)) {
+    const name = t.name || t.type || ('tool_' + at.filter((x) => typeof x === 'number').pop());         // built-in tools (tool_search/web_search) have no name
+    // a namespace's tools are blocks of their own, not its bytes twice
+    const schema = t.parameters !== undefined ? t.parameters : inner ? { ...t, tools: undefined } : t;
     const desc = typeof t.description === 'string' ? t.description : '';
     const props = schema && schema.properties ? Object.keys(schema.properties) : [];
     const mcp = /^mcp/.test(name);
@@ -188,22 +206,23 @@ export function boardFlat(req) {
       sec: 'tools', kind: 'tool', role: 'tool', name, ttype: t.type || 'function',
       props, descChars: desc.length, cc: null, mcp, verbatim: true,
       desc, schema, resKey: mcp ? 'mcp::' + (name.split(/[._]/)[1] || name) : '',
-      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: ['tools', i],
+      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: at, ...(input ? { input: true } : {}),
     });
-  });
+  }
   const instr = typeof (req && req.instructions) === 'string' ? req.instructions : (req && req.instructions != null ? JSON.stringify(req.instructions) : '');
-  if (instr) flat.push({ sec: 'system', kind: 'system', role: 'system', si: 0, label: sysLabel(instr), text: instr, chars: instr.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text: instr }), path: ['instructions'] });
+  if (instr) flat.push({ sec: 'system', kind: 'system', role: 'system', si: 0, label: sysLabel(instr), text: instr, chars: instr.length, volatile: false, cc: null, path: ['instructions'] });
   if (typeof (req && req.input) === 'string') { // the Responses API accepts a bare string input: one user block
     const block = { type: 'text', text: req.input };
-    flat.push({ sec: 'messages', kind: 'text', role: 'user', mi: 0, bi: 0, block, toolName: '', cc: null, resKey: '', key: okey('M:user:text:', block), path: ['input'] });
+    flat.push({ sec: 'messages', kind: 'text', role: 'user', mi: 0, bi: 0, block, toolName: '', cc: null, resKey: '', path: ['input'] });
   }
   const input = Array.isArray(req && req.input) ? req.input : [];
   let mi = 0;
   for (const item of input) {
+    if (isToolsItem(item)) { mi++; continue } // the tools section's, above; mi stays the item's place in input[]
     let bi = 0;
     for (const { role, block, sub } of itemToBlocks(item)) {
       const type = block.type;
-      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['input', mi, ...sub] };
+      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), path: ['input', mi, ...sub] };
       if (type === 'thinking') d.faithfulness = faithfulness(block);
       flat.push(d);
       bi++;
@@ -231,7 +250,7 @@ const chatText = (content) => {
 export function chatMessageToBlocks(m) {
   if (!m || typeof m !== 'object') return [{ role: 'user', block: { type: 'text', text: String(m ?? '') }, sub: [] }];
   const role = m.role || 'user';
-  if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: chatText(m.content) }, sub: ['content'] }];
+  if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: Array.isArray(m.content) ? m.content.map(partBlock) : chatText(m.content) }, sub: ['content'] }];
   const out = [];
   // DeepSeek / Kimi / GLM thinking models: an assistant turn's reasoning travels as `reasoning_content` (plain
   // text), echoed back on later requests. It came before that turn's reply, so its block goes first. (Its exact
@@ -240,17 +259,11 @@ export function chatMessageToBlocks(m) {
     out.push({ role: 'assistant', block: { type: 'thinking', thinking: m.reasoning_content }, sub: ['reasoning_content'] });
   }
   if (Array.isArray(m.content)) {
-    m.content.forEach((c, ci) => {
-      const sub = ['content', ci];
-      if (!c || typeof c !== 'object') { out.push({ role, block: { type: 'text', text: String(c ?? '') }, sub }); return; }
-      if (c.type === 'image_url' || c.type === 'input_image' || c.type === 'image') {
-        const u = c.image_url; out.push({ role, block: { type: 'image', source: { media_type: (u && (u.url || u.detail)) || 'image' } }, sub });
-      } else if (c.type === 'refusal') out.push({ role, block: { type: 'text', text: c.refusal || '' }, sub });
-      else out.push({ role, block: { type: 'text', text: c.text != null ? c.text : JSON.stringify(c) }, sub });
-    });
+    m.content.forEach((c, ci) => out.push({ role, block: partBlock(c), sub: ['content', ci] }));
   } else if (typeof m.content === 'string' && m.content.length) {
     out.push({ role, block: { type: 'text', text: m.content }, sub: ['content'] });
   }
+  if (typeof m.refusal === 'string' && m.refusal) out.push({ role, block: { type: 'text', text: m.refusal }, sub: ['refusal'] });
   (Array.isArray(m.tool_calls) ? m.tool_calls : []).forEach((tc, k) => {
     const f = (tc && tc.function) || {};
     out.push({ role: 'assistant', block: { type: 'tool_use', name: f.name || '', id: (tc && tc.id) || '', input: safeJson(f.arguments) }, sub: ['tool_calls', k] });
@@ -284,14 +297,14 @@ export function boardFlatChat(req) {
   while (lead < msgs.length && msgs[lead] && (msgs[lead].role === 'system' || msgs[lead].role === 'developer')) lead++;
   for (let i = 0; i < lead; i++) {
     const text = chatText(msgs[i].content);
-    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text }), path: ['messages', i, 'content'] });
+    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile: false, cc: null, path: ['messages', i, 'content'] });
   }
   let mi = 0;
   for (let i = lead; i < msgs.length; i++) {
     let bi = 0;
     for (const { role, block, sub } of chatMessageToBlocks(msgs[i])) {
       const type = block.type;
-      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['messages', i, ...sub] });
+      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), path: ['messages', i, ...sub] });
       bi++;
     }
     mi++;
@@ -304,16 +317,19 @@ export function normRespChat(rec) {
   const events = Array.isArray(resp.raw_sse) ? resp.raw_sse : [];
   const body = resp.body && typeof resp.body === 'object' ? resp.body : null;
   const frames = events.length ? events : (body ? [body] : []);
-  let text = '', thinking = '', model = null, id = null, stop = null, usage = {};
+  let text = '', thinking = '', model = null, id = null, stop = null, usage = {}, error = false;
+  const open = new Set(), done = new Set();                   // choices seen that have not finished (n > 1: each must end)
   const acc = new Map();                                       // tool_calls arrive split across deltas
   for (const e of frames) {
     if (!e || typeof e !== 'object') continue;
+    if (e.error) error = true;                                // an error chunk: the stream's own failure
     if (e.usage) usage = e.usage;
     if (e.model) model = e.model;
     if (e.id) id = e.id;
     for (const c of Array.isArray(e.choices) ? e.choices : []) {
       if (!c || typeof c !== 'object') continue;
-      if (c.finish_reason) stop = c.finish_reason;
+      const ci = c.index ?? 0;
+      if (c.finish_reason) { stop = c.finish_reason; open.delete(ci); done.add(ci); } else if (!done.has(ci)) open.add(ci);
       if (c.usage) usage = c.usage;                             // Kimi reports usage inside the choice
       const d = c.delta || c.message || {};
       if (typeof d.reasoning_content === 'string') thinking += d.reasoning_content;
@@ -331,12 +347,10 @@ export function normRespChat(rec) {
     }
   }
   const tools = [...acc.values()].map((t) => ({ id: t.id, name: t.name, input: safeJson(t.args) }));
-  return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools };
+  return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools, ...(error ? { error } : {}), ...(open.size ? { unfinished: open.size } : {}) };
 }
 
-// ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────
-export function boardFlatFor(shape, req) { return shape === 'chat' ? boardFlatChat(req) : boardFlat(req); }
-export function normRespFor(shape, rec) { return shape === 'chat' ? normRespChat(rec) : normResp(rec); }
+const messagesOf = (req) => (Array.isArray(req && req.input) ? req.input.filter((it) => !isToolsItem(it)).length : 0);
 // derived per-call counts the board header reads, per wire shape (Responses: input[]/instructions;
 // Chat: messages[] with the leading system messages as the system text).
 export function reqCountsFor(shape, req) {
@@ -348,8 +362,8 @@ export function reqCountsFor(shape, req) {
     return { message_count: Math.max(0, msgs.length - lead), tool_count: Array.isArray(req && req.tools) ? req.tools.length : 0, system_chars: sysChars };
   }
   return {
-    message_count: Array.isArray(req && req.input) ? req.input.length : 0,
-    tool_count: Array.isArray(req && req.tools) ? req.tools.length : 0,
+    message_count: messagesOf(req),
+    tool_count: toolEntries(req).length,
     system_chars: typeof (req && req.instructions) === 'string' ? req.instructions.length : 0,
   };
 }
@@ -362,7 +376,7 @@ export function reqCountsFor(shape, req) {
 // arrive as one server message each. A terminal response.completed / .incomplete / .failed carries the
 // output and usage; an `error` event with no terminal response is stop_reason 'error'. (Before the split an HTTP
 // stream ending in response.failed or an `error` event read as stop_reason null; it now says 'failed' / 'error',
-// and the `failed` hook below makes such a call an error step that is never a cache baseline — as on WebSocket.)
+// and the `ended` hook below makes such a call an error step that is never a cache baseline — as on WebSocket.)
 export function normEvents(events) {
   let completed = null;
   for (const e of events || []) if (e && /^response\.(completed|incomplete|failed)$/.test(e.type)) completed = e.response || completed;
@@ -377,9 +391,9 @@ export function normEvents(events) {
   }
   // fallback: if no response.completed (interrupted), stitch text from output_text.delta events
   if (!completed) for (const e of events || []) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
-  const errored = !completed && (events || []).some((e) => e && e.type === 'error');
+  const errorEvent = (events || []).some((e) => e && e.type === 'error'), errored = !completed && errorEvent;
   return { model: (completed && completed.model) || null, id: (completed && completed.id) || null,
-    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, text, thinking: undefined, tools: toolCalls };
+    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, text, thinking: undefined, tools: toolCalls, ...(errorEvent ? { errorEvent } : {}) };
 }
 export function normResp(rec) {
   const resp = (rec && rec.resp) || (rec && rec.response) || {};
@@ -401,8 +415,7 @@ export function ctxTokens(norm) {
 // ── reply parts (sse-spans.mjs): each reply block addressed as a span of resp.raw. Responses keys an event by its
 // `output_index` and takes the event that delivers the item whole: its output_item.done, else the terminal's output, so each
 // block is its own node in that event's data. Chat keys
-// a chunk by choice index and what its delta carries (reasoning, text, or tool call `index`).
-const replyBlocksOf = (items) => items.flatMap((it) => itemToBlocks(it)).map((x) => x.block);
+// a chunk by choice index and what its delta carries (reasoning, text, a refusal, or tool call `index`).
 // an output item's blocks as JSON nodes, the item standing at `path` (RFC 3.1 回复块也回源: the request side's rule for the same item)
 export const itemNodes = (item, path) => itemToBlocks(item).map(({ block, sub }) => ({ block, path: [...path, ...sub] }));
 const RESPONSES_REPLY = {
@@ -414,13 +427,13 @@ const RESPONSES_REPLY = {
     const item = term && Array.isArray(term.response.output) ? term.response.output[Number(k)] : null;
     return item ? { evt: term, nodes: itemNodes(item, ['response', 'output', Number(k)]) } : 'this output item did not finish before the stream ended';
   },
-  jsonBlocks: (body) => replyBlocksOf(Array.isArray(body.output) ? body.output : []),
+  jsonNodes: (body) => (Array.isArray(body.output) ? body.output : []).flatMap((it, i) => itemNodes(it, ['output', i])),
 };
 const chatDeltas = (e) => (Array.isArray(e.choices) ? e.choices : []).map((c, i) => [c && c.index !== undefined ? c.index : i, (c && (c.delta || c.message)) || {}]);
+const CHAT_TEXT_FIELDS = { thinking: 'reasoning_content', text: 'content', refusal: 'refusal' }; // key kind → the delta field its text comes in
 const CHAT_REPLY = {
   keysOf: (e) => chatDeltas(e).flatMap(([ci, d]) => [
-    ...(typeof d.reasoning_content === 'string' && d.reasoning_content ? [`${ci}:thinking`] : []),
-    ...(typeof d.content === 'string' && d.content ? [`${ci}:text`] : []),
+    ...Object.entries(CHAT_TEXT_FIELDS).flatMap(([kind, f]) => (typeof d[f] === 'string' && d[f] ? [`${ci}:${kind}`] : [])),
     ...(Array.isArray(d.tool_calls) ? d.tool_calls.map((tc, n) => `${ci}:tool:${tc && tc.index !== undefined ? tc.index : n}`) : []),
   ]),
   build: (k, evts) => {
@@ -428,8 +441,7 @@ const CHAT_REPLY = {
     let text = '', id = '', name = '', args = '';
     for (const e of evts) for (const [c, d] of chatDeltas(e)) {
       if (String(c) !== ci) continue;
-      if (kind === 'thinking' && typeof d.reasoning_content === 'string') text += d.reasoning_content;
-      if (kind === 'text' && typeof d.content === 'string') text += d.content;
+      if (typeof d[CHAT_TEXT_FIELDS[kind]] === 'string') text += d[CHAT_TEXT_FIELDS[kind]];
       if (kind === 'tool') (Array.isArray(d.tool_calls) ? d.tool_calls : []).forEach((tc, n) => {
         if (String(tc && tc.index !== undefined ? tc.index : n) !== ti) return;
         const f = tc.function || {};
@@ -440,22 +452,26 @@ const CHAT_REPLY = {
     }
     return [kind === 'tool' ? { type: 'tool_use', id, name, input: safeJson(args) } : kind === 'thinking' ? { type: 'thinking', thinking: text } : { type: 'text', text }];
   },
-  jsonBlocks: (body) => (Array.isArray(body.choices) ? body.choices : []).flatMap((c) => (c && c.message ? chatMessageToBlocks(c.message).map((x) => x.block) : [])),
+  jsonNodes: (body) => (Array.isArray(body.choices) ? body.choices : []).flatMap((c, i) => (c && c.message ? chatMessageToBlocks(c.message).map(({ block, sub }) => ({ block, path: ['choices', i, 'message', ...sub] })) : [])),
 };
 
+// The reply's own terminal (3.1 `ended`), a closed list per wire: anything not named is null and keeps the rest of the failed rule.
+const RESPONSES_ENDS = Object.freeze({ ok: ['completed', 'incomplete'], failed: ['failed', 'error'] }); // normEvents: 'error' = an error event, no terminal
+const CHAT_ENDS = Object.freeze({ ok: ['stop', 'length', 'tool_calls', 'function_call', 'content_filter'], failed: [] }); // a failure is an error chunk
+export const responsesEnded = (norm) => endOf(RESPONSES_ENDS, [norm.stop_reason, ...(norm.errorEvent ? ['error'] : [])]); // an error event anywhere fails it
 export const RESPONSES = Object.freeze({
-  id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
+  id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'], fold: 'flat', rules: REPLY_RULES,
   boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
   reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
-  // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
-  failed: (norm) => norm.stop_reason === 'failed' || norm.stop_reason === 'error',
+  ended: responsesEnded,
   replyParts: (rec) => streamParts(rec, RESPONSES_REPLY),
-  messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
+  messageCount: (req) => (typeof (req && req.input) === 'string' ? 1 : messagesOf(req)),
 });
 export const CHAT = Object.freeze({
-  id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],
+  id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'], fold: 'flat', rules: REPLY_RULES,
   boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
   reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
+  ended: (norm) => (norm.error ? 'failed' : norm.unfinished ? null : endOf(CHAT_ENDS, [norm.stop_reason])),
   replyParts: (rec) => streamParts(rec, CHAT_REPLY),
   messageCount: (req) => (Array.isArray(req && req.messages) ? req.messages.length : 0),
 });

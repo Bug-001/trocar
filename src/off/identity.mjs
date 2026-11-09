@@ -123,13 +123,14 @@ export function compileIdentity({ harness = '?', names = [], exclude = [], longL
   })
   const ex = exclude.map((x, i) => {
     const w = `${where} exclude[${i}]`
-    if (!x || typeof x !== 'object' || !['name', 'name0', 'args', 'env'].some((k) => x[k] != null)) throw new Error(`${w}: an exclude item needs name, name0, args or env`)
+    if (!x || typeof x !== 'object' || !['name', 'name0', 'exe', 'args', 'env'].some((k) => x[k] != null)) throw new Error(`${w}: an exclude item needs name, name0, exe, args or env`)
     const p = {}
     if (x.name != null) {
       for (const n of identList(x.name)) { identCheckName(w, n); if (!known.has(n)) throw new Error(`${w}: ${JSON.stringify(n)} is not one of the names of ${harness}`) }
       p.names = identNamesRe(identList(x.name))
     }
     if (x.name0 != null) { for (const n of identList(x.name0)) identCheckName(w, n); p.name0 = identNamesRe(identList(x.name0)) }
+    if (x.exe != null) p.exe = identArgsRe(w, x.exe) // the executable's whole path, for the program only its place tells apart (4.6 OpenCode)
     if (x.args != null) p.rest = identArgsRe(w, x.args)
     if (x.env != null) {
       for (const v of Object.values(x.env)) if (v instanceof RegExp && (v.global || v.sticky)) throw new Error(`${w}: /g and /y RegExps are stateful; drop the flag`)

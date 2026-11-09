@@ -17,8 +17,10 @@
 // `wrapper` (the install-folder wrapper, by the real program's path in its bytes: the real program comes back from .trocar-real by a rename).
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
 // receipt shows, 1.6 R3). Not done here, said in the docs: a combined bundle (no manifest, so nobody can say who holds it — `uninstall` removes it with the
-// CA), and an install-phase entry at a home the default places do not name. A `route` place (what `on` writes on macOS / Windows) is resolved as `on`
-// resolved it: its variable (XDG_CONFIG_HOME, CODEX_HOME, HERMES_HOME) and the per-user folders (loc.mjs dirsFor) followed. Imports only node:* and src/off.
+// CA); a home install used under a variable value since cleared or changed (only the manifest knew that value). Every place is resolved as its
+// writer resolved it, by the one <loc> resolver (loc.mjs): a `route` place (what `on` writes on macOS / Windows) with
+// its variable (XDG_CONFIG_HOME, CODEX_HOME, HERMES_HOME) and the per-user folders (loc.mjs dirsFor) followed, and a `home` place (HOME_PLACES: the
+// harness's home, by its variable and by its default place, and Hermes' profiles under it). Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
@@ -31,18 +33,28 @@ import { trocarHome, collectorIn, switchFileIn } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
 import { shellWord } from './manifest.mjs'
 import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
-import { resolveLoc, dirsFor } from './loc.mjs'
+import { resolveLoc, dirsFor, homeRoot } from './loc.mjs'
 import { doorPorts, isDoorValue, loopbackUrl, LOOPBACK_HOSTS } from './door-value.mjs'
 
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin'] // where the Kimi installer's PATH line, and so trocar's, can be
 const PLUGIN_MANIFEST = '{"type":"module"}\n' // the anonymous package.json of trocar's dsh plugin directory (collector/harness/_plugins.mjs: ANONYMOUS_MODULE_MANIFEST)
 
+/** The home each harness keeps its files in, where install writes its certificate carriers and the descriptors read (`dir`, a <loc>: the default place
+ *  and the variable that moves it; `homes`: the folder of further homes under it, a variable naming one of them names the root two levels up, loc.mjs
+ *  homeRoot). One copy: the writers and the marker undo resolve it alike. */
+export const HOME_PLACES = Object.freeze({
+  'claude-code': Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR' }) }),
+  'deepseek-dsh': Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.dsh', env: 'DSH_HOME' }) }),
+  hermes: Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.hermes', env: 'HERMES_HOME' }), homes: 'profiles' }),
+  opencode: Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.config', env: 'XDG_CONFIG_HOME' }) }),
+  pi: Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.pi/agent', env: 'PI_CODING_AGENT_DIR' }) }),
+})
 /** The class-1 routes `on` writes on macOS / Windows whose bytes carry trocar's sentinel (4.11 P5): a plugin-file route's folder (`dir`, a <loc>, loc.mjs)
  *  and file `name`, a dotenv-block route's `file` (a <loc>). The descriptor's route takes its place from here, so the marker undo looks where `on`
  *  wrote — one copy of the place, and the copy trocar-off needs no collector tree to know it. */
-const HERMES_ENV = { perOs: { darwin: { base: 'home', dir: '.hermes', env: 'HERMES_HOME', path: '.env' }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path: '.env' } } }
+const HERMES_ENV = { perOs: { darwin: { ...HOME_PLACES.hermes.dir, path: '.env' }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path: '.env' } } }
 export const ROUTE_PLACES = Object.freeze({
-  opencode: Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.config', env: 'XDG_CONFIG_HOME', path: 'opencode/plugins' }), name: 'trocar.js' }),
+  opencode: Object.freeze({ dir: Object.freeze({ ...HOME_PLACES.opencode.dir, path: 'opencode/plugins' }), name: 'trocar.js' }),
   codex: Object.freeze({ file: Object.freeze({ base: 'home', dir: '.codex', env: 'CODEX_HOME', path: '.env' }) }),
   hermes: Object.freeze({ file: Object.freeze(HERMES_ENV) }),
 })
@@ -50,7 +62,7 @@ export const ROUTE_PLACES = Object.freeze({
  *  names in the directory `dir`), the keys that hold the door (`proxyKeys`), and what `on` writes beside them: the NO_PROXY keys (`noProxyKeys`, P6)
  *  and an element it adds to an array (`arrayItems`). The descriptor's route takes these from here, so the marker undo looks
  *  where `on` wrote, at the keys it wrote — one copy of each. */
-const CC_SETTINGS = { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR', path: 'settings.json' }
+const CC_SETTINGS = { ...HOME_PLACES['claude-code'].dir, path: 'settings.json' }
 const CLAUDE_3P = (base) => ({ base, path: 'Claude-3p/configLibrary' })
 export const DOOR_ROUTES = Object.freeze({
   'claude-code': Object.freeze({
@@ -63,21 +75,22 @@ export const DOOR_ROUTES = Object.freeze({
 const URL_IN_TEXT = /https?:\/\/[^\s"'`,{}[\]\\]+/g // the URLs in a text that does not parse as JSON, each judged as a value would be
 const doorAt = (h) => Object.values(DOOR_ROUTES[h]).map((route) => ({ how: 'json-value', route, door: true, os: ['darwin', 'win32'] }))
 
-/** Where each harness's entries are, relative to HOME (`route`: a ROUTE_PLACES place, resolved against the environment and per-user folders off runs in). `how` says what trocar's mark looks like there (see the header); `eachDir` + `file`: the file in
- *  every subdirectory of a directory (Hermes profiles); `os`: only there. `phase: 'install'`: a certificate carrier `install` writes (a certificate block, a
+/** Where each harness's entries are: `file` relative to HOME, or to the harness's home (`home`: a HOME_PLACES place, resolved against the environment off
+ *  runs in and at its default place, each further home under it included); `route`: a ROUTE_PLACES place, resolved against the environment and per-user
+ *  folders off runs in. `how` says what trocar's mark looks like there (see the header); `os`: only there. `phase: 'install'`: a certificate carrier `install` writes (a certificate block, a
  *  certificate key's value, a trust plugin and its loader row, the Kimi launch shim and its rc PATH line): it is `install`'s (D55①), so only a run that undoes install's items (`uninstall`) looks at it,
  *  never `off` (4.6 §安装清单与卸载). The plan of 1.6 / 4.6 §身份与信任 is the authority; a harness not listed here has no marker undo. */
 const INSTALLS = { phase: 'install' }
 const ROUTED = ['darwin', 'win32'] // where `on` writes class-1 routes (on Linux a block in the same file is install's certificate block, at every CODEX_HOME in use)
 export const MARKER_PATHS = Object.freeze({
-  'claude-code': [{ how: 'json-value', file: '.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'], ...INSTALLS }, ...doorAt('claude-code')],
+  'claude-code': [{ how: 'json-value', home: HOME_PLACES['claude-code'], file: 'settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'], ...INSTALLS }, ...doorAt('claude-code')],
   codex: [{ how: 'block', file: '.codex/.env', ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.codex, os: ['linux'], ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.codex, os: ROUTED }],
-  hermes: [{ how: 'block', file: '.hermes/.env', ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.hermes, os: ROUTED }, { how: 'block', eachDir: '.hermes/profiles', file: '.env', ...INSTALLS }],
-  opencode: [{ how: 'owned-file', file: '.config/opencode/plugins/trocar-ca.js', ...INSTALLS }, { how: 'owned-file', route: ROUTE_PLACES.opencode }],
-  'deepseek-dsh': [{ how: 'line', file: '.dsh/cordis.patch.yml', yaml: true, ...INSTALLS }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js', ...INSTALLS }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST, ...INSTALLS }],
+  hermes: [{ how: 'block', home: HOME_PLACES.hermes, file: '.env', ...INSTALLS }, { how: 'block', route: ROUTE_PLACES.hermes, os: ROUTED }],
+  opencode: [{ how: 'owned-file', home: HOME_PLACES.opencode, file: 'opencode/plugins/trocar-ca.js', ...INSTALLS }, { how: 'owned-file', route: ROUTE_PLACES.opencode }],
+  'deepseek-dsh': [{ how: 'line', home: HOME_PLACES['deepseek-dsh'], file: 'cordis.patch.yml', yaml: true, ...INSTALLS }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js', ...INSTALLS }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST, ...INSTALLS }],
   'kimi-code': [...RC_FILES.map((f) => ({ how: 'line', file: f, ...INSTALLS })), { how: 'owned-file', file: '.trocar/collector/bin/kimi', ...INSTALLS }, ...doorAt('kimi-code')],
   'z-code': [{ how: 'json-value', file: '.zcode/cli/config.json', keys: ['network', 'caCertFile'], ...INSTALLS }, ...doorAt('z-code')],
-  pi: [{ how: 'owned-file', file: '.pi/agent/extensions/trocar-ca.js', ...INSTALLS }],
+  pi: [{ how: 'owned-file', home: HOME_PLACES.pi, file: 'extensions/trocar-ca.js', ...INSTALLS }],
 })
 
 const under = (v, root) => typeof v === 'string' && v.startsWith(root + path.sep) && !/(^|[\\/])\.\.([\\/]|$)/.test(v.slice(root.length)) // `..` leaves it
@@ -108,6 +121,8 @@ function blocksIn(t, root) {
   }
   return out
 }
+// whether a YAML text still holds content (a line that is not blank and not only a comment), read as insertLine reads a yaml-list
+const yamlItems = (t) => t.split('\n').some((l) => l.replace(/\r$/, '').replace(/(^|\s)#.*$/, '').trim() !== '')
 // a line trocar wrote: its mark, and a path under trocar's home or one of the files a descriptor's place says trocar put there (`names`: the plug-in a row loads)
 const lineHits = (t, root, names = []) => linesOf(t).filter((l) => l.line.includes(LINE_MARK) && (l.line.includes(root + path.sep) || names.some((n) => l.line.includes(n))))
 // the marked certificate blocks rule U appended (4.11 P4): from a block's open line through its close line and that line's ending, a PEM inside → [{ from, to }]
@@ -137,10 +152,14 @@ function candidates(home, harness, fs, env, platform, phases, places) {
   for (const spec of MARKER_PATHS[harness]) {
     if ((spec.os && !spec.os.includes(platform)) || !phases.includes(spec.phase || 'on')) continue
     if (spec.route) for (const at of spec.route.select ? selected(spec.route.select, ctx, fs) : spec.route.dir ? resolveLoc(spec.route.dir, ctx).map((d) => path.join(d, spec.route.name)) : resolveLoc(spec.route.file, ctx)) push(at, spec)
-    else if (spec.eachDir) {
-      let names = []
-      try { names = fs.readdirSync(path.join(home, spec.eachDir)).sort() } catch { /* no such directory */ }
-      for (const n of names) push(path.join(home, spec.eachDir, n, spec.file), spec)
+    else if (spec.home) {
+      for (const root of new Set([homeRoot(spec.home, ctx), homeRoot(spec.home, { ...ctx, env: {} })].filter(Boolean))) { // trocar's marks are its own anywhere: the default home too
+        push(path.join(root, spec.file), spec)
+        if (!spec.home.homes) continue
+        let names = []
+        try { names = fs.readdirSync(path.join(root, spec.home.homes)).sort() } catch { /* no such directory */ }
+        for (const n of names) push(path.join(root, spec.home.homes, n, spec.file), spec)
+      }
     } else push(path.join(home, spec.file), spec)
   }
   push(switchFileIn(collectorIn(trocarHome(home)), harness), { how: 'owned-file', ours: true }) // every harness: only one on a switch-file route ever has one
@@ -262,8 +281,12 @@ function undoOne(item, home, fs) {
     const d = item.detail || {}
     const hits = lineHits(t, root, d.names).reverse()
     if (!hits.length) return { result: 'already-clean' }
-    let out = t
-    for (const h of hits) out = out.slice(0, h.at) + out.slice(h.next)
+    const drop = (text) => hits.reduce((o, h) => o.slice(0, h.at) + o.slice(h.next), text) // hits run bottom-up: earlier offsets stay valid
+    // a YAML list whose only item was trocar's row stays a list: `[]` where the topmost row was, its line end kept (install replaced a `[]` there, so
+    // that is byte-exact), the user's comments and blank lines as they were; dsh will not start on a patch file with no list in it (4.6)
+    const top = hits[hits.length - 1], rest = drop(t)
+    const asList = d.yaml && rest !== '' && !yamlItems(rest) // nothing at all left (a file install created): deleted below
+    const out = !asList ? rest : hits.reduce((o, h) => (h === top ? o.slice(0, h.at) + (h.line.endsWith('\r') ? '[]\r' : '[]') + o.slice(h.at + h.line.length) : o.slice(0, h.at) + o.slice(h.next)), t)
     if (d.yaml && out.trim() === '') { fs.rmSync(file, { force: true }); if (!d.keep) removeEmptyDirs([path.dirname(item.path)], fs); return done({ lines: hits.length, deleted: true }) } // dsh will not start on an empty patch file; with no row there is nothing to read
     put(out)
     return done({ lines: hits.length })

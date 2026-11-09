@@ -21,9 +21,9 @@ export const DISK_GROUPS = Object.freeze(['records', 'sealed', 'index', 'logs', 
 // rebuildable segment index, and the journals and event logs. No rule names one file of one product.
 export function groupOf(rel) {
   if (rel.startsWith('logs/') || /(^|\/)flows\//.test(rel) || /(^|\/)journal\.jsonl$/.test(rel)) return 'logs'; // events, the raw journal, the change log
+  if (rel.startsWith('index/')) return 'index'; // first: the index keeps .ndjson files of its own (context projections, fold logs), never records (1.6 C.5)
   if (/\.sealed$/.test(rel)) return 'sealed';
   if (/\.ndjson$/.test(rel)) return 'records';
-  if (rel.startsWith('index/')) return 'index';
   return 'other';
 }
 
@@ -31,7 +31,7 @@ export function groupOf(rel) {
  * diskUsage({home, fs}) → {home, source:'lstat', generated_at, files, total_bytes, groups:{<group>:{files, bytes}}, unreadable:[{path, error}], sealed_paths:[…]}
  * total_bytes = the sum of the file sizes found; when `unreadable` is not empty it is a floor, and the caller says so.
  */
-export async function diskUsage({ home = trocarHome(), fs = fsp, now = Date.now } = {}) {
+export async function diskUsage({ home = trocarHome(), fs = fsp, now = Date.now, progress = null } = {}) {
   const groups = Object.fromEntries(DISK_GROUPS.map((g) => [g, { files: 0, bytes: 0 }]));
   const unreadable = [], sealedPaths = [];
   let files = 0, total = 0;
@@ -44,6 +44,7 @@ export async function diskUsage({ home = trocarHome(), fs = fsp, now = Date.now 
       return;
     }
     for (const ent of ents) {
+      if (progress) progress(); // a long walk on a slow disk is work, not silence (3.5 读不全不静默)
       const abs = path.join(dir, ent.name), r = rel ? `${rel}/${ent.name}` : ent.name;
       if (ent.isDirectory()) { await walk(abs, r); continue; } // Dirent from readdir does not follow a link
       if (rel === '' && ent.isSymbolicLink()) { // only the home's own top-level entries are followed

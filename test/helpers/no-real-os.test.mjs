@@ -141,7 +141,6 @@ test('no-real-os: a process that ends with a refusal nobody took exits 1 and nam
   const swallowed = runChild(`try { execFileSync('launchctl', ['${NOOP}']) } catch { /* "the tool failed", carry on */ }\nconsole.log('went on')`)
   assert.equal(swallowed.status, 1)
   assert.equal(swallowed.stdout.trim(), 'went on')
-  assert.match(swallowed.stderr, /no-real-os: 1 attempt to run a real OS tool was refused in this process and never acknowledged/)
   assert.match(swallowed.stderr, new RegExp(`^ {2}launchctl ${NOOP}$`, 'm'))
   const taken = runChild(`try { execFileSync('launchctl', ['${NOOP}']) } catch { }\nconsole.log(takeRefusals().length)`)
   assert.equal(taken.status, 0); assert.equal(taken.stdout.trim(), '1'); assert.equal(taken.stderr, '')
@@ -160,4 +159,52 @@ test('no-real-os: under node --test a file whose test swallows the refusal fails
   assert.match(bad.stdout + bad.stderr, /no-real-os: 1 attempt/)
   const good = fixture('takes', `test('takes', () => { try { execFileSync('launchctl', ['${NOOP}']) } catch { } if (takeRefusals().length !== 1) throw new Error('not recorded') })`)
   assert.equal(good.status, 0, good.stdout + good.stderr)
+})
+
+// Writes: a test that makes an app "present" at its descriptor's absolute place, or that loses its HOME, writes on the machine under the test. Every way of writing is tried
+// against a path that does not exist, under a root the guard names; a broken guard is red on its assertion and at worst leaves a test's own named file to find.
+const INTO = path.join(process.platform === 'win32' ? process.env.ProgramFiles : '/Applications', 'trocar-no-real-os-test.app')
+const HOME_FILE = path.join(os.userInfo().homedir, '.trocar-no-real-os-test')
+const refused = (fn, file = INTO) => {
+  assert.throws(fn, { code: 'ESANDBOX' })
+  assert.deepEqual(takeRefusals().map((r) => r.command), [file])
+  assert.equal(fs.existsSync(file), false)
+}
+
+test('no-real-os: no test process writes under the machine\'s own folders or the real home, by any of node:fs', async () => {
+  const t = tmpDir('nro-')
+  refused(() => fs.writeFileSync(INTO, ''))
+  refused(() => fs.appendFileSync(INTO, ''))
+  refused(() => fs.mkdirSync(INTO, { recursive: true }))
+  refused(() => fs.openSync(INTO, 'w'))
+  refused(() => fs.openSync(INTO, fs.constants.O_WRONLY | fs.constants.O_CREAT))
+  refused(() => fs.renameSync(path.join(t, 'a'), INTO))
+  refused(() => fs.copyFileSync(path.join(t, 'a'), INTO))
+  refused(() => fs.symlinkSync(t, INTO))
+  refused(() => fs.rmSync(INTO, { force: true }))
+  refused(() => fs.createWriteStream(INTO))
+  refused(() => fs.writeFileSync(new URL(`file://${INTO}`), ''))
+  refused(() => fs.writeFileSync(HOME_FILE, ''), HOME_FILE)
+  for (const w of [() => fs.promises.writeFile(INTO, ''), () => fs.promises.mkdir(INTO), () => fs.promises.open(INTO, 'a')]) {
+    await assert.rejects(w, { code: 'ESANDBOX' })
+    assert.deepEqual(takeRefusals().map((r) => r.command), [INTO])
+  }
+})
+
+test('no-real-os: a write in the temp dir or the checkout, and a read anywhere, are nobody\'s business', async () => {
+  const t = tmpDir('nro-')
+  fs.writeFileSync(path.join(t, 'a'), 'x')
+  fs.renameSync(path.join(t, 'a'), path.join(t, 'b'))
+  fs.closeSync(fs.openSync(path.join(process.cwd(), 'package.json'), 'r'))
+  const readable = process.platform === 'win32' ? process.execPath : '/etc/hosts'
+  fs.closeSync(fs.openSync(readable, 'r'))
+  fs.closeSync(fs.openSync(readable))
+  await new Promise((resolve, reject) => fs.open(readable, (e, fd) => (e ? reject(e) : fs.close(fd, resolve)))) // no flags: the callback sits where flags go
+  assert.deepEqual(takeRefusals(), [])
+})
+
+test('no-real-os: a refused write nobody acknowledged fails the process, like a refused tool', () => {
+  const r = spawnSync(process.execPath, ['--require', GUARD, '-e', `try { require('node:fs').writeFileSync(${JSON.stringify(INTO)}, '') } catch {}`], { encoding: 'utf8' })
+  assert.equal(r.status, 1)
+  assert.equal(fs.existsSync(INTO), false)
 })

@@ -65,8 +65,9 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
     async close() { const c = client; client = null; if (c) await c.close() },
     configure(port) { enginePort = port; return need().configure(port) },
     attach: () => need().attach(),
-    detach: () => need().detach(),
-    status: () => need().status(),
+    // no helper = no links of this instance (they live on its fds, never pinned): off, nothing to take off (4.6 §开关语义)
+    detach: () => (client ? client.detach() : Promise.resolve({ ok: true })),
+    status: () => (client ? client.status() : Promise.resolve({ attached: false, links: [], hb_age_ms: null })),
     heartbeat: () => need().heartbeat(),
     lookup: (peer) => (client ? client.lookup(peer) : Promise.reject(Object.assign(new Error('capability helper is not running'), { code: 'loader-down' }))), // never a miss (D-13)
     watch: (pid, verdict) => need().watch(pid, verdict),

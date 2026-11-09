@@ -25,6 +25,7 @@ import * as src from '../stamp.mjs';
 export class QueryArgError extends Error { constructor(m) { super(m); this.name = 'QueryArgError'; } }
 
 // `times`: the parameters a name reads as times (stampOf's clock tick); `session --since` is a record id, not a time.
+// `rowFree`: the name's answer reads no row list.
 const TIMES = Object.freeze(['since', 'until']);
 // `--harness` here takes the agents' CLI names (it goes through resolveHarnesses), not a value of the answer's harness field.
 const CLI_HARNESS = 'The agents to report on: comma-separated names, such as claude-code,codex. Without it, every agent.';
@@ -39,18 +40,18 @@ const DOCTOR_ABOUT = Object.freeze({
 export const QUERIES = Object.freeze({
   // `status` and `doctor` are the same documents the two commands print: the query IS that document
   // (src/cli/status.mjs statusDoc / doctor.mjs doctorDoc), so the two can never disagree.
-  status: { about: STATUS_ABOUT, params: Object.freeze(Object.keys(STATUS_ABOUT.params)), run: (c) => verdict('status', c), stamp: () => null },
-  doctor: { about: DOCTOR_ABOUT, params: Object.freeze(Object.keys(DOCTOR_ABOUT.params)), run: (c) => verdict('doctor', c), stamp: () => null },
-  sessions: { about: sessions.about, params: sessions.params, run: sessions.run, stored: sessions.stored, stamp: src.usage, times: TIMES }, // its titles come from the usage sidecars (4.4 §人类标题的来源)
+  status: { about: STATUS_ABOUT, params: Object.freeze(Object.keys(STATUS_ABOUT.params)), run: (c) => verdict('status', c), stamp: () => null, rowFree: true },
+  doctor: { about: DOCTOR_ABOUT, params: Object.freeze(Object.keys(DOCTOR_ABOUT.params)), run: (c) => verdict('doctor', c), stamp: () => null, rowFree: true },
+  sessions: { about: sessions.about, params: sessions.params, run: sessions.run, stored: sessions.stored, stamp: src.titles, times: TIMES }, // its titles come from the title table (4.4 §人类标题的来源)
   session: { about: session.about, params: session.params, run: session.run, version: session.version, stamp: src.corpus },
   lane: { about: lane.about, params: lane.params, run: lane.run, version: lane.version, stamp: src.corpus },
   calls: { about: calls.about, params: calls.params, run: calls.run, stamp: src.corpus, times: TIMES },
   traffic: { about: traffic.about, params: traffic.params, run: traffic.run, stamp: src.corpus, times: TIMES },
   overview: { about: overview.about, params: overview.params, run: overview.run, stamp: src.usage, times: TIMES },
-  block: { about: block.about, params: block.params, lists: block.lists, run: block.run, stamp: src.corpus },
+  block: { about: block.about, params: block.params, lists: block.lists, run: block.run, stamp: src.corpus, rowFree: true },
   classes: { about: classes.about, params: classes.params, run: classes.run, stamp: src.classes, clock: true },
   segments: { about: segments.about, params: segments.params, run: segments.run, stamp: src.corpus, times: TIMES },
-  pricing: { about: pricing.about, params: pricing.params, run: pricing.run, stamp: src.pricing },
+  pricing: { about: pricing.about, params: pricing.params, run: pricing.run, stamp: src.pricing, rowFree: true },
 });
 
 /**

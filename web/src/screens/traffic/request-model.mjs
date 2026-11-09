@@ -55,7 +55,7 @@ function bodyOf(side, ctl, rec) {
     case 'sse':
       if (b.clipped) marks.push({ text: W.CLIPPED(b.shown_chars, b.chars), sub: W.REST_IN_SOURCE })
       if (side === 'req' && b.decoded_from) marks.push({ text: W.DECODED_FROM(b.decoded_from) })
-      return out('pre', b.text || '', b.truncated || b.partial ? W.FOLD_PREFIX : W.VERBATIM_BYTES(b.bytes ?? b.chars ?? 0), b.text || '')
+      return out('pre', b.text || '', b.truncated || b.partial ? W.FOLD_PREFIX : b.decoded_from ? W.DECOMPRESSED_CHARS(b.decoded_from, b.chars ?? 0) : W.VERBATIM_BYTES(b.bytes ?? b.chars ?? 0), b.text || '')
     case 'json': {
       let text = typeof b.text === 'string' ? b.text : ''
       if (typeof b.text !== 'string') {
@@ -67,7 +67,7 @@ function bodyOf(side, ctl, rec) {
     case 'ws':
       return out('pre', b.text || '', W.VERBATIM_BYTES(b.bytes ?? b.chars ?? 0), b.text || '')
     case 'binary':
-      return out('hex', b.hex || '', W.VERBATIM_BYTES(b.bytes ?? 0), b.hex || '', { head: W.BINARY_LABEL(b.bytes ?? 0) })
+      return out('hex', b.hex || '', b.decoded_from ? W.DECOMPRESSED_FROM(b.decoded_from) : W.VERBATIM_BYTES(b.bytes ?? 0), b.hex || '', { head: W.BINARY_LABEL(b.bytes ?? 0) })
     case 'undecoded':
       return out('note', `${W.UNDECODED} · ${b.encoding || '?'} · ${bytes(wireN ?? 0)}`)
     case 'length-only': {
@@ -93,6 +93,7 @@ function reqMarks(b) {
 function respMarks(ctl, b) {
   const out = []
   if (labelBy(ctl.labels, 'resp-json-reserialized')) out.push({ text: W.RESP_RESERIALIZED })
+  if (labelBy(ctl.labels, 'resp-decoded-only')) out.push({ text: W.RESP_DECODED_ONLY })
   if (b && b.kind === 'undecoded') out.push({ text: W.RESP_UNDECODED(b.encoding || '?') })
   if (b && b.error) out.push({ text: `Response: ${b.error}` })
   else if (b && b.interrupted) out.push({ text: W.RESP_PARTIAL })

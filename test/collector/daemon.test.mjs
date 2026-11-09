@@ -36,11 +36,13 @@ import { writeNetenv } from '../../src/netenv/index.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
 import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { harnessOf } from '../../src/dissect/harnesses.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { recordId } from '../../src/collector/core/record/segments.mjs'
+import { openSealed } from '../../src/raw/reader.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
@@ -64,7 +66,7 @@ function fakeArch(p, extraEnv = {}, clientOpts = {}) {
 }
 function sandbox() {
   const root = tmpDir('as-d-') // short: unix socket paths are length-limited
-  const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   return { root, home, collector: path.join(home, '.trocar', 'collector'), sock: path.join(root, 'run', 'c.sock'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
 }
 const req = (sock, method, p, body) => controlRequest({ socketPath: sock, method, path: p, body })
@@ -122,10 +124,11 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
   try {
     const lock = JSON.parse(fs.readFileSync(path.join(s.collector, 'lock'), 'utf8'))
-    assert.deepEqual([lock.pid, lock.engine_port, lock.helper_pid, lock.segment, fs.statSync(path.join(s.collector, 'lock')).mode & 0o777], [process.pid, d.port, clients[0]._child.pid, null, 0o600], 'no record yet: no segment is open')
+    assert.deepEqual([lock.pid, lock.engine_port, lock.segment, fs.statSync(path.join(s.collector, 'lock')).mode & 0o777], [process.pid, d.port, null, 0o600], 'no record yet: no segment is open')
     assert.equal((await req(s.sock, 'GET', '/status')).desired, 'off')
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.desired, on.actual, on.recording], ['on', 'on', true])
+    assert.equal(JSON.parse(fs.readFileSync(path.join(s.collector, 'lock'), 'utf8')).helper_pid, clients[0]._child.pid, 'the lock names the helper on started')
 
     p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
@@ -136,6 +139,10 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4242, decrypt: 1 })
     const extraCc = fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') // what CC now trusts: relay CA + trocar CA
     const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: extraCc }); await once(c, 'secureConnect')
+    // Linux has no custody: the daemon reads the CA install minted (readCa) and the leaf it serves is signed by that root itself
+    const trocarRoot = new crypto.X509Certificate(fs.readFileSync(path.join(s.collector, 'ca', 'trocar-ca.pem')))
+    const leaf = c.getPeerX509Certificate()
+    assert.ok(leaf.checkHost('relay.asight.test') && leaf.checkIssued(trocarRoot) && leaf.verify(trocarRoot.publicKey), 'the leaf for the host chains to the installed trocar root')
     const sid = '6a1b7c2d-0000-4000-8000-000000000001'
     const post = (text) => {
       const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text }] }] })
@@ -179,6 +186,63 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     assert.equal(after.trim().split('\n').length, 2, 'the first call and the one that was in flight when off came')
     await until(() => flowsOf(s).some((f) => f.decision === 'decrypt' && f.agent === 'claude-code' && f.pid === 4242))
   } finally { await d.stop(); up.close(); p.done(); s.done() }
+})
+
+// 4.2 §自动封存 · 1.6 §3.6 (V127): after `uninstall` there is no next start, so the daemon it stops seals the segment its stop closes before it exits;
+// a stop by `off`, and an uninstall's with seal:false (--purge-data), leave it for the next start. A real daemon captures one call into a real segment,
+// then the exit request goes over the real control socket.
+for (const [what, body, sealed] of [['uninstall', { exit: true, by: 'uninstall' }, true], ['off', { exit: true }, false], ['uninstall --purge-data', { exit: true, by: 'uninstall', seal: false }, false]]) {
+  test(`daemon: a whole-daemon stop by ${what} ${sealed ? 'seals the segment it closes before it exits' : 'leaves the segment it closes for the next start'} (V127)`, { timeout: 30_000 }, async () => {
+    const s = sandbox(); const p = fakeProc(); const up = await relay()
+    const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
+    fs.mkdirSync(path.join(s.home, '.claude'))
+    fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+    await install(s)
+    const { arch, clients } = fakeArch(p)
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
+    const rawDir = path.join(s.home, '.trocar', 'raw')
+    try {
+      await req(s.sock, 'POST', '/on', {})
+      p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+      await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+      await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && a.trusted))
+      const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+      await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4242, decrypt: 1 })
+      const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') }); await once(c, 'secureConnect')
+      const msg = JSON.stringify({ model: 'claude-x', max_tokens: 16, messages: [{ role: 'user', content: [{ type: 'text', text: 'trocar-seal-at-stop' }] }] })
+      c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(msg)}\r\n\r\n${msg}`)
+      const seg = await until(() => (fs.existsSync(rawDir) ? fs.readdirSync(rawDir) : []).find((n) => n.endsWith('.ndjson') && fs.readFileSync(path.join(rawDir, n), 'utf8').includes('trocar-seal-at-stop')))
+      const bytes = await until(() => { const b = fs.readFileSync(path.join(rawDir, seg)); return b.length && b[b.length - 1] === 0x0a && b })
+      // a closed segment the queue never got, and the temp file of an interrupted seal: nothing of them may outlive the uninstall
+      const stray = '20261001T000000Z.ndjson', temp = `.20261001T000000Z.4242-deadbeef.tmp`
+      fs.writeFileSync(path.join(rawDir, stray), '{"id":"req_stray"}\n', { mode: 0o600 }); fs.writeFileSync(path.join(rawDir, temp), 'half', { mode: 0o600 })
+      await req(s.sock, 'POST', '/off', body)
+      await d.exited
+      const names = fs.readdirSync(rawDir).filter((n) => n.startsWith(seg.replace(/\.ndjson$/, '')))
+      if (!sealed) { assert.deepEqual(names, [seg], 'the plaintext is left for the next start'); return }
+      assert.deepEqual(fs.readdirSync(rawDir).filter((n) => n.endsWith('.ndjson') || n.endsWith('.tmp')), [], 'every plaintext segment sealed, no temp left')
+      assert.deepEqual(names, [seg.replace(/\.ndjson$/, '.sealed')], 'sealed, and the plaintext is gone')
+      const f = openSealed(path.join(rawDir, names[0]))
+      try { assert.deepEqual(Buffer.concat([...f.lines()].map((x) => x.line)), bytes, 'the sealed file rebuilds the segment byte for byte') } finally { f.close() }
+      assert.equal(fs.existsSync(path.join(s.collector, 'lock')), false, 'the stop still finished: the lock is gone')
+    } finally { await d.stop(); up.close(); p.done(); s.done() }
+  })
+}
+
+// D38: a segment the uninstall stop could not seal keeps its plaintext, is said as a seal-failed failure, and daemon-stop names `raw` among the steps
+// that failed. A directory under a segment's name is a plaintext segment the sealer refuses.
+test('daemon: an uninstall stop whose seal fails says so in daemon-stop (failed: raw) (V127, D38)', { timeout: 30_000 }, async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const rawDir = path.join(s.home, '.trocar', 'raw'); fs.mkdirSync(path.join(rawDir, '20261002T000000Z.ndjson'), { recursive: true })
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    await req(s.sock, 'POST', '/off', { exit: true, by: 'uninstall' })
+    await d.exited
+    const f = flowsOf(s)
+    assert.deepEqual(f.filter((x) => x.event === 'daemon-stop').map((x) => x.failed), [['raw']])
+    assert.ok(f.some((x) => x.code === 'seal-failed'), 'the failed seal is said')
+  } finally { await d.stop(); p.done(); s.done() }
 })
 
 // 3.5 #32 (§后台抽取与归约 kick, D63 ①): a session is folded as it is captured. The real daemon records LLM calls of one session and
@@ -423,6 +487,23 @@ test('W25 the win32 daemon refuses an elevated or SYSTEM token before it claims 
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+test('the daemon\'s Node floor (4.9 §7, 4.8 §7): an arch whose nodePreflight says no refuses before anything is claimed, with one {start, node-too-old} record naming its Node and trocar install; a yes starts as before', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const asked = []
+  const endpoints = []
+  const floored = (pf) => ({ ...fakeArch(p).arch, nodePreflight: () => pf, refuseElevated: async () => { asked.push('token'); return null }, controlEndpoint: ({ dir }) => { endpoints.push(dir); return { path: s.sock, token: 't'.repeat(64) } } })
+  await assert.rejects(startDaemon({ dir: s.collector, arch: floored({ ok: false, have: '20.1.0', min: '22.15', doctor: 'Update Node, then run trocar on again.' }), harnesses: [cc] }), (e) => e.code === 'node-too-old')
+  const rec = flowsOf(s).filter((l) => l.event === 'failure' && l.where === 'start')
+  assert.deepEqual(rec.map((x) => x.code), ['node-too-old'], 'one record')
+  // the login entry names a fixed Node and only `install` rewrites it, so the record names that Node and `install`, not `on`'s line
+  for (const part of [process.execPath, '20.1.0', '22.15', 'trocar install']) assert.ok(rec[0].reason.includes(part), `the reason names ${part}: ${rec[0].reason}`)
+  assert.deepEqual(rec.map((x) => checkRecord(x)), [[]], 'a record the closed set takes')
+  assert.deepEqual([asked, endpoints, fs.existsSync(s.sock), fs.existsSync(path.join(s.collector, 'control.json')), fs.existsSync(path.join(s.collector, 'lock'))], [[], [], false, false, false], 'nothing asked or claimed: no token check, no endpoint, no lock')
+  const d = await startDaemon({ dir: s.collector, arch: floored({ ok: true, have: '24.0.0', min: '22.15' }), harnesses: [cc] })
+  try { assert.deepEqual(endpoints, [s.collector], 'a Node at the floor starts as before') } finally { await d.stop(); p.done(); s.done() }
+})
+
 test('daemon: refuses to start uninstalled; desired state survives a restart; on/off idempotent (S6, S9 unit)', async () => {
   const s = sandbox(); const p = fakeProc()
   try {
@@ -476,6 +557,7 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
     const second = fakeArch(p)
     await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch: second.arch, harnesses: [cc] }), /another collector daemon/)
     assert.equal(second.clients.length, 0)
+    await req(s.sock, 'POST', '/on', {}) // the helper runs only while a harness is on
     clients[0]._child.kill('SIGKILL')
     const st = await until(async () => { const r = await req(s.sock, 'GET', '/status'); return r.degraded ? r : null })
     assert.deepEqual([st.actual, st.helper.down !== null], ['off', true])
@@ -504,6 +586,7 @@ test('daemon: a helper that exits at start leaves nothing listening; the next st
   const port = probe.address().port; await new Promise((r) => probe.close(r))
   try {
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => port })
+    fs.writeFileSync(path.join(s.collector, 'state.json'), JSON.stringify({ version: 1, desired: 'on', updated_at: 'T0' })) // a harness on: the start spawns the helper
     await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, {}, { args: ['-e', 'process.exit(6)'] }).arch, harnesses: [cc] }))
     const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
     try {
@@ -523,10 +606,11 @@ test('daemon: with no helper at its path it starts, answers and steers nothing (
   const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) }
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
   try {
-    const st = await req(s.sock, 'GET', '/status')
-    assert.deepEqual([st.actual, typeof st.helper.down], ['off', 'string'])
+    assert.equal((await req(s.sock, 'GET', '/status')).helper.down, null, 'nothing on at start: no helper is asked for')
+    const missing = await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual([missing.actual, typeof missing.helper.down], ['off', 'string'])
     assert.ok(flowsOf(s).some((f) => f.event === 'helper-down' && f.reason), 'the reason is on disk (D38)')
-    assert.ok(st.health.collector.conditions.some((c) => c.kind === 'degraded'), 'and the board says so')
+    assert.ok((await req(s.sock, 'GET', '/status')).health.collector.conditions.some((c) => c.kind === 'degraded'), 'and the board says so')
     fs.mkdirSync(path.dirname(bin), { recursive: true })
     fs.writeFileSync(bin, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE)} "$@"\n`, { mode: 0o755 })
     const on = await req(s.sock, 'POST', '/on', {})
@@ -537,13 +621,71 @@ test('daemon: with no helper at its path it starts, answers and steers nothing (
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+const helperExited = (c) => c._child.exitCode !== null || c._child.signalCode !== null
+
+// 4.6 S20 a/d, D61: a start with no harness on spawns no helper; with none running the actual state is off, and nothing is down or degraded
+test('daemon: started with no harness on it spawns no helper, and status is off with nothing down (4.6 S20)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
+  try {
+    assert.equal(clients.length, 0)
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.actual, st.helper.down, st.helper.ok === false, st.degraded], ['off', null, false, null])
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: a helper that fails to configure at /on is dropped, so the next /on starts a fresh one and attaches (4.6 S20)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const clients = []
+  const makeClient = () => {
+    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
+    if (!clients.length) c.configure = async () => { throw new Error('configure refused') } // the first helper starts and then fails to configure
+    clients.push(c); return c
+  }
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) }, harnesses: [cc] })
+  try {
+    await req(s.sock, 'POST', '/on', {}).catch(() => {})
+    await until(() => helperExited(clients[0]))
+    const on = await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual([on.actual, clients.length], ['on', 2])
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 4.6 S20 a/b: an off that leaves no harness on ends the helper once nothing is relayed; the daemon stays and answers, no helper death is
+// recorded, and the next on starts a new helper and attaches
+for (const body of [{}, { harnesses: [cc.name] }]) {
+  test(`daemon: /off ${JSON.stringify(body)} leaving no harness on ends the helper — no helper-down, the daemon answers on — and the next /on starts a new one (4.6 S20)`, async () => {
+    const s = sandbox(); const p = fakeProc()
+    await install(s)
+    const { arch, clients } = fakeArch(p)
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
+    try {
+      await req(s.sock, 'POST', '/on', {})
+      await req(s.sock, 'POST', '/off', body)
+      await until(async () => helperExited(clients[0]) && (await req(s.sock, 'GET', '/status')).helper.pid === null)
+      assert.deepEqual(flowsOf(s).filter((f) => f.event === 'helper-down' || f.event === 'daemon-stop'), [])
+      const on = await req(s.sock, 'POST', '/on', {})
+      assert.deepEqual([on.actual, clients.length, on.degraded], ['on', 2, null])
+    } finally { await d.stop(); p.done(); s.done() }
+  })
+}
+
+// starting over is followed in order: off (uninstall refuses while a harness is on), uninstall, install (on never installs, D55), then on
+const startsOver = (msg) => { const at = ['off', 'uninstall', 'install', 'on'].map((v) => msg.indexOf(`"trocar ${v}`)); return at.every((x, i) => x >= 0 && (i === 0 || x > at[i - 1])) }
 test('daemon: the install-time engine port held by another process → start fails with the reason, no helper spawned, nothing steered (G3)', async () => {
   const s = sandbox(); const p = fakeProc()
   const squat = net.createServer(); await new Promise((r) => squat.listen(0, '127.0.0.1', r))
   try {
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => squat.address().port })
     const { arch, clients } = fakeArch(p)
-    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered, agent connections go direct\. Free the port, or run "trocar uninstall" and "trocar on" to pick a new one$/)
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => /recorded at install is held by another process/.test(e.message) && startsOver(e.message))
+    const lastOn = async () => { let msg; await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }).catch((e) => { msg = e.message }); return msg.slice(msg.lastIndexOf('"trocar on')) }
+    assert.match(await lastOn(), /^"trocar on <\w+>"/, 'no harness on record: a placeholder, never the bare command that turns on every installed harness')
+    writeStateAtomic(path.join(s.collector, 'state.json'), setDesired(emptyState(), [cc.name], 'on'))
+    assert.equal(await lastOn(), `"trocar on ${cc.name}"`, 'the harnesses that were on, by name')
     assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'start' && f.code === 'engine-port-taken' && /held by another process/.test(f.reason)), 'the refusal to start is recorded under engine-port-taken (D38); the daemon picks no other port')
     assert.equal(clients.length, 0, 'the helper was never spawned, so no connection is redirected')
     assert.ok(!fs.existsSync(path.join(s.collector, 'lock')))
@@ -562,6 +704,7 @@ test('daemon: a control request that arrives while the daemon is still wiring wa
   let release
   const held = new Promise((r) => { release = r })
   const slow = { os: arch.os, createRedirector: (o) => { const r = arch.createRedirector(o); const start = r.start.bind(r); r.start = async () => { await held; return start() }; return r } }
+  fs.writeFileSync(path.join(s.collector, 'state.json'), JSON.stringify({ version: 1, desired: 'on', updated_at: 'T0' })) // a harness on: the start spawns the helper
   const starting = startDaemon({ dir: s.collector, socketPath: s.sock, arch: slow, harnesses: [cc] })
   try {
     await until(() => fs.existsSync(s.sock))
@@ -571,7 +714,7 @@ test('daemon: a control request that arrives while the daemon is still wiring wa
     assert.equal(answered, false, 'no answer while the helper is not started')
     release()
     const st = await early
-    assert.deepEqual([st.desired, typeof st.engine.port, st.helper.ok], ['off', 'number', true])
+    assert.deepEqual([st.desired, typeof st.engine.port, st.helper.ok], ['on', 'number', true])
   } finally { release(); await (await starting).stop(); p.done(); s.done() }
 })
 
@@ -610,6 +753,7 @@ test('daemon: failures it owns leave a durable record with a reason, also when i
   const fails = (where) => flowsOf(s).filter((f) => f.event === 'failure' && f.where === where)
   let stopped = false
   try {
+    await req(s.sock, 'POST', '/on', {}) // the helper runs only while a harness is on
     assert.match(fails('daemon')[0].reason, /previous daemon \(pid 999999\) ended without a clean stop.*connections then in flight through its engine were cut \(how many is not known\)/)
     // engine: a connection steered to it whose original destination is unknown is closed — recorded, folded within 10 s
     for (let i = 0; i < 2; i++) { const c = net.connect(d.port, '127.0.0.1'); await once(c, 'close') }
@@ -809,7 +953,7 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
   const corp = createCa({ commonName: 'corp' }); fs.writeFileSync(path.join(s.home, 'corp.pem'), corp.certPem)
   const dir = s.collector
   const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) }
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on')) // the daemon rebuilds the bundles of the harnesses whose desired state is on only (4.6 「合并包」, D39)
   const bundle = path.join(dir, 'ca', 'combined-rep.pem')
@@ -844,7 +988,7 @@ test('daemon: the Linux arch\'s OS roots — none on the machine is a bundle fai
   const osRoots = () => linux.osRoots({ read })
   const dir = s.collector
   const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
   const first = osRoots()
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, roots: { node: [...tls.rootCertificates], osText: first.pem, missing: first.missing } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
@@ -884,7 +1028,7 @@ test('daemon: OS roots the reader dropped as unparsable, or a roots source that 
   let answer = { pem: root.certPem, dropped: 0, tried: [] }, asked = 0
   const osRoots = async () => { asked++; return answer }
   const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
   const bundle = path.join(dir, 'ca', 'combined-rep.pem')
@@ -922,7 +1066,7 @@ test('daemon: the daily bundle rebuild never writes the trocar CA back into a bu
   fs.writeFileSync(path.join(s.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
   const dir = s.collector
   const repOf = (name) => ({ name, runtime: 'rust', hosts: [], processes: { names: [{ name }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${name}.env`), vars: { SSL_CERT_FILE: path.join(dir, 'ca', `combined-${name}.pem`) }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', `combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) })
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${name}.env`), vars: { SSL_CERT_FILE: path.join(dir, 'ca', `combined-${name}.pem`) }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', `combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) })
   const list = [repOf('stay'), repOf('gone'), repOf('idle')]
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: list, freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['stay', 'gone'], 'on')) // idle was never turned on
@@ -954,7 +1098,7 @@ test('daemon: the bundle rebuild runs under the op lock (1.6 R12) — while anot
   const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
   const dir = s.collector
   const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
-    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [], role: 'bundle' }] }) }
+    present: [{ base: 'home' }], inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [], role: 'bundle' }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
   const bundle = path.join(dir, 'ca', 'combined-rep.pem'), lock = path.join(dir, 'op.lock')
@@ -1471,17 +1615,16 @@ test('V30 unit half: a 3 s event-loop stall while state.json turns a harness off
     assert.deepEqual(last, ['unwatch 4545', 'detach'], 'unwatch, then detach, and not one more heartbeat')
     const off = await req(s.sock, 'GET', '/status')
     assert.deepEqual([off.desired, off.actual, off.links, off.recording], ['off', 'off', [], false])
-    assert.deepEqual(await watched(clients[0]), {})
+    await until(() => helperExited(clients[0])) // none left on: the helper goes, and the watch table with it (4.6 §开关语义)
 
     // the file never attaches: writing claude-code on again changes nothing until an `on` request
-    await clients[0].raw({ op: '__mark', name: 'again' })
     rewriteState(s, (x) => { x.harnesses['claude-code'].desired = 'on' })
     await new Promise((r) => setTimeout(r, 600)) // several 5 s checks' worth at checkMs 150, and no heartbeat timer to carry a reload either
-    assert.deepEqual([await afterMark(clients[0], 'again'), (await req(s.sock, 'GET', '/status')).harnesses['claude-code'].desired], [[], 'off'])
+    assert.deepEqual([clients.length, (await req(s.sock, 'GET', '/status')).harnesses['claude-code'].desired], [1, 'off'])
     const back = await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] })
     assert.deepEqual([back.desired, back.actual, back.harnesses['claude-code'].desired, back.harnesses.codex.desired], ['on', 'on', 'on', 'off'])
     assert.deepEqual(back.agents.map((a) => [a.pid, !!a.off]), [[4242, false], [4343, false], [4444, false], [4545, true]], 'the rescan behind on judges the harness again')
-    assert.deepEqual(Object.keys(await watched(clients[0])).sort(), ['4242', '4343', '4444'])
+    assert.deepEqual(Object.keys(await watched(clients.at(-1))).sort(), ['4242', '4343', '4444'])
     assert.equal(flowsOf(s).filter((f) => f.event === 'failure' && f.where === 'switch').length, 0, 'no state-mismatch on the way')
   } finally { await d.stop(); p.done(); s.done() }
 })
@@ -1680,9 +1823,47 @@ async function withSplice(fn) {
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: echo.address().port, family: 4 }, pid: 4242, decrypt: 0 })
     raw.write('ZZZZ not a protocol the engine knows\n') // classified unknown: passed through, never framed
     await once(raw, 'data')
-    await fn({ s, d, raw, flows: () => flowsOf(s) })
+    await fn({ s, d, raw, clients, flows: () => flowsOf(s) })
   } finally { echo.close(); await d.stop(); p.done(); s.done() }
 }
+
+// 4.6 S20 c (V36 daemon half): the helper outlives the off while a connection is still relayed, and goes once it closes; an /on meanwhile keeps it;
+// with now the cut connection lets it go within 1 s
+test('daemon: /off with a splice open keeps the helper until the splice closes, then it exits (4.6 S20)', async () => {
+  await withSplice(async ({ s, raw, clients }) => {
+    await req(s.sock, 'POST', '/off', {})
+    await new Promise((r) => setTimeout(r, 300))
+    assert.deepEqual([(await req(s.sock, 'GET', '/status')).relayed.waiting, helperExited(clients[0])], [1, false])
+    raw.destroy()
+    await until(() => helperExited(clients[0]))
+  })
+})
+// the helper gone, no exit of the agent reaches the daemon: status does not keep listing a pid it can no longer follow (D38); the next on rescans
+test('daemon: once the helper exits after off, status lists none of the agents it followed, and the next /on finds the live ones again (4.6 S20)', async () => {
+  await withSplice(async ({ s, raw, clients }) => {
+    await req(s.sock, 'POST', '/off', {})
+    raw.destroy()
+    await until(() => helperExited(clients[0]))
+    await until(async () => !(await req(s.sock, 'GET', '/status')).agents.some((a) => a.pid === 4242))
+    await req(s.sock, 'POST', '/on', {})
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && !a.off))
+  })
+})
+test('daemon: /on before the splice closes keeps the helper it has: no second one, still on (4.6 S20)', async () => {
+  await withSplice(async ({ s, raw, clients }) => {
+    await req(s.sock, 'POST', '/off', {})
+    await req(s.sock, 'POST', '/on', {})
+    raw.destroy()
+    await new Promise((r) => setTimeout(r, 400))
+    assert.deepEqual([clients.length, helperExited(clients[0]), (await req(s.sock, 'GET', '/status')).actual], [1, false, 'on'])
+  })
+})
+test('daemon: /off {now:true} cuts the splice and the helper exits within 1 s (4.6 S20)', async () => {
+  await withSplice(async ({ s, clients }) => {
+    await req(s.sock, 'POST', '/off', { now: true })
+    await until(() => helperExited(clients[0]), 1000)
+  })
+})
 
 test('daemon: POST /off {exit:true} with a spliced connection open: the reply says 1 waiting and the daemon\'s pid, it stays up, status counts the connection, and it stops (daemon-stop, reason off) once the connection closes by itself (V36 daemon half, 1.6 §1.4 5)', async () => {
   await withSplice(async ({ s, d, raw, flows }) => {
@@ -1947,3 +2128,33 @@ test('daemon: the 5 s check takes a proxy-mode record\'s own semantics — the f
     assert.deepEqual(fs.readFileSync(file), bytes)
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+// Invariant 5, 4.6 fail-open: the links go on only once every door of the engine listens — a link attached first steers a new agent connection to a port
+// nobody answers. Pinned on the real Linux redirector over the fake helper: at the moment attach() reaches the helper, both loopback doors (127.0.0.1 and,
+// where this machine has IPv6 loopback, [::1]) accept a real connection on the port the helper was configured with. Both ways the links go on: a start
+// that restores a harness already on, and an /on after a start with nothing on.
+const v6Loopback = await new Promise((resolve) => { const s = net.createServer(); s.once('error', () => resolve(false)); s.listen(0, '::1', () => s.close(() => resolve(true))) })
+const accepts = (host, port) => new Promise((resolve) => { const c = net.connect({ host, port }); c.once('connect', () => { c.destroy(); resolve(true) }); c.once('error', () => resolve(false)) })
+for (const via of ['restore', 'on']) {
+  test(`daemon: the links are attached only once every door listens (${via === 'restore' ? 'a start with a harness on' : '/on after a start with nothing on'})`, async () => {
+    const s = sandbox(); const p = fakeProc()
+    await install(s)
+    if (via === 'restore') writeStateAtomic(path.join(s.collector, 'state.json'), setDesired(emptyState(), ['claude-code'], 'on'))
+    const seen = []
+    const makeClient = () => {
+      const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
+      let port = null
+      const configure = c.configure, attach = c.attach
+      c.configure = async (p0) => { port = p0; return configure(p0) }
+      c.attach = async () => { seen.push({ port, v4: await accepts('127.0.0.1', port), v6: v6Loopback ? await accepts('::1', port) : true }); return attach() }
+      return c
+    }
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) }, harnesses: [cc] })
+    try {
+      if (via === 'on') assert.equal((await req(s.sock, 'POST', '/on', {})).actual, 'on')
+      else await until(() => seen.length > 0)
+      assert.ok(seen.length > 0, 'the links were attached')
+      for (const a of seen) assert.deepEqual([a.v4, a.v6], [true, true], `every door listened on port ${a.port} when attach reached the helper`)
+    } finally { await d.stop(); p.done(); s.done() }
+  })
+}

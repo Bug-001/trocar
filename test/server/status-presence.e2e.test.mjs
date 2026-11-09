@@ -29,7 +29,7 @@ for (const platform of ['darwin', 'win32']) {
     const login = { ...w.env, PATH: '/usr/bin:/bin' } // what the login service starts the daemon and its worker with
     const port = await boardPortOf(w.dir)
     await withScratchCwd(platform, async () => {
-      const box = await liveUnit({ w, platform, parts: { helper: HELPER }, daemon: { fork: (h) => workerFork(h, depsFile({ ...w, env: login }, platform)) } })
+      const box = await liveUnit({ w, platform, parts: { helper: HELPER }, daemon: { fork: (h, _, role) => workerFork(h, depsFile({ ...w, env: login }, platform), role) } })
       box.unit.start(); await box.starting
       try {
         const io = fakeIo()

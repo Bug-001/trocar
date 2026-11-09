@@ -15,13 +15,13 @@ const { loadHarnesses } = await import('../../../src/collector/harness/index.mjs
 const { renderHook } = await import('../../../src/collector/harness/templates/index.mjs')
 const { renderWrapper } = await import('../../../src/collector/arch/darwin/wrapper.mjs')
 const { custodyStub } = await import('../../helpers/custody-stub.mjs')
-const { rootStoreStub } = await import('../../helpers/model-world.mjs')
+const { rootStoreStub, worldDirs } = await import('../../helpers/model-world.mjs')
 const { darwinExec, win32Io } = await import('../../helpers/model-io.mjs')
 
 const os = process.env.TROCAR_E2E_OS
 const home = process.env.HOME
 const env = { ...process.env }
-const dirs = { appSupport: path.join(home, 'Library', 'Application Support'), localAppData: path.join(home, 'AppData', 'Local') }
+const dirs = worldDirs(os, home)
 const ctx = sourcesCtx({ os, home, env, cwd: home, dirs })
 ctx.exists = (p) => (p === home || p.startsWith(`${home}${path.sep}`)) && fs.existsSync(p)
 const harnesses = await loadHarnesses()

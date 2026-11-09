@@ -16,6 +16,7 @@ import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { certBlocks, SYSTEM_BUNDLES } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { sevenHomes, USER_CA } from './fixtures/seven-homes.mjs'
 import { readStateFile } from '../../src/off/state.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
@@ -33,9 +34,11 @@ const proc = (pid, exe, argv, { startedAt = Date.now() + 5000, env = {} } = {}) 
 async function sevenInstalled() {
   const home = tmpDir('trocar-off-')
   const sh = sevenHomes(home)
+  const harnesses = await loadHarnesses()
+  seedFootprint(home, harnesses.filter((d) => HARNESS_IDS.includes(d.name)), sh.env) // the seven are installed (4.6: presence is each one's own footprint)
   const before = snapshot(home)
   const beforeDirs = new Set(dirsOf(home))
-  await installCollector({ home, env: sh.env, osName: 'linux', harnesses: await loadHarnesses(), freePort: async () => 47011, scan: async () => [], roots })
+  await installCollector({ home, env: sh.env, osName: 'linux', harnesses, freePort: async () => 47011, scan: async () => [], roots })
   const dir = path.join(home, '.trocar', 'collector')
   const ca = (n) => path.join(dir, 'ca', n)
   // install wrote every item here (phase install), which off spares (D55①): V15 / V25 drive the undo rules over both phases, as uninstall runs them
@@ -124,7 +127,7 @@ test('V1: off with the daemon gone (its lock left, its helper dead): every certi
   assert.deepEqual(s.installItems(), installed, 'every phase-install item: still in the manifest, its file byte for byte')
   assert.deepEqual(receipt.routing, { confirmed: true, state: 'stale', how: 'no-daemon' })
   assert.deepEqual([receipt.daemon, receipt.relayed], [{ pid: null, state: 'none' }, { closing: 0, waiting: 0, cut: 0 }], 'no daemon: nothing is relayed, said as a fact')
-  assert.deepEqual(execFrom(s, calls), ['systemctl --user is-active trocar-collector.service'], 'D61: the only OS tool run is the question whether systemd is about to restart the daemon — off never disables the login entry (it says inactive here): no start, no stop, no restart')
+  assert.deepEqual(execFrom(s, calls), [], 'D61 · D62 ⑥: off runs no OS tool here: it never stops, starts or disables the daemon or its login entry')
   assert.deepEqual(s.sys.daemon.calls.slice(asked).filter((c) => c.startsWith('POST')), [], 'and no daemon was asked for anything, let alone started')
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ALL_HARNESSES.map(() => 'off'), 'every harness is off in state.json')
   assert.deepEqual(readManifest(s.dir).entries, entries, 'and the manifest keeps them for uninstall')
@@ -142,44 +145,16 @@ function restartingSystemd(s, { stubborn = false } = {}) {
   return { run, state }
 }
 
-test('semantics 4 / 1.6 §1.4: a killed daemon that systemd is about to restart (Restart=on-failure) is stopped by an off with no names — stop, reset-failed, is-active, so no daemon comes back; nothing is relayed, exit 0', async () => {
-  const s = await installedHome({ names: ['claude-code', 'codex'] }), installed = s.installItems()
-  s.sys.daemon.state.up = false
-  writeDaemonLock(s)
-  const sd = restartingSystemd(s)
-  const from = s.sys.exec.calls.length
-  const { receipt, exit } = await s.off({ deps: { alive: () => false, exec: sd.run } })
-  assert.equal(exit, 0, JSON.stringify(receipt.problems))
-  const cmds = execFrom(s, from)
-  assert.deepEqual(cmds.filter((c) => !/ is-active /.test(c)), ['systemctl --user stop trocar-collector.service', 'systemctl --user reset-failed trocar-collector.service'], 'D61: the unit is stopped and its failure reset, and NEVER disabled — the next login must bring the daemon back. The unit is stopped and its failed state cleared; the registration is untouched')
-  assert.ok(cmds.every((c) => !/ disable /.test(c)), 'D61: no off disables the autostart — on and off are the same across a reboot')
-  assert.deepEqual(receipt.relayed, { closing: 0, waiting: 0, cut: 0 }, 'there was no engine: nothing was relayed')
-  assert.deepEqual(receipt.daemon, { pid: null, state: 'none' })
-  assert.equal(receipt.routing.confirmed, true)
-  assert.deepEqual(validateReceipt(receipt), [])
-  assert.deepEqual(s.installItems(), installed, 'and every certificate item stays (D55①)')
-  const events = flowEvents(s.dir)
-  assert.ok(events.some((e) => e.kind === 'daemon-stop' && e.stopped === true && /about to restart/.test(e.reason)), 'the stop is on the record')
-})
-
-test('semantics 4: a unit systemd keeps up after the stop is not "off": exit 1 with the command to run, and the certificate items stay all the same', async () => {
-  const s = await installedHome({ names: ['claude-code'] }), installed = s.installItems()
-  s.sys.daemon.state.up = false
-  const sd = restartingSystemd(s, { stubborn: true })
-  const { receipt, exit } = await s.off({ deps: { alive: () => false, exec: sd.run } })
-  assert.equal(exit, 1)
-  assert.match(receipt.problems.join('\n'), /systemctl --user stop trocar-collector\.service/)
-  assert.deepEqual(s.installItems(), installed, 'off never touches a certificate item (D55①); desired is off, so a daemon that comes back attaches nothing')
-})
-
-test('semantics 4: off with names does not touch the unit — only an off with no names takes the daemon away', async () => {
-  const s = await installedHome({ names: ['claude-code', 'codex'] })
-  s.sys.daemon.state.up = false
-  const sd = restartingSystemd(s)
-  const from = s.sys.exec.calls.length
-  const { exit } = await s.off({ ids: ['codex'], deps: { alive: () => false, exec: sd.run } })
-  assert.equal(exit, 0)
-  assert.deepEqual(execFrom(s, from).filter((c) => / (stop|disable|reset-failed|is-active) /.test(c)), [], 'no systemctl question or command for a named off')
+test('semantics 4 · D62 ⑥: no off touches the unit — a killed daemon systemd is about to restart is left to it, since desired is off; only uninstall stops the unit', async () => {
+  for (const ids of [null, ['codex']]) {
+    const s = await installedHome({ names: ['claude-code', 'codex'] })
+    s.sys.daemon.state.up = false
+    const sd = restartingSystemd(s)
+    const from = s.sys.exec.calls.length
+    const { exit } = await s.off({ ids, deps: { alive: () => false, exec: sd.run } })
+    assert.equal(exit, 0)
+    assert.deepEqual(execFrom(s, from).filter((c) => / (stop|disable|reset-failed|is-active) /.test(c)), [], `${ids}: no systemctl question or command`)
+  }
 })
 
 test('semantics 5: with no autostart unit managing it the way out names the pid to kill (the daemon\'s own reply, else the lock\'s); with none on record, how to find it', async () => {
@@ -187,11 +162,9 @@ test('semantics 5: with no autostart unit managing it the way out names the pid 
   fs.rmSync(path.join(s.home, '.config', 'systemd', 'user', 'trocar-collector.service'))
   const r = await s.off({ deps: { request: async (q) => (q.path === '/off' ? { actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 5151 } : s.sys.daemon.request(q)) } })
   assert.equal(r.exit, 1)
-  assert.match(r.receipt.problems[0], /To go on, stop the daemon \(kill 5151\), which takes its links off with it/)
   const t = await installedHome({ names: ['claude-code'] })
   fs.rmSync(path.join(t.home, '.config', 'systemd', 'user', 'trocar-collector.service'))
   const none = await t.off({ deps: { request: async (q) => (q.path === '/off' ? { actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 } } : t.sys.daemon.request(q)) } })
-  assert.match(none.receipt.problems[0], /no pid is on record: find it with pgrep -f 'trocar\.\* \(daemon\|collector start\)'/)
 })
 
 // a manifest that names a file trocar never made (damaged, hand-edited, or from a bug) must not take the user's data with it: what `off` / `uninstall` remove, rewrite or
@@ -268,9 +241,21 @@ test('V5: off claude-code takes only Claude Code\'s routing: no certificate item
   assert.deepEqual([s.state().harnesses['claude-code'].desired, s.state().harnesses.codex.desired], ['off', 'on'])
   assert.deepEqual([s.sys.daemon.isRecording('claude-code'), s.sys.daemon.isRecording('codex')], [false, true], 'the daemon still has codex attached')
   assert.deepEqual([receipt.harnesses, receipt.all, receipt.daemon.state], [[{ harness: 'claude-code', ok: true, reason: null, undone: [], kept_backups: [] }], false, 'running'], 'appendix C.2: one object per harness named')
+  assert.deepEqual(receipt.still_on, ['codex'], 'appendix C.2: the harnesses still on after this off')
   assert.deepEqual(receipt.changed, [], 'off changed no file of the user')
   assert.ok(s.sys.exec.calls.every((c) => !/disable/.test(c)), 'a named off leaves the autostart alone')
   assert.ok(['codex', 'claude-code'].every((h) => readManifest(s.dir).entries.some((e) => e.harness === h)), 'both are still installed')
+})
+
+test('appendix C.2: still_on names the harnesses left on after a named off, and is empty once the last one is off', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const a = await s.off({ ids: ['codex'], dryRun: true })
+  assert.deepEqual(a.receipt.still_on, ['claude-code'], 'a dry run says which would stay on')
+  assert.deepEqual((await s.off({ ids: ['codex'] })).receipt.still_on, ['claude-code'])
+  const { receipt, exit } = await s.off({ ids: ['claude-code'] })
+  assert.equal(exit, 0, JSON.stringify(receipt.problems))
+  assert.deepEqual(validateReceipt(receipt), [])
+  assert.deepEqual(receipt.still_on, [], 'no harness is left on')
 })
 
 test('V21: off,off changes nothing — the second run leaves state.json, the manifest and every user file as they were; per-harness: the bundle install wrote stays, CA and all, and so does the .env naming it', async () => {
@@ -303,7 +288,6 @@ test('1.6 §1.5: the routing is confirmed BEFORE one entry is touched — a daem
   assert.equal(r.exit, 1)
   assert.deepEqual(r.receipt.routing, { confirmed: false, state: 'running', how: 'daemon-reply' })
   assert.match(r.receipt.problems[0], /did not confirm that the kernel's watch table and links are off/)
-  assert.match(r.receipt.problems[0], /To go on, stop the daemon \(systemctl --user stop trocar-collector\.service\), which takes its links off with it, then run the command again/, 'semantics 5: the way out is said, not only the refusal')
   assert.deepEqual(s.userFiles(), before, 'no user file moved')
   assert.equal(shaOf(path.join(s.dir, 'ca', 'combined-codex.pem')), bundle)
   assert.ok(readManifest(s.dir).entries.length >= 2, 'and the manifest still lists the entries')
@@ -313,20 +297,19 @@ test('1.6 §1.5: the routing is confirmed BEFORE one entry is touched — a daem
   assert.deepEqual(flowEvents(s.dir).at(-1).kind, 'result')
 })
 
-test('1.6 §1.4 第 2 步: an off with no names asks the daemon to exit once drained and reports what is left of the connections; --now is passed on; an error answer (a 400) is a failure, not a stuck daemon', async () => {
+test('1.6 §1.4 第 2 步: an off with no names switches the daemon off without asking it to exit and reports what is left of the connections; --now is passed on; an error answer (a 400) is a failure, not a stuck daemon', async () => {
   const s = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
   const r = await s.off({ now: false })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
-  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'])
-  assert.deepEqual([r.receipt.relayed, r.receipt.daemon], [{ closing: 2, waiting: 1, cut: 0 }, { pid: 4242, state: 'draining', exits_after: 2 }], 'appendix C.2: the daemon says what it exits after')
+  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {}'])
+  assert.deepEqual([r.receipt.relayed, r.receipt.daemon], [{ closing: 2, waiting: 1, cut: 0 }, { pid: 4242, state: 'running' }], 'appendix C.2: the daemon keeps running (D62 ⑥)')
   const t = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 0, waiting: 0, cut: 3 }, exitOnOff: false } })
   const cut = await t.off({ now: true })
-  assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true,"exit":true}'])
+  assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true}'])
   assert.equal(cut.receipt.relayed.cut, 3)
   const u = await installedHome({ names: ['claude-code'] }); const before = u.userFiles()
   const bad = await u.off({ deps: { request: async (q) => { if (q.path === '/off') throw Object.assign(new Error('400: unknown harness: nope'), { status: 400 }); return u.sys.daemon.request(q) } } })
   assert.equal(bad.exit, 1); assert.match(bad.receipt.problems[0], /refused the off request/)
-  assert.match(bad.receipt.problems[0], /To go on, stop the daemon \(systemctl --user stop trocar-collector\.service\)/, 'semantics 5: and what to do about it')
   assert.deepEqual(u.userFiles(), before)
   assert.ok(u.sys.exec.calls.every((c) => !/stop|kill/.test(c)), 'an answering daemon is never stopped')
 })
@@ -367,7 +350,8 @@ test('a daemon that cannot be stopped: the certificate items stay as they are, e
   const t = procTable(DAEMON_ROWS, { survives: { 4242: ['SIGTERM', 'SIGKILL'] } }); const c = fakeClock()
   const r = await s.off({ deps: { request: hangsOnStatus(s), alive: t.alive, identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...c } })
   assert.equal(r.exit, 1)
-  assert.match(r.receipt.problems.join('\n'), /pid 4242.*could not be stopped.*kill -9 4242/)
+  assert.match(r.receipt.problems.join('\n'), /pid 4242.*could not be stopped/)
+  assert.ok(r.receipt.problems.join('\n').split('\n').includes('    kill -9 4242'), 'the stop command, a line of its own')
   assert.deepEqual([r.receipt.daemon.state, r.receipt.routing.confirmed], ['unresponsive', false])
   assert.ok(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'the certificate entry stays (D55①)')
   assert.deepEqual(flowEvents(s.dir).filter((e) => e.event === 'failure').map((e) => [e.where, e.code]), [['off', 'stop-failed']])
@@ -493,7 +477,7 @@ test('V24: with the install manifest gone and no terminal, off takes the routing
   assert.deepEqual(first.receipt.pending.map((p) => [p.path, p.how]), [[sw, 'owned-file']], 'what on wrote; the Kimi shim and rc line are install\'s')
   assert.match(first.receipt.problems.join('\n'), /record of what it wrote is missing[\s\S]*trocar off --yes/)
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off', 'off'], 'desired off for every harness')
-  assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart], [true, ['POST /off {"exit":true}'], undefined], 'the routing is off, the daemon was asked to exit, and the receipt carries no autostart key (D61: off touches no registration) — none of it needs the manifest')
+  assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart], [true, ['POST /off {}'], undefined], 'the routing is off, the daemon was asked to switch off (D62 ⑥: never to exit), and the receipt carries no autostart key (D61: off touches no registration) — none of it needs the manifest')
   assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'partial'])
   const second = await s.off({ yes: true })
   assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
@@ -615,6 +599,7 @@ test('R12: while `on` holds the op lock (it waits for its daemon to come up) an 
   const on = await s.on({ request: never, sleep })
   assert.deepEqual(meanwhile, { entry: true, desired: 'off', lock: true }, 'the entry install wrote is there and on holds the lock; off had already written desired off')
   assert.equal(on.exit, 1); assert.match(on.receipt.notes.join('\n'), /turned off while this on ran/)
+  assert.equal(on.receipt.error && on.receipt.error.code, 'stopped-by-off', '1.6 §3.1: the code of an on an off stopped, on Linux as on macOS / Windows')
   assert.ok(pauses < 8, `on stopped at its next poll (${pauses} pauses), not after 60`)
   const off = await offRun
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
@@ -920,12 +905,33 @@ test('1.6 §3.1 · D62 ⑥: a nameless off in proxy mode reads the routing back 
   assert.deepEqual([good.receipt.routing.confirmed, good.receipt.daemon], [true, { pid: 4242, state: 'running' }])
 })
 
-test('the text receipt says a changed file once, as it says a removed file once: two entries of one file that ended the same way are one row; two that ended differently are two', () => {
+test('1.6 §1.1 --now: in proxy mode, off --now after a plain off still asks the running daemon to cut, and the receipt carries what it cut', async () => {
+  const s = await installedHome({ names: ['claude-code'], daemon: { pid: 4242 } })
+  const asked = []
+  const deps = { platform: 'darwin', request: async (q) => { if (q.path !== '/off') return s.sys.daemon.request(q); asked.push(q.body); return { actual: 'off', confirmed: true, relayed: q.body.now ? { closing: 0, waiting: 0, cut: 1 } : { closing: 1, waiting: 0, cut: 0 }, pid: 4242 } } }
+  assert.equal((await s.off({ deps })).exit, 0)
+  const cut = await s.off({ now: true, deps })
+  assert.equal(cut.exit, 0, JSON.stringify(cut.receipt.problems))
+  assert.deepEqual(asked, [{}, { now: true }], 'everything already off: the daemon is still asked, with now')
+  assert.equal(cut.receipt.relayed.cut, 1)
+})
+
+test('the text receipt says a changed file once, as it says a removed file once: the entries of one file are one row, however each ended', () => {
   const file = path.join('/h', 'Library', 'Application Support', 'Code', 'User', 'settings.json') // one file, two json entries (a proxy key and an array item)
   const rows = (changed) => formatOffReceipt({ command: 'off', ok: true, outcome: 'done', changed, removed: [] }, { home: '/h' }).split('\n').filter((l) => l.includes('settings.json')).length
   const restored = { harness: 'kimi-code', path: file, result: 'restored' }
   assert.equal(rows([restored, { ...restored }]), 1)
-  assert.equal(rows([restored, { ...restored, result: 'old-command' }]), 2)
+  assert.equal(rows([restored, { ...restored, result: 'old-command' }]), 1)
+  assert.equal(rows([restored, { ...restored, backup: '/h/.trocar/backup/settings.json', backup_dropped: true }]), 1, 'the backup goes with the last entry of the file (a macOS test machine: two restored rows)')
+})
+
+test('the text receipt says what it says about files an agent wrote because of trocar\'s plugin once, then lists each of them once', () => {
+  const paths = ['/h/.config/opencode/node_modules', '/h/.config/opencode/package.json']
+  const text = formatOffReceipt({ command: 'off', ok: true, outcome: 'done', changed: [], removed: [], residue: paths.map((p) => ({ harness: 'opencode', path: p, why: 'opencode installs its SDK on first run' })) }, { home: '/h' })
+  const lines = text.split('\n')
+  for (const p of paths) assert.equal(lines.filter((l) => l.includes(p.replace('/h', '~'))).length, 1, p)
+  const bare = lines.map((l) => paths.reduce((s, p) => s.replace(p.replace('/h', '~'), ''), l)).filter((l) => l.trim())
+  assert.deepEqual(bare.filter((l, i) => bare.indexOf(l) !== i), [], 'no sentence is said twice')
 })
 
 test('off by trocar\'s marks keeps the backups no record names, and its receipt names them under ~ (1.6 §1.1⑤)', async () => {
@@ -937,4 +943,38 @@ test('off by trocar\'s marks keeps the backups no record names, and its receipt 
   const text = formatOffReceipt(receipt, { home: s.home })
   assert.ok(receipt.orphan_backups.every((b) => text.includes(`~${b.slice(s.home.length)}`)), text)
   assert.ok(!text.includes(s.home), text)
+})
+
+// the supervisor supervisor.lock names (pid 4040) still runs: the one powershell question stopByHand asks, answered
+const supervisorRuns = (file, args) => (file === 'powershell' && args.join(' ').includes('Get-Process -Id 4040 ') ? { status: 0, stdout: '1000000000001', stderr: '' } : { status: 1, stdout: '', stderr: 'not this question' })
+
+test('semantics 5 on win32: the way out finds and stops the daemon with Windows\' own commands, never pgrep or kill', async () => {
+  const { switchRoutingOff } = await import('../../src/off/orchestrate.mjs')
+  // supervisor.lock beside the daemon's lock names the supervisor, which goes first (it restarts a killed daemon)
+  const fs = { readFileSync: (f) => { if (/supervisor\.lock$/.test(f)) return JSON.stringify({ pid: 4040, startedAt: 1000000000001 }); throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
+  const w = (state, pid) => ({ platform: 'win32', fs, exec: supervisorRuns, unitManaged: () => false, lockFile: 'C:\\t\\lock', daemonState: async () => ({ state, socket: '\\\\.\\pipe\\t', lock: pid ? { pid } : null, reason: state === 'unknown' ? 'unreadable lock' : undefined }),
+    request: async () => ({ actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 } }) })
+  const texts = [(await switchRoutingOff(w('running', 5151))).problems.join('\n'), (await switchRoutingOff(w('running', null))).problems.join('\n'), (await switchRoutingOff(w('unknown', null))).problems.join('\n')]
+  for (const t of texts) assert.doesNotMatch(t, /\bpgrep\b|\bkill \d/, t)
+  assert.match(texts[0], /taskkill \/PID 4040\b[^]*taskkill \/PID 5151\b/, 'the supervisor is stopped before the daemon')
+  for (const t of texts.slice(1)) assert.match(t, /Get-CimInstance Win32_Process/)
+})
+
+test('semantics 5 on every platform: a way out\'s commands are lines of their own, and the receipt prints each whole, unfolded, within 80 columns', async () => {
+  const { switchRoutingOff } = await import('../../src/off/orchestrate.mjs')
+  const { formatOffReceipt, isCommandLine } = await import('../../src/off/receipt.mjs')
+  const fs = { readFileSync: (f) => { if (/supervisor\.lock$/.test(f)) return JSON.stringify({ pid: 4040, startedAt: 1000000000001 }); throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
+  for (const platform of ['win32', 'darwin', 'linux']) {
+    for (const unit of [false, true]) {
+      if (unit && platform === 'win32') continue
+      const w = (state, pid) => ({ platform, fs, exec: supervisorRuns, unitManaged: () => unit, lockFile: '/t/lock', daemonState: async () => ({ state, socket: '/t/sock', lock: pid ? { pid } : null, reason: state === 'unknown' ? 'unreadable lock' : undefined }),
+        request: async () => ({ actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 } }) })
+      for (const r of [await switchRoutingOff(w('running', 5151)), await switchRoutingOff(w('running', null)), await switchRoutingOff(w('unknown', null))]) {
+        const cmds = r.problems.flatMap((p) => p.split('\n').filter(isCommandLine)).map((l) => l.trim())
+        assert.ok(cmds.length > 0, `${platform}: the way out names a command on a line of its own: ${r.problems}`)
+        const text = formatOffReceipt({ ...r, harnesses: ['codex'], ok: false }).split('\n')
+        for (const c of cmds) assert.ok(text.some((l) => l.trim() === c && l.length <= 80), `${platform}: printed whole on its own line, within 80 columns: ${c}\n${text.join('\n')}`)
+      }
+    }
+  }
 })

@@ -26,6 +26,7 @@ import { buildEnvelope, logResponse } from '../src/capture/envelope.mjs'
 import { shapeResponse } from '../src/collector/core/record/body.mjs'
 import { HARNESSES } from '../src/dissect/harnesses.mjs'
 import { THIRD_PARTY_TELEMETRY } from '../src/dissect/traffic.mjs'
+import { isMain } from './is-main.mjs'
 
 export const DEFAULTS = Object.freeze({
   seed: 1,
@@ -360,4 +361,4 @@ async function main(argv) {
   for (const s of out.segments) console.log(`  ${s.segment}  ${String(s.records).padStart(8)} records  ${String(s.bytes).padStart(12)} bytes`)
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) await main(process.argv.slice(2))
+if (isMain(import.meta.url)) await main(process.argv.slice(2))

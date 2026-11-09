@@ -166,7 +166,7 @@ test('kimi-code through install / uninstall: the shim runs kimi with the CA file
     const dir = path.join(s.home, '.trocar', 'collector')
     assert.deepEqual(fs.readdirSync(path.join(dir, 'bin')), ['kimi'])
     assert.equal(fs.statSync(path.join(dir, 'bin', 'kimi')).mode & 0o777, 0o755)
-    assert.match(fs.readFileSync(rc, 'utf8'), new RegExp(`^# kimi-code\\nexport PATH="\\$HOME/\\.kimi-code/bin:\\$PATH"\\nexport PATH="${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/bin:\\$PATH" # trocar collector: [^\\n]*\\nalias ll='ls -l'\\n$`))
+    assert.match(fs.readFileSync(rc, 'utf8'), new RegExp(`^# kimi-code\\nexport PATH="\\$HOME/\\.kimi-code/bin:\\$PATH"\\nalias ll='ls -l'\\nexport PATH="${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/bin:\\$PATH" # trocar collector: [^\\n]*\\n$`))
     const run = spawnSync('/bin/sh', ['-c', '. "$HOME/.bashrc"; command -v kimi; kimi -p "two words" \'$x\''], { env: { HOME: s.home, PATH: '/usr/bin:/bin' }, encoding: 'utf8' })
     assert.equal(run.stdout, `${path.join(dir, 'bin', 'kimi')}\n${path.join(dir, 'ca', 'extra-kimi.pem')}\n-p\ntwo words\n$x\n`, run.stderr)
     assert.deepEqual(fps(fs.readFileSync(path.join(dir, 'ca', 'extra-kimi.pem'), 'utf8')), [fp(OTHER), ...fps(fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'), 'utf8'))])
@@ -214,4 +214,34 @@ test('kimi-code on an OS that cannot read the environment (macOS, the 2026-10-12
     assert.equal(at(new Map(), [stale]).trusted, false, 'a stale marker never trusts (this life was not the shim\'s)')
     assert.deepEqual(kimi.layers({}), [], 'the descriptor declares the layers contract (the tracker calls it — an absent one threw "own is not a function" in the live judge)')
   } finally { s.done() }
+})
+
+// 4.6 Kimi row: the rc line runs wherever the installer's PATH line sits. A real shell reads each rc: `kimi` resolves to the shim, with what the user
+// wrote after that line still in force; uninstall gives the rc back byte for byte.
+test('kimi-code: wherever the installer\'s PATH line sits in the rc, `kimi` resolves to the shim and uninstall restores the rc', async () => {
+  const A = 'export PATH="$HOME/.kimi-code/bin:$PATH"'
+  const shapes = {
+    'top level': `# rc\n${A}\nexport LATER=1\n`,
+    'an if that runs': `if true; then\n  ${A}\nfi\nexport LATER=1\n`,
+    'an if that does not': `if false; then\n  ${A}\nfi\nexport LATER=1\n`,
+    'a case': `case x in\n  x) ${A} ;;\nesac\nexport LATER=1\n`,
+    'a loop': `for d in 1; do\n  ${A}\ndone\nexport LATER=1\n`,
+    'a function called in the file': `kp() {\n  ${A}\n}\nkp\nexport LATER=1\n`,
+    'a function whose { is on the next line': `kp()\n{\n  ${A}\n}\nkp\nexport LATER=1\n`,
+    'a heredoc after it': `${A}\ncat >/dev/null <<EOF\nall done\nEOF\nexport LATER=1\n`,
+    'no line end on the last line': `${A}\nexport LATER=1`,
+    'CRLF comment lines': `# rc\r\n${A}\nexport LATER=1\n`,
+  }
+  for (const [what, before] of Object.entries(shapes)) {
+    const s = sandbox()
+    try {
+      s.put('.kimi-code/bin/kimi', '#!/bin/sh\n'); fs.chmodSync(path.join(s.home, '.kimi-code/bin/kimi'), 0o755)
+      const rc = s.put('.bashrc', before)
+      await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [kimi], freePort: async () => 47015 })
+      const run = spawnSync('/bin/sh', ['-c', '. "$HOME/.bashrc"; command -v kimi; echo "$LATER"'], { env: { HOME: s.home, PATH: '/usr/bin:/bin' }, encoding: 'utf8' })
+      assert.equal(run.stdout, `${path.join(s.home, '.trocar', 'collector', 'bin', 'kimi')}\n1\n`, `${what}:\n${fs.readFileSync(rc, 'utf8')}\n${run.stderr}`)
+      await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none' })
+      assert.equal(fs.readFileSync(rc, 'utf8'), before, what)
+    } finally { s.done() }
+  }
 })

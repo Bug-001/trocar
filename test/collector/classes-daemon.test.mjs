@@ -18,6 +18,7 @@ import { controlRequest } from '../../src/collector/core/control.mjs'
 import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { startMockUpstream } from '../lab/mock-upstream/server.mjs'
 import { makeLabCa } from '../lab/mock-upstream/lab-ca.mjs'
@@ -41,7 +42,7 @@ const b64 = (s) => Buffer.from(s, 'base64')
 
 async function scene({ state = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'as-rd-')) // short: unix socket paths are length-limited
-  const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   const dir = path.join(home, '.trocar', 'collector'), sock = path.join(root, 'run', 'c.sock')
   const p = fakeProc()
   const labCa = makeLabCa(path.join(root, 'lab-ca'))

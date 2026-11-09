@@ -144,7 +144,7 @@ test('normRespWs reads the terminal message: text, usage, stop; an error termina
   assert.equal(normRespWs(ws({ input: [user('q')], terminal: 'response.failed', id: 'rf' })).stop_reason, 'failed');
   const cut = normRespWs(ws({ input: [user('q')], terminal: null, error: { type: 'ECONNRESET', message: 'cut' }, id: 'rc' }));
   assert.equal(cut.stop_reason, null, 'no terminal arrived (resp.partial): no stop reason is invented');
-  assert.equal(RESPONSES_WS.failed(cut, { error: true }), true);
+  assert.equal(RESPONSES_WS.ended(cut), null, 'no terminal: the record\'s error decides (endpoints.mjs failedOf)');
 });
 
 test('server messages that are not JSON text are counted, not silently skipped', () => {

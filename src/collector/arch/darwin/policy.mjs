@@ -37,14 +37,18 @@ export function launchdEnv(names, { run = null, env = process.env } = {}) {
   return out
 }
 
+/** persistentEnv(names, { run, env }) → { <name>: value } of launchd's user environment (`launchctl setenv`, which the apps and shells the user
+ *  starts inherit, 4.11 ⑤): each asked name and its lower-case spelling, read by name (launchdEnv) — never the whole environment. */
+export const persistentEnv = (names, o = {}) => launchdEnv(names.flatMap((x) => [x, x.toLowerCase()]), o)
+
 /** The platform facts core asks for (4.11 OS backends): environment names are case-sensitive, a path is keyed as is (after its
- *  real path), and install reads no persistent user environment on macOS (no login-profile reading; nothing is ever written there).
- *  Only an uninstall with no record asks launchd for a certificate variable its own environment lacks (launchdEnv above). */
-export const platformFacts = Object.freeze({
+ *  real path), and the persistent environment is launchd's (persistentEnv above). An uninstall with no record also asks launchd for a
+ *  certificate variable its own environment lacks (launchdEnv above). */
+export const platformFacts = ({ run = null, env = process.env } = {}) => Object.freeze({
   envCaseInsensitive: false,
   exeSuffix: '', // a command's program file name (4.11 P8)
   pathKey: (p) => pathKey(p, { platform: 'darwin' }),
-  persistentEnv: () => ({}),
+  persistentEnv: (names) => persistentEnv(names, { run, env }),
 })
 
 /** sources.mjs's ctx.dirs on macOS: `appSupport` is Electron's appData (~/Library/Application Support); no localAppData. */

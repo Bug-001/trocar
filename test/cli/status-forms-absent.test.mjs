@@ -155,3 +155,13 @@ test('V32 order: no form here comes after the daemon\'s own verdict on a process
   }
   assert.equal(judgeHarness({ ...ready, desired: 'off', entryIntact: true, formsHere: false }).rows[0].reason, 'desired-off')
 })
+
+test('4.11 CM43: status names an out-of-scope app it is told of, and only once trocar is installed', async () => {
+  const named = [{ harness: 'kimi-code', form: 'kimi-code.desktop', what: 'the app' }]
+  const w = await world('darwin', 'kimi-code')
+  const on = (await status(w, 'darwin', 'kimi-code', [], runStatusCli, { outOfScopeForms: async () => named })).j
+  assert.deepEqual(on.out_of_scope, named)
+  fs.rmSync(path.join(w.dir, 'install-manifest.json'))
+  const off = (await status(w, 'darwin', 'kimi-code', [], runStatusCli, { outOfScopeForms: async () => named })).j
+  assert.equal(off.out_of_scope, undefined)
+})

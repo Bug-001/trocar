@@ -79,7 +79,7 @@ test('custody.ps1 builds and signs itself: no caller TBS, X509SignatureGenerator
   const ps1 = fs.readFileSync(CUSTODY_PS1, 'utf8')
   assert.match(ps1, /X509SignatureGenerator\]::CreateForECDsa/)
   assert.match(ps1, /ExportPolicy = \[System\.Security\.Cryptography\.CngExportPolicies\]::None/)
-  assert.ok(ps1.indexOf('Microsoft Platform Crypto Provider') < ps1.indexOf('Microsoft Software Key Storage Provider'), 'the TPM is tried first (R3-W1)')
+  assert.ok(ps1.indexOf('Microsoft Platform Crypto Provider') < ps1.indexOf('Microsoft Software Key Storage Provider'), 'the TPM is tried first')
   assert.doesNotMatch(ps1, /--tbs|Export\(\s*\[System\.Security\.Cryptography\.CngKeyBlobFormat\]::(EccPrivate|Pkcs8Private|GenericPrivate)/i, 'nothing signs a caller\'s bytes; the private key is never exported')
   assert.doesNotMatch(ps1, /SetProperty|GetProperty|CngProperty/, 'the key holds no state of trocar\'s: the TPM provider keeps only its own property set, so a property would push a TPM machine onto the software KSP')
   assert.match(ps1, /Get-ChildItem Cert:\\CurrentUser\\Root/, 'issue takes the issuer name from the root certificate in the user\'s Root store')

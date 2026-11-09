@@ -13,6 +13,7 @@ import { chapterAt, chapterJump } from '../../../web/legacy/replay/timeline.mjs'
 import { readHead } from '../../../src/query/ctx-files.mjs'
 import { bigSession } from '../../query/big-session.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
+import { stripLayout } from '../../../web/src/screens/replay/strip-layout.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -21,12 +22,13 @@ const CALLS = 1_700
 const TIP = 'trocar.token' // core/http.mjs: the board's token slot (4.4 §每用户口令)
 
 let world = null
-async function folded() {
-  if (world) return world
+// ms: this test's budget for the shared board (its timeout less a margin, renewed as each test starts; 0.1 §3 约定 13)
+async function folded(ms) {
+  if (world) { world.b.renew(ms); return world }
   const userHome = tmpDir('trocar-chap-'), home = path.join(userHome, '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   const s = bigSession({ home, ...SHAPE }); s.append(CALLS)
-  const b = await withBoard({ home: { userHome, home }, chromium: gate.chromium })
+  const b = await withBoard({ home: { userHome, home }, chromium: gate.chromium, deadline: ms })
   const until = Date.now() + 240_000
   let head = null
   for (;;) {
@@ -90,7 +92,7 @@ async function jump(c, chs, g, dir, act) {
 }
 
 test('1.3 §章 · 18: ‹ › clicked and [ ] pressed paint the next / previous chapter within BOARD_LINES.chapterJump (p95)', { skip, timeout: 600_000 }, async () => {
-  const w = await folded(), chs = w.head.chapters, last = chs.length - 1
+  const w = await folded(570_000), chs = w.head.chapters, last = chs.length - 1
   const c = await fresh(w)
   try {
     await open(w, c, 1)
@@ -119,7 +121,7 @@ test('1.3 §章 · 18: ‹ › clicked and [ ] pressed paint the next / previous
 })
 
 test('1.3 §章 · 18: a jump into a chapter whose packs are not here paints from the head within the line; its rows fill, bar for bar, when they land', { skip, timeout: 300_000 }, async () => {
-  const w = await folded(), chs = w.head.chapters, [p0, p1] = w.head.packs
+  const w = await folded(270_000), chs = w.head.chapters, [p0, p1] = w.head.packs
   // chapter A ends past the first pack, its next chapter B starts inside the second: open on A's first step with only the first pack
   // let through, then › to B, whose rows are held back
   const a = chapterAt(chs, p0.s1 - 1), b = chs[a + 1]
@@ -144,4 +146,38 @@ test('1.3 §章 · 18: a jump into a chapter whose packs are not here paints fro
     await c.page.waitForFunction((n) => { const bs = document.querySelectorAll('#sawrow .bar'); return bs.length === n && [...bs].every((b) => b.dataset.i != null) }, rough.length, { timeout: 15_000 })
     assert.deepEqual(c.errors, [])
   } finally { release(); await c.context.close() }
+})
+
+test('1.3 · 22: a drag on the strip moves the bars to another part and stops following, never the step; go back brings them to it; [ ] count from the bars\' part', { skip, timeout: 300_000 }, async () => {
+  const w = await folded(270_000), chs = w.head.chapters, last = chs.length - 1, N = w.head.steps
+  const c = await fresh(w)
+  try {
+    await open(w, c)
+    await c.page.waitForSelector(`#stepbar .sb-no[data-n="${N}"]`, { timeout: 30_000 })
+    await allPacks(w, c)
+    assert.equal(await c.page.$eval('.sh-follow', (b) => b.getAttribute('aria-pressed')), 'true', 'a session opened on its end follows')
+    const box = await c.page.$eval('#ovstrip', (e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top + r.height / 2, w: r.width } })
+    const l = stripLayout(chs, box.w), at = (g) => box.x + l.xOf(g + 0.5)
+    const label = () => c.page.$eval('#chapnav .chaplabel', (e) => +e.dataset.s0)
+    // from the last part to the middle of the second
+    await c.page.mouse.move(at(N - 2), box.y); await c.page.mouse.down()
+    await c.page.mouse.move(at((chs[1].s0 + chs[1].s1) >> 1), box.y, { steps: 8 }); await c.page.mouse.up()
+    assert.equal(await label(), chs[1].s0, 'the bars are in the part the drag ended in')
+    assert.equal(await c.page.$eval('.sh-follow', (b) => b.getAttribute('aria-pressed')), 'false', 'a drag stops following')
+    assert.ok(await c.page.$(`#stepbar .sb-no[data-n="${N}"]`), 'the step being read is the same')
+    assert.equal(await c.page.$eval('.chapback', (e) => +e.dataset.step), N - 1, 'go back names the step being read')
+    await new Promise((ok) => setTimeout(ok, 3_000)) // a poll or two: the window the reader dragged stays
+    assert.equal(await label(), chs[1].s0)
+    await c.page.click('#chapBack')
+    await c.page.waitForFunction((s0) => +document.querySelector('#chapnav .chaplabel').dataset.s0 === s0 && !document.querySelector('#chapBack'), chs[last].s0, { timeout: 15_000 })
+    // drag into the first part again and press ]: the playhead goes to the first step of the part after the bars' one
+    await c.page.mouse.move(at(N - 2), box.y); await c.page.mouse.down()
+    await c.page.mouse.move(at(chs[0].s0 + 1), box.y, { steps: 8 }); await c.page.mouse.up()
+    assert.equal(await label(), chs[0].s0)
+    await c.page.keyboard.press('BracketRight')
+    await c.page.waitForSelector(`#stepbar .sb-no[data-n="${chs[1].s0 + 1}"]`, { timeout: 15_000 })
+    assert.equal(await label(), chs[1].s0, 'the bars follow the playhead')
+    assert.equal(await c.page.$('#chapBack'), null)
+    assert.deepEqual(c.errors, [])
+  } finally { await c.context.close() }
 })
