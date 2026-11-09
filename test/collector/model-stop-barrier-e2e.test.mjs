@@ -72,7 +72,7 @@ for (const platform of ['darwin', 'win32']) {
         // `trocar on codex` through the CLI, at the running daemon's real endpoint (its unit is already up: the stand-in starts nothing)
         const unit = { path: path.join(w.home, 'trocar-unit'), text: () => '', links: [], enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), registered: () => ({ state: 'present' }), reload: () => {} }
         const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-        const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: platform, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } }, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: platform, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } }, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['codex', '--yes'], { io, env: w.env, home: w.home, platform, deps }), 0)
         const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
         const door = Number(u.port), auth = Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')

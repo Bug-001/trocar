@@ -8,24 +8,87 @@ import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { primeProcQuestions } from '../off/proc.mjs'
+import { primeProcQuestions, listProcs, psTableVia } from '../off/proc.mjs'
+import { harnessesOf } from '../off/signature.mjs'
 import { opLockFile } from '../off/paths.mjs'
 import { daemonReader } from '../off/daemon-read.mjs'
 import { readManifest, saveManifest } from '../collector/core/trust/journal.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
-import { fit, tilde, formWords, routeWords, refusedLines, setupBlocked, setupError, routeReason, ownTreeItem, commandLine } from './receipt.mjs'
-import { pairs } from './text.mjs'
+import { fit, tilde, formWords, routeWords, refusedLines, setupBlocked, setupError, routeReason, ownTreeItem, commandLine, restartLine } from './receipt.mjs'
+import { pairs, andList } from './text.mjs'
 import { printJson } from './json.mjs'
+import { plainSentence } from './words.mjs'
 import { routeRefusal } from '../netenv/findings.mjs'
 
 const errText = (e) => String((e && e.message) || e)
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 
 // §1.4「计划写全」: every planned route by the full path (and key) it will write; a route that writes no file of yours says why instead
-const planLine = (p, home) => [p.harness, p.paths.length ? `${p.paths.map((x) => tilde(x, home)).join(', ')}: ${routeWords(p)}` : `no file of yours: trocar hands ${p.harness} the setting as it starts`] // 1.6 §3.3: path: what changes there
+const planLine = (p, home) => [p.harness, p.paths.length ? `${p.paths.map((x) => tilde(x, home)).join(', ')}: ${routeWords(p)}${(p.keys || []).length ? ` (${p.keys.join(', ')})` : ''}` : `no file of yours: trocar hands ${p.harness} the setting as it starts`] // 1.6 §3.3: path: what changes there
+// §1.1 ④ rule 4: a fact not read gives the default text a step to take, by its code; --details and --json keep the fact (`text`)
+const NOTE_STEPS = { 'restart-unread': () => 'Restart any agent that was already open; trocar could not list them.', 'start-time-unknown': (n) => `Restart ${n.harness} if it was already open; trocar could not tell when it started.` }
+const shortNoteLine = (n) => (NOTE_STEPS[n.code] ? NOTE_STEPS[n.code](n) : plainSentence(noteLine(n)))
 const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
 // 1.6 §1.1: the headline of a run that did not finish names the harnesses that did not: refused, or a route of theirs not written
 const unfinished = (r) => [...new Set([...r.refused.map((x) => x.harness), ...(r.routes || []).filter((x) => !x.ok).map((x) => x.harness)])]
+// 1.6 §3.3 · §1.1 ④: the notes the default text says — a step left to do (install pending), a fact not read (D38), a form that only forwards (invariant 4).
+// The rest (loopback, a registered side effect such as a host-tree form's, a launch that skips the hook, a port moved) is said once elsewhere, and --details prints it.
+const saysNow = (n) => n.code === 'install-pending' || /could not be (told|read)/.test(n.text || '')
+function shortReceipt(r, exit, home) {
+  const failed = [...new Map((r.routes || []).filter((x) => !x.ok).map((x) => [`${x.harness}|${x.at || x.route}|${x.reason}`, x])).values()].map((x) => {
+    const at = x.at ? tilde(x.at, home) : x.route ? formWords(`.${x.route}`) : ''
+    const w = routeRefusal({ h: x.harness, reason: x.reason, at })
+    if (!w) return [`${x.harness}${at ? ` (${at})` : ''} was not turned on: ${routeReason(x)}.`]
+    const said = w.steps.filter((t) => !t.startsWith('run: ')), runs = w.steps.filter((t) => t.startsWith('run: ')).map((t) => t.slice(5))
+    return [`${x.harness}${at ? ` (${at})` : ''} was not turned on: ${routeReason({ code: 'not-routed', ...x })}. ${[...said, ...(runs.length ? ['run:'] : [])].join(', then ')}${runs.length ? '' : '.'}`, ...runs.map(commandLine)] // the reason in on's own words (the doctor's say entry)
+  })
+  return [r.dry_run ? `After trocar on, ${andList(r.harnesses) || 'no agent'} would be captured. Nothing was written.`
+    : exit === 0 && !r.harnesses.length ? 'Nothing to capture: no agent trocar covers is set up on this machine.'
+      : exit === 0 ? `Capturing ${andList(r.harnesses)}.`
+        : `trocar on did not finish${unfinished(r).length ? ` for ${andList(unfinished(r))}` : ''}. What stopped it is below.`,
+  ...restartLine(r), ...r.refused.flatMap((x) => refusedLines(x, { plain: true })), ...failed.flat(), ...r.notes.filter((n) => saysNow(n) || !r.harnesses.length).map(shortNoteLine), ...r.problems.map((p) => `Problem: ${plainSentence(p)}`)]
+}
+/** The full text of a macOS / Windows `on` (`--details`): every route, note and problem. */
+export function formatModelOnReceipt(receipt, exit, home) {
+  return fit([receipt.dry_run ? `trocar on would start capturing ${receipt.harnesses.join(', ') || 'no agent'}. Nothing was written.`
+    : exit === 0 && !receipt.harnesses.length ? 'Nothing to capture: no agent trocar covers is set up on this machine.'
+    : exit === 0 ? `Capturing ${receipt.harnesses.join(', ')}.${receipt.daemon && receipt.daemon.state === 'running' ? ' The collector is running.' : ''}`
+      : `trocar on did not finish${unfinished(receipt).length ? ` for ${unfinished(receipt).join(', ')}` : ''}. What stopped it is below.`,
+    ...receipt.refused.flatMap(refusedLines),
+    // §1.1: no two rows the same. One agent with several routes (Claude Code's settings and its config library) said "the setting is in place"
+    // twice (a Windows test machine 2026-10-18): the row names the file the setting is in, so each row is the fact it reports
+    ...pairs([...new Map((receipt.routes || []).map((r) => {
+      const where = r.at ? tilde(r.at, home) : r.route ? formWords(`.${r.route}`) : ''
+      const w = r.ok ? null : routeRefusal({ h: r.harness, reason: r.reason, at: r.at ? tilde(r.at, home) : where }) // the doctor's words and steps: never a bare code
+      return [`${r.harness}|${where}|${r.ok}|${r.reason || ''}`, [r.harness, `${where ? `${where}: ` : ''}${r.ok ? 'the setting is in place' : w ? `not written. ${w.why} ${w.steps.join(', then ')}.` : `not written: ${routeReason(r)}`}`]]
+    })).values()], { home }),
+    ...((receipt.restart || []).length ? [`  ! Restart to capture: ${receipt.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}: started before capture was on. Until then they connect as they do now.`] : []),
+    ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)], { home }).join('\n')
+}
+/** The default text of a macOS / Windows `on` (1.6 §3.3): the conclusion, the Restart line, and what the user must act on, each with its way out. */
+export const formatModelOnText = (r, exit, home) => fit(shortReceipt(r, exit, home), { home }).join('\n')
+/** 1.6 §3.3「之后的效果」: the processes of the agents this on just turned on that were already running — `restart:[{harness, pid}]`, as Linux's.
+ *  Read from the table this command's scope already holds (listProcs; on Windows the daemon's answer), judged by the manifest's liveness record:
+ *  a route that is read again while running, or on every request, needs no restart. A table or a manifest that cannot be read is said (D38), and so
+ *  is a process whose start time is not known: it is never guessed to be one started before. On Windows the table is read again from the running
+ *  daemon's helper (no process started), so a process started while the daemon came up is in it. */
+export async function restartOf({ dir, fs, ids, os, exec, env, procs, reader }) {
+  const unread = (e) => ({ restart: [], notes: [{ harness: null, text: `which running agents need a restart could not be read (${errText(e)})`, code: 'restart-unread' }] })
+  let live, list
+  try {
+    const m = readManifest(dir, fs)
+    live = ids.map((h) => [h, ((m && m.liveness) || {})[h]]).filter(([, l]) => l && l.on_at && !l.rereads && !l.per_request)
+    if (!live.length) return { restart: [], notes: [] }
+    const local = () => listProcs({ platform: os, exec, env })
+    list = await (procs ? procs() : os === 'win32' && reader ? psTableVia(reader).catch(local) : local())
+  } catch (e) { return unread(e) }
+  const notes = [], restart = live.flatMap(([h, l]) => {
+    const mine = list.filter((p) => harnessesOf({ [h]: l }, p).includes(h)), unknown = mine.filter((p) => p.startedAt == null).length
+    if (unknown) notes.push({ harness: h, text: `the start time of ${unknown} ${h} process${unknown === 1 ? '' : 'es'} could not be read, so whether ${unknown === 1 ? 'it needs' : 'they need'} a restart to be captured is not known`, code: 'start-time-unknown' })
+    return mine.filter((p) => p.startedAt != null && p.startedAt < Date.parse(l.on_at)).map((p) => ({ harness: h, pid: p.pid }))
+  })
+  return { restart, notes }
+}
 const noFormError = (r) => { const x = r.refused.find((y) => y.reason === 'not-routed'); return x ? { code: 'not-routed', message: `${x.harness} was not turned on: ${x.why}` } : null }
 
 /** → the exit code. `source`: added to each flows/ record this run writes (the board's 'board'). `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
@@ -35,25 +98,14 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const dir = path.join(home, '.trocar', 'collector')
   const run = new Date().toISOString() // on every line this run writes, so the board's "last on" is this run's lines (as install's, 1.6 §1)
   const put = (rec) => { try { if (fs.existsSync(dir)) appendEvent(dir, { ...rec, run, ...(source ? { source } : {}) }) } catch { /* the receipt carries it (R11) */ } }
-  const [{ turnOnModel, offSince, offWords, STOPPED_BY_OFF }, { backendsFor, sourcesCtx, systemProxyNow }, { renderHook }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs')])
+  const [{ turnOnModel, offSince, offWords, STOPPED_BY_OFF }, { backendsFor, sourcesCtx, systemProxyNow }, { renderHook }, { hostTreeNote }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs'), import('../collector/core/proxymode/entries.mjs')])
   const b = deps.backends || (await backendsFor({ os, home, run: deps.exec || null, env, fs }))
   const ctx = deps.ctx || sourcesCtx({ os, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
   const args = { os, home, env, ids, harnesses: deps.harnesses || parts.harnesses, ctx, fs, renderHook, rootStore: b.rootStore || null, persistentEnv: (b.facts && b.facts.persistentEnv) || null, source, ...(deps.now ? { now: deps.now } : {}) }
+  const details = flags.has('--details')
   const out = (receipt, exit) => {
     if (json) printJson(io, receipt)
-    else io.out(fit([receipt.dry_run ? `trocar on would start capturing ${receipt.harnesses.join(', ') || 'no agent'}. Nothing was written.`
-      : exit === 0 && !receipt.harnesses.length ? 'Nothing to capture: no agent trocar covers is set up on this machine.'
-      : exit === 0 ? `Capturing ${receipt.harnesses.join(', ')}.${receipt.daemon && receipt.daemon.state === 'running' ? ' The collector is running.' : ''}`
-        : `trocar on did not finish${unfinished(receipt).length ? ` for ${unfinished(receipt).join(', ')}` : ''}. What stopped it is below.`,
-      ...receipt.refused.flatMap(refusedLines),
-      // §1.1: no two rows the same. One agent with several routes (Claude Code's settings and its config library) said "the setting is in place"
-      // twice (a Windows test machine 2026-10-18): the row names the file the setting is in, so each row is the fact it reports
-      ...pairs([...new Map((receipt.routes || []).map((r) => {
-        const where = r.at ? tilde(r.at, home) : r.route ? formWords(`.${r.route}`) : ''
-        const w = r.ok ? null : routeRefusal({ h: r.harness, reason: r.reason, at: r.at ? tilde(r.at, home) : where }) // the doctor's words and steps: never a bare code
-        return [`${r.harness}|${where}|${r.ok}|${r.reason || ''}`, [r.harness, `${where ? `${where}: ` : ''}${r.ok ? 'the setting is in place' : w ? `not written. ${w.why} ${w.steps.join(', then ')}.` : `not written: ${routeReason(r)}`}`]]
-      })).values()], { home }),
-      ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)], { home }).join('\n'))
+    else io.out((details ? formatModelOnReceipt : formatModelOnText)(receipt, exit, home))
     return exit
   }
   /** 1.6 §1: a real run leaves its receipt in flows/ — its notes, then one `kind:'result'` line with the harnesses it turned on (`on`: turnOnModel's
@@ -67,7 +119,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     return out(receipt, exit)
   }
   // 附录 C.1: `undo` is the one line that undoes THIS run, and `null` when nothing was changed — no harness turned on, a refusal (its code in `error`, or `r.code`) changed nothing, and neither did a dry run (tested on macOS and Windows 2026-10-19)
-  const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, ...(extra.dry_run || r.code || extra.error || !r.on.length ? {} : { undo: UNDO_LINE.on }), harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...extra })
+  const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, ...(extra.dry_run || r.code || extra.error || !r.on.length ? {} : { undo: UNDO_LINE.on }), harnesses: r.on, refused: r.refused, ...(r.restart ? { restart: r.restart } : {}), routes: r.routes, notes: r.notes, problems: r.problems, ...extra })
   const { autostartBlock, AUTOSTART_MISSING, ensureDaemonUp } = await import('../collector/install.mjs')
   const plan = await turnOnModel({ ...args, dryRun: true })
   // a planned route whose entry hands the app a PAC (`value: 'pac-url'`): the one write the system proxy decides (4.11 §3 ③, the forms that follow it)
@@ -99,8 +151,19 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const isNew = (p) => seen.size > 0 && p.paths.some((x) => fresh.includes(x))
   // V85: trocar's own tree (the record, the desired state, ingress.json) is one more row; it is no setting of yours, so no yes is asked for it
   const own = ownTreeItem(home, os), planned = [...plan.planned, own]
-  if (plan.on.length) say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
+  // 1.6 §3.3「要确认时」: the default plan is printed when a yes is asked (or for --dry-run): one line per agent and file of yours, `new` on a file
+  // not confirmed last time, then each registered side effect of a route this on adds, once (a host-tree form's, the descriptor's `effects` by their
+  // short sentence) — under --yes, with no plan to print, the side effects alone, before the receipt. --details prints the full plan on every run.
+  const added = fresh.length ? plan.planned.filter((p) => !p.paths.length || p.paths.some((x) => fresh.includes(x))) : []
+  const effects = [...new Map(args.harnesses.filter((d) => added.some((p) => p.harness === d.name)).flatMap((d) => {
+    const forms = new Set(added.filter((p) => p.harness === d.name).flatMap((p) => p.forms || [])), pm = d.proxyMode || {}
+    return [...(pm.forms || []).filter((f) => f.hostTree && forms.has(f.id)).map((f) => [f.id, `${d.name}: ${hostTreeNote(f.id)}.`]), ...(pm.effects || []).map((e) => [e.id, `${d.name}: ${e.short || e.when}.`])]
+  })).values()]
+  if (plan.on.length && !details && (flags.has('--dry-run') || (fresh.length && !flags.has('--yes')))) {
+    say(fit(['trocar on will point these agents at trocar:', ...pairs(plan.planned.flatMap((p) => (p.paths.length ? p.paths.map((x) => [p.harness, `${tilde(x, home)}${seen.size && fresh.includes(x) ? '  new' : ''}`]) : plan.planned.some((q) => q.harness === p.harness && q.paths.length) ? [] : [[p.harness, 'no file of yours']])), { home }), ...effects], { home }).join('\n'))
+  } else if (plan.on.length && details) say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
     ...pairs([...plan.planned.map((p) => { const [h, v] = planLine(p, home); return [h, isNew(p) ? `${v} (new since you last said yes)` : v] }), [own.what, own.detail]], { home })], { home }).join('\n'))
+  else if (plan.on.length && effects.length) say(fit(effects, { home }).join('\n'))
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
   if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup, plan) }), EXIT.incomplete) // nothing to turn on: no daemon started
@@ -134,6 +197,12 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
     if (fresh.length && r.on.length && up.up) { // nothing new: nothing to save. A failure here is this run's problem, not a throw that loses its receipt (V104)
       try { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) } catch (e) { r.problems.push(`trocar could not record the files you said yes to (${errText(e)}); the next trocar on asks again`); r.exit = EXIT.incomplete }
+    }
+    if (up.up && (r.turnedOn || []).length) { // the processes started before capture was on (§3.3): only of the agents this run turned on
+      const rs = await restartOf({ dir, fs, ids: r.turnedOn.filter((h) => notOn.includes(h)), os, exec: deps.exec || null, env, procs: deps.procs,
+        reader: os !== 'win32' ? null : deps.daemonReader !== undefined ? deps.daemonReader : daemonReader({ platform: os, dir, env, fs }) })
+      r.restart = rs.restart
+      r.notes.push(...rs.notes)
     }
     const b = setupBlocked(r)
     // an on that an off stopped: its code is the receipt's error, and the harnesses it wrote before are undone by `trocar off` (附录 C.1)

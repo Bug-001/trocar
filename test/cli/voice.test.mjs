@@ -4,9 +4,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { andList, countsBy } from '../../src/cli/text.mjs'
-import { unsaidIn } from '../../src/cli/words.mjs'
-import { formatUninstallReceipt, formatUninstallText } from '../../src/cli/receipt.mjs'
+import { unsaidIn, loopbackWords } from '../../src/cli/words.mjs'
+import { hostTreeNote } from '../../src/collector/core/proxymode/entries.mjs'
+import { formatUninstallReceipt, formatUninstallText, formatOnReceipt, formatOnText, formatOnPlan } from '../../src/cli/receipt.mjs'
+import { formatModelOnReceipt, formatModelOnText } from '../../src/cli/on-model.mjs'
 import { newReceipt } from '../../src/off/schema.mjs'
+import { formatOffReceipt, formatOffText } from '../../src/off/receipt.mjs'
 
 const HOMES = { darwin: '/Users/alice', linux: '/home/alice', win32: 'C:\\Users\\alice' }
 const P = (platform) => (platform === 'win32' ? path.win32 : path.posix)
@@ -91,6 +94,131 @@ test('uninstall (§1.4): the trust store and the root key are trocar\'s own, nev
   assert.equal(plan.split('\n').filter((l) => /\.codex\\\.env/i.test(l)).length, 1, 'one file on Windows, whatever its case')
   const mac = formatUninstallText(receipt({ dry_run: true, changed: [{ path: path.join(HOMES.darwin, 'Library/Keychains/login.keychain-db'), change: 'stray root taken out' }] }), { home: HOMES.darwin, platform: 'darwin', tense: 'future', asking: true })
   assert.doesNotMatch(mac, /Keychains/)
+})
+
+// an off with something of every kind its receipt can hold: files restored, one with your later edits, a backup kept, the service, a cut, processes
+// still passing through, a file it could not undo (with the line that puts it back) and one the user must fix by a command
+const offReceipt = (over = {}, platform = 'darwin') => {
+  const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+  return {
+    ...newReceipt('off'), ok: true, all: true, harnesses: ['claude-code', 'codex', 'pi'], still_on: [],
+    changed: [{ path: j('.claude', 'settings.json'), harness: 'claude-code', change: 'env.HTTPS_PROXY', result: 'restored', backup: j('.trocar', 'backup', 'aa-1') },
+      { path: j('.codex', '.env'), harness: 'codex', change: 'HTTPS_PROXY', result: 'reverted-not-identical', backup: j('.trocar', 'backup', 'bb-2'), prior_left: [{ key: 'HTTPS_PROXY', line: 3 }] }],
+    removed: [j('.trocar', 'collector', 'switch', 'pi')], skipped: [],
+    kept_backups: [{ path: j('.claude', 'settings.json'), backup: j('.trocar', 'backup', 'cc-3'), reason: 'you changed it after trocar did' }],
+    daemon: { state: 'running', pid: 4012 }, relayed: { closing: 2, waiting: 0, cut: 0 }, routing: { confirmed: true, state: 'stopped' },
+    holders: [{ harness: 'codex', pid: 5530 }, { harness: 'codex', pid: 5531 }, { harness: 'pi', pid: 6677 }],
+    left: [], pending: [], residue: [], still_trusting: [], kept_bundles: [], user_processes: [], problems: [], notes: [], ...over,
+  }
+}
+const pidsOf = (r) => [...(r.holders || []).map((h) => h.pid), ...(r.daemon && r.daemon.pid ? [r.daemon.pid] : [])]
+const commandsOf = (r) => [...(r.left || []).flatMap((l) => [l.command, l.restore]), ...(r.blocked || []).map((b) => b.command), ...(r.refused || []).flatMap((x) => x.commands || [x.command])].filter(Boolean)
+const onItsOwnLine = (text, command) => text.split('\n').some((l) => l.trim() === command)
+
+test('off: the default text says no unsaid word and no pid; --details holds every path and pid; every command is on a line of its own', () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+    const failed = offReceipt({ ok: false, left: [{ path: j('.zcode', 'config.json'), harness: 'z-code', result: 'left-unparsable', reason: `${j('.zcode', 'config.json')}: trocar cannot read it; trocar's proxy setting may still be in it. The file as it was before trocar is kept at ${j('.trocar', 'backup', 'dd-4')}; by hand: cp a b (puts the whole file back)`, backup: j('.trocar', 'backup', 'dd-4'), restore: 'cp a b' },
+      { path: j('.kimi', 'x'), result: 'error', reason: 'it is locked', command: 'trocar off kimi-code' }], routing: { confirmed: false, state: 'unknown' }, notes: ['the process table could not be read (permission denied)'] }, platform)
+    for (const r of [offReceipt({}, platform), failed, offReceipt({ dry_run: true }, platform), offReceipt({ holders: null }, platform)]) {
+      const text = formatOffText(r, { home }), details = formatOffReceipt(r, { home })
+      assert.deepEqual(unsaidIn(text), [], `${platform}:\n${text}`)
+      for (const pid of pidsOf(r)) assert.ok(!text.includes(String(pid)), `${platform}: no pid in the default text:\n${text}`)
+      for (const pid of pidsOf(r)) assert.ok(details.includes(String(pid)), `${platform}: --details names pid ${pid}`)
+      const paths = [...r.changed.map((c) => c.path), ...r.removed, ...r.kept_backups.map((k) => k.backup), ...r.left.map((l) => l.path)]
+      for (const p of paths) assert.ok(details.includes(`~${p.slice(home.length)}`) || details.includes(p), `${platform}: --details names ${p}`) // src/off shows ~ by the host's separator
+      for (const c of commandsOf(r)) assert.ok(onItsOwnLine(text, c), `${platform}: ${c} on its own line:\n${text}`)
+      if (r.notes.length) assert.ok(text.includes(r.notes[0]), 'a fact not read stays in the default text (D38)')
+      if (r.dry_run) for (const c of r.changed) assert.ok(text.includes(`~${c.path.slice(home.length)}`) || text.includes(c.path), 'the plan names each file of yours')
+    }
+  }
+})
+
+test('off (D38): a fact it could not read is in the default text, the conclusion is not a bare "Capture is off", and the plan leaves ~/.trocar to --details', () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+    // the producers' own sentences (src/off/marker.mjs json-value, src/off/undo.mjs readDoorSeen), as they print them
+    const notes = [`${j('.codex', 'config.json')}: the file names a loopback proxy, and trocar cannot tell whether it is trocar's own (${j('.trocar', 'collector', 'ingress.json')} is missing); it was left as it is`,
+      `trocar's connection record ${j('.trocar', 'collector', 'door-seen.json')} is not JSON, so every running program of an agent that was on is counted as still connected`]
+    const flat = (s) => s.replace(/\s+/g, ' ')
+    for (const note of notes) {
+      const text = formatOffText(offReceipt({ notes: [note] }, platform), { home })
+      assert.deepEqual(unsaidIn(text), [], `${platform}:\n${text}`)
+      const sought = flat(note.split(home + path.sep).join(`~${path.sep}`)) // HOME as ~, by the host's separator as src/off says it
+      assert.ok(flat(text).includes(sought), `${platform}: the note is said:\n${text}`)
+      assert.notEqual(text.split('\n')[0], formatOffText(offReceipt({}, platform), { home }).split('\n')[0], 'the conclusion is not the one of an off that read everything')
+    }
+    const plan = formatOffText(offReceipt({ dry_run: true }, platform), { home }), details = formatOffReceipt(offReceipt({ dry_run: true }, platform), { home })
+    assert.ok(!plan.includes('.trocar'), `${platform}: trocar's own files are not in the default plan:\n${plan}`)
+    assert.ok(details.includes('switch'), `${platform}: --details keeps them`)
+  }
+})
+
+// an on with what its receipt can hold: files changed with backups, trocar's own files, processes to restart, a refusal with its commands, a
+// blocked step with its command, notes said once (loopback) and a problem
+const onReceipt = (over = {}, platform = 'linux') => {
+  const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+  return {
+    ...newReceipt('on'), ok: true, harnesses: ['claude-code', 'codex'], user: 'alice', linger: true, daemon: { state: 'running', pid: 4012 },
+    changed: [{ path: j('.claude', 'settings.json'), change: 'env.HTTPS_PROXY -> trocar', backup: j('.trocar', 'backup', 'aa-1') }],
+    created: [j('.trocar', 'collector', 'state.json')], unchanged: [], skipped: [],
+    restart: [{ harness: 'codex', pid: 5530 }, { harness: 'codex', pid: 5531 }],
+    refused: [{ harness: 'pi', reason: 'setup-needed', why: 'its certificate setting is missing', commands: ['trocar install'] }],
+    blocked: [{ what: 'trocar on', reason: 'the helper is missing', command: 'sudo /usr/bin/node /opt/trocar/bin/trocar.mjs setup-helper' }],
+    notes: ['requests to localhost, 127.0.0.1, ::1 (a model or relay on this computer) do not go through trocar and are not captured'], problems: [], ...over,
+  }
+}
+
+test('on (Linux): the default plan and receipt say no unsaid word and no pid; --details holds every path and pid; every command is on a line of its own', () => {
+  const home = HOMES.linux, r = onReceipt()
+  const text = formatOnText(r, { home }), details = formatOnReceipt(r, { home, platform: 'linux' })
+  assert.deepEqual(unsaidIn(text), [], text)
+  for (const pid of [...r.restart.map((x) => x.pid), r.daemon.pid]) { assert.ok(!text.includes(String(pid)), text); assert.ok(details.includes(String(pid)), `--details names ${pid}`) }
+  for (const p of [...r.changed.flatMap((c) => [c.path, c.backup]), ...r.created]) assert.ok(details.includes(`~${p.slice(home.length)}`), `--details names ${p}`)
+  for (const c of commandsOf(r)) assert.ok(onItsOwnLine(text, c), `${c}:\n${text}`)
+  assert.match(text, /^Restart codex to capture it/m, 'the processes started before are one line (§3.3)')
+  assert.ok(!text.includes('127.0.0.1'), 'the loopback note is said once, in --details')
+  const plan = { targets: ['claude-code', 'pi'], first: false, newPaths: [r.changed[0].path], entries: [{ harness: 'claude-code', path: r.changed[0].path, keys: ['env', 'HTTPS_PROXY'] }], manifest: P('linux').join(home, '.trocar', 'collector', 'install-manifest.json') }
+  const shown = formatOnPlan(plan, { home })
+  assert.deepEqual(unsaidIn(shown), [], shown)
+  assert.match(shown, /claude-code\s+~\/\.claude\/settings\.json\s+new$/m, 'a file not confirmed last time ends in new')
+  assert.match(shown, /^ {2}pi\s+no file of yours$/m)
+  assert.ok(!shown.includes('.trocar') && !shown.includes('HTTPS_PROXY'), "trocar's own files and the keys are --details facts")
+  assert.doesNotMatch(formatOnPlan({ ...plan, first: true }, { home }), /new$/m, 'the first on after install marks nothing new')
+})
+
+test('on (macOS / Windows): the default receipt says no unsaid word and no pid; --details holds every path and pid; every command is on a line of its own', () => {
+  for (const platform of ['darwin', 'win32']) {
+    const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
+    const hostTree = { harness: 'kimi-code', code: 'harness-note', form: 'kimi-code.vscode', text: hostTreeNote('kimi-code.vscode') } // a registered side effect: said once, in the plan
+    const pending = { harness: null, code: 'install-pending', item: 'root', state: 'declined', why: 'the trust store said no', command: 'trocar install' } // a form that only forwards (invariant 4)
+    const r = { ...onReceipt({}, platform), routes: [{ harness: 'claude-code', route: 'settings', at: j('.claude', 'settings.json'), ok: true }, { harness: 'codex', route: 'env', at: j('.codex', '.env'), ok: true },
+      { harness: 'z-code', route: 'cli', at: j('.zcode', 'config.json'), ok: false, code: 'not-routed', reason: 'own-egress' }, { harness: 'z-code', route: 'app', at: j('.zcode', 'app.json'), ok: false, code: 'not-routed', reason: 'blocker' }],
+      notes: [{ code: 'loopback-direct', hosts: ['localhost'], text: loopbackWords(['localhost']) }, hostTree, pending] }
+    const text = formatModelOnText(r, 1, home), details = formatModelOnReceipt(r, 1, home)
+    assert.deepEqual(unsaidIn(text), [], `${platform}:\n${text}`)
+    const prose = text.split('\n').filter((l) => !/^ {4}\S/.test(l)).join('\n')
+    for (const pid of r.restart.map((x) => x.pid)) { assert.ok(!prose.includes(String(pid)), text); assert.ok(details.includes(String(pid)), `${platform}: --details names ${pid}`) }
+    for (const x of r.routes) assert.ok(details.includes(`~${x.at.slice(home.length)}`) || details.includes(x.at), `${platform}: --details names ${x.at}`)
+    for (const c of [...r.refused.flatMap((x) => x.commands), 'trocar on z-code']) assert.ok(onItsOwnLine(text, c), `${c}:\n${text}`)
+    assert.ok(text.includes(pending.command) && text.includes(pending.why), 'a form that only forwards stays in the default text (invariant 4)')
+    for (const n of [hostTree, r.notes[0]]) { assert.ok(!text.includes(n.text), `said once elsewhere, not in the default text:\n${text}`); assert.ok(details.replace(/\s+/g, ' ').includes(n.text), '--details prints it') }
+  }
+})
+
+// A sentence another module wrote (a refusal's why, a problem, a note a read failed with) reaches on's default text with its internal words
+// in it; the default text says them the user's way (plainSentence), --details and --json keep them as written.
+test('on: a sentence another module wrote says no unsaid word in the default text, and --details keeps it as written', () => {
+  const why = 'the collector did not answer (ECONNREFUSED), so which forms it serves could not be read', problem = 'the daemon was started from other code'
+  const linux = onReceipt({ ok: false, refused: [{ harness: 'pi', reason: 'setup-needed', why, commands: ['trocar install'] }], problems: [problem], notes: [problem, `${why}: ENOENT`] })
+  const text = formatOnText(linux, { home: HOMES.linux })
+  assert.deepEqual(unsaidIn(text), [], text)
+  assert.ok(formatOnReceipt(linux, { home: HOMES.linux, platform: 'linux' }).replace(/\s+/g, ' ').includes(problem), '--details keeps the sentence as written')
+  for (const platform of ['darwin', 'win32']) {
+    const r = { ...onReceipt({}, platform), ok: false, routes: [], refused: [{ harness: 'pi', reason: 'setup-needed', why, commands: ['trocar install'] }], problems: [problem], notes: [{ harness: null, text: `${why} (ENOENT)` }] }
+    const shown = formatModelOnText(r, 1, HOMES[platform])
+    assert.deepEqual(unsaidIn(shown), [], `${platform}:\n${shown}`)
+  }
 })
 
 test('uninstall: a refusal (capture on, or the service not answering) is one short line and its steps; --json keeps the full message', () => {
