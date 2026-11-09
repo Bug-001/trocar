@@ -142,7 +142,8 @@ async function update({ io, env, home, platform, deps, flags }) {
     [`trocar update: capture could not be switched off for ${andList(ids)}, so nothing was changed. See why with trocar update --details.`])
 
   /** The handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the code says. */
-  const pending = async () => readHandover(handover, fs, deps.harnessIds || (await (await import('../collector/harness/index.mjs')).loadHarnesses()).map((h) => h.name))
+  // the harness index loads only when there is a file to read: a run with none (most) does not import it
+  const pending = async () => (fs.existsSync(handover) ? readHandover(handover, fs, deps.harnessIds || (await (await import('../collector/harness/index.mjs')).loadHarnesses()).map((h) => h.name)) : null)
   const resume = async (waiting, answered = false, told = []) => {
     if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this trocar has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
     const gone = await noFormHere(waiting.on, { platform, home, env, fs, deps })
@@ -257,12 +258,20 @@ async function update({ io, env, home, platform, deps, flags }) {
   if (waiting) {
     if (checked.refusal) return resume(waiting, false, notPulled(checked.refusal.why, checked.refusal.short))
     if (checked.head === checked.target) return resume(waiting)
-    r.from = waiting.from || r.from; r.harnesses = waiting.on
+    // step 1 for what is on now (an on run by hand since, or a finish whose on got part of the way): the code that wrote an entry undoes it
+    // before the code changes, and the file names it too, so the new code switches it on again (§5.5)
+    const on = harnessesOn({ home, fs })
+    if (on.error) return resume(waiting, false, notPulled(on.error, 'which agents are being captured could not be read'))
+    const all = [...new Set([...waiting.on, ...on.ids])]
+    r.from = waiting.from || r.from; r.harnesses = all
     r.to = codeIdOf(upstreamVersion(git, root, fs), checked.target)
-    const g = await gate([[ROW.version, `${r.from} -> ${r.to}`], [ROW.switchedOn, waiting.on.join(', ') || 'nothing was being captured']],
-      [{ what: 'code', detail: `an update is waiting to be finished: the code of this machine's trocar goes to ${r.to} first, and that code finishes it`, harnesses: waiting.on }], CUT, false, [updateLine(r.from, r.to).replace(/\.$/, ', and finish the update that stopped.'), offUntil(waiting.on)])
+    const g = await gate([[ROW.version, `${r.from} -> ${r.to}`], [ROW.switchedOn, all.join(', ') || 'nothing was being captured']],
+      [{ what: 'code', detail: `an update is waiting to be finished: the code of this machine's trocar goes to ${r.to} first, and that code finishes it`, harnesses: all }], CUT, false, [updateLine(r.from, r.to).replace(/\.$/, ', and finish the update that stopped.'), offUntil(all)])
     if (g !== null) return g
-    return pullAndHand(checked, waiting.on, async (why) => resume(waiting, true, notPulled(why, 'the fast-forward failed')))
+    const finishHere = (why, short) => resume({ ...waiting, on: all }, true, notPulled(why, short)) // what was switched off is switched on again
+    if (on.ids.length && (await step(deps.off || runOffCli, [...on.ids, '--yes', '--json'], { io, env, home, platform, deps })).exit !== EXIT.ok) return finishHere(`${on.ids.join(', ')} could not be switched off`, 'capture could not be switched off first')
+    try { writeHandover(handover, { from: waiting.from, on: all }, fs) } catch (e) { return finishHere(`this update could not be written down (${(e && e.message) || e})`, 'the update could not be written down') }
+    return pullAndHand(checked, all, async (why) => finishHere(why, 'the fast-forward failed'))
   }
   if (checked.refusal) return no(checked.refusal.code, checked.refusal.message)
   const { head, target } = checked

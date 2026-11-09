@@ -393,6 +393,39 @@ test('§5.5: a waiting update.json whose newer code cannot be pulled is finished
   }
 })
 
+// §5.5 step 1: an agent on when the pull comes (switched on by hand since, or by a finish that got part of the way) is switched off by the code
+// that wrote its entries, before the code changes, and the file names it, so the new code switches it on again
+test('§5.5: a waiting update that pulls switches off what is on first and adds it to update.json', async () => {
+  const s = sandbox({ on: ['opencode'] })
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  const target = s.ahead('on-since.md')
+  const t = ctx(s)
+  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(t.calls.off.map((a) => a.filter((x) => !x.startsWith('--'))), [['opencode']], 'what is on goes off with the old code')
+  assert.deepEqual([head(s.root), t.calls.child.length], [target, 1])
+  assert.deepEqual(s.handover(), { from: '0.1.0+0000000', on: ['codex', 'opencode'] }, 'the new code switches both on')
+})
+
+test('§5.5: the process a pull started finishes with its code, whatever upstream has since; a merge that fails finishes with the code here', async () => {
+  const s = sandbox()
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  s.ahead('after-the-pull.md')
+  const was = head(s.root)
+  const child = ctx(s, { env: { [HANDED_OVER]: '1' } })
+  assert.equal(await runUpdateCli(['--yes'], child.c), EXIT.ok, child.io.text())
+  assert.deepEqual([head(s.root), child.calls.child, child.calls.on.map((a) => a.filter((x) => !x.startsWith('--'))), s.handover()], [was, [], [['codex']], null], 'no second pull, no second process')
+
+  const m = sandbox()
+  fs.writeFileSync(path.join(m.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  m.ahead('merge-refused.md')
+  const before = head(m.root)
+  const exec = (file, args, opts) => (args.includes('merge') ? { status: 1, stdout: '', stderr: 'merge refused' } : spawnSync(file, args, opts))
+  const t = ctx(m, { deps: { exec } })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual([head(m.root), t.calls.child, t.calls.on.map((a) => a.filter((x) => !x.startsWith('--'))), m.handover()], [before, [], [['codex']], null])
+  assert.ok(t.io.json().notes.length >= 1, 'a note says the newest code was not pulled')
+})
+
 // ── V96 · the finish ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('V96: with a handover file the new code installs, switches the named harnesses on and removes the file; an `on` that fails keeps it, exit 1', async () => {
   const s = sandbox()
