@@ -169,13 +169,14 @@ test('on (Linux): the default plan and receipt say no unsaid word and no pid; --
 test('on (macOS / Windows): the default receipt says no unsaid word and no pid; --details holds every path and pid; every command is on a line of its own', () => {
   for (const platform of ['darwin', 'win32']) {
     const home = HOMES[platform], j = (...x) => P(platform).join(home, ...x)
-    const r = { ...onReceipt({}, platform), routes: [{ harness: 'claude-code', route: 'settings', at: j('.claude', 'settings.json'), ok: true }, { harness: 'codex', route: 'env', at: j('.codex', '.env'), ok: true }],
+    const r = { ...onReceipt({}, platform), routes: [{ harness: 'claude-code', route: 'settings', at: j('.claude', 'settings.json'), ok: true }, { harness: 'codex', route: 'env', at: j('.codex', '.env'), ok: true },
+      { harness: 'z-code', route: 'cli', at: j('.zcode', 'config.json'), ok: false, code: 'not-routed', reason: 'own-egress' }, { harness: 'z-code', route: 'app', at: j('.zcode', 'app.json'), ok: false, code: 'not-routed', reason: 'blocker' }],
       notes: [{ code: 'loopback-direct', hosts: ['localhost'], text: 'requests to localhost are not captured' }, { harness: 'codex', code: 'harness-note', form: 'codex.vscode', text: 'codex.vscode runs inside another program: trocar passes those connections on without capturing them' }] }
     const text = formatModelOnText(r, 1, home), details = formatModelOnReceipt(r, 1, home)
     assert.deepEqual(unsaidIn(text), [], `${platform}:\n${text}`)
     for (const pid of r.restart.map((x) => x.pid)) { assert.ok(!text.includes(String(pid)), text); assert.ok(details.includes(String(pid)), `${platform}: --details names ${pid}`) }
     for (const x of r.routes) assert.ok(details.includes(`~${x.at.slice(home.length)}`) || details.includes(x.at), `${platform}: --details names ${x.at}`)
-    for (const c of r.refused.flatMap((x) => x.commands)) assert.ok(onItsOwnLine(text, c), `${c}:\n${text}`)
+    for (const c of [...r.refused.flatMap((x) => x.commands), 'trocar on z-code']) assert.ok(onItsOwnLine(text, c), `${c}:\n${text}`)
     assert.ok(text.includes('codex.vscode runs inside another program'), 'a form that only forwards stays in the default text (invariant 4)')
     assert.ok(!text.includes('requests to localhost'), 'the loopback note is --details only')
   }

@@ -36,7 +36,7 @@ function shortReceipt(r, exit, home) {
     const w = routeRefusal({ h: x.harness, reason: x.reason, at })
     if (!w) return [`${x.harness}${at ? ` (${at})` : ''} was not turned on: ${routeReason(x)}.`]
     const said = w.steps.filter((t) => !t.startsWith('run: ')), runs = w.steps.filter((t) => t.startsWith('run: ')).map((t) => t.slice(5))
-    return [`${x.harness}${at ? ` (${at})` : ''} was not turned on. ${w.why} ${[...said, ...(runs.length ? ['run:'] : [])].join(', then ')}${runs.length ? '' : '.'}`, ...runs.map(commandLine)]
+    return [`${x.harness}${at ? ` (${at})` : ''} was not turned on: ${routeReason({ code: 'not-routed', ...x })}. ${[...said, ...(runs.length ? ['run:'] : [])].join(', then ')}${runs.length ? '' : '.'}`, ...runs.map(commandLine)] // the reason in on's own words (the doctor's say entry)
   })
   return [r.dry_run ? `trocar on would start capturing ${andList(r.harnesses) || 'no agent'}. Nothing was written.`
     : exit === 0 && !r.harnesses.length ? 'Nothing to capture: no agent trocar covers is set up on this machine.'
