@@ -295,16 +295,17 @@ const runOn = async (w, argv) => {
   const { runOnCli } = await import('../../src/cli/on.mjs')
   const out = [], io = { out: (s) => out.push(s), err: (s) => out.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {}, text: () => out.join('\n') }
   const unit = { path: '/nowhere/unit', text: () => '', registered: () => ({ state: 'present' }) }
-  const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+  const deps = { getuid: () => 501, procs: async () => [], exec: () => ({ status: 0, stdout: '<dictionary> {\n}\n', stderr: '' }), backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
   const exit = await runOnCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps })
   return { exit, text: io.text() }
 }
-async function inPlaceWorld(onFirst) {
+async function inPlaceWorld(onFirst, { commands = ['codex', 'opencode'], apps = [] } = {}) {
   const fs = (await import('node:fs')).default
   const { modelWorld } = await import('../helpers/model-world.mjs')
   const { renderWrapper } = await import('../../src/collector/arch/darwin/wrapper.mjs')
   const { startControlServer } = await import('../../src/collector/core/control.mjs')
-  const w = await modelWorld({ os: 'darwin', commands: ['codex', 'opencode'] })
+  const w = await modelWorld({ os: 'darwin', commands })
+  for (const a of apps) fs.mkdirSync(path.join(w.home, 'Applications', a), { recursive: true })
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
   const { tmpDir } = await import('../helpers/tmp.mjs')
   const sock = path.join(tmpDir('sock'), 'c.sock'), token = 't'.repeat(32) // outside HOME: the tree's bytes are compared
@@ -383,6 +384,17 @@ test('on --dry-run (macOS): an agent whose record is for another file than the o
     saveManifest(w.dir, m, fs)
     const dry = await runOn(w, ['--dry-run'])
     assert.ok(named(dry.text, f), `codex's planned file is in the plan\n${dry.text}`)
+  } finally { await server.close() }
+})
+
+test('on --dry-run (macOS): a route that writes into a folder (Claude\'s config library) is in place when its entry file is intact', async () => {
+  const { w, server, planned } = await inPlaceWorld(['claude-code', 'codex'], { commands: ['claude', 'codex'], apps: ['Claude.app'] })
+  try {
+    const lib = planned.find((p) => p.harness === 'claude-code' && p.paths.some((f) => !path.extname(f)))
+    assert.ok(lib, `the sandbox plans a folder route\n${JSON.stringify(planned)}`)
+    const dry = await runOn(w, ['--dry-run'])
+    assert.ok(!dry.text.split('\n').some((l) => l.startsWith('  claude-code')), `no plan row for claude-code\n${dry.text}`)
+    assert.ok(dry.text.split('\n').some((l) => l.includes('claude-code') && l.includes('codex')), `one line names both\n${dry.text}`)
   } finally { await server.close() }
 })
 
