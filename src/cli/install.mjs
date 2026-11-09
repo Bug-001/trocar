@@ -29,8 +29,8 @@ function needsYes(io, json, planned = [], left = []) {
   if (json) printJson(io, { ...newReceipt('install'), ok: false, planned, ...(left.length ? { left } : {}), needs_yes: true, notes: [NEEDS_YES] }); else io.err(NEEDS_YES)
   return EXIT.usage
 }
-const USAGE = 'usage: trocar install [--dry-run] [--yes] [--json]'
-const FLAGS = new Set(['--dry-run', '--yes', '--json'])
+const USAGE = 'usage: trocar install [--dry-run] [--yes] [--details] [--json]'
+const FLAGS = new Set(['--dry-run', '--yes', '--details', '--json']) // --details: today's text is the full one (1.6 §1.1 ④)
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 // 1.6 §3.2: the two lines every plan prints — what being installed costs, and on macOS / Windows the same-user residual risk
 const COST = "While installed, programs you run trust certificates issued by this machine's trocar root. Remove it: trocar uninstall"
