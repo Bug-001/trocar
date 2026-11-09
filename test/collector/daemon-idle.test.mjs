@@ -60,7 +60,7 @@ for (const platform of ['darwin', 'win32']) {
       box = await liveUnit({ w, platform, io: ioFor(platform), daemon: { fork: workerFork } })
       await withScratchCwd(platform, async () => {
         const io = fakeIo()
-        const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text())
         const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
         const st = await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status' })

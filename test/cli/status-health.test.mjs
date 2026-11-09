@@ -110,6 +110,18 @@ test('C.3 failures: each count is the sum of its level\'s group counts, a resolv
   assert.equal(Date.parse(f.since), Date.parse(health.generated_at) - 24 * 3600e3)
 })
 
+// C.3: `latest` is the newest of what `problem` counts; a newer note (a resolved group, an upstream wait) is not "the latest problem"
+test('C.3 failures: latest is the newest problem record, never a newer note group', async () => {
+  const health = healthOver([
+    { ts: at(500), event: 'failure', where: 'engine', code: 'tls-client-error', reason: 'c' },
+    { ts: at(100), event: 'failure', where: 'engine', code: 'upstream-slow', reason: 'w' },
+  ])
+  const f = (await sandbox().run(['status', '--json'], { deps: { captureHealth: () => health } })).io.json().failures
+  const newest = (level) => f.groups.filter((g) => g.level === level).map((g) => g.last_ts).sort().at(-1)
+  assert.ok(newest('note') > newest('problem'), `the shape: a note newer than the problem: ${JSON.stringify(f.groups)}`)
+  assert.equal(f.latest, newest('problem'))
+})
+
 test('D38: doctor counts the capture failures status counts, from the same read: one failure fed, both documents carry it', async () => {
   const s = sandbox()
   for (const [recs, n] of [[[{ ts: at(60), event: 'failure', where: 'engine', code: 'upstream-cert', reason: 'r' }], 1], [[], 0]]) {

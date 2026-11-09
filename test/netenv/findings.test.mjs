@@ -523,6 +523,32 @@ test('V66 process-unknown `named` (a preset name whose args missed, e.g. the Z C
   assert.doesNotMatch(f.why, /is on no list/)
 })
 
+// 4.11 P4b (driver mode): a needed setup is what `on` refuses on (precondition ⑪), so when the verdict's entry-missing and the setup's carrier-absent are one
+// finding, its fix is the setup's, `trocar install`; the verdict alone keeps `trocar on`
+test('4.11 P4b: entry-missing with a needed setup (carrier-absent) says trocar install; without the setup, trocar on', () => {
+  const run = (hOver) => findingsOf(facts('claude-code', {}, { entry: { state: 'missing' }, procs: [], installed: true, ...hOver }), ['claude-code']).filter((f) => f.code === 'entry-missing').map((f) => f.commands.map((c) => c.run))
+  assert.deepEqual(run({ setup: { state: 'needed', missing: [{ form: 'claude-code', what: 'carrier-absent' }], uncaptured: [] } }), [['trocar install']])
+  assert.deepEqual(run({}), [['trocar on claude-code']])
+})
+
+// 4.11 P4b (driver mode): while the setup is needed `on` refuses, so every fix of the harness that runs `trocar on` has what lets it run just before,
+// `trocar install` — whatever the finding's code (a verdict `entry-changed` beside setup `carrier-absent`, or capture off)
+test('4.11 P4b: with a needed setup, each of the harness\'s fixes that runs trocar on has the setup\'s steps just before it', () => {
+  const setup = { state: 'needed', missing: [{ form: 'claude-code', what: 'carrier-absent' }], uncaptured: [] }
+  const fixes = (over, hOver) => findingsOf(facts('claude-code', over, { procs: [], installed: true, setup, ...hOver }), ['claude-code'])
+  const ons = (fs) => fs.filter((f) => f.commands.some((c) => /^trocar on\b/.test(c.run)))
+  for (const fs of [fixes({}, { entry: { state: 'changed' } }), fixes({ desired: { 'claude-code': 'off' } }, {})]) {
+    assert.ok(ons(fs).length, `the shape: a fix that runs trocar on: ${JSON.stringify(fs.map((f) => [f.code, f.commands]))}`)
+    for (const f of ons(fs)) { const runs = f.commands.map((c) => c.run); assert.equal(runs[runs.findIndex((r) => /^trocar on\b/.test(r)) - 1], 'trocar install', `${f.code}: ${JSON.stringify(runs)}`) }
+  }
+  // the steps are the setup's own: marked text with no record is not set up by install alone (附录 B), so its steps come before trocar on
+  const marked = findingsOf(facts('claude-code', {}, { procs: [], installed: true, entry: { state: 'changed' }, setup: { state: 'needed', missing: [{ form: 'claude-code', what: 'marked-without-record' }], uncaptured: [] } }), ['claude-code'])
+  const steps = findingFor('marked-without-record').commands.map((c) => c.run)
+  for (const f of ons(marked)) { const runs = f.commands.map((c) => c.run), at = runs.findIndex((r) => /^trocar on\b/.test(r)); assert.deepEqual(runs.slice(at - steps.length, at), steps, `${f.code}: ${JSON.stringify(runs)}`) }
+  // without the setup, the same fixes are as they were
+  assert.ok(ons(findingsOf(facts('claude-code', {}, { procs: [], installed: true, entry: { state: 'changed' } }), ['claude-code'])).every((f) => f.commands[0].run !== 'trocar install'))
+})
+
 test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the route record\'s reason and place), and uninstall\'s collectors-online gives trocar off then trocar uninstall', async () => {
   const nr = (reason, at) => findingsOf(pfacts('hermes', form('hermes.cli', { entry: null, route: { code: 'not-routed', reason, ...(at ? { at } : {}) }, procs: [] }), fwForm(17993), { platform: 'darwin' }), ['hermes']).find((f) => f.code === 'not-routed')
   const absent = nr('absent', '/Users/a/.hermes/.env')

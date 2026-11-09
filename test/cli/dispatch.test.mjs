@@ -182,6 +182,16 @@ test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cann
   assert.equal((await s.run(['daemon'], { deps: { startDaemon: async () => { throw new Error('the port is taken') } } })).exit, 1)
 })
 
+test('D38: the daemon log carries a dying query worker\'s last stderr lines under its record line', async () => {
+  const s = await installedViaCli()
+  const died = Object.assign(new Error('the query worker exited (signal SIGABRT): FATAL ERROR: heap out of memory'), { code: 'query-failed', detail: ['<--- Last few GCs --->', 'FATAL ERROR: heap out of memory'] })
+  const r = await s.run(['daemon'], { deps: { startDaemon: async ({ log }) => { log('daemon', died); throw new Error('the port is taken') } } })
+  const lines = r.io.text().split('\n')
+  const at = lines.findIndex((l) => l.includes('[daemon] the query worker exited (signal SIGABRT)'))
+  assert.ok(at >= 0, r.io.text())
+  assert.deepEqual(lines.slice(at + 1, at + 3).map((l) => l.replace(/^.*\|\s?/, '')), died.detail)
+})
+
 test('the real bin: --version, help, help off, an unknown command, `daemon --bogus` and `classes set` of an unknown class (sandbox HOME, no OS tool)', () => {
   const home = tmpDir('trocar-bin-')
   const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', TROCAR_TEST_SANDBOX: '1' }
