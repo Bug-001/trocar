@@ -99,8 +99,11 @@ export function windowCalls(lane, anchorTs, view) {
   const first = (pred) => { let a = 0, b = calls.length; while (a < b) { const m = (a + b) >> 1; if (pred(toMs(calls[m].ts))) b = m; else a = m + 1 } return a }
   const from = lo > 0 && lo < n ? first((t) => t >= anchorTs[lo]) : 0
   const to = hi < n ? first((t) => t > anchorTs[hi]) : calls.length
+  // a window past step 0, or before the last step with no held step after it, has no place for a call outside its held rows: the rows
+  // of those steps are not here, so stepPos would pile the call at the edge (1.3 §叠加轨)
+  const t0 = view.cutBefore ? anchorTs[lo] : -Infinity, t1 = view.cutAfter && hi >= n ? anchorTs[n - 1] : Infinity
   const out = []
-  for (let i = from; i < to; i++) if (inWindow(anchorTs, view, calls[i].ts)) out.push({ c: calls[i], i })
+  for (let i = from; i < to; i++) { const t = toMs(calls[i].ts); if (t >= t0 && t <= t1 && inWindow(anchorTs, view, calls[i].ts)) out.push({ c: calls[i], i }) }
   return out
 }
 // index of the lane call nearest in time (over EVERY call, not just the drawn ticks); `fallback` is kept when ts is unparsable

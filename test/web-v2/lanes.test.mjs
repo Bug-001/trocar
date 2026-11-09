@@ -51,6 +51,27 @@ test('stepPos is the walked step position, and windowCalls is exactly the calls 
   }
 })
 
+// 1.3 §叠加轨: a window over held rows that do not reach the session's first or last step has no place for a call outside them: one
+// before its first held step (when the window starts past step 0) or after its last (when steps after it are not held) is culled, never
+// piled at the rail's edge
+test('1.3 · windowCalls: a window past step 0 draws no call before its first step; one ending before the last step, with no held step after it, none after its last', () => {
+  for (let seed = 1; seed <= 40; seed++) {
+    const r = rng(seed), int = (lo, hi) => lo + Math.floor(r() * (hi - lo + 1))
+    const n = int(1, 30)
+    let t = T0
+    const anchorTs = Array.from({ length: n }, () => (t += int(1, 5000)))
+    const calls = Array.from({ length: int(1, 60) }, () => T0 - 20000 + Math.floor(r() * (t - T0 + 40000))).sort((x, y) => x - y).map((ms, i) => ({ rid: `r${i}`, ts: iso(ms) }))
+    for (let lo = 0; lo < n; lo++) for (let hi = lo + 1; hi <= n; hi++) for (const cutBefore of [false, true]) for (const cutAfter of [false, true]) {
+      const got = windowCalls({ calls }, anchorTs, { lo, hi, cutBefore, cutAfter }).map(({ c }) => Date.parse(c.ts))
+      const plain = windowCalls({ calls }, anchorTs, { lo, hi }).map(({ c }) => Date.parse(c.ts))
+      const at = `seed ${seed} [${lo}, ${hi}) ${cutBefore} ${cutAfter}`
+      if (cutBefore) assert.ok(got.every((ms) => ms >= anchorTs[lo]), at)
+      if (cutAfter && hi === n) assert.ok(got.every((ms) => ms <= anchorTs[n - 1]), at)
+      assert.deepEqual(got, plain.filter((ms) => (!cutBefore || ms >= anchorTs[lo]) && (!(cutAfter && hi === n) || ms <= anchorTs[n - 1])), `${at}: nothing else is culled`)
+    }
+  }
+})
+
 test('2.1 #11 · the lane kind table covers the server\'s kinds: every harness aux kind is event-only and named; token-count alone is no lane; no word holds an emoji', () => {
   const { 'token-count': tc, ...lanes } = LANE_KIND
   assert.ok(tc && !laneMeta('token-count'))

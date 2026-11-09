@@ -111,12 +111,13 @@ export function panSpan(prev, c, g, K) {
   const w = prev.hi - prev.lo, lo = Math.max(c.s0, Math.min(c.s1 - w, Math.round(g - w / 2)))
   return { lo, hi: lo + w }
 }
-// the span in the anchor lane's local indexes; `none` while a step of it is not held or the rows are not contiguous there
+// the span in the anchor lane's local indexes; `none` while a step of it is not held or the rows are not contiguous there. `cutBefore` /
+// `cutAfter`: steps lie before / after the span, so a call the held rows cannot place there is not in it (windowCalls, 1.3 §叠加轨)
 export function anchorSpan(s, { lo, hi }) {
   const a = s.anchor, none = { lo: 0, hi: 0, none: true }
   if (!a || hi <= lo) return none
   const first = a.ridLocal.get(ridAt(s.desk, a.id, lo))
   if (first == null) return none
   for (let g = lo + 1; g < hi; g++) if (a.ridLocal.get(ridAt(s.desk, a.id, g)) !== first + g - lo) return none
-  return { lo: first, hi: first + hi - lo }
+  return { lo: first, hi: first + hi - lo, cutBefore: lo > 0, cutAfter: hi < stepCount(s) }
 }
