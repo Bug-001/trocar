@@ -366,3 +366,46 @@ export function statusNote(code, opts) {
   const r = statusReason(code, opts)
   return r && [r.text, r.fix, r.command && `run: ${r.command}`].filter(Boolean).join('; ')
 }
+
+// ── the default text's words (1.6 §1.1 ④, D58 ⑦) ─────────────────────────────────────────────────────────────────────────────────────────────
+/** The default text's sentence where the shared one (the board's, and `--details`') says a word of UNSAID: by failure code, and by status
+ *  reason. Everything else reads the shared tables as they are. */
+export const PLAIN_FAILURE = Object.freeze({
+  'late-write': "a record arrived after trocar's service stopped and was not written",
+  'door-record-unreadable': "trocar's record of which programs used it could not be read",
+  'classes-bad-entry': 'the traffic class table holds an item trocar cannot use',
+  'home-mismatch': "install or uninstall was refused: HOME is not your account's home, which the login item uses",
+})
+export const PLAIN_REASON = Object.freeze({
+  'var-missing': "this process's environment does not carry trocar's certificate",
+  'file-unreadable': 'the certificate file its setting points to could not be read',
+  shadowed: "a higher-priority setting without trocar's certificate overrides trocar's",
+  'marker-stale': "the trust plugin's mark belongs to an earlier process with the same number",
+  'environ-unreadable': "this process's environment could not be read, so whether it carries trocar's certificate is not known",
+  'config-unreadable': 'one of its config files could not be read, so the certificate setting in it does not count',
+  'settings-unparsable': 'one of its settings files could not be parsed, so the certificate setting in it does not count',
+  'autostart-missing': "trocar's login item is not registered or is switched off",
+  'agent-list-invalid': '~/.trocar/agents.json has bad items; the rest is still used',
+})
+const PLAIN_FIX = Object.freeze({ 'agent-list-invalid': 'fix or remove those items; no restart is needed' })
+/** statusReason in the default text's words (PLAIN_REASON, PLAIN_FIX). */
+export const plainReason = (code, opts) => { const r = statusReason(code, opts); return r && { ...r, ...(Object.hasOwn(PLAIN_REASON, code) ? { text: PLAIN_REASON[code] } : {}), ...(Object.hasOwn(PLAIN_FIX, code) ? { fix: PLAIN_FIX[code] } : {}) } }
+/** statusNote in the default text's words. */
+export const plainNote = (code, opts) => { const r = plainReason(code, opts); return r && [r.text, r.fix, r.command && `run: ${r.command}`].filter(Boolean).join('; ') }
+const STATUS_CODE = /^[a-z][a-z0-9-]*$/
+const REFUSED = new Set(['client-rejected-leaf', 'trust-rejected']) // a program refused trocar's certificate: `status <agent>` names the hosts and the fix
+const upper = (s) => s.replace(/^./, (m) => m.toUpperCase())
+/** One failure group (C.3 `failures.groups[]`) as `status --failures` says it by default: `{ text, todo }`, what happened and what to do ('' when
+ *  nothing). A reason that is itself a status code (a connection passed on unread because its program started before capture) says that reason, so
+ *  two groups of one cause read as one; the code, the raw reason and the program stay in `--details`. A code no table knows says so, never its name. */
+export function plainFailure(g) {
+  const h = (g && g.harness) || ''
+  const byReason = g && typeof g.reason === 'string' && STATUS_CODE.test(g.reason) ? plainReason(g.reason, { harness: h }) : null
+  const byCode = plainReason(g && g.code, { harness: h })
+  const shared = failureWord(g && g.where, g && g.code, h, g && g.cause)
+  const text = (byReason && byReason.text) || (Object.hasOwn(PLAIN_FAILURE, g && g.code) ? PLAIN_FAILURE[g.code] : null)
+    || (byCode && shared === statusReason(g.code, { harness: h }).text ? byCode.text : shared) // the shared word came from statusReason: its plain one
+  const r = h ? byReason || byCode : null // the shared clauses name the agent; with none they would say "it"
+  const todo = r && r.fix ? `${upper(r.fix)}.` : r && r.command ? `Run: ${r.command}` : h && REFUSED.has(g.code) ? `See: trocar status ${h}` : ''
+  return text ? { text, todo } : { text: 'a problem trocar has no sentence for yet', todo: 'See: trocar status --failures --details' }
+}

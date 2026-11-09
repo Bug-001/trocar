@@ -197,10 +197,10 @@ export const FINDINGS = {
     commands: (c) => [gui(c.u.name == null ? unknownValue('name', 'the name of that process could not be read') : c.u.wide ? `An interpreter name needs its script name, which trocar does not keep: add ${c.u.name} with an "args" pattern to the agents list in ${c.listPath}`
       : c.u.named ? `A line without "args" would claim every process named ${c.u.name}: add this one with its own "args" pattern to the agents list in ${c.listPath}`
       : `Add ${JSON.stringify({ harness: c.h, name: c.u.name })} to the agents list in ${c.listPath} (create it as {"version":1,"agents":[...]} if it is not there); no restart needed`)], verify: (c) => `trocar status ${c.h}` },
-  'agent-list-invalid': { cls: 'problem', trocarFirst: false, what: (c) => `${c.file.path} has ${c.file.problems.length} bad entr${c.file.problems.length === 1 ? 'y' : 'ies'}; the rest is still used.`, why: (c) => (c.file.state === 'ok' ? 'A bad entry does not apply; the others do.' : 'The whole file does not apply, so only the built-in names are used.'),
+  'agent-list-invalid': { cls: 'problem', trocarFirst: false, what: (c) => `${c.file.path} has ${c.file.problems.length} bad item${c.file.problems.length === 1 ? '' : 's'}; the rest is still used.`, why: (c) => (c.file.state === 'ok' ? 'A bad item does not apply; the others do.' : 'The whole file does not apply, so only the built-in names are used.'),
     commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `Fix ${c.file.path}` : `Fix or remove entry ${p.index + 1} of ${c.file.path}`}: ${p.detail}`)), verify: () => 'trocar status' },
   // D61: the login entry is install's; without it nothing of trocar starts after the next login (status's read of registered(), the question on asks)
-  'autostart-missing': { cls: 'problem', trocarFirst: true, what: (c) => (c.F.autostart.state === 'unknown' ? 'Whether trocar\'s login entry is registered could not be read, so trocar may not start after the next login.' : 'trocar\'s login entry is not registered or is switched off, so trocar does not start after the next login.'),
+  'autostart-missing': { cls: 'problem', trocarFirst: true, what: (c) => (c.F.autostart.state === 'unknown' ? 'Whether trocar\'s login item is registered could not be read, so trocar may not start after the next login.' : 'trocar\'s login item is not registered or is switched off, so trocar does not start after the next login.'),
     why: (c) => `${c.F.autostart.reason.replace(/^./, (m) => m.toUpperCase())}; without it the agents trocar points at cannot connect after a restart.`, commands: (c) => [trocar(c, 'trocar install')], verify: () => 'trocar status' },
   'cert-key-missing': { cls: 'problem', trocarFirst: true, what: () => 'The key for trocar\'s root is gone, so trocar only forwards.', why: () => 'It was removed from your keychain or key store.', commands: (c) => [trocar(c, 'trocar install')], verify: () => 'trocar status' },
   'cert-intermediate-unavailable': { cls: 'problem', trocarFirst: false, what: () => 'trocar cannot sign certificates right now, so it only forwards.', why: () => 'There is no desktop login session, or your keychain is locked.',
@@ -340,15 +340,27 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
  * The findings as lines for a person (附录 B · §3.7): a problem or an expected finding is numbered, a note is prefixed `Note:`; then `Fix` with one command
  * to a line and `Check` with the one that verifies it. Wrapped to 80 columns, except a path or a command, which keeps its own line unbroken.
  */
-export function renderFindings(findings, { width = 80 } = {}) {
+// ── the default text (1.6 §3.7, §1.1 ④): a pid only in --details ─────────────────────────────────────────────────────────────────────────────────────
+const PID_COMMAND = /^(?:kill|Stop-Process -Id) \d+$/ // the commands restartSteps and collectors-online fill in with a pid
+const NO_ACTION = /^No action needed\b/ // the step of an expected finding that asks nothing of you
+/** A finding's sentence without the pids it names: `: pid N started` is `: it was started`, `(pid N, M)` goes, any other `pid N` is `a process`. */
+export const noPid = (s) => String(s).replace(/: pid \d+ started/g, ': it was started').replace(/ \(pid [^)]*\)/g, '').replace(/: pid \d+\./g, '.').replace(/\bpid \d+\b/g, 'a process')
+/** Does an expected finding ask something of you (a step that is not 「No action needed」)? Capture that is off is your choice, not a step. */
+export const needsYou = (f) => f.class === 'expected' && f.code !== 'desired-off' && f.commands.some((c) => !NO_ACTION.test(c.run))
+
+/** The findings as `doctor` prints them: numbered problems and expected findings, then notes. `short` (the default text): no why, no pid, and a
+ *  command that needs one is left to --details; a finding with `see` points there in one line instead of Fix and Check. */
+export function renderFindings(findings, { width = 80, short = false } = {}) {
   const lines = []
   let n = 0
   for (const f of fold(findings)) {
     const head = f.class === 'note' ? 'Note: ' : `${(n += 1)}. `
     const pad = ' '.repeat(head.length)
-    lines.push(...wrap(`${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
-    if (f.why) lines.push(...wrap(f.why, width - head.length).map((l) => pad + l))
-    f.commands.forEach((c, i) => {
+    if (short && lines.length) lines.push('') // the default text: a blank line between findings (§3.7's sample)
+    lines.push(...wrap(short ? noPid(f.what) : `${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
+    if (f.why && !short) lines.push(...wrap(f.why, width - head.length).map((l) => pad + l))
+    if (f.see) { lines.push(`${pad}See    ${f.see}`); continue }
+    f.commands.filter((c) => !short || !PID_COMMAND.test(c.run)).forEach((c, i) => {
       // a note is not a problem, so what it offers is not a `Fix` (a macOS test machine 2026-10-18: a Fix sat under the headline "no problems")
       const label = i === 0 ? `${pad}${f.class === 'note' ? 'Option' : 'Fix   '} ` : `${pad}       `
       // a command to copy is never folded (§1.1⑥): a paste of half of `sudo <node> <trocar.mjs> setup-helper` runs node alone; a step in an
