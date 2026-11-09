@@ -78,3 +78,16 @@ test('R12 (win32 on any host): place asks op.lock\'s question about itself throu
   assert.ok(lw.held.length > 0)
   for (const h of lw.held) assert.deepEqual([h.pid, h.start_time, h.boot_id], [process.pid, String(STARTED), String(BOOTED)])
 })
+
+// D38: only a lock another command holds is "another command"; a lock that could not be taken for another reason says that reason, never a busy lock
+test('place: a lock that cannot be taken for a reason other than another command says its own reason, not that another command holds it', async () => {
+  const home = tmpDir('trocar-place-')
+  version(appDir(home), '0.1.0', '22.0.0')
+  const o = io()
+  const identity = () => { throw new Error('the identity reader broke: EXAMPLE-REASON') }
+  const exit = await runPlaceCli([path.join(appDir(home), '0.1.0')], { io: o.io, home, platform: 'darwin', deps: { identity } })
+  assert.notEqual(exit, 0)
+  const err = o.err.join('\n')
+  assert.match(err, /EXAMPLE-REASON/, err)
+  assert.doesNotMatch(err, /another trocar command/, err)
+})
