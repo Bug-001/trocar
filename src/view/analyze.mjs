@@ -54,9 +54,6 @@ const monitorFlag = (text, stop) => {
   return said.size === 1 ? said.has('yes') : null
 }
 
-// normResp: the reply in one shape, read in src/dissect (synth-key reads replies too, and dissect imports nothing above it, 0.1 §2)
-export { normResp }
-
 // Pull a short readable label from a tool call's input.
 export function toolArg(name, input = {}) {
   if (input.file_path || input.path || input.notebook_path)
