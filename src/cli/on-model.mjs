@@ -8,7 +8,7 @@ import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { primeProcQuestions, listProcs, psTableVia } from '../off/proc.mjs'
+import { primeProcQuestions, listProcs, psTableVia, identityFor } from '../off/proc.mjs'
 import { harnessesOf } from '../off/signature.mjs'
 import { opLockFile } from '../off/paths.mjs'
 import { daemonReader } from '../off/daemon-read.mjs'
@@ -180,7 +180,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   try {
   let lock
   // another command holds the lock: nothing was written, and the run says so like every failed run — a result line in flows/ and its receipt (1.6 §1)
-  try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) return done(receiptOf({ ...plan, routes: [], problems: [errText(e)], exit: EXIT.incomplete }, { undo: null }), EXIT.incomplete); throw e }
+  try { lock = await acquireOpLock({ file: opLockFile(home), identity: deps.identity || identityFor({ platform: os, exec: deps.exec || null, env }), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) return done(receiptOf({ ...plan, routes: [], problems: [errText(e)], exit: EXIT.incomplete }, { undo: null }), EXIT.incomplete); throw e }
   try {
     // 1.6 §1.6 (R12): what was on when the lock was taken; an off that comes in meanwhile marks one of these off, and on stops at its next look
     const stateF = path.join(dir, 'state.json')

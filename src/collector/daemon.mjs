@@ -484,7 +484,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       const report = { rebuilt: [], failed: [], lost: [] }
       let held = null
       try {
-        held = tryOpLock({ file: path.join(P.dir, 'op.lock') })
+        held = tryOpLock({ file: path.join(P.dir, 'op.lock'), identity })
         if (!held.lock) {
           if (bundleBusy++ < BUNDLE_BUSY_RETRIES) { bundleRetry = setTimeout(refreshBundles, BUNDLE_BUSY_MS); bundleRetry.unref() }
           return
