@@ -7,7 +7,7 @@
 // 1 GB (1.6 §4.1 速度目标) where reading every record back cost 4.5 s on Windows and 7 s on macOS.
 import nodeFs from 'node:fs';
 import path from 'node:path';
-import { createSynthAssigner, synthFactsOf } from '../dissect/synth-key.mjs';
+import { createSynthAssigner, headsFactOf } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { endpointClass } from '../dissect/endpoints.mjs';
 import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom, IndexPending } from './index-build.mjs';
@@ -47,19 +47,19 @@ const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, v.owners ? v : 
 // the index keeps a call's kinship fingerprints as one space-joined string (index-build.mjs `kin_fp` / `kin_probe`; `kin_chain` the same way)
 const fpOf = (s) => (s == null ? null : s ? s.split(' ').map(Number) : []);
 const lineOf = (id) => Number(String(id).split(':').pop());
-// `heads(row)`: a compaction request's windows (kin_probe: it is one), read back from its record, never held (3.4 按内容认亲 有界)
-const assignRow = (assign, r, heads) => (r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
+// `heads`: a compaction request's windows (its row has kin_probe), read back from its record before the rule takes the row (headsReader), never held (3.4 按内容认亲 有界)
+const assignRow = (assign, r, heads = null) => (r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
   hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), late: r.kin_late, chain: r.kin_chain ? r.kin_chain.split(' ') : [], items: r.kin_items ? r.kin_items.split(' ') : [], mark: r.kin_mark === true,
-  reply: r.kin_reply ?? null, heads: r.kin_probe != null ? heads(r) : null }) : null);
+  reply: r.kin_reply ?? null, heads }) : null);
 // A part keeps the rule's state at its end (`open`) only where a build resumes: the last part (the live segment grows from its own state)
 // and the one before it (a new segment, or the live one renamed or rewritten, starts from it), and every KEEP-th part; a build that starts
 // further back replays the rule from the nearest kept state (stateAt; at most KEEP - 1 parts, read from their warm index views)
 const KEEP = 16, kept = (j, n) => j >= n - 2 || j % KEEP === KEEP - 1;
-function stateAt(parts, j, heads) {
+async function stateAt(parts, j, heads) {
   let m = j - 1;
   while (m >= 0 && !parts[m].open) m--;
   const open = copyOpen(m >= 0 ? parts[m].open : new Map()), assign = createSynthAssigner({ open });
-  for (let q = m + 1; q < j; q++) for (let k = 0; k < parts[q].view.length; k++) assignRow(assign, parts[q].view.at(k), heads);
+  for (let q = m + 1; q < j; q++) for (let k = 0; k < parts[q].view.length; k++) { const r = parts[q].view.at(k); assignRow(assign, r, r.kin_probe != null ? await heads(r) : null); }
   return open;
 }
 
@@ -82,16 +82,26 @@ export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [],
     segs.push({ segment, records, entry: recordsId(records) });
     if (ease) await ease();
   }
-  const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
-  return lists.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old, false, headsReader({ home, fs, errors }))).rows;
+  const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n'), key = `${fsTag(fs)}\n${home}`, heads = headsReader({ home, fs, errors, progress, ease });
+  const list = await lists.get(key, stamp, (old) => rowList(segs, old, false, heads));
+  // a list built while a read back failed is answered once and never kept, as a failed read is never remembered (records.mjs): the next
+  // read builds it again, reads again and says it again (D38), and no later build starts from its state
+  if (heads.failed) lists.take(key);
+  return list.rows;
 }
-/** A compaction request's windows, read back from its record. One that cannot be read decides nothing by its replies, and is said (D38). */
-const headsReader = ({ home, fs, errors }) => (r) => {
-  const segment = String(r.id).split(':').slice(0, -1).join(':'), errs = [];
-  const [rec] = recordsAt({ home, fs, rows: [{ id: r.id, segment, lineNo: lineOf(r.id), offset: r.offset, stored_bytes: r.stored_bytes }], errors: errs, remember: false });
-  if (!rec) errors.push({ where: `segments/${segment}`, code: 'record-unreadable', reason: `${r.id}: a compaction request could not be read back, so its replies decide nothing: ${errs.map((x) => x.reason).join('; ') || 'no record'}` });
-  const f = rec && synthFactsOf(rec);
-  return (f && f.heads) || null;
+/** A compaction request's windows, read back from its record (one seek), with a progress tick and a yield after each: a build that meets
+ *  many is background work like a scan (3.5 后台抽取与归约). One that cannot be read decides nothing by its replies, and is said (D38). */
+const headsReader = ({ home, fs, errors, progress, ease }) => {
+  const read = async (r) => {
+    const segment = String(r.id).split(':').slice(0, -1).join(':'), errs = [];
+    const [rec] = recordsAt({ home, fs, rows: [{ id: r.id, segment, lineNo: lineOf(r.id), offset: r.offset, stored_bytes: r.stored_bytes }], errors: errs, remember: false });
+    if (!rec) { read.failed = true; errors.push({ where: `segments/${segment}`, code: 'record-unreadable', reason: `${r.id}: a compaction request could not be read back, so its replies decide nothing: ${errs.map((x) => x.reason).join('; ') || 'no record'}` }); }
+    if (progress) progress();
+    if (ease) await ease();
+    return rec ? headsFactOf(rec) : null;
+  };
+  read.failed = false;
+  return read;
 };
 
 /**
@@ -115,12 +125,13 @@ export async function provisionalRows({ home = trocarHome(), fs = nodeFs, ready 
   // said while the list is provisional, every segment ready or not: the full list is still being built, and this answer is not its answer
   errors.push({ where: 'index', code: 'index-pending', level: 'state', reason: `${all.length - segs.length} of ${all.length} capture files are still being re-indexed, then the session list is built; until that ends this read may lack calls.` });
   const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
-  return { rows: early.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old, true)).rows, errors, early: true };
+  return { rows: (await early.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old, true))).rows, errors, early: true };
 }
 const early = warmCache({ max: 1, cost: (v) => v.heap });
 /** dropProvisional({home, fs}): the boot pass ended, the provisional list goes. */
 export const dropProvisional = ({ home = trocarHome(), fs = nodeFs } = {}) => { early.take(`${fsTag(fs)}\n${home}`); };
-function rowList(segs, old, keyedOnly = false, heads = null) {
+async function rowList(segs, old, keyedOnly = false, heads = null) {
+  old = old ? await Promise.resolve(old).catch(() => null) : null; // a list still being built when its stamp moved: grown from once it is
   let i = 0;
   if (old) while (i < segs.length && i < old.parts.length && old.parts[i].segment === segs[i].segment && old.parts[i].entry === segs[i].entry) i++;
   // only the newest segment grew, and its records begin with the ones its rows were built from (index-build.mjs grownFrom): its
@@ -146,11 +157,11 @@ function rowList(segs, old, keyedOnly = false, heads = null) {
     // the part before, built here and kept by no one (shed below), hands its state on as it is: copying it for every segment
     // churned every kept reply once per segment
     const prev = !keyedOnly && j > i && !kept(j - 1, segs.length) ? parts[j - 1].open : null;
-    const open = keyedOnly ? null : was ? copyOpen(was.open) : prev || stateAt(parts, j, heads), assign = open && createSynthAssigner({ open });
+    const open = keyedOnly ? null : was ? copyOpen(was.open) : prev || await stateAt(parts, j, heads), assign = open && createSynthAssigner({ open });
     const derived = [];
     for (let k = k0; k < view.length; k++) {
       const r = view.at(k);
-      const got = assign ? assignRow(assign, r, heads) : null;
+      const got = assign ? assignRow(assign, r, r.kin_probe != null ? await heads(r) : null) : null;
       // keyedOnly (provisionalRows): only a row whose session no rule before it decides
       const sid = keyedOnly ? (r.synth_hash == null ? r.session_key ?? null : null) : r.session_key ?? (got && got.key) ?? null;
       // a keyed call's chain (3.4 带键会话里的消息链) is no synthesized key: the session stays as it was

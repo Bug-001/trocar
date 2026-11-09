@@ -238,6 +238,10 @@ function factsOf(rec, memo) {
     late: fingerprints([...texts.slice(1)].reverse(), FP_CAP).length, chain, items, mark: !probe && hint.compactionMarker === true };
 }
 
+/** headsFactOf(rec) → a compaction request's `heads` (synthFactsOf's), without the rest of its facts: what a reader that kept no windows
+ *  computes when the rule reaches the request (src/query/rows.mjs). */
+export const headsFactOf = (rec) => headsOf(userTextsOf(bodyOf(rec)));
+
 // The call that is the compaction request: a header / request-kind hint, or its harness's text marker in one block of its own system
 // text (pi's summary request; on the Anthropic OAuth wire pi's prompt is the second block, after Claude Code's identity block), each
 // block read as a JSON string so a marker anchored on a string's start holds. A marker in the history (Hermes

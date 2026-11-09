@@ -184,15 +184,22 @@ test('kinship by reply: a reply no reader can read is no reply, and its segment 
   assert.equal(m.get(recs[3].id), m.get(recs[0].id), 'the summary still joins by the reply it carries')
 })
 
-test('kinship by reply: a compaction request whose record cannot be read back decides nothing by its replies, and says so', async () => {
+test('kinship by reply: a compaction request whose record cannot be read back decides nothing by its replies, says so, and is not remembered', async () => {
   const r = prose(61, 900), recs = [turn('messages', 0, 0, r, T0), summary('messages', [r], T0 + MIN)]
-  const home = homeOf([recs]), raw = path.join(home, 'raw', `${SEG[0]}.ndjson`)
-  let opens = 0 // the index scan opens the segment first; the next open is the read back of the summary's record, and it fails
-  const failing = { ...fs, openSync: (f, ...a) => { if (String(f) === raw && ++opens > 1) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return fs.openSync(f, ...a) } }
-  const errors = [], rows = [...await indexRows({ home, fs: failing, errors })]
-  assert.deepEqual(errors.map((e) => [e.where, e.code]), [[`segments/${SEG[0]}`, 'record-unreadable']])
-  assert.match(errors[0].reason, new RegExp(`${rows[1].id}: a compaction request could not be read back`))
-  assert.notEqual(rows[1].session_id, rows[0].session_id, 'not joined by a reply it could not be read for')
+  const home = homeOf([recs]), at = Buffer.byteLength(JSON.stringify(recs[0])) // a seek to the summary's line reads from the newline before it (records.mjs plainReader)
+  const disk = { failing: true } // a read of the summary's own bytes fails while `failing`; the index scan reads from the start
+  const f = { ...fs, readSync: (fd, b, o, n, pos, ...a) => { if (disk.failing && pos === at) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return fs.readSync(fd, b, o, n, pos, ...a) } }
+  const read = async () => { const errors = [], rows = [...await indexRows({ home, fs: f, errors })]; return { errors, rows } }
+  for (const turn of [1, 2]) { // said by every read while it fails: the list it gave is not kept
+    const { errors, rows } = await read()
+    assert.deepEqual(errors.map((e) => [e.where, e.code]), [[`segments/${SEG[0]}`, 'record-unreadable']], `read ${turn}`)
+    assert.match(errors[0].reason, new RegExp(`${rows[1].id}: a compaction request could not be read back`))
+    assert.notEqual(rows[1].session_id, rows[0].session_id, 'not joined by a reply it could not be read for')
+  }
+  disk.failing = false
+  const { errors, rows } = await read()
+  assert.deepEqual(errors, [])
+  assert.equal(rows[1].session_id, rows[0].session_id, 'read back once the disk answers, it joins, as a cold build does')
 })
 
 // past KEEP segments a build hands the rule's state from part to part (src/query/rows.mjs): the parts it keeps are copied, so a
