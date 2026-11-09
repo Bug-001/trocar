@@ -104,6 +104,6 @@ test('3.5 §行表先读: a warm start sends no segment to a thread: only one wi
   await segmentIndex({ home, segment })
   assert.equal(needsBuild(home, segment), false, 'its index is current')
   const file = path.join(indexDir(home), `${segment}.json`)
-  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/"v":(\d+)\}\n$/, (m, v) => `"v":${Number(v) - 1}}\n`))
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/"v":(\d+)(,"fv":\d+)?\}\n$/, (m, v, fv = '') => `"v":${Number(v) - 1}${fv}}\n`))
   assert.equal(needsBuild(home, segment), true, 'an index of another version')
 })
