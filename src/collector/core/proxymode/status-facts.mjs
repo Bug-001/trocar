@@ -7,7 +7,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned, markedWithoutRecord, samePath } from '../trust/journal.mjs'
-import { formsHere, readSrc, holds, presentPaths, userCertFilesOf, rootHeldIn, inTrocar } from './sources.mjs'
+import { formsHere, routedForms, readSrc, holds, presentPaths, userCertFilesOf, rootHeldIn, inTrocar } from './sources.mjs'
 import { planRoutes, priorRecordOf, loopbackDirect, loopbackNote, blockerOf, pacStale } from './entries.mjs'
 import { judgedWith } from './verdict.mjs'
 import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
@@ -56,7 +56,7 @@ function carrierLoss(m, desc, own, fs) {
 }
 
 /** The ids of this OS's present forms whose certificate needs a carrier of their own (not the root, its `when` holding): proxy mode's forms. */
-const carriedForms = (pm, os, ctx) => formsHere(pm, os, ctx).filter((f) => { // a form out of scope counts as not on the machine (CM43)
+const carriedForms = (pm, os, ctx) => routedForms(pm, os, ctx).filter((f) => { // a form out of scope counts as not on the machine (CM43); one not measured where a sibling is gets no entry (P5)
   const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
   return c && !(c.when && holds(c.when, ctx) === false) // the root carries it: nothing per form, whether install saw the harness or not
 }).map((f) => f.id)
@@ -171,7 +171,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
     const plan = planRoutes(desc, ctx), d = drift(h), own = itemsFor(desc, inst, ctx)
     const { code: ufCode, ...uf } = userFileOf(desc, { m, ctx, fs, own, rootFp256 }) || {}
     const forms = []
-    for (const f of formsHere(pm, os, ctx)) {
+    for (const f of formsHere(pm, os, ctx)) { // every form here is drawn, an unmeasured one too (on writes it no entry of its own, 4.11 P5)
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       const carrier = !c || (c.when && holds(c.when, ctx) === false) ? 'root' : CARRIER[c.kind] ?? null
       const r = root || {}

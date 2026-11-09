@@ -4,9 +4,11 @@
 import { harnessKey } from '../core/chips.mjs'
 import { sessionTotals, priceMatch } from '../core/metrics.mjs'
 import { placeOf, after } from './packs.mjs'
+import { NOTHING_LOST } from '../../../src/health/codes.mjs' // a src/ module the build bundles (4.4 静态面)
 
 // ── the 采集缺口 (1.2 §会话保真行): judged, never asserted away ───────────────────────────────────────────────────────
-// `doc` is the C.3 `status` document. A failure group counts only when (a) the session's time overlaps the groups' window
+// `doc` is the C.3 `status` document. A failure group counts only when it is not expected (by design) nor of a code that loses
+// nothing (NOTHING_LOST: a wait); a resolved one still counts, its failures happened in its time; and (a) the session's time overlaps the groups' window
 // ([failures.since, now]), (b) the group's own [first_ts, last_ts] overlaps the session's [first step, last step], and (c) the
 // group's `harness` (via harnessKey) is this session's or absent. No status answer, or no readable window, → null: no
 // judgement — and never the words 「没有缺口」. → the matching groups, or null.
@@ -17,6 +19,7 @@ export function captureGap(doc, range, harness, now = Date.now()) {
   if (isNaN(since) || range.end < since || range.start > now) return null // outside the window: not judged, not said
   const mine = harness != null ? harnessKey(harness) : null
   const hit = (f.groups || []).filter((g) => {
+    if (g && (g.level === 'expected' || NOTHING_LOST.includes(g.code))) return false
     const lo = Date.parse(g && g.first_ts), hi = Date.parse(g && g.last_ts)
     if (isNaN(lo) || isNaN(hi) || hi < range.start || lo > range.end) return false // did not touch this session's time
     return g.harness == null || mine == null || harnessKey(g.harness) === mine

@@ -40,7 +40,8 @@ export function readHead(home, id, fs = nodeFs) {
 
 const docOf = (errors, body, command = 'session') => ({ schema: SCHEMA_VERSION, command, ok: !errors.some((e) => !e.level), errors, v: CTX_V, ...body });
 // the index's problems (a note, `level`, is about the read that made it, never the disk's: index-build.mjs) and the first failed members
-const errorsOf = (index, failed) => [...index.filter((e) => !e.level), ...failed.slice(0, FAILED_SHOWN).map((f) => ({ where: f.id, code: f.code, reason: f.reason }))];
+const errorsOf = (index, failed) => [...index.filter((e) => e.level !== 'note'), // a note is about one read; a state (index-pending) holds while the head does
+  ...failed.slice(0, FAILED_SHOWN).map((f) => ({ where: f.id, code: f.code, reason: f.reason }))];
 
 /** headDoc(s) → the tier-1 head of a session state (named/session.mjs sessionState, `mark` already the wire's, `markTs` its member's
  *  index ts, `packs` and `open` those of packsOf / the writer): the axis lane's steps as `cols` (the step-order columns' cx / cb / fl, session-doc.mjs), its chapters, the lane headers. */

@@ -9,7 +9,7 @@
 //            hosts in the extension's own settings, the operator's extra_hosts; 4.8 OPEN 22); absent → desc.hosts.
 //   issuer = makeIssuer()'s object, or null; ctx = the sources.mjs ctx (os, home, dirs, readFile, readdir, policy, join).
 import path from 'node:path'
-import { readSrc, fileOf, rootHeldIn, namesEnv } from './sources.mjs'
+import { readSrc, fileOf, rootHeldIn, namesEnv, measuredOn } from './sources.mjs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { HOOK_PID_ENV } from './chain.mjs'
 import { normalizeName } from '../../../off/identity.mjs'
@@ -86,7 +86,7 @@ function replaceVerdict(pm, ctx, facts, record) {
  *  line says: forwarded rather than broken (4.11 P11). The door judges every one of them; `status` asks the same. */
 export function judgedForms(desc, os, routeId = null, exe = null, argv = null) {
   const all = desc.proxyMode.forms.filter((f) => f.os.includes(os) && (routeId == null || f.route === routeId))
-  const ok = all.filter((f) => f.verified && f.verified[os] === true), may = ok.length ? ok : all
+  const ok = all.filter((f) => measuredOn(f, os)), may = ok.length ? ok : all
   const name = exe == null ? null : normalizeName(exe)
   const byExe = name ? may.filter((f) => !f.exe || !f.exe[os] || f.exe[os].includes(name)) : may
   if (!byExe.length) return may // a program file no form names: every form, whatever its command line says

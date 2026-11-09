@@ -21,7 +21,7 @@ export function doorPorts(collector, fs = nodeFs) {
   let j
   try { j = JSON.parse(fs.readFileSync(file, 'utf8')) } catch (e) { return { why: `${file} ${e && e.code === 'ENOENT' ? 'is missing' : 'cannot be read'}` } }
   const ports = j && typeof j.groupPorts === 'object' && j.groupPorts ? Object.values(j.groupPorts) : []
-  return ports.length && ports.every(Number.isInteger) ? { ports } : { why: `${file} holds no door ports` }
+  return ports.length && ports.every(Number.isInteger) ? { ports } : { why: `${file} holds no port of trocar's` }
 }
 
 // the URL a value is, or null: an http(s) URL with an explicit port

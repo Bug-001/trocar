@@ -44,7 +44,7 @@ test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and
   const a = doc.adopted['claude-code']
   assert.equal(a.chain, 'claude-code -> [ebpf] trocar -> [CONNECT passed on as it is] proxy.corp:8080 -> internet')
   assert.equal(a.proxy, 'http://***@proxy.corp:8080')
-  const text = (await (async () => { const t = sandbox(ENGINE); seedProxy(t); return (await t.run(['on', '--yes'], { deps: FACTS })).io.text() })())
+  const text = (await (async () => { const t = sandbox(ENGINE); seedProxy(t); return (await t.run(['on', '--yes', '--details'], { deps: FACTS })).io.text() })())
   const unwrap = (t) => t.replace(/\s+/g, ' ') // a sentence wraps (§1.1 width); the fact is what it says, not where it breaks
   // the hops in order; a chain too long for its line drops its [labels] first (附录 A.1), so a label is optional here
   const chain = /claude-code -> (\[ebpf\] )?trocar -> (\[CONNECT passed on as it is\] )?proxy\.corp:8080 -> internet/g
