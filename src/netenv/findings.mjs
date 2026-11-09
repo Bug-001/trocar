@@ -314,8 +314,9 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     for (const fm of hf.forms || []) { const fwf = F.forwarder && F.forwarder.forms && F.forwarder.forms[fm.id]; if (fwf && fwf.source === 'unknown') add('prior-proxy-unknown', { pids: fm.procs.map((p) => p.pid) }) }
     // the certificate axis of each form (proxy mode, 1.6 §9.4): one that is not in effect gives its own code, with the form's command (4.11 §3 ⑱)
     for (const fm of hf.forms || []) { const k = fm.certificate; if (k && !k.in_effect && k.code && FINDINGS[k.code]) add(k.code, { fm }) }
-    // driver mode (Linux) has no per-form certificate: the setup `on`'s ⑪ judges says the same codes, whatever the capture state (a bundle that lacks a CA breaks the agent off too)
-    if (F.routing === 'driver' && hf.installed && hf.setup && hf.setup.state === 'needed') for (const x of hf.setup.missing || []) if (SETUP_FINDING[x.what]) add(SETUP_FINDING[x.what], { fm: { certificate: { command: 'trocar install' } } })
+    // driver mode (Linux) has no per-form certificate: the setup `on`'s ⑪ judges says the same codes, whatever the capture state (a bundle that lacks a CA breaks the agent off too).
+    // It replaces the verdict's finding of the same code (entry-missing): `on` refuses while the setup is needed, so its fix is install's
+    if (F.routing === 'driver' && hf.installed && hf.setup && hf.setup.state === 'needed') for (const x of hf.setup.missing || []) if (SETUP_FINDING[x.what]) found.set(SETUP_FINDING[x.what], make(SETUP_FINDING[x.what], { ...base, fm: { certificate: { command: 'trocar install' } } }))
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
     const listPath = F.agentList ? F.agentList.path : null
