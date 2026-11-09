@@ -679,6 +679,17 @@ test('CM43: a harness with no covered form left is not switched on again, and th
   assert.equal(s.handover(), null, 'the update is done')
 })
 
+test('CM44: a harness whose only form here is not measured on this system, beside measured ones, is not switched on again', async () => {
+  const s = sandbox({ on: ['codex'] })
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex', 'pi'] }) + '\n')
+  const form = (id, darwin) => ({ id, os: ['darwin'], verified: { darwin } })
+  const pi = { name: 'pi', proxyMode: { forms: [form('pi.cli', true), form('pi.npm', { reason: 'not-measured' })] } }
+  const t = ctx(s, { platform: 'darwin', deps: { presentForms: async () => ({ codex: ['codex.cli'], pi: ['pi.npm'] }), harnesses: [pi] } })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(t.calls.on.map((a) => a.filter((x) => !x.startsWith('--'))), [['codex']])
+  assert.equal(s.handover(), null, 'the update is done')
+})
+
 test('a script copy on a machine whose last uninstall kept its record (install: null) has nothing installed to update: update hands to install, with its plan and question', async () => {
   const s = sandbox({ on: [] })
   const app = path.join(s.home, '.trocar', 'app'), root = path.join(app, '0.2.0')
