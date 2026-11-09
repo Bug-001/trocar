@@ -11,7 +11,7 @@ import path from 'node:path'
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
-import { fit, formatOnReceipt, formatPlan, planItems } from './receipt.mjs'
+import { fit, formatOnReceipt, formatPlan, planItems, onlyRefused, formatRefusal, markedRefusal } from './receipt.mjs'
 import { colors, noColor } from './text.mjs'
 import { renderCompact, BRANCH_SEP } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -24,7 +24,7 @@ import { runModelOn } from './on-model.mjs'
 import { printJson } from './json.mjs'
 
 const USAGE = usageLine(commandNamed('on'))
-const FLAGS = new Set(['--dry-run', '--yes', '--json'])
+const FLAGS = new Set(['--dry-run', '--yes', '--details', '--json']) // --details: today's text is the full one (1.6 §1.1 ④)
 const chainText = (t) => renderCompact(t).join(BRANCH_SEP)
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
@@ -60,7 +60,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
   }
   try {
     // the name list in effect (D51③): the presets plus ~/.trocar/agents.json, as the daemon and `status` judge — the running processes the plan restarts and whose CAs it carries
-    const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env, platform, agentList: readAgentList({ home, fs: deps.fs || nodeFs }).entries })
+    const parts = deps.parts || await (await (deps.daemon || import('../collector/net-deps.mjs'))).loadParts({ env, platform, agentList: readAgentList({ home, fs: deps.fs || nodeFs }).entries })
     const install = deps.install || await import('../collector/install.mjs')
     const model = isModelOs(parts.os) // macOS / Windows: the collector model's on (on-model.mjs); none of the old adoption / routing code runs there
     const fs = deps.fs || nodeFs
@@ -70,7 +70,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     if (model) { const warm = Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs'), import('../collector/install.mjs')]); warm.catch(() => {}) }
     // The Node floor (4.8 §7, W24: the daemon is pulled up by THIS Node at every login, so an older one cannot run the collector): the arch's own read of
     // process.versions, asked first because it is free — ok:false refuses with the doctor line, before anything is touched. No flows record: the receipt
-    // is it (nothing of trocar's may exist yet, and the closed sets hold no code for this). Linux's arch has no nodePreflight and nothing here changes.
+    // is it (nothing of trocar's may exist yet; the daemon's own refusal is the `node-too-old` record). Linux's arch has no nodePreflight and nothing here changes.
     if (parts.arch && typeof parts.arch.nodePreflight === 'function') {
       const pf = parts.arch.nodePreflight()
       if (pf && pf.ok === false) {
@@ -113,13 +113,15 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     // install's bundles carry them — not only the daemon's next rebuild — and a read that fails stops the on before one file of the agents' is touched (D38); `deps.roots` overrides them.
     let { receipt, exit, plan } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null,
+      userFilesFor: (await import('../collector/arch/model-backends.mjs')).userFilesFor, // rule U's finder, handed in (collector layering rule 5)
       roots: deps.roots || null, unit, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (p) => say(planText(p)),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
+    // 1.6 §3.3: a run whose only shortfall is a harness refused for setup turned the others on: their proxies are recorded as on any done run
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
-    else if (adoption && receipt.harnesses && receipt.harnesses.length && receipt.ok !== false && !receipt.dry_run && !receipt.planned && !receipt.declined) {
+    else if (adoption && receipt.harnesses && receipt.harnesses.length && (receipt.ok !== false || onlyRefused(receipt)) && !receipt.dry_run && !receipt.planned && !receipt.declined) {
       const rec = await recordAdoption({ adoption, routing, targets: receipt.harnesses, home, env, now: deps.now ? () => deps.now().getTime() : Date.now, fs: deps.fs })
       receipt.adopted = rec.adopted
       if (rec.wrote) receipt.created.push(rec.wrote)
@@ -137,6 +139,11 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     }
     return exit
   } catch (e) {
+    if (e && e.code === 'marked-without-record' && Array.isArray(e.paths)) { // 1.6 §3.2: the same refusal install gives, with the line that gets past it
+      const r = markedRefusal('on', e)
+      if (json) printJson(io, r); else io.err(formatRefusal(r, { home, paths: e.paths }).join('\n'))
+      return EXIT.incomplete
+    }
     const message = String((e && e.message) || e)
     if (json) printJson(io, { ...newReceipt('on'), ok: false, notes: [message] }); else io.err(`trocar on: ${message}`)
     return EXIT.incomplete

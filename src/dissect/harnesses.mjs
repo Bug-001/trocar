@@ -24,13 +24,18 @@ const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'm
 // querystring; the first entry that matches wins. Nothing matches → the shared third-party hosts (src/dissect/traffic.mjs),
 // then `other`. The class table (src/classes/table.mjs) compiles these entries; the collector applies it when it writes a
 // record. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
+//
+// `aux` (RFC 2.1 §种类怎么认): which background kind a call of the aux lane is, the first entry that matches. An entry reads one thing:
+// `maxTokens` the reply cap (at or under it), `first` the first user message, `last` the last user message with text, `system` the
+// system text. A kind listed here has a row in the lane kind table (LANE_META, LANE_KIND); no entry matches → `aux`.
+//
 // `cwd` (3.4 §工作目录): where a call states its working directory — rules {in: 'system'|'user', re}, capture 1 the path, read by
 // src/dissect/project.mjs only. [] = this harness states none that is read.
 // main lane: a ` - Primary working directory:` list item in a system-role message; a subagent prompt: a bare line
 const CC_CWD = [{ in: 'system', re: /^[ \t]*(?:[-*][ \t]+)?(?:Primary working|Working) directory:[ \t]*([^\n]+)$/m }];
 // chainLane: inside a keyed session, the lane of a call whose system text is not the session's main one, one lane per message chain
 // (3.4 带键会话里的消息链); null: the harness's calls take only its declared lane hints
-const ROW = { ua: null, parentKeys: [], forkKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [], entry: [], chainLane: null };
+const ROW = { ua: null, parentKeys: [], forkKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [], cwd: [], entry: [], chainLane: null, aux: [{ kind: 'quota', maxTokens: 1 }] };
 const DESKTOP = { is: 'desktop', re: /desktop/ }, CLI = { is: 'cli', re: /cli/ };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
@@ -45,6 +50,19 @@ const ROWS = [
     // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
     lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
     compaction: [{ header: 'x-cc-compaction-request' }],
+    // Different utilities with different fates for their output. quota: a one-token liveness check, the reply discarded. titlegen: its reply
+    // becomes the session's name. notify: a background summary (a JSON status) that drives Claude Desktop's push notifications. suggest: a
+    // copy of the whole conversation asking for the next prompt, so its marker is only ever the LAST user text, and earlier turns may
+    // quote it. websearch / webfetch: the calls the two web tools make on their own, the page summary with at most one line before the page.
+    aux: [
+      { kind: 'quota', maxTokens: 1 },
+      { kind: 'quota', first: /^\s*quota\s*$/i },
+      { kind: 'titlegen', first: /lowercase label for this job/i },
+      { kind: 'notify', system: /walked away|Read the tail of what the agent/i },
+      { kind: 'suggest', last: /^\s*\[SUGGESTION MODE:/ },
+      { kind: 'websearch', first: /^\s*Perform a web search for the query:/ },
+      { kind: 'webfetch', first: /^(?:[^\n]*\n+)?\s*Web page content:/ },
+    ],
     cwd: CC_CWD, // main: ` - Primary working directory:` list item; subagent: bare `Working directory:`
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
       'Claude Code sends request bodies uncompressed while a custom CA is set')],
@@ -78,9 +96,9 @@ const ROWS = [
     cwd: [{ in: 'system', re: /^[ \t]*Working directory:[ \t]*([^\n]+)$/m }], // indented inside <env>
     observerEffects: [
       effect('opencode-plugin', 'trocar trust plugin',
-        'trocar code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin', LINUX),
+        'trocar code runs inside the agent process; the first run adds an npm registry fetch of @opencode-ai/plugin, repeated at each start until one succeeds', LINUX),
       effect('opencode-route-plugin', 'trocar route plugin',
-        'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds one npm registry fetch of @opencode-ai/plugin', DOOR)] },
+        'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds an npm registry fetch of @opencode-ai/plugin, repeated at each start until one succeeds', DOOR)] },
   { ...ROW, id: 'kimi',
     entry: [CLI],
     cwd: [{ in: 'system', re: /urrent working directory is `([^`\n]+)`/ }],
@@ -260,6 +278,27 @@ export function hintsOf(rec) {
 
 // D37 ⑤ / 4.6 R5: only calls captured through injected trust carry an effect; legacy MITM / reverse-proxy
 // captures (the control group) never do.
+// the words of a message: its text blocks, none for a tool_result-only turn
+const textOf = (m) => (Array.isArray(m?.content) ? m.content.map((b) => (b?.type === 'text' ? b.text || '' : '')).join('') : typeof m?.content === 'string' ? m.content : '');
+
+const systemOf = (b) => (Array.isArray(b.system) ? b.system.map((s) => s?.text || '').join('\n') : String(b.system || ''));
+
+/** auxKindOf(rec) → the kind of a background call by its harness's `aux` table (2.1); a record with no row reads the neutral row's. */
+export function auxKindOf(rec) {
+  const b = bodyOf(rec) || {}, users = (Array.isArray(b.messages) ? b.messages : []).filter((m) => m?.role === 'user');
+  const cap = typeof b.max_tokens === 'number' ? b.max_tokens : Infinity, first = textOf(users[0]), last = textOf(users.findLast(textOf));
+  const system = systemOf(b);
+  const hit = (harnessOf(rec).row || ROW).aux.find((e) => cap <= e.maxTokens || e.first?.test(first) || e.last?.test(last) || e.system?.test(system));
+  return hit ? hit.kind : 'aux';
+}
+
+const HOME_OF = /^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)[/\\]/;
+/** pathContext(rec) → what a shell read's path resolves against (2.4 §保真边界 item 6): `home` from the process's own path, null when it
+ *  does not live under one. A working directory is not in it: the capture holds no reliable one. */
+export function pathContext(rec) {
+  return { home: HOME_OF.exec(String(rec?.proc?.exe ?? ''))?.[1] ?? null };
+}
+
 export function observerEffectsOf(rec) {
   const { row } = harnessOf(rec);
   if (!row || !rec) return null;

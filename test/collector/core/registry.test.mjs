@@ -145,7 +145,7 @@ test('R6 a user name that does not normalize to itself is that item\'s problem, 
   assert.doesNotThrow(() => livenessOf(codex, { agentList: raw }))
 })
 
-test('registry: a win32 command line not known yet (pending / cim-backoff) is `pending` for every name on a list — its exclusions, args and Chromium role all read it; never `match` (review R17, 4.8 W78)', async () => {
+test('registry: a win32 command line not known yet (pending / cim-backoff) is `pending` for every name on a list — its args, argv / env exclusions and Chromium role all read it; never `match`; an exe-only exclusion answers at once (review R17, 4.8 W78)', async () => {
   const reg = createRegistry(await loadHarnesses())
   const pend = (exe, cmdlineState = 'pending') => ({ os: 'win32', exe, argv: [], cmdline: null, env: null, envRead: false, cmdlineState })
   const known = (exe, argv) => ({ os: 'win32', exe, argv: [exe, ...argv], cmdline: 'x', env: null, envRead: false, cmdlineState: 'ok' })
@@ -157,11 +157,15 @@ test('registry: a win32 command line not known yet (pending / cim-backoff) is `p
     [KIMI, 'pending', ['__update_download', '2.1.2'], [null, 'excluded', 'kimi-code']],
     [CODEX, 'cim-backoff', ['pid-update-loop'], [null, 'excluded', 'codex']],
     [CLAUDE, 'pending', ['--type=renderer'], ['claude-code', 'match', null]], // a match whose trust confirm.mjs then refuses as chromium-child: needs the argv
-    [OPENCODE, 'pending', ['--type=gpu-process'], ['opencode', 'match', null]], // the Electron desktop's children share its exe name on Windows
   ]) {
     assert.deepEqual(said(reg.match(pend(exe, state))), [null, 'pending', null], `${exe} (${state}): not known yet — never match`)
     assert.deepEqual(said(reg.match(known(exe, after))), want, `${exe} once its command line came`)
   }
+  // an exclusion that reads only the exe answers at once: no argument changes the file (4.6 §识别进程)
+  assert.deepEqual(said(reg.match(pend(OPENCODE))), [null, 'excluded', 'opencode'], `${OPENCODE} (pending): its exe-only exclusion holds`)
+  for (const after of [[], ['--type=gpu-process']]) assert.deepEqual(said(reg.match(known(OPENCODE, after))), [null, 'excluded', 'opencode'], `${OPENCODE} ${after.join(' ')}`)
+  const CLI = String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode.exe`
+  assert.deepEqual(said(reg.match({ ...pend(CLI), env: new Map([['BUN_BE_BUN', '1']]) })), [null, 'pending', null], 'an exclusion that reads the environment waits like one that reads argv')
   assert.deepEqual(said(reg.match(pend(String.raw`C:\Windows\System32\notepad.exe`))), [null, 'no-match', null], 'a name on no list is still no-match')
   assert.deepEqual(said(reg.match({ ...pend(KIMI), cmdlineState: 'empty' })), ['kimi-code', 'match', null], '`empty` is final: judged as no arguments (4.8 §2.3)')
 })

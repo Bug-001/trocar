@@ -32,7 +32,7 @@ import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
 
-export const PROJ_V = 14;
+export const PROJ_V = 20; // 20: the desk line's 14 (Readable reads the parsed block) joined; 19: the desk line's projection (its 13: the background kinds and shell reads) joined; 18: the reads line's projection (its 14) joined with the batch's (its 17); 17: Codex's additional_tools input item is tool definitions; 16: a security review's flagged is what the reply says; 15: a reply the agent closed after its own success terminal is read as that reply (3.5 §访问模式 ②)
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by what they weigh in the heap (a row grows with its context: a count let a long
@@ -59,7 +59,7 @@ export const sessionDir = (home, sessionKey) => path.join(ctxDir(home), hashOf(s
 export const projectionFile = (home, sessionKey) => path.join(sessionDir(home, sessionKey), 'extract.0.ndjson');
 
 /** migrateFlat({home, fs, key}): the flat layout's files of the session (`ctx/<k>.ndjson`, `<k>.idx`, `<k>.fold.ndjson`,
- *  `<k>.fold.idx`) renamed into `ctx/<k>/` (4.3 §4 迁移): rename only, never a copy (D27③); offsets do not change, so the sidecars
+ *  `<k>.fold.idx`) renamed into `ctx/<k>/` (4.3 §4 迁移): rename only, never a copy; offsets do not change, so the sidecars
  *  still hold. The directory may be there already with answer files only (the start-up sweep's tier-0 head comes before any read);
  *  one that holds a projection or fold log of its own makes the flat files an older copy, and they are deleted (derived, D69②). */
 export function migrateFlat({ home = trocarHome(), fs = nodeFs, key }) {

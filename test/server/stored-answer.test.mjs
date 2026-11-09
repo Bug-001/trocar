@@ -9,11 +9,12 @@ import http from 'node:http'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { gunzipSync } from 'node:zlib'
+import { createHash } from 'node:crypto'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { boardHome, serveBoard } from '../web-v2/real-face.mjs'
 import { serveFace, withToken } from './face.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
-import { storedFile, writeStored, STORED_V } from '../../src/query/stored.mjs'
+import { storedFile, writeStored } from '../../src/query/stored.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
 import { workerForkIn } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
@@ -29,7 +30,7 @@ const get = (port, p) => new Promise((resolve, reject) => {
       const body = res.headers['content-encoding'] === 'gzip' ? gunzipSync(raw) : raw
       let doc = null
       try { doc = JSON.parse(body.toString('utf8')) } catch { /* not JSON */ }
-      resolve({ status: res.statusCode, headers: res.headers, doc, ms: performance.now() - t0 })
+      resolve({ status: res.statusCode, headers: res.headers, doc, raw, ms: performance.now() - t0 })
     })
   })
   r.on('error', reject); r.end()
@@ -97,20 +98,24 @@ test('4.4 #18: a live worker that has not said `{rows: true}` leaves sessions to
   } finally { w.close() }
 })
 
-test('3.5 #38: a file of another STORED_V, or from before versions, is not handed out', { timeout: 60_000 }, async () => {
-  const seg = `.v${STORED_V}.`
-  for (const name of ['.', `.v${STORED_V + 1}.`]) {
-    const home = rawHome('trocar-stored-face-')
-    writeStored(home, 'sessions', PARAMS, { sessions: [], stored: { at: '2020-01-01T00:00:00.000Z' } })
-    const file = storedFile(home, 'sessions', PARAMS)
-    fs.renameSync(file, file.replace(seg, name))
-    const w = await standIn(home)
-    try {
-      const got = await get(w.port, LIST)
-      assert.equal(got.status, 200)
-      assert.equal(got.doc.stored, undefined, name)
-    } finally { w.close() }
-  }
+test('3.5 #38: the last release\'s stored list, its rows short of keys added since, is handed out at once by a cold worker\'s face', { timeout: 60_000 }, async (t) => {
+  const { userHome, home } = boardHome()
+  // the name built here, not by storedFile(): the format of the last release's file is pinned
+  const file = path.join(home, 'index', 'stored', `sessions.${createHash('sha1').update(JSON.stringify([['limit', '500']])).digest('hex').slice(0, 16)}.json.gz`)
+  const row = { session_id: 'from-before', project_slug: '_unresolved', project_path: null, entrypoint: null, harness: 'claude-code', harness_inferred: false,
+    session_synthesized: false, provider: 'anthropic', title: null, title_source: 'pending', calls: 1, logged: 0, probes: 0, other: 0, has_subagent: false, last_ts: '2020-01-01T00:00:00.000Z' }
+  const bytes = gzipSync(Buffer.from(JSON.stringify({ schema: 1, command: 'sessions', ok: true, as_of: '2020-01-01T00:00:00.000Z', sessions: [row], next: null, has_more: false, errors: [], stored: { at: '2020-01-01T00:00:00.000Z' } })))
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  fs.writeFileSync(file, bytes, { mode: 0o600 })
+  const b = await serveBoard({ userHome, home })
+  try {
+    assert.equal(b.workers().length, 0, 'cold: no worker yet')
+    const got = await get(b.port, LIST)
+    t.diagnostic(`stored answer in ${Math.round(got.ms)} ms`)
+    assert.equal(got.status, 200)
+    assert.ok(got.ms < 500, `answered in ${Math.round(got.ms)} ms, over the 0.5 s line`)
+    assert.ok(got.raw.equals(bytes), 'the file\'s bytes, as stored')
+  } finally { await b.close() }
 })
 
 // The real worker, forked by the daemon's `sweep` before anyone asks, its row pass held shut (test/query/worker-rows-deps.mjs).

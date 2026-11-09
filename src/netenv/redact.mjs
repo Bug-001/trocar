@@ -1,6 +1,7 @@
 // redact.mjs (src/netenv) — what may be shown of a proxy setting (RFC 1.6 §9.2「永远不印」, §9.5, V46, V52). A proxy URL can carry `user:password@`; it is shown with `***@` in its place, and only a
 // hash of the original value is ever kept (`adopted.<harness>.sha256`, so a changed setting is noticed without the setting being stored). Pure, imports only node:crypto.
 import crypto from 'node:crypto'
+import { hidePacKey } from '../off/userinfo.mjs'
 
 const SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i
 const DEFAULT_PORT = { http: 80, https: 443, socks4: 1080, socks5: 1080, socks5h: 1080 }
@@ -16,7 +17,7 @@ export function redactProxyUrl(url) {
   const end = rest.search(/[/?#]/), authority = end < 0 ? rest : rest.slice(0, end), after = end < 0 ? '' : rest.slice(end)
   const at = authority.lastIndexOf('@')
   const q = after.search(/[?#]/)
-  return `${scheme}${at >= 0 ? '***@' : ''}${authority.slice(at + 1)}${q < 0 ? after : after.slice(0, q)}${q < 0 ? '' : '…'}`
+  return `${scheme}${at >= 0 ? '***@' : ''}${authority.slice(at + 1)}${hidePacKey(q < 0 ? after : after.slice(0, q))}${q < 0 ? '' : '…'}`
 }
 
 /** sha256 (hex) of the setting as written: what `adopted.<harness>.sha256` holds, in place of the value. */

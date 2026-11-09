@@ -47,6 +47,22 @@ export const WORKER_MEMORY_MB = 384
 /** The light role's heap (3.5 §内存有界): it holds no rows and no spine, so what it needs is one `block`'s segment index and record. Set from measurement:
  *  deploy-check's lightHeapPeakMb on a real capture. A read that does not fit is a crash, and the router hands that request to the main role. */
 export const LIGHT_MEMORY_MB = 128
+/** The control role's heap (3.5 §内存有界): it holds no rows, but a control verb reads and rewrites whole agent config files. Measured 2026-11-06 on
+ *  Set up (one harness, a 16.3 MB config.json) then `on` (a 15.9 MB .env), plan then confirm each: the used heap sampled every 50 ms peaked at 91-92 MB
+ *  under a 384 MB heap, and the same run died of the heap under 128 MB, so the peak a sample misses is past 128 MB. The status verb also parses
+ *  configs that grow by themselves (an agent's own state file can pass 16 MB) and that run is not measured, so the role keeps the 384 MB the verbs had on
+ *  the main role: no verb gets less room than before. */
+export const CONTROL_MEMORY_MB = 384
+/** Every query role (3.5 §内存有界 · §谁执行它「三个角色」): its heap cap and whether it writes answer files. forkOptions (and the tests' fork)
+ *  take every cap from here, the worker passes `writer` as `ROLES[role].writes`, and the writer's heap bound is asserted against every cap
+ *  whose role writes. A new writing role still needs worker.mjs: it reads the rows, and so runs the background slices that write, only
+ *  for `main`. No prototype: a role named like an Object method is unknown, and throws. */
+export const ROLES = Object.freeze({
+  __proto__: null,
+  main: { capMb: WORKER_MEMORY_MB, writes: true },
+  light: { capMb: LIGHT_MEMORY_MB, writes: false },
+  control: { capMb: CONTROL_MEMORY_MB, writes: false },
+});
 /** The flags that give a process a heap of `mb` MB: V8's `--max-heap-size`, the young generation inside it, so V8's heap_size_limit
  *  is `mb` and the used heap (both generations) is measured against the heap it can use. `--max-old-space-size` adds the young
  *  generation on top (3 × its semi-space, 48 MB at V8's default): a process started with it reckons its budget and ceiling past its

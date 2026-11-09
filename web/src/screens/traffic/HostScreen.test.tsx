@@ -18,6 +18,8 @@ import type { ScreenProps } from '../../ScreenOutlet'
 type BoardRouter = ScreenProps['router']
 import HostScreen from './HostScreen'
 import TrafficScreen from './TrafficScreen'
+import { failOf } from './model.mjs'
+import * as W from '../../../legacy/labels/traffic.mjs'
 
 const H = (HARNESS_ORDER as readonly string[])[0], HOST = 'api.example.test', T = '2026-10-20T09:00:00Z', PAGE = 40
 const SECRET = { authorization: 'Bearer s3cr3t-A', 'x-api-key': 'k3y-B' } as Record<string, string>
@@ -140,6 +142,16 @@ test('d1 #21: Show reads that one header once, shows it alone, and keeps Technic
   expect(showButton(p.container, 'x-api-key')).not.toBeNull()
 })
 
+test('1.10 列头: the header row names every column a request row has, the marks column included', async () => {
+  answerOf = (q) => (q.ref ? ok(refDoc(String(q.ref))) : ok(page(null, 'telemetry')))
+  const p = mount(hostHash(''))
+  await waitFor(() => expect(p.$('#hlist .hrow')).not.toBeNull())
+  const heads = [...p.$('.hhead')!.children], row = p.$('#hlist .hrow')!
+  const cells = [...row.querySelector('a.hmain')!.children, ...[...row.children].filter((c) => c.tagName !== 'A')]
+  expect(heads.length).toBe(cells.length)
+  for (const h of heads) expect(h.textContent!.trim()).not.toBe('')
+})
+
 test('d2 #12: the end of the list reads after=next; the focused and the selected rows stay the same nodes; no read once next is null', async () => {
   let page2 = held()
   answerOf = (q) => (q.after ? page2.p : q.ref ? ok(refDoc(String(q.ref))) : ok(page(null, 'telemetry')))
@@ -209,6 +221,18 @@ test('d3 #20 detail placement follows the media query: the drawer opens with ref
   document.getSelection()!.setBaseAndExtent(cell.firstChild!, 0, cell.firstChild!, 4)
   fireEvent.click(cell, { detail: 1 })
   expect(p.router().setParams).not.toHaveBeenCalled()
+})
+
+// 1.5 K-29 cause classes reach the detail: a ref read the deadline ended says the timed-out class, not the unreachable one
+test('d4 #19 · K-29 a ref read the deadline ended says its own cause class in the detail', async () => {
+  const late = { ok: false, status: 0, timedOut: true, data: null, error: 'no answer within 60 s' }
+  answerOf = (q) => (q.ref === 'r3' ? late : q.ref ? ok(refDoc(String(q.ref))) : ok(page(q.after, 'telemetry')))
+  const p = mount(hostHash('ref=r3'))
+  await p.findByRole('button', { name: /retry/i })
+  const shown = p.$('.d-err')!.textContent!
+  expect(shown).toContain(failOf(W.THIS_REQUEST, late).line)
+  expect(shown).not.toContain(failOf(W.THIS_REQUEST, { ...late, timedOut: false }).line)
+  p.unmount()
 })
 
 test('d4 #23 / #19 a detail that cannot be read says why: a slower earlier answer never paints over the newer selection; a failed ref read shows Retry, which re-reads', async () => {

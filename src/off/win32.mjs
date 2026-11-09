@@ -1,24 +1,27 @@
 // win32.mjs (src/off) — what `trocar off` and `trocar uninstall` do on Windows that no other OS needs (RFC 4.8 §4.2, §7; 1.6 R3, R7). It imports Node's own modules and files of src/off and nothing else: the standalone `trocar-off`
 // is made of the files of this directory alone, so it cannot reach the helper, the collector or the source tree (0.1 §2). Today this file holds the elevation check; the Windows undo (`undoWin32`) joins it.
 //
-// R7 on Windows (4.8 §7): trocar never runs with an elevated token or as SYSTEM, so `on`, `daemon`, `off` and `uninstall` refuse to. All four ask `whoami /groups` through execTool (`on` and `daemon`
+// R7 on Windows (4.8 §7): trocar never runs with an elevated token or as SYSTEM, so `on`, `daemon`, `off` and `uninstall` refuse to. All four ask `whoami /user /groups` through execTool (`on` and `daemon`
 // by arch/win32/autostart.mjs `refuseElevated`, which calls elevationByWhoami): a helper started for the question cost on 1.2 s (2026-10-17), and off has to work when trocar is broken. The SIDs are the same in every language of Windows, so the check reads
-// SIDs, never group names: the integrity label is `S-1-16-<rid>` (High is 12288, System 16384) and SYSTEM is `S-1-5-18`.
+// SIDs, never names: the integrity label is `S-1-16-<rid>` (High is 12288, System 16384) and SYSTEM is the user SID `S-1-5-18`. A SYSTEM token lists no S-1-5-18 group, so
+// SYSTEM is either of two signals, the user SID or a System label, and it is decided before the unsplit-token exception, which lets High through and never SYSTEM.
 import nodeFs from 'node:fs'
 import nodePath from 'node:path'
 import { execTool } from './exec.mjs'
 
 const HIGH_RID = 12288
+const SYSTEM_RID = 16384
 
 /** → `{ elevated: false }` · `{ elevated: true, why: 'high-integrity' | 'system' }` · `{ elevated: null, reason }` (R11: not readable is not "no", and `reason` says why). `run` is the injected runner (execTool's). */
 export function elevationByWhoami({ run = null, env = process.env } = {}) {
-  const r = execTool('whoami', ['/groups', '/fo', 'csv', '/nh'], { run, env })
-  if (r.code !== 0) return { elevated: null, reason: `whoami /groups ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `failed (exit ${r.code})`}` }
+  const r = execTool('whoami', ['/user', '/groups', '/fo', 'csv', '/nh'], { run, env })
+  if (r.code !== 0) return { elevated: null, reason: `whoami ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `failed (exit ${r.code})`}` }
+  const user = /^"[^"\r\n]*","(S-1-[\d-]+)"\r?$/m.exec(r.out)?.[1] ?? null // the user row is the one with two fields
   const rids = [...r.out.matchAll(/\bS-1-16-(\d+)\b/g)].map((m) => Number(m[1]))
-  if (/\bS-1-5-18\b/.test(r.out)) return { elevated: true, why: 'system' }
-  if (!rids.length) return { elevated: null, reason: 'whoami /groups gave no mandatory label (S-1-16-…)' }
+  if (/\bS-1-5-18\b(?!-)/.test(r.out) || Math.max(...rids) >= SYSTEM_RID) return { elevated: true, why: 'system' }
+  if (!rids.length) return { elevated: null, reason: 'whoami gave no mandatory label (S-1-16-…)' }
   if (Math.max(...rids) < HIGH_RID) return { elevated: false }
-  return unsplitByReg({ run, env }) ? { elevated: false, why: 'unsplit' } : { elevated: true, why: 'high-integrity' }
+  return unsplitByReg({ user, run, env }) ? { elevated: false, why: 'unsplit' } : { elevated: true, why: 'high-integrity' }
 }
 
 // R7's unsplit-token exception (1.6 R7, D53③): with no split token every shell of the account is High, so `on` and `off` share one token. whoami cannot see a
@@ -30,10 +33,9 @@ const regDword = (name, { run, env }) => {
   const m = r.code === 0 && new RegExp(`\\b${name}\\s+REG_DWORD\\s+0x([0-9a-f]+)`, 'i').exec(r.out)
   return m ? parseInt(m[1], 16) : r.code === 1 ? 'absent' : null
 }
-function unsplitByReg({ run, env }) {
+function unsplitByReg({ user, run, env }) {
   if (regDword('EnableLUA', { run, env }) === 0) return true
-  const u = execTool('whoami', ['/user', '/fo', 'csv', '/nh'], { run, env })
-  if (u.code !== 0 || !/"S-1-5-21-[\d-]+-500"/.test(u.out)) return false
+  if (!/^S-1-5-21-[\d-]+-500$/.test(user ?? '')) return false
   const f = regDword('FilterAdministratorToken', { run, env })
   return f === 0 || f === 'absent'
 }
@@ -79,12 +81,42 @@ export function undoRunKey({ prior = null, run = null, env = process.env } = {})
   return r.code === 0 ? { ok: true, result: prior ? 'restored' : 'removed' } : { ok: false, result: 'failed', reason: `reg ${prior ? 'add' : 'delete'} failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})` }
 }
 
+export const TASK_FILE = 'trocar-collector.task.xml' // the task's XML install wrote and registered, in the collector's directory
+
+const xmlUnescape = (v) => v.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+/** A task XML's action: `{ command, args }` from its one `<Exec>`, or null (no Exec, or more than one action: a second would run beside trocar's on every start). */
+export const taskAction = (xml) => {
+  const text = String(xml).replace(/\u0000/g, '')
+  const actions = text.match(/<Actions[\s>][\s\S]*?<\/Actions>/)
+  const execs = actions ? actions[0].match(/<Exec>[\s\S]*?<\/Exec>/g) || [] : []
+  if (execs.length !== 1 || /<(ComHandler|SendEmail|ShowMessage)[\s>]/.test(actions[0])) return null
+  const el = (tag) => { const x = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(execs[0]); return x ? xmlUnescape(x[1]).trim() : '' }
+  return { command: el('Command'), args: el('Arguments') }
+}
+/** Is the task registered under trocar's name (`schtasks /Query /XML`) the one in the task file install wrote (`written`, null when there is none: then it is
+ *  not trocar's)? schtasks prints UTF-16LE and execTool decodes UTF-8, so a non-ASCII character (a user name in the program's path) comes back mangled, the
+ *  same way every time: a field matches as written, or as the same text sent through that channel. */
+export const sameTask = (registered, written) => {
+  const own = written == null ? null : taskAction(written), reg = taskAction(registered)
+  const same = (a, b, fold = (x) => x) => fold(a) === fold(b) || fold(Buffer.from(a, 'utf16le').toString('utf8').replace(/\u0000/g, '')) === fold(b)
+  return !!(own && reg && same(own.command, reg.command, (x) => x.toLowerCase()) && same(own.args, reg.args))
+}
+
 /** The task off the login path — the TASK alone, before the ledger's entries go (an `off`'s step 5 and `uninstall`'s own step call this; the Run value is a
  *  manifest entry and goes with the rest): `/Change /DISABLE` for an `off` (it does not end a running instance — the supervisor is stopped first, 4.8 §4.2),
  *  `/Delete /F` for an `uninstall`. A task that is not there is already as asked; a query that cannot tell changes nothing on a guess. → `{ ok, task:
  *  'disabled'|'deleted'|'absent'|'failed', reason? }`. */
-export function disableScheduledTask({ uninstall = false, run = null, env = process.env } = {}) {
+export function disableScheduledTask({ uninstall = false, run = null, env = process.env, file = null, ours = null, fs = nodeFs } = {}) {
   const q = taskState({ run, env })
+  if (q.state === 'present' && (file || ours)) {
+    // trocar never switches off or deletes what is not its own: a task under trocar's name is trocar's when its action is the task file's install wrote, or,
+    // with no file (no record), the one this copy of trocar would write (`ours`: its daemon by path); any other is left as it is, and said
+    const x = execTool('schtasks', ['/Query', '/TN', TASK_NAME, '/XML'], { run, env })
+    if (x.code !== 0) return { ok: false, task: 'failed', reason: `whether the task ${TASK_NAME} is the one trocar wrote could not be read (schtasks /Query /XML: ${x.err || (x.code === null ? 'it did not run' : `exit ${x.code}`)}); nothing was changed on a guess` }
+    let written = null
+    try { written = file ? fs.readFileSync(file, 'utf8') : null } catch { /* no task file: no record */ }
+    if (!sameTask(x.out, written ?? ours)) { const a = taskAction(x.out); return { ok: true, task: 'not-trocars', why: `the task ${TASK_NAME} is not the one trocar wrote (it runs ${(a && a.command) || 'no program'}), so it was left as it is` } }
+  }
   if (q.state === 'present') {
     const r = execTool('schtasks', [uninstall ? '/Delete' : '/Change', '/TN', TASK_NAME, ...(uninstall ? ['/F'] : ['/DISABLE'])], { run, env })
     return r.code === 0 ? { ok: true, task: uninstall ? 'deleted' : 'disabled' } : { ok: false, task: 'failed', reason: `schtasks ${uninstall ? '/Delete' : '/Change /DISABLE'} failed (${r.code === null ? `did not run (${r.err || 'no reason given'})` : `exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}`})` }
@@ -106,8 +138,8 @@ export function taskState({ run = null, env = process.env } = {}) {
 /** The task off the login path AND trocar's Run value taken out, the two as one undo whatever an earlier `on` used (§7: exactly one login mechanism is
  *  left live; arch's undoScheduledTask, the Run value half inlined with it): `/Change /DISABLE` for an `off`, `/Delete /F` for an `uninstall`. →
  *  `{ ok, task: 'disabled'|'deleted'|'absent'|'failed', runKey: 'removed'|'restored'|'left'|'absent'|'failed', reason?, runKeyReason? }`. */
-export function undoScheduledTask({ uninstall = false, prior = null, run = null, env = process.env } = {}) {
-  const t = disableScheduledTask({ uninstall, run, env })
+export function undoScheduledTask({ uninstall = false, prior = null, run = null, env = process.env, file = null, ours = null, fs = nodeFs } = {}) {
+  const t = disableScheduledTask({ uninstall, run, env, file, ours, fs })
   const k = undoRunKey({ prior, run, env })
   return { ok: t.ok && k.ok, ...t, runKey: k.result, ...(k.ok ? {} : { runKeyReason: k.reason }) }
 }

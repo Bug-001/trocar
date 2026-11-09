@@ -18,6 +18,7 @@ import { checkRecord } from '../../src/health/codes.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
@@ -31,7 +32,7 @@ function fakeArch(p) {
 }
 async function sandbox() {
   const root = tmpDir('as-al-')
-  const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   const s = { root, home, collector: path.join(home, '.trocar', 'collector'), sock: path.join(root, 'run', 'c.sock'), list: path.join(home, '.trocar', 'agents.json') }
   await installCollector({ home, env: { HOME: home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
   return s
@@ -64,6 +65,7 @@ test('agent-list: a custom name added while the daemon runs is judged as its har
   const s = await sandbox(); const p = fakeProc(); const { arch, clients } = fakeArch(p)
   const d = await start(s, arch)
   try {
+    await req(s, 'POST', '/on', {}) // the helper that reports exec runs only while a harness is on (4.6 §开关语义)
     await spawnFake(p, clients, 4301, NIGHTLY_EXE, ['claude-nightly', '-p', 'hi'])
     await settle()
     assert.equal(await agentOf(s, 4301), null, 'claude-nightly is on no preset list')
@@ -91,6 +93,7 @@ test('agent-list: a bad item is one agent-list-invalid with its index and code, 
   const s = await sandbox(); const p = fakeProc(); const { arch, clients } = fakeArch(p)
   const d = await start(s, arch)
   try {
+    await req(s, 'POST', '/on', {}) // the helper that reports exec runs only while a harness is on (4.6 §开关语义)
     await spawnFake(p, clients, 4303, NIGHTLY_EXE, ['claude-nightly'])
     writeList(s, { version: 1, agents: [{ harness: 'no-such-harness', name: 'x' }, { harness: 'claude-code', name: 'claude-nightly' }] })
     assert.equal(await until(async () => agentOf(s, 4303)), 'claude-code', 'the good item applies')

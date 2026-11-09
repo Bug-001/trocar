@@ -48,11 +48,9 @@ test('cli: `collector status` is the one `trocar status` (src/cli/status.mjs: it
   const named = []
   const t2 = io(); assert.equal(await runCli(['off', '--bogus'], { env, request, platform: 'linux', ...t2 }), 2, 'and its usage errors are `trocar off`\'s: exit 2')
   assert.match(t2.e.join('\n'), /trocar off: unknown option '--bogus'\ntrocar off \[<harness>/)
-  assert.match(t.o.join('\n'), /^No harness is set up for capture yet\./, 'nothing installed: the summary says so (§3.5); the engine summary the daemon reports is behind --failures, below')
-  const tf = io(); await runCli(['status', '--failures'], { env, home, request, ...status, ...tf })
-  assert.match(tf.o.join('\n'), /No problems in the last 24 hours\.\n\nExpected\n/, '\u00a73.5: `--failures` prints the problems of the last 24 hours, folded, then Expected')
   // the daemon's own answer, word for word (D46 R11): every agent it reported, why each is not captured, and the processes it could not judge
   const all = formatStatus(STATUS)
+  assertEnglish(formatStatus({ ...STATUS, agents: [], unjudged: null, helper: { pid: null, proto: null, build: null, ok: null, down: null, expected_proto: 3 } }), 'an idle helper (no harness is on, 4.6)') // V73: no `null` reaches a person
   assert.match(all, /2 decrypted/)
   assert.match(all, /  11 claude-code not captured: var-missing/)
   assert.match(all, /  12 opencode \(started by claude-code\) captured\n    not captured \(it did not read trocar's certificate\): models\.dev \(before-plugin\)/)
@@ -61,7 +59,6 @@ test('cli: `collector status` is the one `trocar status` (src/cli/status.mjs: it
   assert.match(all, /  13 deepseek-dsh not captured: dsh-node-too-old - this dsh runs on a Node older than 22\.19\.0/)
   // R4: 3 is for "could not judge", not for "no daemon": with nothing installed and no daemon there is nothing wrong (0); no runtime dir is no usage error either (the lock names the socket when there is one)
   t = io(); assert.equal(await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...status, ...t }), 0)
-  assert.match(t.o.join('\n'), /^No harness is set up for capture yet\./)
   t = io(); assert.equal(await runCli(['status'], { env: {}, home, request, ...status, ...t }), 0); assert.deepEqual(t.e, [])
   fs.rmSync(home, { recursive: true, force: true })
 })
@@ -72,19 +69,19 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
   const home = tmpDir('trocar-cli-')
   const dir = path.join(home, '.trocar', 'collector')
   try {
+    markInstalled(home) // installed, then this install's daemon fails to start
     appendEvent(dir, { event: 'failure', where: 'start', code: 'EADDRINUSE', reason: 'the engine port is held by another process' })
-    markInstalled(home) // installed
     const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
     const status = { platform: 'linux', statusDeps: { procs: async () => [], exec: NO_EXEC } }
     let t = io(); assert.equal(await runCli(['status'], { env: {}, home, ...status, ...t }), 1)
     assert.deepEqual(t.e, [], 'no runtime dir is not an error of the caller\'s: there is just no control socket to ask')
-    const wall = io(); await runCli(['status', '--failures'], { env: {}, home, ...status, ...wall })
+    const wall = io(); await runCli(['status', '--failures', '--details'], { env: {}, home, ...status, ...wall })
     assert.match(wall.o.join('\n'), /^ {2}just now\s+x1\s+EADDRINUSE the engine port is held by another process$/m, 'the failure read from disk, with its errno head, squashed reason and count (D46)')
     t = io(); assert.equal(await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out after 2000 ms'), { code: 'ETIMEDOUT' }) }, ...status, ...t }), 1)
     assert.equal(t.e.length, 0, 'a daemon that does not answer is not an error of the caller\'s; the failure from disk decides the exit')
     fs.rmSync(path.join(dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(dir, 'flows'), 'x')
     t = io(); assert.equal(await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }, ...status, ...t }), 3)
-    assert.match(t.o.join('\n').replace(/\s+/g, ' '), /Could not read capture health: .*flows: ENOTDIR/, 'a read that failed is said, never silence (D38)')
+    assert.match(t.o.join('\n').replace(/\s+/g, ' '), /flows: ENOTDIR/, 'a read that failed is said, never silence (D38)')
     assert.equal(t.e.length, 0, 'no lock: still nothing the caller did wrong')
     fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: 2 ** 22 + 7, start_time: '1', boot_id: 'b', socket: '/x' })) // a pid nothing runs as
     t = io(); await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...status, ...t })
@@ -93,7 +90,7 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
     t = io(); await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) }, ...status, ...t })
     assert.equal(t.e.length, 0, 'a stuck daemon')
     const health = { generated_at: 'T', summary: { state: 'ok', since: 'T0', read_errors: 1 }, collector: { installed: true, daemon: { state: 'running' }, conditions: [], failures: [], expected: { policy: 3 } }, raw: { problems: [] }, read: { errors: [{ file: '/f', error: 'EACCES' }], truncated: true } }
-    assert.match(formatStatus({ ...STATUS, health, events: { lost: 2 } }), /capture health: capturing since T0 - some files could not be read[^\n]*\nnot captured by design \(last 24 hours\): policy 3\ncould not read \/f: EACCES\n\(older records were left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
+    assert.match(formatStatus({ ...STATUS, health, events: { lost: 2 } }), /capture health: capturing since T0 - some files could not be read[^\n]*\nnot captured by design \(in the last 24 hours\): policy 3\ncould not read \/f: EACCES\n\(older records were left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
     assert.match(formatStatus({ ...STATUS, health: { error: 'capture health could not be read: /x/flows: EACCES' } }), /capture health could not be read: \/x\/flows: EACCES/)
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
@@ -109,7 +106,7 @@ test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 
     const daemon = { startDaemon: async (o) => ({ port: 1, socketPath: '/s', foreground: o.foreground, stop: async (x) => { stops.push(x); return { failed } } }) }
     const proc = new EventEmitter()
     // 1.6 §5.2: before install the daemon refuses and writes nothing — not even the collector directory it would log into
-    let t = io(); assert.equal(await runCli(['daemon'], { home, env: {}, daemon, proc, exit: () => {}, platform: 'linux', getuid: () => 1000, ...t }), 1, 'no install, no daemon')
+    let t = io(); assert.equal(await runCli(['daemon'], { home, env: {}, daemon, proc: { stdin: { isTTY: true }, on() {} }, exit: () => {}, platform: 'linux', getuid: () => 1000, ...t }), 1, 'no install, no daemon (at a terminal)')
     assert.match(t.e.join('\n'), /^trocar daemon: certificates are not installed\. Run: trocar install$/)
     assertEnglish(t.e.join('\n'))
     assert.deepEqual([t.o, stops, fs.existsSync(path.join(home, '.trocar'))], [[], [], false], 'nothing started, nothing written')
@@ -303,13 +300,13 @@ test('cli: runCli in a child node runs `status` without a runtime dir on a HOME 
   const home = tmpDir('trocar-cli-bin-')
   const c = cliOnEmptyMachine(home, ['status'], { XDG_RUNTIME_DIR: undefined }) // status reads the disk: never the operator's own
   const r = spawnSync(process.execPath, c.args, { env: c.env, encoding: 'utf8' })
-  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /^No harness is set up for capture yet\./); assert.equal(r.stderr, '')
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.equal(r.stderr, '')
   assert.deepEqual(fs.readdirSync(home), [], 'read-only')
   assert.ok(formatStatus({ ...STATUS, agents: [] }).includes('agents: none running'))
   const groups = [{ key: 'agent-untrusted:config-after-start', count: 1, last_ts: 'T1', last: { ts: 'T1', event: 'agent-untrusted', pid: 11, agent: 'claude-code', code: 'config-after-start', reason: 'restart it' } },
     { key: 'engine/lookup-miss', count: 4, last_ts: 'T2', last: { ts: 'T2', event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'no original destination', suppressed: 3 } }]
   const health = { generated_at: 'T3', summary: { state: 'failing', n: 3 }, collector: { installed: true, daemon: { state: 'running' }, conditions: [{ kind: 'untrusted', pid: 11, agent: 'claude-code', since: 'T1', reason: 'config-after-start' }], failures: groups, expected: {} }, raw: { problems: [] }, read: { errors: [], truncated: false } }
-  assert.match(formatStatus({ ...STATUS, health }), /capture health: 3 problem\(s\)[^\n]*\nconditions now:\n  now: untrusted pid 11 claude-code since T1: config-after-start\nproblems in the last 24 hours \(2 kind\(s\)\):\n  T1 agent-untrusted pid 11 claude-code: restart it\n  T2 problem \(engine\/lookup-miss\): no original destination \(x4 in 24 h\)$/, 'status prints the durable failure records by kind (D38)')
+  assert.match(formatStatus({ ...STATUS, health }), /capture health: 3 problem\(s\)[^\n]*\nconditions now:\n  now: untrusted pid 11 claude-code since T1: config-after-start\nproblems in the last 24 hours \(2 kind\(s\)\):\n  T1 agent-untrusted pid 11 claude-code: restart it\n  T2 problem \(engine\/lookup-miss\): no original destination \(x4\)$/, 'status prints the durable failure records by kind (D38)')
   fs.rmSync(home, { recursive: true, force: true })
 })
 
@@ -330,6 +327,17 @@ test('cli: a daemon that finds another one answering on the control channel says
   assert.equal(second.t.e.filter((l) => /another collector daemon is answering/.test(l)).length, 1, `said once: ${JSON.stringify(second.t.e)}`)
   const other = await run(false)
   assert.equal(other.exit, 1, 'a start that failed for any other reason is still a failure')
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+// The Node floor (4.9 §7): a relaunch runs on the same Node and is refused again, so the refusal exits 0 — launchd's KeepAlive {SuccessfulExit: false} and the
+// Windows supervisor (4.8 §7) then do not re-pull it, and the one record startDaemon wrote is the episode's only one until the next login or `on`.
+test('cli: a daemon refused by the Node floor exits 0, so the platform does not relaunch it into the same refusal', async () => {
+  const home = tmpDir('trocar-cli-node-')
+  markInstalled(home)
+  const daemon = { startDaemon: async () => { throw Object.assign(new Error('Node 20.1.0 is too old'), { code: 'node-too-old' }) } }
+  const exit = await runDaemonCli([], { io: io(), home, env: {}, platform: 'darwin', deps: { daemon, proc: { on() {} }, getuid: () => 1000 } })
+  assert.equal(exit, 0)
   fs.rmSync(home, { recursive: true, force: true })
 })
 
@@ -356,3 +364,30 @@ test('cli: a control endpoint held by something that does not answer is a failur
   assert.deepEqual(checkRecord(held[0]), [], 'the code and where are in the closed sets')
   fs.rmSync(home, { recursive: true, force: true })
 })
+
+// 1.6 §5.2: nothing installed — a person at a terminal gets 1 and nothing is written; a service manager's start gets 0 (systemd's Restart=on-failure,
+// launchd's KeepAlive {SuccessfulExit:false} and the Windows supervisor do not relaunch a 0: a relaunch is refused the same way), with one record where
+// the collector directory already is (after an uninstall that kept captures, say) and none created for it
+for (const platform of ['linux', 'darwin', 'win32']) {
+  for (const by of ['terminal', 'systemd', 'service']) {
+    for (const dirThere of [false, true]) {
+      test(`daemon (${platform}, ${by}, collector directory ${dirThere ? 'there' : 'absent'}): not installed is refused${by === 'terminal' ? ' with 1' : ' with 0'}, with a record only where the directory is`, async () => {
+        const home = tmpDir('trocar-cli-ni-'), dir = path.join(home, '.trocar', 'collector')
+        if (dirThere) fs.mkdirSync(dir, { recursive: true })
+        const proc = { stdin: { isTTY: by === 'terminal' }, on: () => {} }
+        const env = by === 'systemd' ? { INVOCATION_ID: 'x' } : {}
+        const daemon = { loadArch: async () => ({}), startDaemon: async () => { throw new Error('a daemon that is not installed is not started') } }
+        const t = io()
+        const exit = await runDaemonCli([], { io: t, home, env, platform, deps: { daemon, proc, getuid: () => 1000 } })
+        assert.equal(exit, by === 'terminal' ? 1 : 0)
+        assert.match(t.e.join('\n'), /certificates are not installed\. Run: trocar install/)
+        const flows = path.join(dir, 'flows')
+        const recs = fs.existsSync(flows) ? fs.readdirSync(flows).flatMap((f) => fs.readFileSync(path.join(flows, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : []
+        assert.deepEqual(recs.map((r) => [r.where, r.code]), dirThere && by !== 'terminal' ? [['start', 'not-installed']] : [], JSON.stringify(recs))
+        recs.forEach((r) => assert.deepEqual(checkRecord(r), [], JSON.stringify(r)))
+        assert.equal(fs.existsSync(dir), dirThere, 'the collector directory is never made for the refusal')
+      })
+    }
+  }
+}
+

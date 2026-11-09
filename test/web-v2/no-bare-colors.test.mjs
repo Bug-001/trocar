@@ -17,14 +17,12 @@ const HEX = /(?<![&\w#/])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-
 const FN = /\b(?:rgba?|hsla?)\s*\(/gi
 // Every hex counts by default — a string, an array, a return, a ternary, a call argument, a CSS string in a script, a declaration in a
 // stylesheet. A hex that is not a colour is exempt only where the text on its left says so: it sits inside the string argument of a DOM
-// lookup (querySelector / querySelectorAll / getElementById / closest / matches, the project's $(sel) helper in core/dom.mjs, and the
-// q(el, sel) helper of replay/timeline.mjs) — an id selector like '#decade' or '#add' — or it is a fragment link (href="#decade") or an
+// lookup (querySelector / querySelectorAll / getElementById / closest / matches, and the project's $(sel) helper in core/dom.mjs) — an id selector like '#decade' or '#add' — or it is a fragment link (href="#decade") or an
 // SVG reference (url(#add)). Hash routes ('#/…') never match HEX at all. `left` is the text of the same line before the hex; the sink's
 // string must still be open there (same quote, not closed yet), so `$('#a').style.color = '#fff'` is flagged.
 const OPEN_STRING = "(['\"`])(?:\\\\.|(?!\\1)[^\\\\\\n])*$"
 const SELECTOR_ARG = [
   new RegExp("(?<![\\w$])(?:querySelector(?:All)?|getElementById|closest|matches|\\$)\\s*\\(\\s*" + OPEN_STRING),
-  new RegExp("(?<![\\w$.])q\\s*\\(\\s*[\\w$.]+\\s*,\\s*" + OPEN_STRING),
 ]
 const NOT_A_COLOUR = /(?:\bhref\s*=\s*['"]?|\burl\(\s*['"]?)$/
 const exempt = (left) => NOT_A_COLOUR.test(left) || SELECTOR_ARG.some((re) => re.test(left))
@@ -71,11 +69,11 @@ test('the scanner catches planted violations and spares the token blocks (it is 
     "const a = $('.a ' + '#decade')", // a hex outside the selector string of the call
   ]) assert.ok(colorViolations('replay/x.mjs', src).length >= 1, src)
   assert.equal(colorViolations('replay/x.mjs', "const palette = ['#3c3', '#a1b2c3']").length, 2)
-  // … except where it is a selector (the string argument of the DOM lookups and the project's $ / q helpers), a fragment link or an SVG reference
+  // … except where it is a selector (the string argument of the DOM lookups and the project's $ helper), a fragment link or an SVG reference
   for (const src of [
     "const a = $('#add')", "const a = $('#decade', root)", "const a = el.querySelector('#add, #bad'), b = document.querySelectorAll('#decade .x')",
     "const a = el.closest('a:hover #decade'), b = el.matches('#decade.on'), c = document.getElementById('decade')", "const a = $(`#row-${i} #facade > b`)",
-    "const a = q(el, '.row #facade > b')", "const a = $(\"#decade [data-x='y']\")",
+    "const a = $(\"#decade [data-x='y']\")",
     "const h = `<a href=\"#decade\">x</a>`", "const u = 'http://host/#decade'", "const f = `<use fill=\"url(#add)\"/>`", "go('#/sessions'); go('#/replay?p=x')",
   ]) assert.deepEqual(colorViolations('replay/x.mjs', src), [], src)
   assert.equal(colorViolations('index.html', '<style>.a{color:#decade}</style> <a href="#decade">').length, 1)

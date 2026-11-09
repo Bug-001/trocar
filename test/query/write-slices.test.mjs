@@ -16,6 +16,7 @@ import { openProjection, sessionDir } from '../../src/query/projection.mjs'
 import { openFoldLog } from '../../src/query/fold-log.mjs'
 import { columns, dumpColumns, loadColumns, sync } from '../../src/query/session-doc.mjs'
 import { drain } from '../helpers/bounded.mjs'
+import { DEF_BYTES, weigh } from '../../src/query/named/lane.mjs'
 
 const SHAPE = { growth: 120, compactAt: 6_000, subEvery: 3, subLanes: 2, late: 3 }
 const homeOf = () => { const home = path.join(tmpDir('trocar-slices-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
@@ -246,4 +247,73 @@ test('a whole sync says it is working while it runs, here and on a cold read wit
     return n
   }
   assert.ok(await coldRead(true) > await coldRead(false), 'columns made from the log are heard, columns read from the sidecar need not be')
+})
+
+// 3.5 §会话读 --tail: what the writer appends to a tail is each line's compact JSON and a newline, in UTF-8, after the bytes the tail had
+// (a fresh render writes the same); a text past Latin-1 among the appended lines, so a line encoded any other way changes the bytes.
+test('3.5 §会话读 --tail: the lines appended to a tail are each its compact JSON and a newline in UTF-8, after the bytes it had', async () => {
+  const { home, id, a, ctx } = homeWith(150, { ...SHAPE, late: 0, preamble: 'Привет, 日本語 ✓ 🚀' })
+  const tails = () => ['main', 'rest'].map((p) => fs.readFileSync(tailFile(home, id, p)))
+  await toTheEnd(ctx, id)
+  const before = tails()
+  a.append(60)
+  await toTheEnd(ctx, id)
+  const appended = tails().map((t, i) => {
+    assert.ok(t.length > before[i].length && t.subarray(0, before[i].length).equals(before[i]), 'appended to, not written afresh')
+    const lines = t.toString('utf8').split('\n')
+    assert.equal(lines.pop(), '', 'it ends with a newline')
+    assert.ok(t.equals(Buffer.from(lines.map((l) => `${JSON.stringify(JSON.parse(l))}\n`).join(''), 'utf8')), 'every line its compact JSON in UTF-8')
+    return t.subarray(before[i].length)
+  })
+  assert.ok(Buffer.concat(appended).includes(Buffer.from('日本語', 'utf8')), 'a text past Latin-1 among the appended lines')
+})
+
+// The blocks the steps of an answer file hold: each step's list rebuilt from its ops against its parent's (in the file), and its reply.
+function blocksOf(text) {
+  const lists = new Map(), blocks = new Set()
+  for (const l of text.trimEnd().split('\n').slice(1)) {
+    const o = JSON.parse(l)
+    if (!o.s) continue
+    const P = o.s.parent == null ? [] : lists.get(o.s.parent), list = o.s.ops.flatMap((op) => (op[0] === 0 ? P.slice(op[1], op[1] + op[2]) : op.slice(1)))
+    lists.set(o.s.rid, list)
+    for (const b of [...list, ...o.s.reply]) blocks.add(b)
+  }
+  return blocks.size
+}
+// many lanes side by side that share blocks: the tool definitions every request carries and a reminder every lane's first prompt starts with
+const TOOLS = Array.from({ length: 10 }, (_, k) => ({ name: `T${k}`, description: `tool ${k} `.repeat(40), input_schema: { type: 'object', properties: { a: { type: 'string' } } } }))
+const LANES = { wire: 'threads', tools: TOOLS, subLanes: 8, subEvery: 2, subLen: 12, growth: 300, compactAt: 20_000, prompt: 400 }
+
+test('3.5 §内存有界: on many lanes that share blocks, the writer reads a stored definition at most once for each file it renders', async () => {
+  const { home, id, ctx } = homeWith(700, LANES), s = await folded(ctx, id), store = s.store, readDef = store.readDef
+  let reads = 0, weight = 0
+  store.readDef = (bid) => { reads++; const d = readDef(bid); weight += weigh(d ?? null); return d }
+  try { cut(ctx, s) } finally { store.readDef = readDef }
+  const files = answerNames(home, id).filter((n) => !n.startsWith('head'))
+  assert.ok(files.some((n) => n.startsWith('p0.')) && s.V.lanes.length >= 16, `a sealed pack and many lanes: ${files} · ${s.V.lanes.length} lanes`)
+  assert.ok(weight <= DEF_BYTES, `what was read (${weight} B) fits one definitions cache (DEF_BYTES), so none is read again for want of room`)
+  const blocks = files.reduce((n, f) => { const b = fs.readFileSync(path.join(sessionDir(home, id), f)); return n + blocksOf((f.endsWith('.gz') ? gunzipSync(b) : b).toString('utf8')) }, 0)
+  assert.ok(reads <= blocks, `${reads} reads of stored definitions, past the ${blocks} blocks the ${files.length} files' steps hold`)
+})
+
+test('3.5 §会话读 --tail: an append lists the lane headers it carries in the lanes\' order, as a fresh tail does: the same input gives the same tail bytes, however the fold was sliced', async () => {
+  const shape = { growth: 120, compactAt: 1_000_000, subEvery: 2, subLanes: 12, subLen: 6 }
+  const tails = async (slice) => {
+    const h = homeWith(120, shape)
+    cut(h.ctx, await folded(h.ctx, h.id)) // the first write: the tails, fresh
+    const before = fs.statSync(tailFile(h.home, h.id, 'rest')).size
+    const ino = Object.fromEntries(['main', 'rest'].map((p) => [p, fs.statSync(tailFile(h.home, h.id, p)).ino]))
+    h.a.append(60) // new subagent lanes come, and the old ones move
+    await drain(() => extendSession(h.ctx, h.id, slice))
+    const s = await folded(h.ctx, h.id)
+    cut(h.ctx, s)
+    for (const p of ['main', 'rest']) assert.equal(fs.statSync(tailFile(h.home, h.id, p)).ino, ino[p], `${p}: appended to, not written afresh`)
+    const t = textsOf(h, (n) => n.startsWith('open.'))
+    const appended = fs.readFileSync(tailFile(h.home, h.id, 'rest')).subarray(before).toString('utf8').split('\n').filter((l) => l.startsWith('{"l":')).map((l) => JSON.parse(l).l.lane)
+    return { t, appended, order: s.V.lanes.map((x) => x.lane) }
+  }
+  const whole = await tails(Infinity), sliced = await tails(1)
+  assert.ok(whole.appended.length > 12, `lane headers appended: ${whole.appended.length}`)
+  assert.deepEqual(whole.appended, whole.order.filter((k) => whole.appended.includes(k)), 'in the order of the session\'s lanes')
+  assert.deepEqual(sliced.t, whole.t)
 })

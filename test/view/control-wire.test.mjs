@@ -7,6 +7,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { controlRecordWire } from '../../src/view/control-wire.mjs'
+import { shapeResponse } from '../../src/collector/core/record/body.mjs'
+import zlib from 'node:zlib'
 import { isSecretHeader } from '../../src/capture/redact.mjs'
 import { isCredentialHeader } from '../../web/legacy/core/sensitive.mjs'
 
@@ -130,4 +132,31 @@ test('ctl.traffic_class is the record\'s own traffic_class, or null when it has 
     assert.equal(controlRecordWire({ ...bare, traffic_class: cls, is_llm_call: false, endpoint: '/api/event_logging/v2/batch' }).ctl.traffic_class, cls)
   }
   assert.equal(controlRecordWire(bare).ctl.traffic_class, null)
+})
+
+// 4.1 #13: the compressed wire bytes of a reply (up to 64 MiB) stay in the source record; no query document carries them, and it says they were left behind
+test('a reply shown decompressed names its coding (decoded_from), by the rule the writer keeps wire_b64 by; one that did not decode does not', () => {
+  const sse = 'event: ping\ndata: {}\n\n'
+  const at = (ctype, enc, body) => controlRecordWire({ ...SEED, resp: shapeResponse({ status: 200, headers: [['Content-Type', ctype], ...(enc ? [['Content-Encoding', enc]] : [])], body }) }).ctl.resp
+  for (const [enc, z] of [['gzip', zlib.gzipSync], ['br', zlib.brotliCompressSync]]) {
+    assert.equal(at('text/event-stream', enc, z(Buffer.from(sse))).decoded_from, enc, `${enc} sse`)
+    assert.equal(at('application/octet-stream', enc, z(Buffer.from([0xff, 0xfe, 0x00]))).decoded_from, enc, `${enc} binary`)
+  }
+  assert.ok(!('decoded_from' in at('text/event-stream', null, Buffer.from(sse))), 'not compressed')
+  assert.ok(!('decoded_from' in at('text/event-stream', 'identity', Buffer.from(sse))), 'identity')
+  const bad = at('text/event-stream', 'gzip', Buffer.from('not gzip'))
+  assert.deepEqual([bad.kind, 'decoded_from' in bad], ['undecoded', false])
+})
+
+test('resp.wire_b64 and resp.partial.wire_b64 never reach a query document, detail or slim, and are named in ctl.omitted', () => {
+  const W1 = 'H4sIAAAAAAAAA-wire-bytes-of-the-reply', W2 = 'H4sIAAAAAAAAA-wire-bytes-of-the-partial'
+  const rec = { ...SEED, resp: { ...SEED.resp, headers: { 'content-encoding': 'gzip' }, content_encoding: 'gzip', wire_b64: W1,
+    partial: { kind: 'sse', raw: 'event: ping\n\n', content_encoding: 'gzip', wire_b64: W2 } } }
+  for (const opts of [undefined, { detail: false }]) {
+    const out = controlRecordWire(rec, opts)
+    const s = JSON.stringify(out)
+    assert.ok(!s.includes(W1) && !s.includes(W2), `detail=${opts ? 'false' : 'true'}`)
+    assert.ok(out.ctl.omitted.includes('resp.wire_b64'))
+    assert.ok(out.ctl.omitted.includes('resp.partial.wire_b64'))
+  }
 })

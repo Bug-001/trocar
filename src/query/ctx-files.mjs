@@ -11,14 +11,15 @@ import { SCHEMA_VERSION } from '../cli/schema.mjs';
 import { sessionMetaOfFacts } from '../view/board.mjs';
 import { listOf } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
+import { isMarked, opensPart } from '../view/head-cols.mjs';
 import { HEAD_FILES } from './ctx-key.mjs';
-import { lru, sessionDir } from './projection.mjs';
+import { lru, posCmp, sessionDir } from './projection.mjs';
 import { isModelCall, sessionFactsOf } from './rows.mjs';
 import { laneOf, placeIn, recOf, FLAG } from './session-doc.mjs';
-import { laneStepper, weigh } from './named/lane.mjs';
+import { DEF_BYTES, laneStepper, weigh } from './named/lane.mjs';
 
 /** The answer files' format version (3.5 `v`). */
-export const CTX_V = 3;
+export const CTX_V = 5;
 /** The lane headers a head lists at most, the axis lane first, then the most recently active (3.5 `lanes`, SHOULD 64). */
 export const HEAD_LANES = 64;
 // cells of `cols` at most (3.5 `bucket`), failed members `errors` names at most, tier-0 time buckets at most
@@ -39,7 +40,8 @@ export function readHead(home, id, fs = nodeFs) {
 
 const docOf = (errors, body, command = 'session') => ({ schema: SCHEMA_VERSION, command, ok: !errors.some((e) => !e.level), errors, v: CTX_V, ...body });
 // the index's problems (a note, `level`, is about the read that made it, never the disk's: index-build.mjs) and the first failed members
-const errorsOf = (index, failed) => [...index.filter((e) => !e.level), ...failed.slice(0, FAILED_SHOWN).map((f) => ({ where: f.id, code: f.code, reason: f.reason }))];
+const errorsOf = (index, failed) => [...index.filter((e) => e.level !== 'note'), // a note is about one read; a state (index-pending) holds while the head does
+  ...failed.slice(0, FAILED_SHOWN).map((f) => ({ where: f.id, code: f.code, reason: f.reason }))];
 
 /** headDoc(s) → the tier-1 head of a session state (named/session.mjs sessionState, `mark` already the wire's, `markTs` its member's
  *  index ts, `packs` and `open` those of packsOf / the writer): the axis lane's steps as `cols` (the step-order columns' cx / cb / fl, session-doc.mjs), its chapters, the lane headers. */
@@ -57,11 +59,13 @@ export function headDoc(s) {
     if (i % bucket === 0 || h > cells[c]) { cells[c] = h; cells[c + 1] = cols.cb[k]; }
     cells[c + 2] |= f;
     let ch = chapters.at(-1);
-    if (!ch || f & FLAG.compaction && i > 0) {
-      ch = { k: chapters.length, s0: i, s1: i, rid0: lane.rids[i], ts0: cols.ts[k] ?? null, ts1: null, inferred: !!(ch && f & FLAG.inferred), peakCtx: 0 };
+    const before = i ? cols.fl[lane.slots[i - 1]] : 0;
+    if (!ch || opensPart(before, f)) {
+      ch = { k: chapters.length, s0: i, s1: i, rid0: lane.rids[i], ts0: cols.ts[k] ?? null, ts1: null, inferred: !!(ch && f & FLAG.inferred && !isMarked(before)), peakCtx: 0, prompts: 0 };
       chapters.push(ch);
     }
     ch.s1 = i + 1; ch.ts1 = cols.ts[k] ?? null;
+    if (f & FLAG.user) ch.prompts++;
     if (cols.cx[k] > ch.peakCtx) ch.peakCtx = cols.cx[k];
   }
   // the axis lane, then the others by their last step, the newest first
@@ -212,7 +216,8 @@ function stepLines(S, key, i, p, wrote, memo = null) {
 }
 // the `{l}` lines of a tail: every lane header of its part (they follow the doc-head line); a pack has none (3.5 `{l}`)
 const headsOf = (s, part) => { const ax = axisOf(s.V); return s.V.lanes.filter((h) => (h.lane === ax) === (part === 'main')).map((h) => ({ l: h })); };
-const textOf = (lines) => lines.map((o) => `${JSON.stringify(o)}\n`).join('');
+// a line made into bytes at once (outside the heap): a span's text, rendered or appended, can be tens of MB
+const lineBytes = (o) => Buffer.from(`${JSON.stringify(o)}\n`, 'utf8');
 /** renderSpan(s, n, part, tail) → the NDJSON text of pack n's `part` (`main` = the axis lane's, `rest` = the rest), or of the open
  *  tail when `tail`: the doc-head line; a tail's `{l}` for every lane of the part; per call of the part in step order its row, the definitions not yet in the file, its step against
  *  the previous step of its lane in this file (none: a keyframe); `{r}` for the part's members in write order; `{x}` (rest) for
@@ -222,20 +227,21 @@ export const renderSpan = (s, n, part, tail = false) => drain(rendering(s, n, pa
 const drain = (it) => { for (;;) { const r = it.next(); if (r.done) return r.value; } };
 // a span's doc-head line
 const docLine = (s, n, part, tail, [s0, s1] = axisSpans(s)[n]) => docOf(errorsOf(s.indexErrors, []), { id: s.id, ...(tail ? { tail: { n, part, s0 } } : { pack: { n, part, s0, s1 } }) }, 'lane');
-// → {buf, wrote}: the span's text, rendered a call at a time (it yields after each: the writer's unit, 3.5 后台抽取与归约)
-function* rendering(s, n, part, tail, memo = null, spans = axisSpans(s)) {
+// → {buf, wrote}: the span's text, rendered a call at a time (it yields after each: the writer's unit, 3.5 后台抽取与归约). Its lane steppers
+// share one definitions cache and one tool_use cache (`uses`: the memo's, else the writer's own, else one of this call), so a block
+// every lane holds is read once a call, and what they keep does not grow with the lanes (3.5 §内存有界).
+function* rendering(s, n, part, tail, memo = null, spans = axisSpans(s), uses = memo || lru(DEF_BYTES)) {
   const V = s.V, { cols, log } = V, ax = axisOf(V), main = part === 'main', a = n * PACK_MEMBERS;
   const axV = ax == null ? -2 : cols.keys.get(ax), onAxis = (rid) => isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV;
   const members = s.plan.members.slice(a, Math.min(a + PACK_MEMBERS, upToOf(s))).filter((r) => s.cut(r)), [s0, s1] = spans[n];
-  // each line made into bytes at once (outside the heap): a span's text can be tens of MB
-  const chunks = [], out = { push: (...os) => { for (const o of os) chunks.push(Buffer.from(`${JSON.stringify(o)}\n`, 'utf8')); } };
+  const chunks = [], out = { push: (...os) => { chunks.push(Buffer.concat(os.map(lineBytes))); } }, defs = lru(DEF_BYTES);
   out.push(docLine(s, n, part, tail, spans[n]));
   if (tail) out.push(...headsOf(s, part));
   const calls = members.map((r) => String(r.id)).filter((rid) => isRow(cols, rid) && onAxis(rid) === main);
   calls.sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
   const steppers = new Map(), prev = new Map(), wrote = new Set();
   for (const rid of calls) {
-    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, memo || undefined)).get(key), i = placeIn(cols, S.L, rid);
+    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, uses, defs)).get(key), i = placeIn(cols, S.L, rid);
     out.push(...stepLines(S, key, i, prev.has(key) ? prev.get(key) : -1, wrote, memo));
     prev.set(key, i);
     S.release(i);
@@ -336,7 +342,7 @@ export function listedText(home, id, n, part, fs = nodeFs) {
 }
 const same = (a, b) => !!a && a.equals(b);
 // a file's text begins with the doc-head line `o`
-const headed = (t, o) => { const h = Buffer.from(textOf([o]), 'utf8'); return !!t && t.subarray(0, h.length).equals(h); };
+const headed = (t, o) => { const h = lineBytes(o); return !!t && t.subarray(0, h.length).equals(h); };
 // The tail `part` of span n a worker before this one wrote, carried on by appends: whole, of the size its checkpoint says (nothing
 // was written to it after the checkpoint), its doc-head line the one a render now writes (same v, span, s0, errors); the definitions
 // it holds read back from its `{d}` lines. Else (a line that does not parse too) null: it is written afresh (a fresh render is as
@@ -442,7 +448,7 @@ function* writing(ctx, s) {
   for (let n = 0; n < N; n++) {
     const k = W.packs[n];
     if (k && !d.packs.has(n) && k.s0 === spans[n][0] && k.s1 === spans[n][1]) continue; // its rows and its doc head as written
-    W.packs[n] = yield* sealing(s, { home, fs, ax, memo: n >= W.open ? W.memo : null }, n, spans, c && c.ax === ax && !d.packs.has(n), k);
+    W.packs[n] = yield* sealing(s, { home, fs, ax, memo: n >= W.open ? W.memo : null, uses: W.memo }, n, spans, c && c.ax === ax && !d.packs.has(n), k);
   }
   // a tail written afresh → its {size, defs}
   const fresh = function* (part) {
@@ -463,7 +469,7 @@ function* writing(ctx, s) {
   return W.files;
 }
 // pack n's files brought to the state `s` (`kept`: its files may be taken as they are) → its W.packs entry
-function* sealing(s, { home, fs, ax, memo }, n, spans, kept, k) {
+function* sealing(s, { home, fs, ax, memo, uses }, n, spans, kept, k) {
   const files = PARTS.map((p) => packFile(home, s.id, n, p));
   // a pack sealed before this worker and unchanged since, its files written under this axis (a pack's main / rest split is the
   // axis's): its files, when whole and their doc head ([s0, s1]) the one a render now writes
@@ -471,7 +477,7 @@ function* sealing(s, { home, fs, ax, memo }, n, spans, kept, k) {
   if (kept) { texts = files.map((f, i) => { const t = readText(fs, f, true); return headed(t, docLine(s, n, PARTS[i], false, spans[n])) ? t : null; }); yield; }
   if (!texts || texts.includes(null)) {
     texts = [];
-    for (const p of PARTS) texts.push((yield* rendering(s, n, p, false, memo, spans)).buf);
+    for (const p of PARTS) texts.push((yield* rendering(s, n, p, false, memo, spans, uses)).buf);
     for (let i = 0; i < PARTS.length; i++) {
       const t = texts[i], due = k ? k.h[i] !== sha(t) : !same(readText(fs, files[i], true), t);
       yield;
@@ -486,31 +492,37 @@ function* sealing(s, { home, fs, ax, memo }, n, spans, kept, k) {
 // written (torn, removed, replaced, or not carried on from the last worker) is written afresh instead.
 function* appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
   const { cols, log } = s.V, ax = W.ax, add = { main: [], rest: [] }, partOf = (key) => (key === ax ? 'main' : 'rest');
-  for (const h of d.lanes) add[partOf(h.lane)].push({ l: h });
+  const steppers = new Map(), defs = lru(DEF_BYTES), push = (part, ...os) => { add[part].push(Buffer.concat(os.map(lineBytes))); };
+  // the log gives what changed in its order of change, which follows how the fold was sliced: each kind of line goes in an order of
+  // its own instead, lane headers by first step (V.lanes; a reader adds a lane it has not seen in the order its header comes), the
+  // failed members and the rids no longer a call by record id (3.5 §会话读 --tail)
+  const firstAt = (h) => (isRow(cols, h.first) ? cols.ts[cols.slotOf(h.first)] : null); // a lane's key is its first rid: no two tie
+  const lanes = [...d.lanes].sort((a, b) => compareStep(firstAt(a), a.first, firstAt(b), b.first));
+  for (const h of lanes) push(partOf(h.lane), { l: h });
   const calls = [...d.opens].filter((rid) => isRow(cols, rid)).sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
-  const steppers = new Map();
   for (const rid of calls) {
-    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, W.memo)).get(key), i = placeIn(cols, S.L, rid);
+    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, W.memo, defs)).get(key), i = placeIn(cols, S.L, rid);
     let p = -1;
     for (let t = i - 1; t >= 0 && t >= i - 64; t--) if (spanOf(s, S.rids[t]) >= N) { p = t; break; }
-    add[partOf(key)].push(...stepLines(S, key, i, p, W.tails[partOf(key)].defs, W.memo));
+    push(partOf(key), ...stepLines(S, key, i, p, W.tails[partOf(key)].defs, W.memo));
+    S.release(i);
     yield;
   }
   const axV = ax == null ? -2 : cols.keys.get(ax);
   for (let q = W.rec; q < upTo; q++) {
     const r = s.plan.members[q], rid = String(r.id);
-    if (s.cut(r)) add[isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV ? 'main' : 'rest'].push({ r: recOf(r) });
+    if (s.cut(r)) push(isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV ? 'main' : 'rest', { r: recOf(r) });
   }
-  for (const f of d.fails) add.rest.push({ x: { where: f.id, code: f.code, reason: f.reason } });
-  for (const [rid, part] of d.gone) add[part].push({ g: rid });
+  for (const f of [...d.fails].sort((a, b) => posCmp(a.id, b.id))) push('rest', { x: { where: f.id, code: f.code, reason: f.reason } });
+  for (const [rid, part] of [...d.gone].sort((a, b) => posCmp(a[0], b[0]))) push(part, { g: rid });
   for (const part of PARTS) {
     const file = fileOf(part);
     let size = -1;
     try { size = fs.statSync(file).size; } catch { /* gone */ }
     if (size !== W.tails[part].size) { W.tails[part] = yield* fresh(part); continue; }
     if (!add[part].length) continue;
-    const t = textOf(add[part]);
+    const t = Buffer.concat(add[part]);
     fs.appendFileSync(file, t);
-    W.tails[part].size += Buffer.byteLength(t);
+    W.tails[part].size += t.length;
   }
 }

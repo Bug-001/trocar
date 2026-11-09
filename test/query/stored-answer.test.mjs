@@ -8,7 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import { answer } from '../../src/query/answers.mjs'
-import { storedFile, writeStored, STORED_MAX, STORED_V } from '../../src/query/stored.mjs'
+import { storedFile, writeStored, STORED_MAX } from '../../src/query/stored.mjs'
 import { rawHome, writeSegment } from './raw-home.mjs'
 
 const DEMO = fileURLToPath(new URL('../../samples/demo-session.ndjson', import.meta.url))
@@ -69,15 +69,13 @@ test('the directory keeps at most STORED_MAX files, the newest among them', asyn
   assert.ok(fs.existsSync(storedFile(h, 'sessions', last)))
 })
 
-test('the rotation counts files of other versions too, and they go first: they are older', () => {
+test('the rotation counts files of other names too, and they go first: they are older', () => {
   const h = rawHome('trocar-stored-')
   const file = (i) => storedFile(h, 'sessions', { limit: '1', after: String(i) })
-  const seg = `.v${STORED_V}.`
-  assert.ok(path.basename(file(0)).includes(seg), 'the name carries STORED_V')
   writeStored(h, 'sessions', { limit: '1' }, { sessions: [] })
   const past = new Date(Date.now() - 3_600_000)
   for (let i = 0; i < STORED_MAX; i++) {
-    const to = file(i).replace(seg, i % 2 ? '.' : `.v${STORED_V + 1}.`) // the name before versions, and another version
+    const to = path.join(path.dirname(file(i)), path.basename(file(i)).replace(/^sessions\./, i % 2 ? 'sessions.v2.' : 'sessions2.')) // a name once versioned, and a new prefix
     fs.writeFileSync(to, 'old')
     fs.utimesSync(to, past, past)
   }
@@ -85,4 +83,24 @@ test('the rotation counts files of other versions too, and they go first: they a
   assert.equal(files(h).length, STORED_MAX)
   assert.ok(fs.existsSync(storedFile(h, 'sessions', { limit: '1', after: 'now' })))
   assert.ok(fs.existsSync(storedFile(h, 'sessions', { limit: '1' })))
+})
+
+// The keys a stored file under each name prefix has carried since the prefix began (3.5 §存下的答案: the shape may only gain keys).
+// Sound for a key removed or renamed; NOT for a value whose meaning or vocabulary changes, which only the spec rule and review catch.
+const FROZEN = {
+  'sessions.': {
+    top: ['schema', 'command', 'ok', 'as_of', 'sessions', 'next', 'has_more', 'errors'],
+    row: ['session_id', 'project_slug', 'project_path', 'entrypoint', 'harness', 'harness_inferred', 'session_synthesized', 'provider', 'title',
+      'title_source', 'calls', 'logged', 'probes', 'other', 'has_subagent', 'last_ts'],
+  },
+}
+test('3.5 #38: a stored name keeps every key its prefix was first stored with', async () => {
+  const h = home(), params = { limit: '500' }
+  const prefix = path.basename(storedFile(h, 'sessions', params)).replace(/[0-9a-f]{16}\.json\.gz$/, '')
+  const frozen = FROZEN[prefix]
+  assert.ok(frozen, `a new prefix ${prefix} needs its frozen key list here`)
+  const doc = JSON.parse((await asWorker(h, params)).bytes.toString('utf8'))
+  for (const k of frozen.top) assert.ok(Object.hasOwn(doc, k), `top-level ${k}`)
+  assert.ok(doc.sessions.length > 0)
+  for (const r of doc.sessions) for (const k of frozen.row) assert.ok(Object.hasOwn(r, k), `row ${k}`)
 })

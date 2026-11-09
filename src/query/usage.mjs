@@ -16,21 +16,23 @@ import { parseTextRef } from '../raw/refs.mjs';
 import { reduce, NO_FILE } from '../view/reduce.mjs';
 import { openProjection } from './projection.mjs';
 import { mapUsage } from '../model/schema.mjs';
+import { boardDissectorOf } from '../dissect/registry.mjs';
 import { recordsAt } from './records.mjs';
 import { isModelCall, sessionGroups, indexRows } from './rows.mjs';
 import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, plainMark, sealedMark, segStamp } from './index-build.mjs';
 import { warmCache, fsTag, statKey } from './warm.mjs';
 import { trocarHome } from '../paths.mjs';
 
-export const USAGE_V = 4; // the facts are the session's extraction and reduction (lane = its lane header's kind)
+export const USAGE_V = 6; // 6: the desk line's background kinds of 2.1 (its 4) joined; 3: the facts are the session's extraction and reduction (lane = its lane header's kind); 4: a reply closed after its success terminal is not failed; 5: a keyed session's lanes follow its message chain, Gemini bodies read
 export const USAGE_CHUNK_BYTES = 4 << 20; // stored bytes of model calls read back per chunk (4.2 §用量旁注 ④)
 
 export const usageFile = (home, segment) => path.join(indexDir(home), `${segment}.usage.json`);
 
-// The provider usage a call row carries (x.facts.usage on the anthropic wire, x.nu on a flat one), in 3.2's canonical form by the
-// wire it arrived in and the vendor that answered; null when the reply reported none, or in a wire format no mapping exists for.
+// The provider usage a call row carries (its wire dissector's usageOf, else x.nu as a flat wire has it), in 3.2's canonical form by
+// the wire it arrived in and the vendor that answered; null when the reply reported none, or in a wire format no mapping exists for.
 function usageOf(x) {
-  const raw = x.format === 'anthropic' ? x.facts && x.facts.usage : x.nu;
+  const d = boardDissectorOf(x.format);
+  const raw = d && d.usageOf ? d.usageOf(x) : x.nu;
   if (!raw || typeof raw !== 'object' || !Object.keys(raw).length || !x.wire) return null;
   try { return mapUsage(x.format, raw, { vendor: x.wire.vendor }); } catch { return null; }
 }
@@ -82,6 +84,12 @@ export const readUsage = ({ home = trocarHome(), segment, fs = nodeFs } = {}) =>
   });
 
 const tick = () => new Promise((r) => setImmediate(r));
+let gate = null;
+/** pauseFill(fn): `fn() → Promise` is awaited before each chunk of a fill (the query worker: until no session work is pending, 3.5
+ *  后台抽取与归约); null (the default): no pause. */
+export function pauseFill(fn) { gate = fn; }
+let running = false; // a chunk of a fill is running: between its gate and the next one (what it holds may still let go)
+const step = async () => { running = false; await tick(); if (gate) await gate(); running = true; };
 const callLine = ({ line, lane, model, failed, cache_known, usage }) => `${JSON.stringify({ line, lane, model, failed, cache_known, usage })}\n`;
 const problemLine = (p) => `${JSON.stringify({ p })}\n`;
 const markLine = (m) => `${JSON.stringify({ m, v: USAGE_V })}\n`;
@@ -124,7 +132,7 @@ export function takeFillProblem({ home = trocarHome(), fs = nodeFs } = {}) {
 }
 
 async function fillOne({ home, fs, segment }) {
-  await tick();
+  await step();
   // the segment's rows of the shared row list: its session_id is the one `session` groups by (3.4 合成键 included)
   const rows = (await indexRows({ home, fs })).filter((r) => r.segment === segment);
   const needed = isModelCall;
@@ -141,7 +149,7 @@ async function fillOne({ home, fs, segment }) {
       const got = chunkLines({ home, fs, rows: chunk.filter(needed) });
       if (got.io) return; // a failed read is never remembered: the next warm `overview` reports it and this retries
       lines.push(...got.lines);
-      await tick();
+      await step();
     }
     lines.push(markLine(sealedMark(fs, source)));
     storeIndex(fs, file, lines, problems, null);
@@ -164,13 +172,15 @@ async function fillOne({ home, fs, segment }) {
     said();
     if (problems.some((p) => p.code === 'index-unwritable')) return;
     at = (at ?? 0) + Buffer.byteLength(lines.join(''));
-    await tick();
+    await step();
   }
 }
 
 // SERIAL within this process (one chain), and a segment already waiting in it is not queued twice.
 let chain = Promise.resolve();
 const waiting = new Set();
+/** filling() → whether a chunk of a fill is running in this process, not waiting at its gate: what it holds may still let go. */
+export const filling = () => running;
 /** fillUsage({home, fs, segments}) → Promise<void>: brings each segment's sidecar up to its index. For the query
  *  worker, after it has answered (D63): it yields between chunks and segments, and runs on no timer. Never throws. */
 export function fillUsage({ home = trocarHome(), fs = nodeFs, segments = [] } = {}) {
@@ -179,7 +189,7 @@ export function fillUsage({ home = trocarHome(), fs = nodeFs, segments = [] } = 
     if (waiting.has(key)) continue;
     waiting.add(key);
     chain = chain.then(() => { waiting.delete(key); return fillOne({ home, fs, segment }); })
-      .catch((e) => noteProblem(home, fs, segment, String((e && e.message) || e)));
+      .catch((e) => noteProblem(home, fs, segment, String((e && e.message) || e))).finally(() => { running = false; });
   }
   return chain;
 }

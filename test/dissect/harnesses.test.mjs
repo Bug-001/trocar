@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  HARNESSES, harnessOf, sessionKeyOf, hintsOf, observerEffectsOf, headerOf, wireProviderOfEndpoint,
+  HARNESSES, harnessOf, sessionKeyOf, hintsOf, observerEffectsOf, headerOf, wireProviderOfEndpoint, auxKindOf,
 } from '../../src/dissect/harnesses.mjs';
 import { HARNESS_REGISTRY, readIdOf } from '../../src/off/harness-names.mjs';
 
@@ -206,4 +206,12 @@ test('pi: the trust extension is its Linux effect, the install-time extension it
 test('wireProviderOfEndpoint: /v1/messages is anthropic, a bare /messages is no wire, responses / chat completions are openai', () => {
   for (const [ep, want] of [['/v1/messages', 'anthropic'], ['/anthropic/v1/messages?beta=true', 'anthropic'], ['/messages', null],
     ['/v1/responses', 'openai'], ['/v1/chat/completions', 'openai']]) assert.equal(wireProviderOfEndpoint(ep), want, ep);
+});
+
+test('auxKindOf: a record with no harness row reads no harness\'s kinds; an unmatched call is aux (2.1)', () => {
+  const body = JSON.stringify({ max_tokens: 32000, messages: [{ role: 'user', content: [{ type: 'text', text: 'Write a 2-4 word lowercase label for this job: tidy' }] }] });
+  const rec = (headers) => ({ endpoint: '/v1/messages', is_llm_call: true, req_headers: headers, req_body: body });
+  assert.equal(harnessOf(rec({})).row, null);
+  assert.equal(auxKindOf(rec({})), 'aux');
+  assert.notEqual(auxKindOf(rec({ 'user-agent': 'claude-cli/2.0.0' })), 'aux', 'the same call under a row that names it is that kind');
 });

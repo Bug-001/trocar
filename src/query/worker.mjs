@@ -20,9 +20,11 @@
 // and its last byte this process does nothing else, so that work can neither delay the answer nor, if it fails or runs the heap
 // out, cost the caller the answer it was already sent.
 //
-// THE WRITER (4.3 §4 写者): this process alone writes the context projections (`writer: true` on every answer's ctx). BACKGROUND
+// THE WRITER (4.3 §4 写者): the role whose `ROLES[role].writes` (warm.mjs) is true writes the context projections (its answers' ctx carry
+// `writer` as that says; it is the main role, the one that reads the rows and runs the background). BACKGROUND
 // WORK (3.5 后台抽取), one scheduler: from boot it reads the rows, then every session's title (readRows, 3.5 §行表先读; until the rows are read a
-// request that needs them is answered `102`, ask again, and until the titles are done no slice runs); then, while no request line is waiting or being answered (the last frame written whole), it runs
+// request that needs them is answered `102`, ask again, unless it is a `session` or `lane` of a session the segments read so far name the way the
+// full list will (earlyRows), and until the titles are done no slice runs); then, while no request line is waiting or being answered (the last frame written whole), it runs
 // slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then those of the
 // sessions of the model calls the daemon kicked (`{kick: ids}` on IPC: their record ids, just indexed) and of the heads it handed out
 // still folding (`{follow: id}`: the board opened a session never folded, 3.5 §谁执行它「答案文件」), then, after IDLE_SLICE_MS with no request, those
@@ -38,9 +40,11 @@
 // (a stop, an update, a crash) may cut a slice, which leaves at most a torn last line that the next open cuts off (4.3 §上下文投影),
 // and loses at most the fold since the last checkpoint (session.mjs CHECKPOINT_MS).
 //
-// THE LIGHT ROLE (argv[4] === 'light', 3.5 §谁执行它「两个角色」): the same wire, for the names `rowFree` in QUERIES only (src/query/router.mjs). It writes
+// THE THREE ROLES (argv[4]: absent or 'main', 'light', 'control'; 3.5 §谁执行它「三个角色」). THE LIGHT ROLE: the same wire, for the names `rowFree` in QUERIES only (src/query/router.mjs). It writes
 // nothing and never reads the rows, so `rowsRead` stays false: background() never runs, a name that needs the rows and a line with `rows: true` are
 // answered `102`, and so is a `block` of a segment whose index it may not build (`warmOnly`, 3.5 §行表先读).
+// THE CONTROL ROLE (argv[4] === 'control'): the board's control verbs (`{control, body}`) only. It never reads the rows and writes nothing
+// under index/; a query line is the caller's mistake and is answered `500`, never `102`.
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -49,9 +53,12 @@ import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { QUERIES } from './named/index.mjs'
 import { answer } from './answers.mjs'
+import { ROLES } from './warm.mjs'
 import { lowerPriority } from '../low-priority.mjs'
-import { READING_MS, extendSession, heapHasRoom, indexed, openSessions, rereadingNow, saveIndexes, sealParts } from './named/session.mjs'
-import { indexRows, sessionGroups } from './rows.mjs'
+import { READING_MS, extendSession, headAsked, heapHasRoom, indexed, noRoomStop, openSessions, rereadingNow, roomFor, saveIndexes, sealParts } from './named/session.mjs'
+import { dropProvisional, indexRows, provisionalRows, sessionGroups } from './rows.mjs'
+import { segmentFiles, warmSegmentIndex } from './index-build.mjs'
+import { filling, pauseFill } from './usage.mjs'
 import { dirUse, gcProjections, posCmp, projectionStale, sessionDir } from './projection.mjs'
 import { foldStale } from './fold-log.mjs'
 import { hasHead, hasReread, headFile, readHead, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
@@ -61,8 +68,10 @@ const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
 // The daemon passes no deps: argv[3] is absent, or '' before a role; a test fork names an ES module whose default export is that `deps` object. `beforeRows`, `beforeTitles`
 // and `beforeServe`, a test's alone, are awaited before the row pass starts, before the title pass behind it and before a query is answered.
-const light = process.argv[4] === 'light'
-const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})
+// `loginCache`: the board asks status every 1.5 s, so this worker keeps the login entry's answer (1.6 §3.5 Login; src/cli/status.mjs); the CLI asks each time.
+const role = process.argv[4] || 'main', light = role === 'light'
+const writes = ROLES[role].writes // the one place that says which role writes answer files (warm.mjs ROLES)
+const depsP = (process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})).then((d) => ({ ...d, loginCache: true }))
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
 for (const k of LOCAL_ENV) delete process.env[k]
@@ -90,12 +99,16 @@ const write = (status, body, enc, cpu, tag) => new Promise((done) => {
 const persist = (e) => { if (process.connected) process.send({ failure: { code: e.code, reason: e.reason } }) }
 
 async function serve(line) {
-  let status = 200, bytes, enc = '-', tag = '-', asked = null
+  let status = 200, bytes, enc = '-', tag = '-', asked = null, wait = false, early = null
   const after = [], cpu0 = process.cpuUsage()
   try {
     const { name, params, indent, control, body, gzip: wants, etag, rows } = JSON.parse(line)
-    if (!rowsRead && !control && Object.hasOwn(QUERIES, name) && (!QUERIES[name].rowFree || rows)) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null } // ask again: the daemon does (3.5 §行表先读)
+    if (role === 'control' && !control) throw new Error(`the control worker answers control verbs only, not the query ${JSON.stringify(name)}`)
+    // ask again: the daemon does (3.5 §行表先读); a session the segments read so far name the way the full list will is answered now
+    if (!rowsRead && !control && Object.hasOwn(QUERIES, name) && (!QUERIES[name].rowFree || rows) && !(early = await earlyRows(name, params))) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null }
     asked = { name, params }
+    // a session waiting for room is tried by its timer, not by each ask: 102 at once, no fold (`session --head` answers its head as it stands)
+    if (!control && (name === 'lane' || (name === 'session' && !headAsked(params || {}))) && waitRoom.has(String(params?.id))) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null }
     if (control) { // one JSON line, the bytes `trocar <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
       try {
         const { VERBS } = await import('../control/board.mjs')
@@ -111,12 +124,16 @@ async function serve(line) {
       // query core's own, so the caller can raise the very error its local path would have raised.
       const deps = await depsP;
       await deps.beforeServe?.(name);
-      ({ status, bytes, enc, tag } = await answer({ name, params: params || {}, indent, gzip: wants === true, etag: typeof etag === 'string' ? etag : null },
-        { home, fs: nodeFs, writer: !light, warmOnly: light, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
+      ({ status, bytes, enc, tag, wait } = await answer({ name, params: params || {}, indent, gzip: wants === true, etag: typeof etag === 'string' ? etag : null },
+        { home, fs: nodeFs, writer: writes, warmOnly: light, early, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
     }
   } catch (e) { // a line that is not a request
     status = 500
     bytes = Buffer.from(JSON.stringify({ error: String((e && e.message) || e) }), 'utf8')
+  }
+  if (status === 102) { // asked again: the session is no target of this one; one that waits for room is tried by its timer
+    if (wait && (asked?.name === 'session' || asked?.name === 'lane') && asked.params?.id != null) { waitRoom.set(String(asked.params.id), null); roomLater() }
+    asked = null
   }
   const cpu = process.cpuUsage(cpu0)
   await write(status, bytes, enc, Math.round((cpu.user + cpu.system) / 1000), tag)
@@ -129,10 +146,28 @@ const SLICE_MS = 50, IDLE_SLICE_MS = READING_MS
 const ease = () => new Promise((r) => setImmediate(r))
 const say = (e) => process.stderr.write(`trocar query worker: background work failed: ${(e && e.stack) || e}\n`) // the daemon keeps stderr (D38)
 // newestDone starts true: only a request opens the newest-session scan, never a kick (a worker forked for a kick has none to follow).
-let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = false, queued = false, timer = null, once = {}
+// `user`: `target` came from a request or the followed ones (a kick's, the board's), not the upgrade queue or the newest-session scan
+let busy = 0, lastAt = Date.now(), target = null, user = false, newestDone = true, gcDone = false, queued = false, timer = null, once = {}
 // the idle save's parts still to seal (session.mjs sealParts): a slice at a time; a request or kick stops it, the next idle period goes on
 let sealing = false
 let rowsRead = false // the boot's pass over the rows has ended (readRows)
+const ready = new Set() // the segments the boot's pass has read the index of, the newest first (readRows): provisionalRows reads these
+/** While the pass reads, a `session` or `lane` of a session the segments read so far hold, by a key no rule decides (provisionalRows):
+ *  those rows, for this request's index (session.mjs indexed); else null, and the request is asked again (3.5 §行表先读). */
+// The list is built again once the ready segments grew by a tenth, not per segment: each build reads every ready row, and the pass
+// prepends a segment at a time (the newest first), so a build per segment would cost the pass a read of every row it has read so far.
+let earlyList = null // {n, got}: the last provisional list and how many segments were ready for it
+async function earlyRows(name, params) {
+  if (light || (name !== 'session' && name !== 'lane') || params?.id == null || !ready.size) return null
+  try {
+    if (!earlyList || ready.size >= earlyList.n * 1.1 + 1) {
+      const got = await provisionalRows({ home, fs: nodeFs, ready })
+      if (rowsRead) { dropProvisional({ home, fs: nodeFs }); return null } // the pass ended meanwhile: the full list answers (asked again)
+      earlyList = got && { n: ready.size, got }
+    }
+    return earlyList && sessionGroups(earlyList.got.rows).has(String(params.id)) ? earlyList.got : null
+  } catch (e) { say(e); return null }
+}
 let sweeping = false // a sweep, a scan or the title pass is between two sessions: it gives way to requests, not to other background work
 let rawUnlisted = false // raw/ could not be listed at the last GC: its D38 record is sent
 // The sweep (3.5 §谁执行它「答案文件」): at the first idle period of this worker's life, and again on the daemon's `{sweep: true}`, a
@@ -170,6 +205,37 @@ async function upgradeQueue(ctx) {
 const answered = new Set() // the sessions this worker answered: never collected under it
 const follow = new Set() // the sessions the daemon kicked or followed (3.5 §后台抽取与归约): folded in turn from their checkpoints
 const noRoom = new Set() // the sessions a background slice stopped on heap-no-room: back to `follow` at an idle period with room, never before
+// the sessions a background slice found the heap held by others on (heap-busy) → the upgrade entry it was, else null (a user's): once the
+// heap has room, back to the head of the upgrade queue or to `follow`; when nothing else can give way (no reader, no fill, the warm
+// entries let go: heapHasRoom), it does not fit: its heap-no-room stop, and `noRoom`
+const waitRoom = new Map()
+/** Session work pending: a request read or in flight, or a session read for a user (a request's, a follow's, a kick's). The usage fill waits
+ *  for none (3.5 后台抽取与归约); a session fully read is no longer `target` nor followed, so it holds nothing. */
+const sessionWork = () => busy > 0 || (target != null && user) || follow.size > 0
+// the fill also waits while a user's session waits for heap room (a `null` entry in waitRoom): the room it is waiting for may be the fill's
+const userWaits = () => { for (const u of waitRoom.values()) if (u == null) return true; return false }
+if (role === 'main') pauseFill(async () => { while (sessionWork() || userWaits()) await new Promise((r) => setTimeout(r, 50)) })
+// The heap is looked at (a full collection, the warm entries let go) at most once per ROOM_MS while sessions wait for it, never under session
+// work nor beside a reader, whose state the look would let go (3.5 #62).
+const ROOM_MS = 2000
+let roomTimer = null
+const roomLater = () => {
+  if (roomTimer) return
+  roomTimer = setTimeout(async () => {
+    roomTimer = null
+    if (!waitRoom.size) return
+    if (sessionWork()) return roomLater()
+    const room = roomFor()
+    if (room === null || (!room && filling())) return roomLater() // a reader or the fill may still let go
+    const ids = [...waitRoom]
+    waitRoom.clear()
+    for (const [id, u] of ids) {
+      if (room) { if (u) upgrade?.unshift(u); else follow.add(id) }
+      else { noRoom.add(id); try { await noRoomStop({ home, fs: nodeFs, writer: writes, persist, once, progress }, id) } catch (e) { say(e) } }
+    }
+    kick()
+  }, ROOM_MS)
+}
 const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
 const opened = new Set() // the sessions a request or a follow of a re-read asked for, until their turn ends: a re-read gives way to these (giveWay)
 /** The sessions of the kicked records, by the one session rule (sessionGroups: a synthesized key too). The kicked calls are the
@@ -194,8 +260,8 @@ async function kickedSessions(ctx) {
 function giveWay() {
   for (const s of follow) {
     if (rereadOf(s) && (!opened.has(s) || opened.has(target))) continue
-    if (up && up[0] === target) { upgrade?.unshift(up); up = null } else { follow.delete(target); follow.add(target) }
-    follow.delete(s); target = s
+    if (up && up[0] === target) { upgrade?.unshift(up); up = null } else if (user) { follow.delete(target); follow.add(target) } // the newest scan's: dropped
+    follow.delete(s); target = s; user = true
     return
   }
 }
@@ -210,27 +276,32 @@ const notIdle = () => {
 async function background() {
   if (busy || !rowsRead || sweeping) return
   // `progress`: the segment index read before the first slice is background work too, reported per segment and chunk (3.5 后台抽取与归约)
-  const ctx = { home, fs: nodeFs, writer: true, persist, once, progress }
+  // `writer: writes`: ROLES says who writes (background() runs only in the main role, which reads the rows)
+  const ctx = { home, fs: nodeFs, writer: writes, persist, once, progress }
   if (kicked.size) {
     try { await kickedSessions(ctx) } catch (e) { say(e) }
     if (busy) return // a request came during the look: it goes first, and kicks when it is answered
   }
   if (target != null && follow.size && rereadOf(target)) giveWay()
-  if (target == null && follow.size) { const [k] = follow; follow.delete(k); target = k }
+  if (target == null && follow.size) { const [k] = follow; follow.delete(k); target = k; user = true }
   if (target == null && !newestDone) {
     if (notIdle()) return
     newestDone = true
     let best = null
     for (const [id, ms] of sessionGroups((await indexed(ctx)).rows)) for (const r of ms) if (best == null || posCmp(String(r.id), best[1]) > 0) best = [id, String(r.id)]
-    target = best && !noRoom.has(best[0]) ? best[0] : null
+    target = best && !noRoom.has(best[0]) && !waitRoom.has(best[0]) ? best[0] : null; user = false
   }
   if (target != null) {
     let more = false
-    const id = target // a request answered during the slice may change `target`
-    noRoom.delete(id)
-    try { more = await extendSession(ctx, id, SLICE_MS) } catch (e) { say(e); if (e?.code === 'heap-no-room') noRoom.add(id) }
+    const id = target, mine = user ? null : up?.[0] === id ? up : undefined // a request answered during the slice may change `target`
+    noRoom.delete(id); waitRoom.delete(id)
+    try { more = await extendSession(ctx, id, SLICE_MS) } catch (e) {
+      // heap-busy is no failure: a user's or an upgrade's session waits for room; the newest scan's is dropped (the next request scans again)
+      if (e?.code === 'heap-busy') { if (mine !== undefined) { waitRoom.set(id, mine); roomLater() } } else say(e)
+      if (e?.code === 'heap-no-room') noRoom.add(id)
+    }
     if (more === null) noRoom.add(id) // its state went in the slice: the heap again, not the session
-    if (!more && !noRoom.has(id) && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
+    if (!more && !noRoom.has(id) && !waitRoom.has(id) && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
       try { writeSkip(home, target, up[1]) } catch { /* the next worker tries again */ }
     }
     if (!more) { opened.delete(target); target = null; up = null }
@@ -276,7 +347,7 @@ async function background() {
   }
   if (upgrade.length) {
     if (busy || notIdle()) return
-    up = upgrade.shift(); target = up[0]
+    up = upgrade.shift(); target = up[0]; user = false
     return kick()
   }
   if (sealing ? busy : gcDone || busy || notIdle()) return // once per idle period, IDLE_SLICE_MS after the last request or kick: not after every burst
@@ -313,7 +384,8 @@ process.stdin.on('data', (d) => {
     busy++; once = {}; newestDone = false; gcDone = false; sealing = false; clearTimeout(timer) // a new idle period begins after this one is answered
     chain = chain.then(() => serve(line)).then((asked) => {
       const id = asked && (asked.name === 'session' || asked.name === 'lane') && asked.params && asked.params.id
-      if (id != null && id !== '') { if (target != null && target !== String(id)) follow.add(target); target = String(id); answered.add(String(id)); opened.add(String(id)) } // a followed session keeps its turn
+      // a followed session keeps its turn; an upgrade target goes back to its queue, the newest scan's is dropped
+      if (id != null && id !== '') { if (target != null && target !== String(id)) { if (up && up[0] === target) { upgrade?.unshift(up); up = null } else if (user) follow.add(target) } target = String(id); user = true; answered.add(String(id)); opened.add(String(id)) }
     }, say).finally(() => { busy--; lastAt = Date.now(); kick() })
   }
 })
@@ -323,7 +395,7 @@ process.stdin.on('data', (d) => {
 // must not hold off the idle save and the GC).
 process.on('message', (m) => {
   if (m && m.sweep === true) { sweepDue = true; kick(); return }
-  if (m && typeof m.follow === 'string') { if (rereadOf(m.follow)) opened.add(m.follow); if (target !== m.follow) follow.add(m.follow); kick(); return }
+  if (m && typeof m.follow === 'string') { if (rereadOf(m.follow)) opened.add(m.follow); if (target !== m.follow && !waitRoom.has(m.follow)) follow.add(m.follow); kick(); return } // a session waiting for room: its timer tries it
   if (!m || !Array.isArray(m.kick)) return
   for (const id of m.kick) kicked.add(String(id))
   once = {}; gcDone = false; sealing = false; lastAt = Date.now()
@@ -336,9 +408,17 @@ async function readRows() {
   let rows = []
   try {
     await (await depsP).beforeRows?.()
+    // each segment's index the newest first, so the sessions a user opens first are answered before the pass ends (earlyRows); the
+    // list after, oldest first, from those warm entries (a segment's index stands alone; the keys are the list's, in its order)
+    for (const [segment, at] of segmentFiles(home, nodeFs, []).reverse()) {
+      try { await warmSegmentIndex({ home, segment, fs: nodeFs, at, progress, ease }); ready.add(segment) } catch (e) { say(e) }
+      progress()
+      await ease()
+    }
     rows = await indexRows({ home, fs: nodeFs, errors: [], progress, ease })
   } catch (e) { say(e) }
   rowsRead = true
+  ready.clear(); earlyList = null; dropProvisional({ home, fs: nodeFs })
   if (process.connected) process.send({ rows: true }) // the daemon's word for a warm worker (4.4 刷新)
   sweeping = true
   try {
@@ -352,6 +432,6 @@ async function readRows() {
     await saveTitles({ home, fs: nodeFs })
   } catch (e) { say(e) } finally { sweeping = false; kick() } // the first idle period: the sweep
 }
-if (!light) readRows()
+if (role === 'main') readRows()
 process.stdin.on('end', () => process.exit(0))
 process.on('disconnect', () => process.exit(0)) // the daemon is gone: so is the reason to be here

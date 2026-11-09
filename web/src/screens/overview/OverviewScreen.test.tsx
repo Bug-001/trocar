@@ -10,7 +10,7 @@ import { api } from '../../../legacy/core/api.mjs'
 import { LIST_WAIT_MS } from '../../../legacy/library/logic.mjs'
 import { INTERVAL, backoffMs } from '../../../legacy/core/poll.mjs'
 import { TIP_MS } from '../../../legacy/core/ui.mjs'
-import { HEALTH_READ } from '../../../legacy/labels/common.mjs'
+import { HEALTH_READ, TITLE_PENDING, UNTITLED } from '../../../legacy/labels/common.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { store } from '../../../legacy/core/store.mjs'
 import { ALIASES, HARNESS_ORDER, harnessKey } from '../../../legacy/core/chips.mjs'
@@ -334,6 +334,28 @@ test('1.8 #18: the recent card says what is going on from 3 s of a read still ou
   out(ok({ sessions: [sess('a', 60)] })); await settle()
   expect(wait()).toBeNull()
   expect(p.link(replay('a'))).not.toBeNull()
+})
+
+test('1.8 #18 · 1.7: while the list answers 503 still-reading the recent card stays in its wait, never a failure; then the rows come', async () => {
+  const outs: Array<(a: Ans) => void> = []
+  answer.sessions = () => new Promise((res) => { outs.push(res) })
+  const p = mount(); await settle()
+  await tick(LIST_WAIT_MS)
+  const card = () => p.region(W.CARD.recent)!
+  for (let i = 0; i < 2; i++) {
+    outs.shift()!({ ok: false, status: 503, data: null, error: 'still reading', code: 'still-reading' } as Ans); await settle()
+    expect(p.c.querySelector('.ovsay.warn')).toBeNull() // the card's failed state (Cards.tsx Failed)
+    expect(card().querySelector('[data-list-wait]')).not.toBeNull()
+  }
+  outs.shift()!(ok({ sessions: [sess('a', 60)] })); await settle()
+  expect(p.link(replay('a'))).not.toBeNull()
+})
+
+test('1.8 §标题规则: a recent row whose title_source the board does not know, or which has none, reads not read yet; null is no prompt captured', async () => {
+  answer.sessions = () => ok({ sessions: [{ ...sess('old', 1), title: null, title_source: 'pending' }, { ...sess('bare', 2), title: null, title_source: undefined }, { ...sess('none', 3), title: null, title_source: null }] })
+  const p = mount(); await settle()
+  const text = (id: string) => p.link(replay(id))!.querySelector('.ovtx')!.textContent
+  expect(['old', 'bare', 'none'].map(text)).toEqual([TITLE_PENDING, TITLE_PENDING, UNTITLED])
 })
 
 test('O8: a sessions answer that carries `stored` is never shown; the fresh one after it is, on the same rows', async () => {

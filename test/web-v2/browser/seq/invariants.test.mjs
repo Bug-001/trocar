@@ -3,7 +3,7 @@
 // (through page.evaluate, a route, an unrecorded keydown, or growth with the session reads aborted) and check() names it; a tiny
 // static page the harness serves (not the board) proves the probe sees a long task; two more static pages break I-chapter and I-pack.
 // Runs only under `npm run test:browser`.
-import test, { before, after } from 'node:test'
+import test, { before, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard } from '../harness.mjs'
 import { makeWorld, mainCount } from './world.mjs'
@@ -33,8 +33,8 @@ async function fresh() {
 async function settledDesk() {
   const m = await mainCount(b.get, id)
   await b.page.waitForFunction((k) => {
-    const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || ''), s = window.__seq.snap()
-    return !!x && +x[2] === k && s.inflight === 0 && Date.now() - Math.max(0, ...s.fetchLog.map((e) => e.end ?? Infinity)) >= 500
+    const x = window.__stepNo(), s = window.__seq.snap()
+    return !!x && x.m === k && s.inflight === 0 && Date.now() - Math.max(0, ...s.fetchLog.map((e) => e.end ?? Infinity)) >= 500
   }, m, { timeout: 20000, polling: 100 })
 }
 // the desk follows the newest step of the settled session: its step bar shows m / m (m = the server's main-lane count) with
@@ -43,8 +43,8 @@ async function settledDesk() {
 async function following() {
   const m = await mainCount(b.get, id)
   await b.page.waitForFunction((k) => {
-    const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-    return !!x && +x[1] === k && +x[2] === k && document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true' &&
+    const x = window.__stepNo()
+    return !!x && x.n === k && x.m === k && document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true' &&
       !new URLSearchParams(location.hash.split('?')[1] || '').has('step')
   }, m, { timeout: 20000 })
 }
@@ -61,6 +61,7 @@ before(async () => {
   await drawn(b.page)
   await following()
 })
+beforeEach(() => { b?.renew() }) // each case its own deadline on the shared board (0.1 §3 约定 13)
 after(async () => { await b?.stop() })
 
 // The desk reads `sessions` with every 1.5 s tick (replay.mjs pollOnce → loadSessions), against 4.4's 3 s for that name, so at the
@@ -184,6 +185,19 @@ test('V-mem the DOM inflated across a revisit', { skip }, async () => {
   assert.ok(ids(await check(ctx())).includes('I-mem'))
 })
 
+test('V-heap 40 MB more held across a revisit; what the page read for its desks may stay', { skip }, async () => {
+  const hold = () => b.page.evaluate(() => { window.__held = Array.from({ length: 5e6 }, (_, i) => i + 0.5) }) // 8 bytes each
+  const warm = async () => { await fresh(); await check(ctx()); await revisit(); await check(ctx()) } // the first visit, then the heap's baseline
+  await warm()
+  await hold(); await revisit()
+  assert.ok(ids(await check(ctx())).includes('I-heap'), 'a page that read nothing')
+  await warm()
+  await b.page.route('**/api/block?ref=seq-read', (r) => r.fulfill({ body: Buffer.alloc(30 * 2 ** 20) }))
+  try { await b.page.evaluate(() => fetch('/api/block?ref=seq-read').then((r) => r.arrayBuffer())) } finally { await b.page.unroute('**/api/block?ref=seq-read') }
+  await hold(); await revisit()
+  assert.ok(!ids(await check(ctx())).includes('I-heap'), 'a page that read 30 MB for its desks')
+})
+
 test('V-follow following, the session grows and its reads are aborted', { skip }, async () => {
   await fresh()
   await b.page.route('**/api/d/**', (r) => r.abort())
@@ -209,7 +223,7 @@ test('V-hold not following, growth and an unrecorded step key', { skip }, async 
 test('V-url the hash names another step than the one shown', { skip }, async () => {
   await fresh(); await settledDesk()
   await b.page.evaluate(() => {
-    const n = +/(\d+)\s*\//.exec(document.querySelector('#stepbar .sb-no').textContent)[1]
+    const n = window.__stepNo().n
     const [route, q] = location.hash.split('?'), p = new URLSearchParams(q || '')
     p.set('step', String(n === 1 ? 2 : 1)); history.replaceState(null, '', `${route}?${p}`)
   })
@@ -412,4 +426,19 @@ test('V-select a click that ends a drag-select folds a block', { skip }, async (
     act('select'); await quiet()
     assert.ok(ids(await check(ctx({ drag: c.lastDrag }))).includes('I-select'))
   } finally { await b.page.evaluate(() => window.removeEventListener('click', window.__plantFold, true)) }
+})
+
+// I-jump (2.5 #5): an Overview row whose click never reaches the desk. The planted listener sits on window in the capture phase, ahead
+// of React's root, and stops every click on a row; the reader's ovjump step then sees no landing.
+test('V-jump a click on an Overview row that never reaches the desk does not land', { skip }, async () => {
+  await fresh(); await following()
+  await b.page.evaluate(() => { window.__plantStop = (e) => { if (e.target.closest?.('[data-ovjump]')) e.stopPropagation() }; window.addEventListener('click', window.__plantStop, true) })
+  try {
+    const jump = ACTIONS.find((x) => x.a === 'ovjump'), c = { page: b.page }
+    const r = await jump.run(c, { f: 0 })
+    assert.notEqual(r?.skipped, true, 'an Overview row to click')
+    assert.equal(c.lastJump.landed, false)
+    act('ovjump'); await quiet()
+    assert.ok(ids(await check(ctx({ jump: c.lastJump }))).includes('I-jump'))
+  } finally { await b.page.evaluate(() => window.removeEventListener('click', window.__plantStop, true)) }
 })

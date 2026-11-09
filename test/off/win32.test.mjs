@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { listProcs, identityFor, procIdentity } from '../../src/off/proc.mjs'
-import { daemonState, stopDaemon, readDaemonLock, supervisorHolderAlive, clearStaleSupervisorLock, SUPERVISOR_LOCK, SUPERVISOR_START_TOLERANCE_MS } from '../../src/off/daemon-stop.mjs'
+import { daemonState, stopDaemon, readDaemonLock, supervisorHolderAlive, stopByHand, clearStaleSupervisorLock, SUPERVISOR_LOCK, SUPERVISOR_START_TOLERANCE_MS } from '../../src/off/daemon-stop.mjs'
 import { SUPERVISOR_LOCK as ARCH_SUPERVISOR_LOCK, LOCK_START_TOLERANCE_MS as ARCH_LOCK_START_TOLERANCE_MS, lockHolderAlive } from '../../src/collector/arch/win32/autostart.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -180,4 +180,18 @@ test('the supervisor question and its tolerance are the arch module\'s own (lock
     assert.equal(mine, arch, `the same answer for ${JSON.stringify(holder)}`)
   }
   assert.throws(() => supervisorHolderAlive({ pid: 5000, startedAt: SUPER_AT }, { run: powershell({ fail: ['Get-Process'] }).run }), /could not be asked/)
+})
+
+test('stopByHand on win32: the supervisor goes first only while its lock\'s holder runs; proven gone, the daemon alone; not knowable, the query and no supervisor pid', () => {
+  const dir = tmpDir()
+  const hand = (table, opts = {}) => stopByHand({ platform: 'win32', dir, pid: 4242, run: powershell({ table, ...opts }).run })
+  const pids = (h) => h.commands.flatMap((c) => /^taskkill \/PID (\d+) \/F$/.exec(c)?.[1] ?? [])
+  assert.deepEqual(pids(hand({})), ['4242'], 'no supervisor.lock: the daemon alone')
+  nodeFs.writeFileSync(path.join(dir, SUPERVISOR_LOCK), JSON.stringify({ pid: 5000, startedAt: SUPER_AT }))
+  assert.deepEqual(pids(hand({ 5000: SUPER_AT })), ['5000', '4242'], 'a live holder: supervisor, then daemon')
+  assert.deepEqual(pids(hand({})), ['4242'], 'the holder is gone: the daemon alone')
+  assert.deepEqual(pids(hand({ 5000: SUPER_AT + 60_000 })), ['4242'], 'the pid is another process now: the daemon alone')
+  const unknown = hand({ 5000: SUPER_AT }, { fail: ['Get-Process'] })
+  assert.deepEqual(pids(unknown), [], 'cannot be told: no pid is printed')
+  assert.ok(unknown.commands.some((c) => c.includes('Win32_Process')) && unknown.after, 'the query, and which one to end first')
 })

@@ -5,7 +5,7 @@
 // change's p95 is within BOARD_LINES.stepClick. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, timed, stats } from './harness.mjs'
+import { probe, withBoard, serveWorld, timed, stats, stepKey } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { LIMITS } from './seq/invariants.mjs'
@@ -39,10 +39,10 @@ for (const [name, shape] of SHAPES) {
       await page.route('**/api/block?**', (route) => route.fulfill({ status: 200, contentType: 'application/json',
         body: JSON.stringify({ blocks: new URL(route.request().url()).searchParams.getAll('ref').map((ref) => ({ ref, bytes: 'x', encoding: 'utf8', fidelity: 'verbatim', truncated: false })), errors: [] }) }))
       const longTasks = () => page.evaluate(() => window.__lt.splice(0))
-      const step = () => page.textContent('#stepbar .sb-no')
+      const step = () => stepKey(page)
       const at = (n) => page.waitForFunction((n) => {
-        const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
-        return !!x && +x[1] === n && !document.querySelector('#ctxwin .cwload')
+        const x = window.__stepNo()
+        return !!x && x.n === n && !document.querySelector('#ctxwin .cwload')
       }, n, { timeout: 30000, polling: 'raf' })
       await page.evaluate((m) => { location.hash = `#/replay/p/S?step=${m}` }, M)
       await at(M)

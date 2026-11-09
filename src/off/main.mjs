@@ -11,8 +11,8 @@ import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, makeIo, hidingIo, printJson, asOneDocument } from './io.mjs'
 import { NAME_ALIASES, resolveHarnesses } from './harness-names.mjs'
 
-const OFF_USAGE = 'usage: trocar off [<harness>...] [--now] [--yes] [--dry-run] [--json]'
-const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--json'])
+const OFF_USAGE = 'usage: trocar off [<harness>...] [--now] [--yes] [--dry-run] [--details] [--json]'
+const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--details', '--json']) // --details: today's text is the full one (1.6 §1.1 ④)
 
 /** → the exit code. `argv` is what follows `off`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo; the process's own streams when none is given, which is how the
  *  standalone `trocar-off` calls it). `standalone`: this is the single-file copy (src/off/standalone.mjs ends in a call with it): the only difference is the words of what it

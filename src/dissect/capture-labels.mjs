@@ -8,8 +8,9 @@
 //     on disk is what arrived before that.
 // These are NOT the top-level `partial` (a connection's earlier messages are missing — context, not bytes).
 // Envelope fields only, no wire knowledge, so the board and the ETL can both use it. Leaf module.
-import { requestEncodingOf, storedRequestBody } from './request-body.mjs';
+import { nonIdentityEncoding, requestEncodingOf, storedRequestBody } from './request-body.mjs';
 import { harnessOf } from './harnesses.mjs';
+import { reserializedReply } from './record-fields.mjs';
 const PARTIAL = {
   'early-response': 'never finished uploading: the upstream answered (e.g. 413 / 401) before it was fully sent',
   aborted: 'never finished uploading: the connection was aborted mid-body',
@@ -131,14 +132,17 @@ export function bodyUnparsedOf(rec) {
 // The other incompleteness labels (4.6 §记录 「不完整的标注,各说一件事」), one per thing that happened, from
 // envelope fields only. None of them changes context_state (3.1): they say which BYTES of this record are
 // not all there, or not decoded; the request-body labels above stay with reqIncompleteOf, so nothing is
-// shown twice. → [{ id, label, text }]
-export function captureLabelsOf(rec) {
+// shown twice. `closed`: the record is a reply the agent closed after its own success terminal (registry.mjs closedAfterEnd), whole,
+// so it says that instead of resp-partial. → [{ id, label, text }]
+export function captureLabelsOf(rec, closed = false) {
   const out = [];
   if (!rec) return out;
   const r = rec.resp || rec.response || {};
   if (r.truncated === true) out.push({ id: 'resp-truncated', label: 'Reply cut at the capture cap',
     text: `the reply was cut at the capture cap: only its first ${Number(r.body_bytes) || 0} bytes are stored` });
-  if (r.kind === 'error' && r.partial) out.push({ id: 'resp-partial', label: 'Reply never finished',
+  if (closed) out.push({ id: 'resp-closed-early', label: 'Agent closed the connection after the reply',
+    text: 'the reply arrived whole, up to its own last event; the agent then closed the connection before the server ended the exchange' });
+  else if (r.kind === 'error' && r.partial) out.push({ id: 'resp-partial', label: 'Reply never finished',
     text: 'the response stopped before it finished; what arrived is kept under resp.partial' });
   if (r.encoding_error) out.push({ id: 'resp-undecoded', label: 'Reply not decoded',
     text: `the reply could not be decoded (${r.encoding_error}); its bytes are kept as base64 in the record, so no reply text is shown` });
@@ -163,8 +167,15 @@ export function captureLabelsOf(rec) {
   if (keep) out.push({ id: `retention-${keep.retention}`, label: keep.label, text: keep.text });
   // 4.1 保真边界 ⑤: before D40 a JSON reply was stored as the parsed value, re-serialized on write — not the wire bytes. A record from D40 on
   // carries body_wire_bytes and keeps resp.raw whenever the two differ, so a parsed reply without either is the old kind (the shape alone says so)
-  if (r.kind === 'json' && r.body !== undefined && typeof r.raw !== 'string' && !rec.body_wire_bytes) out.push({ id: 'resp-json-reserialized', label: 'Re-serialized JSON, not the wire bytes',
+  if (reserializedReply(rec)) out.push({ id: 'resp-json-reserialized', label: 'Re-serialized JSON, not the wire bytes',
     text: 'the reply is stored as the parsed JSON and was written back out: whitespace, key order, integers past 2^53 and duplicated keys may differ from what was on the wire (this capture predates the verbatim reply text)' });
+  // 4.1 保真边界 ②: a reply that decoded from a content-encoding keeps its wire bytes in resp.wire_b64; one that came compressed, decoded,
+  // and has no wire_b64 is the old kind (the shape alone says so). What arrived of an unfinished reply is judged the same way, under resp.partial
+  const b = r.kind === 'error' && r.partial && typeof r.partial === 'object' ? r.partial : r;
+  if (rec.transport !== 'ws' && !isLogOnly(rec) && b.kind !== 'empty' && b.kind !== 'error' && b.verbatim !== false
+    && nonIdentityEncoding(b.headers?.['content-encoding']) && !b.encoding_error && !b.wire_b64) out.push({ id: 'resp-decoded-only',
+    label: 'Compressed reply: decompressed text only',
+    text: 'the reply arrived compressed and only its decompressed text is stored; the compressed bytes on the wire are not in this record (it predates keeping them)' });
   return out;
 }
 

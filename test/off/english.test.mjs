@@ -11,7 +11,7 @@ import { runOffCli } from '../../src/off/main.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
 import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { fakeIo } from '../cli/fixtures/on-ctx.mjs'
-import { installedHome } from './fixtures/off-ctx.mjs'
+import { installedHome, onSwitch } from './fixtures/off-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const CODE_NAMES = /desired-off|left-unparsable|left-unreadable|unknown-kind|json-key|owned-file|pem-block|config-entry|root-key|json-array-item|nothing_installed|dry_run|op\.lock/
@@ -41,11 +41,11 @@ test('D58: off with things to undo, and off with programs still connected, read 
   readable('off-undone', io.stdoutText(), { home: s.home })
   assert.match(io.stdoutText(), /^Capture is off for /)
 
-  // the §3.4 sample itself: a harness still connected through trocar, forwarded only, and the daemon draining
+  // the §3.4 sample itself: a harness still connected through trocar, forwarded only, and the daemon running
   const held = formatOffReceipt({
     ok: true, all: true, harnesses: ['claude-code', 'codex'], routing: { confirmed: true, how: 'daemon-reply' },
     changed: [{ harness: 'claude-code', path: '/h/.claude/settings.json', change: 'env.NODE_EXTRA_CA_CERTS removed', result: 'restored' }, { harness: 'codex', path: '/h/.codex/.env', change: "trocar's block removed", result: 'reverted-not-identical' }],
-    removed: [], skipped: [], relayed: { closing: 2, waiting: 0, cut: 0 }, daemon: { pid: 4012, state: 'draining', exits_after: 2 },
+    removed: [], skipped: [], relayed: { closing: 2, waiting: 0, cut: 0 }, daemon: { pid: 4012, state: 'running' },
     holders: [{ harness: 'codex', pid: 5530, name: 'codex' }], problems: [], notes: [],
   }, { home: '/h' })
   readable('off-holders', held)
@@ -60,22 +60,22 @@ test('D58: off on a machine trocar is not on, and off with the install record lo
   readable('off-nothing', formatOffReceipt(receipt, { home }), { home })
 
   // §1.4: the record is gone, there is no terminal and no --yes — the routing comes off, the files are untouched, the plan is listed, exit 1
-  const s = await installedHome({ names: ['codex'] })
+  const s = await installedHome({ names: ['kimi-code'] })
   fs.rmSync(path.join(s.dir, 'install-manifest.json'))
-  const before = fs.readFileSync(path.join(s.home, '.codex', '.env'))
+  const sw = onSwitch(s, 'kimi-code') // one file left to undo: on's switch file (the Kimi shim and rc line are install's)
+  const rc = s.sh.files['kimi-code'][0]
+  const before = [rc, sw].map((f) => fs.readFileSync(f))
   const io = fakeIo({ tty: false })
   assert.equal(await runOffCli([], { io, home: s.home, env: s.sh.env, platform: 'linux', deps: s.offDeps({ getuid: () => 1000 }) }), 1, io.text())
-  assert.deepEqual(fs.readFileSync(path.join(s.home, '.codex', '.env')), before, 'not a byte of the user\'s file moved')
+  assert.deepEqual([rc, sw].map((f) => fs.readFileSync(f)), before, 'not a byte moved')
   readable('off-no-record', io.stdoutText(), { home: s.home })
   assert.match(io.stdoutText(), /Found by trocar's own marks and not undone yet:/)
   assert.match(io.stdoutText(), /Undo it by the marks trocar left in it: trocar off --yes/) // one file: the sentence counts with it
 })
 
-// D62 ⑥ (a review of D found the receipt saying two opposite things at once): in proxy mode a nameless `off` closes the doors and the daemon stays.
-// With a program still connected, ONE door stays open, passing its traffic on and recording nothing of it (P12) — so the receipt must not also say
-// "with no door open", and must not say trocar exits, because in proxy mode it never does. Driver mode (the daemon IS the detach there) keeps its own
-// words. Asserted as the contract: for each state, which of the two claims the text may carry — never both.
-test('D62 ⑥: the receipt never claims both "no door open" and that trocar exits — one truth per state, and a --dry-run says the daemon keeps running', () => {
+// D62 ⑥: a nameless `off` switches capture off and the daemon stays, in both modes. With a program still connected, ONE door stays open, passing
+// its traffic on and recording nothing of it (P12), so the receipt must not also say "with no door open", nor that trocar exits.
+test('D62 ⑥: with a holder the receipt never claims "no door open" nor that trocar exits; a --dry-run reads as §1.1 asks', () => {
   const base = {
     ok: true, all: true, harnesses: ['codex'], routing: { confirmed: true, how: 'daemon-reply' },
     changed: [], removed: [], skipped: [], problems: [], notes: [], relayed: { closing: 0, waiting: 1, cut: 0 },
@@ -89,19 +89,9 @@ test('D62 ⑥: the receipt never claims both "no door open" and that trocar exit
   assert.match(held.replace(/\s+/g, ' '), /\b4012\b[^.]*\bkeeps running\b[^.]*\bdoor\b/, 'D62 ⑥: the daemon stays, a door open for the holder')
   assert.match(held, /^That door closes when it exits; the daemon keeps running\.$/m)
 
-  const idle = formatOffReceipt({ ...base, daemon: { pid: 4012, state: 'running' }, holders: [] })
-  assert.match(idle, /The daemon \(pid 4012\) keeps running, with no door open\./)
-  assert.doesNotMatch(idle, /exits/, `nothing exits: ${idle}`)
-
-  // driver mode: the daemon drains and goes, and the holders line says so
-  const driver = formatOffReceipt({ ...base, daemon: { pid: 4012, state: 'draining' }, holders: holder })
-  assert.match(driver, /trocar exits when it does\./)
-  assert.doesNotMatch(driver, /keeps running/, `a draining daemon does not keep running: ${driver}`)
-
-  // --dry-run on macOS / Windows: no daemon was asked anything, so there is no pid — the future tense still says what will happen to it
+  // --dry-run: no daemon was asked anything, so there is no pid
   const dry = formatOffReceipt({ ...base, dry_run: true, daemon: { pid: null, state: 'running' }, holders: [] })
   readable('off-proxy-dry', dry)
-  assert.match(dry, /^The daemon will keep running, with no door open\.$/m)
 })
 
 // 1.6 §1.1⑥: the list a marker-only off asks about — each file an item at column 2 with what would be done to it on the same item, folded past

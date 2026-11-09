@@ -40,7 +40,16 @@ export function confirm(io, question) {
 /** The io a command prints through: `out` to stdout and `err` to stderr (default: stdout's sibling, the process's own is the caller's choice),
  *  a newline after each line. */
 export function makeIo({ stdin, stdout, stderr = stdout }) {
+  for (const w of new Set([stdout, stderr])) toClosedPipe(w)
   return { stdin, stdout, stderr, out: (s) => { stdout.write(`${s}\n`) }, err: (s) => { stderr.write(`${s}\n`) } }
+}
+// `trocar … | head`: a reader that leaves early makes the next write fail with EPIPE, an 'error' event that with no listener crashes the command,
+// maybe halfway through a change. Output with no reader is dropped and the command finishes; any other stream error is still thrown.
+const guarded = new WeakSet()
+function toClosedPipe(w) {
+  if (!w || typeof w.on !== 'function' || guarded.has(w)) return
+  guarded.add(w)
+  w.on('error', (e) => { if (!e || e.code !== 'EPIPE') throw e })
 }
 
 /** The same io, every line it prints through `out` / `err` passed through hideUserinfo (userinfo.mjs, RFC 1.6 §1.2「不印凭据」): how a command that changes state prints (main.mjs, the standalone trocar-off). */

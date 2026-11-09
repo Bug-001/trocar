@@ -8,7 +8,9 @@ import path from 'node:path'
 import { loadSessions } from '../../web/legacy/library/logic.mjs'
 import { rowModel } from '../../web/src/screens/library/model.mjs'
 import { harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
-import { captureGap, fidelityFacts } from '../../web/legacy/replay/header.mjs'
+import { captureGap } from '../../web/legacy/replay/header.mjs'
+import { NOTHING_LOST } from '../../src/health/codes.mjs'
+import { sessionHeadModel } from '../../web/src/screens/replay/models.mjs'
 import { bodyCache, loadBody } from '../../web/legacy/replay/blocks.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { deskFrom } from './desk-world.mjs'
@@ -32,29 +34,29 @@ test('(1)(2) the library reads every page of `sessions`; a row\'s title fields a
     assert.equal(r.data.sessions.length, whole.sessions.length)
     for (const s of whole.sessions) {
       const m = rowModel(s, Date.now())
-      assert.equal(m.title, s.title); assert.equal(m.titleSource, s.title_source); assert.equal(m.untitled, s.title == null)
+      assert.equal(m.title, s.title); assert.equal(m.untitled, s.title == null)
       // the agent is the read side's id, named by the one chips table (1.8 #1); the call count is the answer's, absent → 0
       assert.equal(m.harnessId, s.harness); assert.equal(m.harnessName, harnessName(harnessKey(s.harness))); assert.equal(m.calls, s.calls || 0)
       for (const [title, title_source] of [['t', 'wire'], [null, null]]) {
         const v = rowModel({ ...s, title, title_source }, Date.now())
-        assert.equal(v.title, title); assert.equal(v.titleSource, title_source)
+        assert.equal(v.title, title)
         assert.equal(v.untitled, title == null)
       }
     }
   } finally { await face.close() }
 })
 
-test('(4) the capture gap: only a same-harness group inside the session time, with the session after failures.since', () => {
+test('(4) the capture gap: only a same-harness group that may have lost calls, inside the session time, with the session after failures.since', () => {
   const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
   const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
   const sample = () => JSON.parse(/```json\n([\s\S]*?)```/.exec(C3)[1])
   const H = sample().failures.groups[0].harness
   const T = (m) => new Date(Date.UTC(2026, 6, 19, 9, m)).toISOString()
   const range = { start: Date.parse(T(10)), end: Date.parse(T(20)) }, now = Date.parse(T(59))
-  const doc = ({ since, first, last, harness }) => {
+  const doc = ({ since, first, last, harness, level = 'problem', code }) => {
     const s = sample()
     s.failures.since = since
-    s.failures.groups = [{ ...s.failures.groups[0], first_ts: first, last_ts: last, harness }]
+    s.failures.groups = [{ ...s.failures.groups[0], first_ts: first, last_ts: last, harness, level, ...(code ? { code } : {}) }]
     return s
   }
   const cases = [
@@ -63,6 +65,11 @@ test('(4) the capture gap: only a same-harness group inside the session time, wi
     [{ since: T(0), first: T(30), last: T(40), harness: H }, false], // outside the session
     [{ since: T(0), first: T(12), last: T(14), harness: 'another-agent' }, false],
     [{ since: T(30), first: T(12), last: T(14), harness: H }, false], // the session is before the window
+    // an expected group is by design, and a code that records a wait lost nothing (NOTHING_LOST): no gap; a resolved group (a note) still is one,
+    // its failures happened in its time (1.2 §会话保真行, 1.6 C.3)
+    [{ since: T(0), first: T(12), last: T(14), harness: null, level: 'expected', code: 'not-trust-path' }, false],
+    ...NOTHING_LOST.map((code) => [{ since: T(0), first: T(12), last: T(14), harness: H, level: 'note', code }, false]),
+    [{ since: T(0), first: T(12), last: T(14), harness: H, level: 'note', code: 'helper-down' }, true],
   ]
   for (const [c, gap] of cases) {
     const g = captureGap(doc(c), range, H, now)
@@ -108,7 +115,7 @@ test('K-20: a record no dissector reads → `unknown.records` ≥ 1 and the head
     try {
       const id = (await face.get('sessions')).doc.sessions[0].session_id // the demo session, the home's only one
       const desk = await deskFrom(getOf(face), id)
-      const { tech } = fidelityFacts(desk)
+      const { tech } = sessionHeadModel({ meta: desk.meta, desk, lanes: [] }).facts
       const endpoints = tech.find(([k]) => k === 'endpoints')
       if (!odd) { assert.equal(desk.unknown, null, 'no `unknown`'); assert.equal(endpoints, undefined, 'no K-20 fact'); continue }
       assert.ok(desk.unknown.records >= 1, '`unknown.records` ≥ 1')

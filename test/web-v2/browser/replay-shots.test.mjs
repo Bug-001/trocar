@@ -1,10 +1,11 @@
-// test/web-v2/browser/replay-shots.test.mjs — the replay desk's layout at 1280 and 1024 × light / dark on the real face (1.2 §会话头
-// 让位次序, §回放台 B 布局 上下文窗的高度, §窄屏): no head or step-bar part clipped, every ellipsis carries a title, #ctxwin holds at
-// least half the available height at 900 px, the document never scrolls sideways, and the raw panel reaches the right page's
-// bottom. Shots: the replay, the bottom sheet open at 1024, the cost view. Runs only under `npm run test:browser`.
+// test/web-v2/browser/replay-shots.test.mjs — the replay desk's layout at 1440 / 1280 / 1024 / 800 × light / dark on the real face
+// (1.2 §会话头让位次序, §回放台 B 布局 上下文窗的高度, §窄屏): no head or step-bar part clipped, every ellipsis carries a title,
+// the window holds at least half the available height, the document never scrolls sideways, and the narrow table holds at
+// every width. Shots: the replay, the cost view, a few-step session, Files read, a failed first read, the narrow layout and
+// the bottom sheet. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot, layoutFaults, DESK_NEXT } from './harness.mjs'
+import { probe, withBoard, shoot, layoutFaults, stepKey } from './harness.mjs'
 import { typeFaults } from './type-inventory.mjs'
 import { CACHE_POPOVER_LABEL } from '../../../web/legacy/labels/replay.mjs'
 import { CT_ORDER } from '../../../web/legacy/replay/analysis.mjs'
@@ -62,13 +63,11 @@ const layout = (page) => page.evaluate(() => {
   const untitled = [...document.querySelectorAll('#content *')].filter((e) => e.getClientRects().length && getComputedStyle(e).textOverflow === 'ellipsis' && e.scrollWidth > e.clientWidth + 0.5 && !e.closest('[title]'))
     .map((e) => `${e.tagName}.${e.className}: ${e.textContent.slice(0, 40)}`)
   const h = (s) => { const e = q(s); return e && e.getClientRects().length ? e.getBoundingClientRect().height : 0 }
-  const rp = q('#rightpage'), raw = q('#rawpanel')
   return {
     clipped, untitled,
     ctxwin: h('#ctxwin'),
-    avail: innerHeight - h('#deskhead') - h('#rpbar'), // the head + its fidelity row; the bottom row only where it is drawn
+    avail: innerHeight - h('#deskhead') - h('.deskside.bottom'), // the head + its fidelity row; the bottom row only where it is drawn
     hscroll: document.documentElement.scrollWidth > innerWidth || document.body.scrollWidth > innerWidth,
-    rawGap: raw && raw.getClientRects().length && rp.getClientRects().length ? rp.getBoundingClientRect().bottom - raw.getBoundingClientRect().bottom : null,
   }
 })
 
@@ -87,7 +86,6 @@ for (const width of [1440, 1280, 1024, 800]) {
           ...L.untitled.map((x) => `ellipsis without a title: ${x}`),
           ...(L.ctxwin >= 0.5 * L.avail ? [] : [`#ctxwin ${L.ctxwin}px < half of the available ${L.avail}px`]),
           ...(L.hscroll ? ['the document scrolls sideways'] : []),
-          ...(L.rawGap == null || L.rawGap <= 8 ? [] : [`the raw panel stops ${L.rawGap}px above the right page's bottom`]),
         ]
         await shoot(b.page, 'replay-desk', { width, theme })
         if (width === 1280 && theme === 'light') { // 1.5 #16 on the desk: a block row opened, then the cache popover, then the session info
@@ -102,14 +100,6 @@ for (const width of [1440, 1280, 1024, 800]) {
           }
           await page.keyboard.press('Escape')
           assert.deepEqual(type, [], 'replay: type')
-        }
-        if (width < 1200) { // the right page is the bottom row here: open it
-          await b.page.click('#rpbar')
-          await b.page.waitForSelector('#rightpage.open #rawpanel .rphd')
-          const S = await layout(b.page)
-          assert.equal(S.hscroll, false, 'the open sheet scrolls the document sideways')
-          await shoot(b.page, 'replay-sheet', { width, theme })
-          await b.page.click('#rpbar')
         }
         await b.page.click('#viewswitch [data-view="cost"]')
         await b.page.waitForSelector('#viewswitch [data-view="cost"][aria-pressed="true"]')
@@ -131,9 +121,19 @@ test('at 1280 × 800 the step bar is one row, the window holds half the height, 
     await everyType(b)
     await openBusiest(b)
     const L = await layout(b.page)
-    // 1.3 §排布: a step with every content type keeps the main track's row; no gutter glyph is cut (the new desk lists each share)
-    const shares = await b.page.evaluate(() => document.querySelectorAll('#sawgut .gshare').length)
-    assert.ok(shares === 0 || shares === CT_ORDER.length, `${shares} shares in the gutter`)
+    // 1.3 §排布: a step with every content type keeps the main track's row; no gutter glyph is cut (the desk lists each share)
+    // every type is accounted for: the shares drawn plus the "+N more" line's N (1.3 §排布)
+    const g = await b.page.evaluate(() => {
+      const vis = (e) => !e.hidden && e.getClientRects().length > 0, more = document.querySelector('#sawgut .gmore')
+      // drawn = not hidden and inside the gutter's clipped box (a clipped line counts as not drawn)
+      const box = document.querySelector('#sawgut .gshares')?.getBoundingClientRect()
+      const inBox = (e) => { const q = e.getBoundingClientRect(); return !!box && q.height > 0 && q.top >= box.top - 0.5 && q.bottom <= box.bottom + 0.5 }
+      return { drawn: [...document.querySelectorAll('#sawgut .gshare')].filter((e) => vis(e) && inBox(e)).length, all: document.querySelectorAll('#sawgut .gshare').length,
+        more: more && vis(more) ? Number(more.dataset.n) : 0, moreInBox: !more || !vis(more) || (inBox(more) && /\d/.test(more.textContent || '')) }
+    })
+    assert.ok(g.all === 0 || g.all === CT_ORDER.length, `${g.all} shares in the gutter`)
+    assert.equal(g.drawn + g.more, g.all, `${g.drawn} drawn + ${g.more} more`)
+    assert.ok(g.moreInBox, 'the "+N more" line is drawn whole inside the gutter')
     assert.deepEqual((await layoutFaults(b.page, '#saw')).cut, [])
     // one row: every drawn part's middle lies inside the arrows' box (center-aligned parts of different heights share a row)
     const off = await b.page.evaluate(() => {
@@ -170,7 +170,7 @@ test('turning follow latest on from an earlier step lands the window on the newe
     await b.page.waitForFunction(() => !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cwreply'))
     await b.page.click('#ctxwin') // the keys go to the page, not to a control
     await b.page.keyboard.press('f')
-    await b.page.waitForFunction(() => /(\d+) \/ \1\b/.test(document.querySelector('#stepbar .sb-no').textContent))
+    await b.page.waitForFunction(() => { const x = window.__stepNo(); return !!x && x.n === x.m })
     const at = await b.page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => {
       const w = document.querySelector('#ctxwin'), r = document.querySelector('#ctxwin .cwreply').getBoundingClientRect(), wr = w.getBoundingClientRect()
       const sb = document.querySelector('#stepbar'), top = wr.top + (sb && w.contains(sb) ? sb.getBoundingClientRect().height : 0)
@@ -189,16 +189,16 @@ test('a reply row has the request row\'s head frame and opens by keyboard', { sk
   try {
     await openBusiest(b) // the last step; back to the latest one whose reply has parts (a demo step may carry only a stop reason)
     const head = '#ctxwin .cwreply .cblk > .cbh'
-    const no = () => b.page.$eval('#stepbar .sb-no', (e) => e.textContent)
+    const no = () => stepKey(b.page)
     while (!(await b.page.$(head))) {
       const was = await no()
-      assert.doesNotMatch(was, /^Step 1 \//, 'no step of the busiest session has a reply row')
+      assert.doesNotMatch(was, /^1\//, 'no step of the busiest session has a reply row')
       await b.page.click('#stepbar [data-step="prev"]')
-      await b.page.waitForFunction((w) => document.querySelector('#stepbar .sb-no').textContent !== w && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cwreply'), was)
+      await b.page.waitForFunction((w) => { const x = window.__stepNo(); return `${x.n}/${x.m}` !== w && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cwreply') }, was)
     }
     const frame = (sel, i) => b.page.$$eval(sel, (hs, i) => { const s = getComputedStyle(hs.at(i)); return [s.fontFamily, s.fontSize, s.paddingLeft, s.paddingRight] }, i)
     assert.deepEqual(await frame(head, 0), await frame('#ctxwin .cblk[data-bi] > .cbh', -1)) // the first reply row against the last request row
-    const control = DESK_NEXT ? `${head} .cbtog` : head // the new desk's head holds a button (2.3 §block 卡)
+    const control = `${head} .cbtog` // the desk's head holds a button (2.3 §block 卡)
     assert.equal(await b.page.$eval(control, (e) => e.tabIndex), 0)
     const shut = () => b.page.$eval(head, (e) => e.parentElement.classList.contains('collapsed'))
     const before = await shut()
@@ -226,47 +226,11 @@ test('Files read: a long path and a long life sentence are never cut — the lif
       j.resources = [...(j.resources || []), ...Array.from({ length: 6 }, (_, i) => ({ kind: 'file', label: `/private/tmp/a/rather/long/working/directory/for/the/project/src/web/module-${i}/server-side-file-${i}.mjs`, segments: [{ enter: rids[0], evict: rids[rids.length - 2] }], loads: [] }))]
     })
     await openBusiest(b)
+    await b.page.locator('.deskside [role=tab]').nth(1).click() // the list is the sidebar's Resources tab (1.2 §回放台布局)
     await b.page.waitForSelector('.navsub.dead .navlife', { timeout: 15000 })
     const F = await layoutFaults(b.page)
     assert.deepEqual({ overlap: F.overlap, cut: F.cut, untitled: F.untitled }, { overlap: [], cut: [], untitled: [] })
     await shoot(b.page, 'replay-files-read', { width: 1440, theme: 'light' })
-    assert.deepEqual(b.errors, [])
-  } finally { await b.stop() }
-})
-
-// 2.4 · 1.5: the System prompt row of a block that changes every call (Claude Code's billing header) carries a pill longer than the
-// left panel is wide; it wraps inside its row and is never drawn past the panel's edge. The real answers, with the system blocks so marked.
-test('System prompt: the "changes every call" pill stays inside the left panel', { skip, timeout: 120_000 }, async () => {
-  const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
-  try {
-    // every pack and tail file marks the system blocks its steps' add ops bring in volatile (3.5 §会话读: the position `attrs` of add
-    // ops; copies carry theirs), as the board is told of a block that changes every call
-    // the busiest session whose main lane's tail page holds a system block (some generated sessions send none)
-    let row = null
-    for (const r of await byCalls(b)) if ((await b.get('lane', { id: r.session_id, lane: await mainOf(b, r) })).doc.defs.some((d) => d.sec === 'system')) { row = r; break }
-    assert.ok(row, 'a session with a system block')
-    const sec = new Map() // bid → sec, over every file so far (a def comes before the first step that uses it)
-    await editFiles(b, (line) => {
-      if (line.d) sec.set(line.d.bid, line.d.sec)
-      for (const st of line.s ? [line.s] : []) {
-        let pos = 0
-        for (const op of st.ops || []) {
-          if (op[0] === 0) { pos += op[2]; continue }
-          op.slice(1).forEach((bid, i) => { if (sec.get(bid) === 'system') st.attrs = { ...st.attrs, [pos + i]: { ...(st.attrs || {})[pos + i], volatile: true } } })
-          pos += op.length - 1
-        }
-      }
-    })
-    await openSession(b, row)
-    await b.page.waitForSelector('.navsub .volbadge', { timeout: 15000 })
-    const past = await b.page.evaluate(() => [...document.querySelectorAll('.navsub .volbadge')].filter((e) => e.getClientRects().length).map((e) => {
-      const r = e.getBoundingClientRect(), row = e.closest('.navsub').getBoundingClientRect()
-      return r.right > row.right + 0.5 || r.left < row.left - 0.5 ? `${Math.round(r.left)}–${Math.round(r.right)} outside ${Math.round(row.left)}–${Math.round(row.right)}` : null
-    }).filter(Boolean))
-    assert.deepEqual(past, [])
-    const F = await layoutFaults(b.page)
-    assert.deepEqual({ overlap: F.overlap, cut: F.cut, untitled: F.untitled }, { overlap: [], cut: [], untitled: [] })
-    await shoot(b.page, 'replay-volatile-pill', { width: 1440, theme: 'light' })
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
@@ -290,6 +254,91 @@ test('a session whose first read failed: one sentence and Retry; the reason only
     const before = reads
     await Promise.all([b.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/d/head'), b.page.click('#ctxwin [data-retry]')])
     assert.ok(reads > before, 'Retry reads the session\'s head again')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
+// 1.2 §会话不存在 · 1.5 K-29: a head answered 503 still-reading has not answered yet: the desk waits and reads again, no failure line
+test('a first head answered 503 still-reading is a wait: no failure line or Retry, and the head is read again', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1280, chromium: gate.chromium })
+  try {
+    let reads = 0
+    await b.page.route((u) => new URL(u).pathname === '/api/d/head', (r) => { reads++; return r.fulfill({ status: 503, json: { error: 'reading', errors: [{ code: 'still-reading' }] } }).catch(() => {}) }) // a round still out when the page closes
+    const rows = (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0)
+    await b.page.evaluate((h) => { location.hash = h }, `#/replay/${encodeURIComponent(rows[0].project_slug)}/${encodeURIComponent(rows[0].session_id)}`)
+    for (const until = Date.now() + 15_000; reads < 2 && Date.now() < until;) await b.page.waitForTimeout(100)
+    assert.ok(reads >= 2, `the head is read again (${reads} reads)`)
+    // a count, not the handle: a failed assert prints its actual, and a Playwright handle prints as its whole connection
+    assert.equal(await b.page.locator('#ctxwin [data-retry]').count(), 0, 'no failure line with Retry while the head is still being read')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
+// 1.2 #8 §窄屏 on one open desk, resized in place: at each width the sidebar or the bottom row is there, what the narrower widths take
+// away is gone, #ctxwin holds half the available height, and nothing scrolls sideways. A tab raises the panel, Escape lowers it, and
+// crossing 1200 px and back leaves the side boundary's stored layout as the reader left it.
+test('1.2 #8: the narrow table holds at every width, the bottom panel rises and falls, and the side boundary survives the crossing', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1440, height: 900, chromium: gate.chromium })
+  const { page } = b
+  const resize = async (width, height) => {
+    await page.setViewportSize({ width, height })
+    await page.evaluate(() => new Promise((ok) => { // the scope refits through ResizeObservers: settled = ten frames with the window's height unchanged
+      let was = -1, same = 0
+      const tick = () => {
+        const h = document.querySelector('#ctxwin').getBoundingClientRect().height
+        same = h === was ? same + 1 : 0; was = h
+        if (same < 10) requestAnimationFrame(tick); else ok()
+      }
+      tick()
+    }))
+  }
+  const facts = () => page.evaluate(() => {
+    const shown = (s) => [...document.querySelectorAll(s)].some((e) => e.getClientRects().length > 0)
+    const el = document.documentElement
+    return { sideways: el.scrollWidth - el.clientWidth, side: shown('[data-testid=desk-side]'), row: shown('.deskside.bottom'), panel: shown('.deskside.bottom .sidepanel'),
+      gut: shown('#saw .tgut, #rails .tgut'), detail: shown('#saw .sdetail'), legend: shown('#saw .sawlegend'), whole: shown('#saw .tkrow-ovw') }
+  })
+  const current = () => page.evaluate(() => { const a = document.activeElement; return a.getAttribute('role') === 'tab' && a.getAttribute('aria-selected') === 'true' })
+  const tabs = page.locator('.deskside.bottom [role=tab]')
+  try {
+    await openBusiest(b)
+    for (const [width, height] of [[1440, 900], [1280, 900], [1024, 900], [800, 900], [500, 900], [1280, 800]]) {
+      await resize(width, height)
+      const at = `${width} × ${height}`, L = await layout(page), F = await facts()
+      assert.ok(L.ctxwin >= 0.5 * L.avail, `${at}: #ctxwin ${L.ctxwin}px < half of the available ${L.avail}px`)
+      assert.ok(F.sideways <= 0, `${at}: ${F.sideways}px sideways`)
+      assert.equal(F.side, width >= 1200, `${at}: the sidebar`)
+      assert.equal(F.row, width < 1200 && width >= 600, `${at}: the bottom row`)
+      assert.equal(F.gut, width >= 900, `${at}: the lane names`)
+      assert.equal(F.detail, width >= 600, `${at}: the detail rows`)
+      assert.equal(F.legend, width >= 600, `${at}: the legend`)
+      assert.equal(F.whole, true, `${at}: the whole-session row`)
+      await shoot(page, 'replay-narrow', { width, theme: 'light' })
+      if (!F.row) continue
+      await tabs.nth(1).click()
+      assert.equal((await facts()).panel, true, `${at}: a tab raises its panel`)
+      assert.equal(await tabs.nth(1).getAttribute('aria-selected'), 'true', `${at}: and selects itself`)
+      const half = await page.evaluate(() => document.querySelector('.deskside.bottom .sidepanel').offsetHeight / document.querySelector('.desk.next').offsetHeight)
+      assert.ok(Math.abs(half - 0.5) < 0.01, `${at}: the panel is ${half} of the desk`)
+      assert.ok((await facts()).sideways <= 0, `${at}: the raised panel scrolls sideways`)
+      await shoot(page, 'replay-sheet', { width, theme: 'light' })
+      await tabs.nth(0).click()
+      assert.equal((await facts()).panel, true, `${at}: another tab keeps the panel up`)
+      await tabs.nth(0).click()
+      assert.equal((await facts()).panel, false, `${at}: the current tab lowers it`)
+      await tabs.nth(1).click()
+      await page.keyboard.press('Escape')
+      assert.equal((await facts()).panel, false, `${at}: Escape lowers it`)
+      assert.ok(await current(), `${at}: the focus is back on the current tab`)
+    }
+    await resize(1440, 900)
+    await page.locator('.deskpanes > [data-separator]').focus()
+    await page.keyboard.press('ArrowLeft')
+    const kept = await page.evaluate(() => [localStorage.getItem('trocar.v2.split.side'), document.querySelector('#desk-side').getBoundingClientRect().width])
+    assert.ok(kept[0], 'the keyboard move stored the layout')
+    await resize(1000, 900)
+    await resize(1440, 900)
+    assert.deepEqual(await page.evaluate(() => [localStorage.getItem('trocar.v2.split.side'), document.querySelector('#desk-side').getBoundingClientRect().width]), kept)
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })

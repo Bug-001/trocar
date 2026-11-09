@@ -5,6 +5,11 @@
 /** The flag bits of a step, from the low bit: compaction, inferred compaction, a cache break that changed the prefix, failed, a user ask,
  *  summarize, a subagent spawned, no usage (a call that did not fail and reported none). */
 export const FLAG = Object.freeze({ compaction: 1, inferred: 2, cacheBreak: 4, failed: 8, user: 16, summarize: 32, spawn: 64, noUsage: 128 });
+/** isMarked(f) → a step's flags say compaction, marked by the harness itself (3.4): the summary lands on the next step. */
+export const isMarked = (f) => (f & (FLAG.compaction | FLAG.inferred)) === FLAG.compaction;
+/** opensPart(prev, f) → a step with flags `f` after a step with flags `prev` opens a chapter (1.3 §章): a marked compaction is the last
+ *  step of its chapter, an inferred one the first of its own. */
+export const opensPart = (prev, f) => isMarked(prev) || (f & (FLAG.compaction | FLAG.inferred)) === (FLAG.compaction | FLAG.inferred);
 /** cellsOf(base64) → the bytes of `cols` (3 a cell; empty for '' or anything that is not base64). */
 export function cellsOf(b64) {
   let bin = ''

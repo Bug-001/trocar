@@ -32,7 +32,7 @@ const doctor = (home, source, args = []) => {
   return { status, out }
 }
 
-test('doctor reports the collector: a running-but-untrusted agent with its reason, and a CA block that was not carried into a bundle with its type and file; the exit code is the old one (B-7)', async () => {
+test('doctor reports the collector: a running-but-untrusted agent with its reason, and a CA block that was not carried into a bundle with its type and file; the failure status counts is doctor\'s problem too (D38)', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-doc-'))
   try {
     const corp = path.join(home, 'corp.pem'); fs.writeFileSync(corp, KEY + createCa({ commonName: 'corp relay CA' }).certPem)
@@ -44,15 +44,17 @@ test('doctor reports the collector: a running-but-untrusted agent with its reaso
     appendEvent(dir, { event: 'agent-untrusted', pid: 4242, agent: 'claude-code', code: 'var-missing', reason: 'no trocar trust entry is in effect for this process' })
     writeStandalone({ home }) // what `trocar on` writes next to the install record: without it `doctor` has a problem of its own (standalone-stale), and this test is about the collector's own report
     const source = cleanSource(home)
-    const { status, out } = doctor(home, source)
-    assert.equal(status, 0, `doctor still exits 0 when the capture is clean:\n${out}`)
+    const { status, out } = doctor(home, source, ['--details']) // the install notes and the reasons are facts of --details
+    assert.equal(status, 1, `the capture failure status counts makes doctor exit 1:\n${out}`)
     assert.match(out, /Notes of the last install/)
-    assert.match(out, /codex: .*corp\.pem: block 1 \(PRIVATE KEY\) is not carried over/, `the block that was not merged: its type and its file:\n${out}`)
+    assert.match(out.replace(/\s+/g, ' '), /codex: .*corp\.pem: block 1 \(PRIVATE KEY\) is not carried over/, `the block that was not merged: its type and its file (a note folds inside 80 columns):\n${out}`)
     assert.ok(!out.includes('U0VDUkVULUtFWQ'), 'never the key itself')
     // the running-but-untrusted agent is a problem of the capture health the document carries, never silence (D38); its code and reason are what `trocar status --failures` prints
     const j = doctor(home, source, ['--json'])
-    assert.equal(j.status, 0, j.out)
-    assert.equal(JSON.parse(j.out).status.failures.problem, 1, `the untrusted agent is counted in the status document:\n${j.out}`)
+    assert.equal(j.status, 1, j.out)
+    const doc = JSON.parse(j.out)
+    assert.equal(doc.status.failures.problem, 1, `the untrusted agent is counted in the status document:\n${j.out}`)
+    assert.deepEqual(doc.findings.filter((x) => x.code === 'capture-failures').map((x) => x.count), [1], 'and doctor counts the same one')
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 

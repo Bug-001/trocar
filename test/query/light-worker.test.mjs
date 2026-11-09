@@ -1,4 +1,4 @@
-// test/query/light-worker.test.mjs — the light worker role and the bound on `102` (RFC 3.5 §谁执行它「两个角色」, §行表先读; 验收 #57–#61; D78 ②). The real
+// test/query/light-worker.test.mjs — the light worker role and the bound on `102` (RFC 3.5 §谁执行它「三个角色」, §行表先读; 验收 #57–#61; D78 ②). The real
 // router over real worker forks, or a real daemon on a model world with only the worker's fork the test one; worker-rows-deps.mjs forces what comes first.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -102,6 +102,7 @@ test('MA14 on macOS the main role is started in the utility class and the light 
   const on = { platform: 'darwin', execPath: '/n' }
   assert.equal(forkOptions('', on).execPath, '/usr/sbin/taskpolicy')
   assert.equal(forkOptions('light', on).execPath, undefined)
+  assert.equal(forkOptions('control', on).execPath, '/usr/sbin/taskpolicy')
 })
 
 test('3.5 #57: a lane in flight on a real daemon does not hold status up', { timeout: 60_000 }, async () => {

@@ -19,7 +19,7 @@ const descs = await loadHarnesses()
 const SECRETS = ['alice:pw']
 const ENGINE = { status: { engine: { port: 47123 } } }
 // what a status or a doctor may run: queries that only read (1.6 V50). Anything else in a run is a failure of the test.
-const READ_ONLY = new Set(['ps', 'ss', 'ip', 'gsettings', 'scutil', 'lsof', 'netstat', 'reg', 'schtasks', 'where.exe'])
+const READ_ONLY = new Set(['ps', 'ss', 'ip', 'gsettings', 'scutil', 'lsof', 'netstat', 'reg', 'schtasks', 'where.exe', 'systemctl is-enabled']) // the last: the login entry's read (D61, 1.6 §3.5)
 // the Windows half of the allowlist (1.6 §9.7 / 4.8 §10.4: netstat, reg query, schtasks /Query, where.exe — the OS tools the printed commands name — plus the resident helper's read verbs).
 // What `doctor` itself executes on Windows goes through the helper, so the static form of the check is: the files that talk to it on the status / doctor path only ever ask its read verbs (the verb
 // closed set itself is 4.8 §1's, held by helper.test.mjs). `netsh`, printed for the user, is held by the live test above (never run).
@@ -31,7 +31,7 @@ async function world({ proxy = 'http://alice:pw@127.0.0.1:7897' } = {}) {
   const s = await installedViaCli(ENGINE)
   const calls = []
   const exec = (file, args, o) => {
-    calls.push(file)
+    calls.push(file === 'systemctl' && args.includes('is-enabled') ? 'systemctl is-enabled' : file)
     if (file === 'ss') return { status: 0, stdout: 'LISTEN 0 4096 127.0.0.1:7897 0.0.0.0:* users:(("verge-mihomo",pid=11800,fd=7))', stderr: '' }
     return s.sys.exec.run(file, args, o)
   }
@@ -58,7 +58,7 @@ test('V50 status and doctor only read: they write nothing at all, run only read-
     assert.deepEqual(connects, [], 'zero connections of their own: no VPN controller is asked, nothing goes online')
     // printed for the user, never run
     w.deps.netFactsDeps = async () => ({ harnesses: descs, archFacts: async (ctx) => ({ ...(await linuxNetFacts(ctx)), otherRedirector: true }) })
-    const out = (await w.s.run(['doctor'], { deps: w.deps })).io.stdoutText()
+    const out = (await w.s.run(['doctor', '--details'], { deps: w.deps })).io.stdoutText() // a note is --details'
     assert.ok(out.includes('sudo bpftool cgroup tree /sys/fs/cgroup'), 'doctor prints the command for the user') // the command is the fact; its label is wording
     assert.ok(!w.calls.some((c) => /bpftool|netsh|sudo/.test(c)), 'and never runs it')
     assert.ok(!(w.s.sys.exec.calls.some((c) => /bpftool|netsh|sudo/.test(c))))

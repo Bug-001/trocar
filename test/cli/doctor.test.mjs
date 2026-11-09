@@ -49,7 +49,7 @@ test('no record read = cannot judge: an empty capture file, or none at all, is e
   assert.ok(!/no problems\.$/.test(r.out.trim()), `an all-clear alone is not what exit 3 prints: ${r.out}`)
   r = await doctor(s, [], { source: path.join(s.home, 'nowhere') })
   assert.equal(r.exit, 3, 'a source that does not exist is not a pass either')
-  r = await doctor(plain()) // the defaults: ~/.trocar does not exist
+  r = await doctor(plain(), ['--details']) // the defaults: ~/.trocar does not exist; that it is said is a fact of --details (1.6 §1.1 ④)
   assert.equal(r.exit, 0, `§3.7: having no captured data at all is not 「cannot judge」\n${r.text}`)
   assert.match(r.out, /^File permissions: no captured data yet$/m, 'and it is said, not passed over in silence')
   capture(src, { n: 1 })
@@ -60,19 +60,22 @@ test('no record read = cannot judge: an empty capture file, or none at all, is e
   assert.equal(r.err, '', 'nothing on stderr for a clean capture')
 })
 
-test('a capture file others can read (0644, 0640) is exit 1 with the words, the file and its mode and the chmod line filled in; owner-only again is exit 0', async () => {
+// the finding by its code and its command (§3.7 findings wrap at 80 columns, so a sentence is not a layout-proof fact)
+const readable = async (s, src, file) => (await doctor(s, ['--json'], { source: src })).io.json().findings.some((x) => x.code === 'file-readable-by-others' && x.class === 'problem' && x.commands.some((c) => c.run.includes('chmod 600') && c.run.includes(file)))
+
+test('a capture file others can read (0644, 0640) is exit 1 with its finding and the chmod line filled in; owner-only again is exit 0', async () => {
   const s = plain()
   const src = path.join(s.home, 'src')
   const f = capture(src, { mode: 0o644 })
   let r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 1, r.text)
   assert.match(r.out, /^trocar doctor: 1 problem\.$/m)
-  assert.ok(r.out.includes(f) && r.out.includes('(mode 0644) can be read by someone else'), r.out)
   assert.ok(r.out.includes(`chmod 600`) && r.out.includes(f), `the command, with the path filled in:\n${r.out}`)
+  assert.ok(await readable(s, src, f), 'the finding names the file and the chmod line')
   assert.ok(!/credential leak|redact firewall/.test(r.text), 'the old wording (the credential is stored verbatim on purpose) is gone')
   fs.chmodSync(f, 0o640)
   r = await doctor(s, [], { source: src })
-  assert.equal(r.exit, 1); assert.match(r.out, /\(mode 0640\) can be read by someone else/)
+  assert.equal(r.exit, 1); assert.ok(await readable(s, src, f))
   fs.chmodSync(f, 0o600)
   r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 0, r.text)
@@ -102,12 +105,13 @@ test('④b covers ~/.trocar/backup/: a backup of a user\'s file that others can 
   fs.chmodSync(b, 0o644)
   r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 1, r.text)
-  assert.ok(r.out.includes(b) && r.out.includes('(mode 0644) can be read by someone else'), r.out)
+  assert.ok(await readable(s, src, b), r.out)
 })
 
 // the network reads of the topology (1.6 §9.7, V50): `ss` and `ip` only read; the tests below are about what doctor starts, stops or changes, so these are set aside
 const NET_READ = /^(ss -ltnpH|ip -j (route get 1\.1\.1\.1|-d link show dev \S+))$/
-const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !NET_READ.test(c))
+const ENTRY_READ = /^systemctl --user is-enabled \S+$/ // the login entry's read (D61, 1.6 §3.5): the question `on` asks, a read
+const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !NET_READ.test(c) && !ENTRY_READ.test(c))
 
 // P7 (Windows test machine 2026-10-18): there is ONE check for 「is trocar's root trusted」 — the collector's root store, the one `status` and `install` use.
 // doctor used to run a second, half-built one of its own and printed its exception at the reader: "win32 TrustStoreInstaller not implemented
@@ -119,7 +123,7 @@ for (const platform of ['darwin', 'win32']) {
     const w = await modelWorld({ os: platform })
     await w.install()
     const src = path.join(w.home, 'src'); capture(src)
-    const run = (rootStore) => doctor({ home: w.home, sh: { env: w.env }, sys: { exec: recordingExec() } }, [], { platform, source: src, deps: { rootStore, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) } })
+    const run = (rootStore) => doctor({ home: w.home, sh: { env: w.env }, sys: { exec: recordingExec() } }, [], { platform, source: src, deps: { rootStore, unit: { registered: () => ({ state: 'present' }) }, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) } }) // the login entry install registered (its read: status-autostart.test.mjs)
     const judged = await run(w.store)
     assert.notEqual(judged.exit, 3, judged.text)
     assert.doesNotMatch(judged.out, /trust store/i, 'a store it could read is not \u300ccould not judge\u300d')
@@ -158,7 +162,7 @@ test('doctor explains the same harnesses `status` judges (the daemon\'s answer, 
   const src = path.join(s.home, 'src'); capture(src)
   const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: "trocar's settings for this agent were written after this process started; restart it once" }]
   const before = s.sys.exec.calls.length
-  const r = await doctor(s, [], { source: src, deps: { request: asDaemon(reply({ agents })) } })
+  const r = await doctor(s, ['--details'], { source: src, deps: { request: asDaemon(reply({ agents })) } }) // the pid is a fact of --details
   assert.equal(r.exit, 0, `status would say 1 here (an agent is not captured); doctor's exit is the capture's:\n${r.text}`)
   assert.match(r.out, /claude-code is not captured: pid 4388 started before capture was on\./, 'the finding says the harness, the pid and the reason')
   assert.ok(!/VPN/.test(r.out), 'no VPN software line: doctor probes none (D49)')
@@ -175,7 +179,8 @@ test('a stale standalone copy is a problem with its reason (exit 1); where nothi
   const src = path.join(s.home, 'src'); capture(src)
   fs.appendFileSync(path.join(s.home, '.trocar', 'bin', 'trocar-off'), '\n// edited\n')
   let r = await doctor(s, [], { source: src })
-  assert.match(r.out, /is not the current version, so it may not undo everything\./); assert.equal(r.exit, 1, r.out)
+  assert.equal(r.exit, 1, r.out)
+  assert.ok((await doctor(s, ['--json'], { source: src })).io.json().findings.some((x) => x.code === 'standalone-stale' && x.class === 'problem'), r.out)
   assert.ok(r.out.includes(path.join(s.home, '.trocar', 'bin', 'trocar-off')), 'the copy is named')
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   r = await doctor(n, [], { source: nsrc })
@@ -203,18 +208,18 @@ test('backups no manifest names are a note with their paths; the ones the manife
   let r = await doctor(s, [], { source: src })
   assert.ok(!/belong to no install record/.test(r.out), `every backup is named:\n${r.out}`)
   const stray = writeBackup({ home: s.home, file: path.join(s.home, '.zshrc'), data: 'export A=1\n' })
-  r = await doctor(s, [], { source: src })
+  r = await doctor(s, ['--details'], { source: src }) // a note is --details'
   assert.match(r.out, /^Note: 1 backup file\(s\) belong to no install record\.$/m)
   assert.ok(r.out.includes(stray)); for (const b of named) assert.ok(!r.out.includes(b), `${b} is named by an entry`)
   const j = await doctor(s, ['--json'], { source: src, io: fakeIo() })
   assert.deepEqual(j.io.json().findings.filter((x) => x.code === 'backup-unclaimed').map((x) => x.class), ['note'], 'a backup nobody claims is a note, never a problem of its own')
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   const lone = writeBackup({ home: n.home, file: path.join(n.home, '.zshrc'), data: 'x\n' })
-  r = await doctor(n, [], { source: nsrc })
+  r = await doctor(n, ['--details'], { source: nsrc })
   assert.ok(r.out.includes(lone), 'no manifest: all of them')
   fs.mkdirSync(path.join(n.home, '.trocar', 'collector'), { recursive: true })
   fs.writeFileSync(path.join(n.home, '.trocar', 'collector', 'install-manifest.json'), '{ not json')
-  r = await doctor(n, [], { source: nsrc })
+  r = await doctor(n, ['--details'], { source: nsrc })
   assert.match(r.out, /Whether any backup belongs to no install record is unknown$/m, 'a manifest that cannot be read: unknown, not "none are orphans"')
   assert.ok(r.out.includes(path.join(n.home, '.trocar', 'collector', 'install-manifest.json')), `with the file:\n${r.out}`)
 })
@@ -291,7 +296,7 @@ test('V66 wired: a process-unknown in ~/.trocar\'s flows/ reaches `doctor claude
   for (const platform of ['linux', 'darwin', 'win32']) {
     for (const [label, request] of [['no daemon', down()], ['daemon', daemon]]) {
       const what = `${platform}, ${label}`
-      const text = await doctor(s, ['claude-code'], { platform, deps: { request } })
+      const text = await doctor(s, ['claude-code', '--details'], { platform, deps: { request } }) // a note is --details'
       assert.ok(text.out.includes(line), `${what}: the text gives ${line}\n${text.out}`)
       assert.match(text.out, /used claude-code's proxy but is/, what)
       const j = await doctor(s, ['claude-code', '--json'], { platform, deps: { request } })

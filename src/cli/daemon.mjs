@@ -55,7 +55,15 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   // V14 first: a platform with no collector is refused before anything starts or is written — loadArch's own error, so the CLI holds no platform list
   // (ahead of the install gate: on such a platform "not supported yet" is the honest answer, installing would not help)
   if (typeof D.loadArch === 'function') { try { await D.loadArch(platform) } catch (e) { io.err(`trocar daemon: ${e.message}`); return EXIT.incomplete } } // an injected daemon without one answers for the platform itself
-  if (!daemonMayStart(readInstallManifest(dir, deps.fs || nodeFs))) { io.err('trocar daemon: certificates are not installed. Run: trocar install'); return EXIT.incomplete }
+  if (!daemonMayStart(readInstallManifest(dir, deps.fs || nodeFs))) {
+    const message = 'certificates are not installed. Run: trocar install'
+    io.err(`trocar daemon: ${message}`)
+    if (!env.INVOCATION_ID && !!(proc.stdin && proc.stdin.isTTY)) return EXIT.incomplete // a person at a terminal
+    // a service manager's start: a relaunch meets the same state, so 0 (as node-too-old and another daemon answering), or systemd, launchd and the
+    // Windows supervisor loop on it. One record where the collector directory is; none is made for it (no residue after an uninstall, D38)
+    try { if ((deps.fs || nodeFs).existsSync(dir)) appendEvent(dir, { event: 'failure', where: 'start', code: 'not-installed', reason: message }) } catch { /* stderr has it */ }
+    return EXIT.ok
+  }
   let crashed
   const crashedFirst = new Promise((resolve) => { crashed = resolve })
   // An uncaught exception or rejection: one `crash` record with the first line of the stack, then a non-zero exit — the next start's "no clean stop" then has a reason on disk (D-5).
@@ -76,6 +84,9 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
     // and exits 0, because the platform retries a non-zero exit for as long as the other daemon lives — launchd's KeepAlive {SuccessfulExit: false} every
     // ThrottleInterval, the Windows supervisor on its backoff (4.8 §7: 0 = it was asked to stop, do not re-pull) — which is a loop nobody sees.
     if (e && e[DAEMON_ALREADY_UP]) return EXIT.ok
+    // The Node floor (4.9 §7) is the same loop: a relaunch runs on the same Node and is refused again. startDaemon wrote the one record (D38); exit 0 so
+    // neither launchd nor the supervisor re-pulls it before the next login or `on`.
+    if (e && e.code === 'node-too-old') return EXIT.ok
     // An endpoint held by something that does NOT answer is the opposite case (D38): exiting 0 here would leave the machine with no working collector
     // until the next login, and no record of why. One failure record naming the pid the lock claims, then a non-zero exit, so the platform retries at
     // its own throttle and `trocar status` / `trocar doctor` show it.

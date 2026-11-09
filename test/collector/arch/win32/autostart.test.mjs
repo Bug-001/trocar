@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { assertEnglish } from '../../../helpers/english.mjs'
 import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, directStartEnv, register, daemonCommandLine, readRunValue, runKeyFallback, removeRunValue, TASK_NAME, TASK_FILE, RUN_KEY, superviseChild, runSupervisor, lockHolderAlive, supervisorBackoff, SUPERVISOR_LOCK, SUPERVISE_CAP_MS, SUPERVISE_STABLE_MS } from '../../../../src/collector/arch/win32/autostart.mjs'
-import { elevationByWhoami, refuseElevatedByWhoami } from '../../../../src/off/win32.mjs'
+import { elevationByWhoami, refuseElevatedByWhoami, elevatedRefusal } from '../../../../src/off/win32.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, PIPE_PREFIX } from '../../../../src/collector/arch/win32/control-path.mjs'
 import { autostartBlock } from '../../../../src/collector/install.mjs' // D61: the refusal `registered()` feeds
@@ -145,13 +145,13 @@ test('W26 a second server on a live endpoint is refused, and the first one is no
 const WHOAMI = (label, extra = '') => `"Everyone","Well-known group","S-1-1-0","Mandatory group, Enabled by default, Enabled group"\n"BUILTIN\\Users","Alias","S-1-5-32-545","Mandatory group, Enabled by default, Enabled group"\n${extra}"${label}","Label","S-1-16-${{ medium: 8192, high: 12288, system: 16384, low: 4096 }[label.split('\\')[1].split(' ')[0].toLowerCase()] ?? 8192}",""\n`
 const runner = (out, code = 0, calls = []) => (file, args) => { calls.push([file, ...args]); return { status: code, stdout: out, stderr: '' } }
 
-test('W25 off and uninstall (no helper, no source): the check is `whoami /groups` through execTool, High mandatory level or SYSTEM refuses, Medium and Low do not', () => {
+test('W25 off and uninstall (no helper, no source): the check is `whoami /user /groups` through execTool, High mandatory level or SYSTEM refuses, Medium and Low do not', () => {
   const calls = []
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\Medium Mandatory Level'), 0, calls) }), { elevated: false })
-  assert.deepEqual(calls, [['whoami', '/groups', '/fo', 'csv', '/nh']], 'one fixed command, nothing else asked')
+  assert.deepEqual(calls, [['whoami', '/user', '/groups', '/fo', 'csv', '/nh']], 'one fixed command, nothing else asked')
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\Low Mandatory Level')) }), { elevated: false })
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\High Mandatory Level')) }), { elevated: true, why: 'high-integrity' })
-  assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\System Mandatory Level')) }), { elevated: true, why: 'high-integrity' }, 'System integrity is above High')
+  assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\System Mandatory Level')) }), { elevated: true, why: 'system' }, 'a System label is SYSTEM')
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('Mandatory Label\\Medium Mandatory Level', '"NT AUTHORITY\\SYSTEM","User","S-1-5-18","Mandatory group, Enabled by default, Enabled group"\n')) }), { elevated: true, why: 'system' }, 'SYSTEM by its own SID')
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('强制性标签\\High Mandatory Level')) }), { elevated: true, why: 'high-integrity' }, 'a localised label name does not matter: the SID decides')
   const r = refuseElevatedByWhoami({ run: runner(WHOAMI('Mandatory Label\\High Mandatory Level')) })
@@ -174,7 +174,7 @@ test('W25 off and uninstall never block on a token they cannot read: whoami fail
   }
 })
 
-test('W25 on and the daemon ask the same `whoami /groups` as off and uninstall (one question, no helper: its C# compile cost on 1.2 s, Windows test machine 2026-10-17): High or SYSTEM refuses with the closed-set record, Medium and Low do not, an unreadable token is said and not refused', async () => {
+test('W25 on and the daemon ask the same `whoami /user /groups` as off and uninstall (one question, no helper: its C# compile cost on 1.2 s, Windows test machine 2026-10-17): High or SYSTEM refuses with the closed-set record, Medium and Low do not, an unreadable token is said and not refused', async () => {
   for (const [what, out, refused, token] of [
     ['elevated (the Administrator token, UAC accepted)', WHOAMI('Mandatory Label\\High Mandatory Level'), true, { elevated: true, system: false, integrity: 'high' }],
     ['SYSTEM', WHOAMI('Mandatory Label\\System Mandatory Level', '"NT AUTHORITY\\SYSTEM","User","S-1-5-18","Mandatory group, Enabled by default, Enabled group"\n'), true, { elevated: true, system: true, integrity: 'system' }],
@@ -183,7 +183,7 @@ test('W25 on and the daemon ask the same `whoami /groups` as off and uninstall (
   ]) {
     const calls = [], unknown = []
     const r = await refuseElevated({ run: runner(out, 0, calls), onUnknown: (why) => unknown.push(why) })
-    assert.deepEqual(calls[0], ['whoami', '/groups', '/fo', 'csv', '/nh'], `${what}: whoami first`)
+    assert.deepEqual(calls[0], ['whoami', '/user', '/groups', '/fo', 'csv', '/nh'], `${what}: whoami first`)
     assert.ok(calls.every(([f]) => f === 'whoami' || f === 'reg'), `${what}: whoami and the UAC settings only, nothing started: ${JSON.stringify(calls)}`)
     assert.deepEqual(unknown, [])
     if (!refused) { assert.equal(r, null, what); continue }
@@ -194,7 +194,7 @@ test('W25 on and the daemon ask the same `whoami /groups` as off and uninstall (
   }
   const unknown = []
   assert.equal(await refuseElevated({ run: runner('', 1), onUnknown: (why) => unknown.push(why) }), null, 'whoami failing is not a refusal')
-  assert.match(unknown.join('\n'), /whoami \/groups failed \(exit 1\)/)
+  assert.match(unknown.join('\n'), /whoami failed \(exit 1\)/)
   assert.equal(await refuseElevated({ run: runner('<html>') }), null, 'onUnknown is optional')
 })
 
@@ -445,9 +445,9 @@ test('W24 a /Query that did not run (timeout, blocked, no schtasks) is a failure
 
 /** The task's XML as `schtasks /Query /TN \trocar\collector /XML` prints it, shortened to the elements the answer turns on (a Windows test machine, 2026-10-19, pass C /
  *  win-6): `<Enabled>false</Enabled>` is in `<Settings>` only when the task is switched off — an enabled task has no such element at all. */
-const TASK_XML = (enabled) => ['<?xml version="1.0" encoding="UTF-16"?>', '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">', '  <Settings>',
+const TASK_XML = (enabled, exec = inner(xml(), 'Exec')) => ['<?xml version="1.0" encoding="UTF-16"?>', '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">', '  <Settings>',
   '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>', ...(enabled ? [] : ['    <Enabled>false</Enabled>']), '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>', '  </Settings>',
-  '  <Triggers>', '    <LogonTrigger>', '      <UserId>TESTMACHINE\\tester</UserId>', '    </LogonTrigger>', '  </Triggers>', '</Task>'].join('\r\n')
+  '  <Triggers>', '    <LogonTrigger>', '      <UserId>TESTMACHINE\\tester</UserId>', '    </LogonTrigger>', '  </Triggers>', '  <Actions Context="Author">', `    <Exec>${exec}</Exec>`, '  </Actions>', '</Task>'].join('\r\n')
 /** schtasks writes that XML as UTF-16LE with a BOM on a redirected stdout, and execTool decodes UTF-8 (and trims): what the code really gets is every ASCII character followed by a NUL. */
 const asSchtasksPrintsIt = (xml) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')]).toString('utf8').trim()
 /** A `schtasks` whose task is registered and answers `xml` to `/Query /XML` (null = the query fails), with no Run value of ours. */
@@ -455,10 +455,10 @@ const taskThatAnswers = (xml) => fakeTools({ 'schtasks /Query': (file, args) => 
 
 test('D61 registered() answers the one question 1.6 §3.3 asks — registered AND enabled: a DISABLED task is not "present", in either encoding schtasks may print its XML in', () => {
   for (const [how, form] of [['UTF-16LE decoded as UTF-8, as execTool gets it', asSchtasksPrintsIt], ['plain text', (x) => x]]) {
-    const on = userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(true))) })
+    const on = installed(userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(true))) }))
     assert.equal(on.registered().state, 'present', `${how}: an enabled task is the login entry`)
     assert.equal(autostartBlock({ unit: on, osName: 'win32' }), null, `${how}: so \`on\` goes on`)
-    const off = userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(false))) })
+    const off = installed(userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(false))) }))
     assert.equal(off.registered().state, 'disabled', `${how}: /Query /TN exits 0 for a disabled task too, so the XML is what tells`)
     assert.match(autostartBlock({ unit: off, osName: 'win32' }), /trocar install$/, `${how}: and \`on\` refuses — nothing starts at the next login`)
   }
@@ -471,7 +471,7 @@ test('D61 registered() answers the one question 1.6 §3.3 asks — registered AN
 test('D62 (1.6 §3.1): a registered login entry is ONE schtasks start — `/Query /TN <task> /XML` answers both halves, and the second query is asked only when it did not', () => {
   const asked = (xml) => {
     const run = fakeTools({ 'schtasks /Query': (file, args) => (args.includes('/XML') ? (xml === null ? { status: 1, stderr: 'ERROR: The system cannot find the file specified.' } : { status: 0, stdout: xml }) : { status: 0 }), ...NO_RUN_VALUE })
-    const state = userUnit({ ...withHome(), run }).registered().state
+    const state = installed(userUnit({ ...withHome(), run })).registered().state
     return { state, queries: run.calls.filter((c) => c[0] === 'schtasks' && c.includes('/Query')).map((c) => c.slice(1).join(' ')) }
   }
   const enabled = asked(TASK_XML(true))
@@ -546,7 +546,7 @@ test('W24 a /Create that schtasks refused: the Run value is written with the sam
   assert.match(r.event.reason, /Access is denied/)
   assert.match(r.event.reason, /Run/, 'the event names the entry that is used instead')
   assert.deepEqual(checkRecord(r.event), [], 'a record of the closed set')
-  assert.deepEqual(run.calls.map((c) => c.slice(0, 2).join(' ')), ['schtasks /Create', 'reg query', 'reg add', 'reg query', 'schtasks /Query'], 'create, look at the old value, write, read it back, look whether an earlier task is there to switch off; no /Run (there is no task)')
+  assert.deepEqual(run.calls.map((c) => c.slice(0, 2).join(' ')), ['schtasks /Create', 'reg query', 'reg add', 'reg query', 'schtasks /Query', 'schtasks /Query'], 'create, look at the old value, write, read it back, look whether a task is there to switch off; no /Run (there is no task)')
   assert.deepEqual(run.calls[2], ['reg', 'add', RUN_PATH, '/v', 'trocar-collector', '/t', 'REG_SZ', '/d', COMMAND, '/f'])
   assert.equal(run.reg.value.value, COMMAND)
   assert.equal(COMMAND, `conhost.exe ${inner(x2(u.text({})), 'Arguments')}`, 'the command is the task\'s action: the same supervised one')
@@ -706,11 +706,11 @@ test('W24 exactly one login mechanism is live: enable by the task takes trocar\'
   const odd = installed(userUnit({ ...withHome(), run: fakeTools({ 'reg query': { status: 0, stdout: 'garbage' } }) })).enable({ now: false })
   assert.equal(odd.runKey, 'failed')
   assert.match(odd.warn, /Run/)
-  // the other way round: the Task Scheduler refuses, the Run value is written, and an earlier task is switched off
+  // the other way round: the Task Scheduler refuses, the Run value is written, and a task under trocar's name (here one someone else put there) is switched off
   const earlier = (over = {}) => {
     const reg = fakeRegistry()
     const run = (file, args, opts) => {
-      if (file === 'schtasks' && args[0] === '/Query') return { status: 0, stdout: '', stderr: '' }
+      if (file === 'schtasks' && args[0] === '/Query') return { status: 0, stdout: args.includes('/XML') ? asSchtasksPrintsIt(TASK_XML(true, '<Command>C:\\other\\run.exe</Command><Arguments>/token s3cret</Arguments>')) : '', stderr: '' }
       if (file === 'schtasks' && args[0] === '/Change') return { stdout: '', stderr: '', ...(over.change || { status: 0 }) }
       return reg(file, args, opts)
     }
@@ -726,6 +726,7 @@ test('W24 exactly one login mechanism is live: enable by the task takes trocar\'
   assert.deepEqual([g.code, g.via, g.task], [0, 'run-key', 'failed'])
   assert.match(g.warn, /\\trocar\\collector/)
   assert.match(g.warn, /Access is denied/)
+  assert.ok(g.warn.includes('C:\\other\\run.exe') && !g.warn.includes('s3cret'), 'the task is named by its program, never its arguments')
   const none = fakeRegistry() // schtasks /Query answers 1: no task, nothing to switch off
   const h = installed(userUnit({ ...withHome(), run: none })).enable({ now: false })
   assert.deepEqual([h.code, h.via, h.task, h.warn], [0, 'run-key', undefined, undefined])
@@ -1054,16 +1055,17 @@ const REG = (name, v) => `\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\
 const answers = (map, calls = []) => (file, args) => { calls.push([file, ...args]); const k = Object.keys(map).find((x) => [file, ...args].join(' ').includes(x)); return k ? (typeof map[k] === 'string' ? { status: 0, stdout: map[k], stderr: '' } : map[k]) : { status: 1, stdout: '', stderr: 'ERROR: The system was unable to find the specified registry key or value.' } }
 const HIGH = WHOAMI('Mandatory Label\\High Mandatory Level')
 const USER = (rid) => `"pc\\\\me","S-1-5-21-1-2-3-${rid}"\r\n`
+const HIGH_AS = (rid) => USER(rid) + '\r\n' + HIGH // `whoami /user /groups`: the user row, then the groups
 
 test('R7 unsplit token (off / uninstall, whoami): High with EnableLUA = 0, or the built-in Administrator with FilterAdministratorToken not 1, is let through; a split token\'s High and SYSTEM are not', () => {
-  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x0'), '/user': USER(1001) }) }), null, 'UAC off: every token is unsplit')
-  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500) }) }), null, 'the built-in Administrator, FilterAdministratorToken absent (its default, 0)')
-  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500), FilterAdministratorToken: REG('FilterAdministratorToken', '0x0') }) }), null)
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH_AS(1001), EnableLUA: REG('EnableLUA', '0x0') }) }), null, 'UAC off: every token is unsplit')
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH_AS(500), EnableLUA: REG('EnableLUA', '0x1') }) }), null, 'the built-in Administrator, FilterAdministratorToken absent (its default, 0)')
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH_AS(500), EnableLUA: REG('EnableLUA', '0x1'), FilterAdministratorToken: REG('FilterAdministratorToken', '0x0') }) }), null)
   for (const [why, map] of [
-    ['a split token run as administrator', { '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(1001) }],
-    ['the built-in Administrator under Admin Approval Mode', { '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500), FilterAdministratorToken: REG('FilterAdministratorToken', '0x1') }],
-    ['EnableLUA unreadable: not known to be unsplit', { '/groups': HIGH, '/user': USER(1001) }],
-    ['SYSTEM, whatever UAC says', { '/groups': WHOAMI('Mandatory Label\\System Mandatory Level', '"NT AUTHORITY\\SYSTEM","User","S-1-5-18",""\n'), EnableLUA: REG('EnableLUA', '0x0'), '/user': USER(1001) }],
+    ['a split token run as administrator', { '/groups': HIGH_AS(1001), EnableLUA: REG('EnableLUA', '0x1') }],
+    ['the built-in Administrator under Admin Approval Mode', { '/groups': HIGH_AS(500), EnableLUA: REG('EnableLUA', '0x1'), FilterAdministratorToken: REG('FilterAdministratorToken', '0x1') }],
+    ['EnableLUA unreadable: not known to be unsplit', { '/groups': HIGH_AS(1001) }],
+    ['SYSTEM, whatever UAC says', { '/groups': '"nt authority\\\\system","S-1-5-18"\r\n\r\n' + WHOAMI('Mandatory Label\\System Mandatory Level'), EnableLUA: REG('EnableLUA', '0x0') }],
   ]) assert.equal(refuseElevatedByWhoami({ run: answers(map) })?.code, 'elevated-token', why)
   const calls = []
   refuseElevatedByWhoami({ run: answers({ '/groups': WHOAMI('Mandatory Label\\Medium Mandatory Level') }, calls) })
@@ -1072,8 +1074,7 @@ test('R7 unsplit token (off / uninstall, whoami): High with EnableLUA = 0, or th
 
 test('R7 unsplit token (on / daemon, whoami as off): High with UAC off or the built-in Administrator unfiltered is let through; High otherwise and SYSTEM are refused (D53③)', async () => {
   const world = ({ label, system = false, lua = '0x1', user = 'S-1-5-21-1-2-3-1001', filter = null }) => (file, args) => {
-    if (file === 'whoami' && args[0] === '/groups') return { status: 0, stdout: WHOAMI(label, system ? '"NT AUTHORITY\\SYSTEM","User","S-1-5-18","x"\n' : ''), stderr: '' }
-    if (file === 'whoami' && args[0] === '/user') return { status: 0, stdout: `"pc\\u","${user}"\n`, stderr: '' }
+    if (file === 'whoami') return { status: 0, stdout: `"pc\\u","${system ? 'S-1-5-18' : user}"\n\n` + WHOAMI(label), stderr: '' }
     const v = args.at(-1) === 'EnableLUA' ? lua : filter
     return v == null ? { status: 1, stdout: '', stderr: '' } : { status: 0, stdout: `    ${args.at(-1)}    REG_DWORD    ${v}\n`, stderr: '' }
   }
@@ -1084,6 +1085,47 @@ test('R7 unsplit token (on / daemon, whoami as off): High with UAC off or the bu
   assert.equal((await ask({ label: HIGH, user: 'S-1-5-21-1-2-3-500', filter: '0x1' }))?.code, 'elevated-token', 'Admin Approval Mode on: split')
   assert.equal((await ask({ label: HIGH }))?.code, 'elevated-token', 'an elevated shell of a split account')
   assert.equal((await ask({ label: 'Mandatory Label\\System Mandatory Level', system: true, lua: '0x0' }))?.code, 'elevated-token', 'SYSTEM is refused whatever UAC says')
+})
+
+
+// R7 / W25 on real whoami shapes: `whoami /user /groups /fo csv /nh` answers one user row ("name","SID") and the group rows, CRLF, names in the
+// language of Windows. A SYSTEM token lists no S-1-5-18 group: SYSTEM is its user SID, and its label is System (S-1-16-16384). The runner answers
+// each table only when asked for it, so a check that asks for less sees less, as on Windows.
+const SHAPE = {
+  en: { label: { 8192: 'Mandatory Label\\Medium Mandatory Level', 12288: 'Mandatory Label\\High Mandatory Level', 16384: 'Mandatory Label\\System Mandatory Level' }, kind: 'Label', admins: 'BUILTIN\\Administrators', alias: 'Alias', nta: 'NT AUTHORITY' },
+  de: { label: { 8192: 'Verbindliche Beschriftung\\Mittlere Verbindlichkeitsstufe', 12288: 'Verbindliche Beschriftung\\Hohe Verbindlichkeitsstufe', 16384: 'Verbindliche Beschriftung\\Systemverbindlichkeitsstufe' }, kind: 'Bezeichnung', admins: 'VORDEFINIERT\\Administratoren', alias: 'Alias', nta: 'NT-AUTORITÄT' },
+  zh: { label: { 8192: 'Mandatory Label\\Medium Mandatory Level', 12288: '强制标签\\高强制级别', 16384: '强制标签\\系统强制级别' }, kind: '标签', admins: 'BUILTIN\\Administrators', alias: '别名', nta: 'NT AUTHORITY' },
+}
+const WHO = {
+  user: { sid: 'S-1-5-21-111-222-333-1001', rid: 8192, admins: null },
+  admin: { sid: 'S-1-5-21-111-222-333-1002', rid: 12288, admins: 'Mandatory group, Enabled by default, Enabled group, Owner' },
+  'admin-filtered': { sid: 'S-1-5-21-111-222-333-1002', rid: 8192, admins: 'Group used for deny only' },
+  system: { sid: 'S-1-5-18', rid: 16384, admins: 'Enabled by default, Enabled group, Group owner' },
+}
+const machine = ({ who, uac, lang }) => (file, args) => {
+  const t = SHAPE[lang], w = WHO[who]
+  if (file === 'reg') return args.at(-1) === 'EnableLUA' ? { status: 0, stdout: `\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\r\n    EnableLUA    REG_DWORD    ${uac ? '0x1' : '0x0'}\r\n\r\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'ERROR' }
+  const rows = []
+  if (args.includes('/user')) rows.push(`"${who === 'system' ? `${t.nta.toLowerCase()}\\system` : 'desktop-7q\\ada'}","${w.sid}"`, '')
+  if (args.includes('/groups')) rows.push('"Everyone","Well-known group","S-1-1-0","Mandatory group, Enabled by default, Enabled group"',
+    ...(w.admins ? [`"${t.admins}","${t.alias}","S-1-5-32-544","${w.admins}"`] : []),
+    ...(who === 'system' ? [] : [`"${t.nta}\\INTERACTIVE","Well-known group","S-1-5-4","Mandatory group, Enabled by default, Enabled group"`]),
+    `"${t.nta}\\Authenticated Users","Well-known group","S-1-5-11","Mandatory group, Enabled by default, Enabled group"`,
+    `"${t.label[w.rid]}","${t.kind}","S-1-16-${w.rid}",""`)
+  return { status: 0, stdout: rows.join('\r\n') + '\r\n', stderr: '' }
+}
+
+test('R7 / W25 the token on real whoami shapes (UAC on / off × user / elevated administrator / SYSTEM, CRLF, localised names): SYSTEM is refused as SYSTEM whatever UAC says, the elevated half of a split token is refused, the rest go on', async () => {
+  for (const lang of Object.keys(SHAPE)) for (const uac of [true, false]) for (const [who, want] of [['user', null], ['admin-filtered', null], ['admin', uac ? 'high' : null], ['system', 'system']]) {
+    if (!uac && who === 'admin-filtered') continue // with UAC off an administrator has no filtered half
+    const what = `${who}, UAC ${uac ? 'on' : 'off'}, ${lang}`, run = machine({ who, uac, lang })
+    const off = refuseElevatedByWhoami({ run }), on = await refuseElevated({ run })
+    if (!want) { assert.equal(off, null, `${what}: off / uninstall go on`); assert.equal(on, null, `${what}: on / daemon go on`); continue }
+    assert.equal(off?.code, 'elevated-token', `${what}: off / uninstall refuse`)
+    assert.equal(on?.code, 'elevated-token', `${what}: on / daemon refuse`)
+    assert.equal(on.token.system, want === 'system', `${what}: the record says ${want === 'system' ? 'SYSTEM' : 'not SYSTEM'}`)
+    assert.equal(off.reason, elevatedRefusal(want === 'system').reason, `${what}: off says what on says`)
+  }
 })
 
 // W39 (moved from the old wiring.test.mjs, which went with the old win32 collector): the arch the CLI and daemon reach through loadArch.
@@ -1101,4 +1143,46 @@ test('W39 loadArch("win32") returns the Windows arch on any OS (imported and bui
   assert.equal(A.ensureKernel, undefined, 'no kernel to ensure either')
   assert.equal(typeof A.osRoots, 'function', 'the Windows roots are read (4.8 §6.2)')
   assert.equal(typeof A.netFacts, 'function', 'the platform\'s part of the network facts (1.6 §9.7): gatherNetFacts reaches it as archFacts')
+})
+
+// 4.11 P4: the task under trocar's name is read back as its XML (what install backs up before it replaces an unrecorded one); none there → null
+test('4.11 P4 · registeredBytes: the task\'s XML when one is registered under trocar\'s name, null when none', () => {
+  const xml = '<?xml version="1.0"?><Task version="1.2"><Actions/></Task>'
+  const there = userUnit({ ...withHome(), run: fakeTools({ 'schtasks /Query': { status: 0, stdout: xml.split('').join('\u0000') } }) })
+  assert.equal(String(there.registeredBytes()), xml)
+  const none = userUnit({ ...withHome(), run: fakeTools({ 'schtasks /Query': { status: 1, stdout: '' } }) })
+  assert.equal(none.registeredBytes(), null)
+})
+
+// A task under trocar's name that install did not write (someone's, or left with no record): `on` must not run it, and it is not trocar's login entry. Only its
+// program is said, never its arguments: a stranger's command line can carry anything.
+test('W24 a task whose action is not the one install wrote is not started and is not the login entry; only its program is named', () => {
+  const foreign = '<Command>C:\\Tools\\other.exe</Command><Arguments>--token s3cret</Arguments>'
+  for (const [label, withRecord] of [['install wrote another task', true], ['no record of a task at all', false]]) {
+    const run = taskThatAnswers(asSchtasksPrintsIt(TASK_XML(true, foreign)))
+    const u0 = userUnit({ ...withHome(), run }), u = withRecord ? installed(u0) : u0
+    const q = u.registered()
+    assert.equal(q.state, 'absent', label)
+    assert.match(autostartBlock({ unit: u, osName: 'win32' }), /other\.exe/, `${label}: the refusal names its program`)
+    assert.doesNotMatch(autostartBlock({ unit: u, osName: 'win32' }), /s3cret/, `${label}: never its arguments`)
+    const r = u.startNow()
+    assert.notEqual(r.code, 0, label)
+    assert.doesNotMatch(r.err, /s3cret/)
+    assert.equal(run.calls.filter((c) => c[1] === '/Run').length, 0, `${label}: it was not run`)
+  }
+  // trocar's own task under a profile whose path is not ASCII, or holds `&`, as schtasks prints it back: still ours. With a second action beside it: not
+  for (const user of ['张三', 'Zoë', 'R&D']) {
+    const h = withHome(), home = path.join(h.home, user), o = { ...h, home, script: path.join(home, 'trocar', 'bin', 'trocar.mjs') }
+    const text = userUnit(o).text({})
+    const u = installed(userUnit({ ...o, run: taskThatAnswers(asSchtasksPrintsIt(text)) }))
+    assert.equal(u.registered().state, 'present', `${user}: trocar's own task`)
+    const twice = installed(userUnit({ ...o, run: taskThatAnswers(asSchtasksPrintsIt(text.replace('</Exec>', '</Exec><Exec><Command>calc.exe</Command></Exec>'))) }))
+    assert.equal(twice.registered().state, 'absent', `${user}: a second action makes it not trocar's`)
+  }
+  // the task install wrote, as schtasks prints it back: it is ours, and it is run
+  const run = taskThatAnswers(asSchtasksPrintsIt(TASK_XML(true)))
+  const u = installed(userUnit({ ...withHome(), run }))
+  assert.equal(u.registered().state, 'present')
+  u.startNow()
+  assert.equal(run.calls.filter((c) => c[1] === '/Run').length, 1)
 })

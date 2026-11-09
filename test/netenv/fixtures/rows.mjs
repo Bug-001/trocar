@@ -60,7 +60,7 @@ row({ n: 1, title: 'no proxy in the agent: eBPF → engine → the API host, dir
 row({ n: 2, title: 'the agent has its own proxy (HTTPS_PROXY → mihomo, rule mode): the engine hands the CONNECT on', h: 'claude-code',
   facts: facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, viaMihomo),
   kinds: [['agent', 'trocar-engine', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['claude (pid 4121) -> [ebpf] trocar :47123 -> [CONNECT passed on as it is] mihomo :7890 -> internet'], findings: [] })
+  compact: ['claude (pid 4121) -> [ebpf] trocar :47123 -> [CONNECT passed on as it is] :7890 -> internet'], findings: [] })
 
 row({ n: 3, title: 'a VPN with TUN on is not read (D49): with no proxy in the agent the path stops at the API host, direct', h: 'claude-code',
   facts: facts('claude-code', { vpn: mihomoVpn({ product: 'clash-verge', tun: true }) }),
@@ -70,22 +70,22 @@ row({ n: 3, title: 'a VPN with TUN on is not read (D49): with no proxy in the ag
 row({ n: 4, title: 'trocar is off (after `trocar off`): the agent goes to its own proxy', h: 'claude-code',
   facts: facts('claude-code', { desired: { 'claude-code': 'off' }, listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { watched: 'absent', trusted: false, reason: 'off' })] }),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'desired-off',
-  compact: ['claude (pid 4121) -> [HTTPS_PROXY] mihomo :7890 -> internet'], findings: ['desired-off'] })
+  compact: ['claude (pid 4121) -> [HTTPS_PROXY] :7890 -> internet'], findings: ['desired-off'] })
 
 row({ n: 5, title: 'on, and this process started before `on`: the kernel does not rewrite its connections', h: 'claude-code',
   facts: facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { startedAt: BEFORE, watched: 'no-decrypt', trusted: false, reason: 'config-after-start' })] }),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'config-after-start',
-  compact: ['claude (pid 4121) -> [HTTPS_PROXY] mihomo :7890 -> internet'], findings: ['config-after-start'] })
+  compact: ['claude (pid 4121) -> [HTTPS_PROXY] :7890 -> internet'], findings: ['config-after-start'] })
 
 row({ n: 6, title: 'on, and (pid, host) is in the negative cache: the engine is on the path and passes the connection through', h: 'claude-code',
   facts: facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { negative: true })], negatives: [{ pid: 4121, host: 'api.anthropic.com', reason: 'negative-cache' }] }),
   kinds: [['agent', 'trocar-engine', 'proxy', 'egress']], on_path: true, captured: false, reason: 'negative-cache',
-  compact: ['claude (pid 4121) -> [ebpf] trocar :47123 (forwarded only for api.anthropic.com) -> [CONNECT passed on as it is] mihomo :7890 -> internet'], findings: ['negative-cache'] })
+  compact: ['claude (pid 4121) -> [ebpf] trocar :47123 (forwarded only for api.anthropic.com) -> [CONNECT passed on as it is] :7890 -> internet'], findings: ['negative-cache'] })
 
 row({ n: 7, title: 'wanted on and the daemon is not running: the links went with the helper, the agent goes to its own proxy', h: 'claude-code',
   facts: facts('claude-code', { daemon: { state: 'not-running', pid: null, enginePort: null }, link: { attached: null, helper: 'ok', ids: [] }, listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { watched: 'unknown', trusted: null })] }),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'daemon-not-running',
-  compact: ['claude (pid 4121) -> [HTTPS_PROXY] mihomo :7890 -> internet'], findings: ['daemon-not-running'] })
+  compact: ['claude (pid 4121) -> [HTTPS_PROXY] :7890 -> internet'], findings: ['daemon-not-running'] })
 
 // ── proxy mode (4.8 §10.2; the facts are the Windows branch's to give, here they are injected) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // A harness has forms; each form has the proxy it would use without trocar (`setting`: as of now), the OS proxy, the entry trocar wrote, and the kernel's own state for it (`forwarder.forms`).
@@ -103,7 +103,7 @@ export const pfacts = (h, fm, fw, over = {}) => facts(h, {
 }, { forms: [fm], procs: fm.procs, behaviour: { ...BEHAVE[h], measured: 'lab' } }) // what the Windows branch measured on a test machine: nothing here is inferred
 const codexForm = (over = {}) => form('codex.cli', { procs: [proc(5530, CODEX_PROC)], ...over })
 const ENGINE_AND_KERNEL = ['agent', 'trocar-forwarder', 'trocar-engine']
-const CODEX_VIA_CLASH = '(pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> [system proxy] verge-mihomo.exe :7897 -> internet'
+const CODEX_VIA_CLASH = '(pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 -> [system proxy] :7897 -> internet'
 const viaSystemProxy = (port = 7897) => ({ listeners: [{ ...CLASH, port }], vpn: clashVpn({ port }) })
 
 row({ n: 8, title: 'proxy mode: the agent has no proxy and there is no VPN: the kernel and the engine dial the API host', h: 'claude-code',
@@ -129,7 +129,7 @@ row({ n: 11, title: 'proxy mode: the OS proxy is a PAC and the form follows it: 
 row({ n: 12, title: 'proxy mode: wanted on, the engine is gone: the kernel falls back to the upstream and only forwards', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), { daemon: { state: 'not-running', pid: null, enginePort: null }, ...viaSystemProxy() }),
   kinds: [['agent', 'trocar-forwarder', 'proxy', 'egress'], ['agent', 'trocar-forwarder', 'proxy', 'egress']], on_path: true, captured: false, reason: 'daemon-not-running',
-  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 (forwarded only) -> [system proxy] verge-mihomo.exe :7897 -> internet'], findings: ['daemon-not-running', 'egress-differs'] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 (forwarded only) -> [system proxy] :7897 -> internet'], findings: ['daemon-not-running', 'egress-differs'] })
 
 row({ n: 13, title: 'proxy mode: wanted on, the kernel is not running: nobody listens on the entry the agent points at', h: 'codex',
   facts: pfacts('codex', codexForm(), fwForm(17992), { forwarder: { pid: null, up: false, forms: { 'codex.cli': fwForm(17992) } } }),
@@ -139,7 +139,7 @@ row({ n: 13, title: 'proxy mode: wanted on, the kernel is not running: nobody li
 row({ n: 14, title: 'proxy mode: after `off`, an agent started while it was on is still connected to the kernel, which only forwards', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { state: 'forward-only', upstream: 'http://127.0.0.1:7897', source: 'system-proxy', clients: [5530] }), { desired: { codex: 'off' }, ...viaSystemProxy() }),
   kinds: [['agent', 'trocar-forwarder', 'proxy', 'egress'], ['agent', 'trocar-forwarder', 'proxy', 'egress']], on_path: true, captured: false, reason: 'desired-off',
-  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 (forwarded only) -> [system proxy] verge-mihomo.exe :7897 -> internet'], findings: ['desired-off', 'egress-differs'],
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by trocar] trocar :17992 (forwarded only) -> [system proxy] :7897 -> internet'], findings: ['desired-off', 'egress-differs'],
   notes: ['1 process(es) are still connected through trocar, forwarded only; trocar exits once they do'] })
 
 row({ n: 17, title: 'proxy mode: the user changed the agent\'s own proxy: it no longer points at the kernel and goes where the setting says', h: 'codex',
@@ -162,7 +162,7 @@ row({ n: 20, title: 'old capture: Claude Desktop → the OS proxy (the VPN) → 
   facts: facts('claude-code', { platform: 'darwin', routing: 'legacy', daemon: { state: 'not-running', pid: null, enginePort: null }, link: { attached: null, helper: 'ok', ids: [] }, listeners: [CLASH], vpn: clashVpn() },
     { procs: [proc(8801, { name: 'Claude', version: '1.4', watched: 'absent', trusted: null })], systemProxy: sysProxy(), legacy: { mitm: { addr: '127.0.0.1', port: 8443, pid: 321 }, on_path: true, captured: true, reason: null } }),
   kinds: [['agent', 'proxy', 'legacy-mitm', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['Claude (pid 8801) -> [system proxy] verge-mihomo.exe :7897 -> [the old capture] trocar old MITM :8443 -> verge-mihomo.exe :7897 -> internet'], findings: [] })
+  compact: ['Claude (pid 8801) -> [system proxy] :7897 -> [the old capture] trocar old MITM :8443 -> :7897 -> internet'], findings: [] })
 
 // ── the unknowns ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // Rows 21 and 22 say 「不知道」 under 「在路径上」. The builder judges on_path from trocar's own facts (the watch table, the link), which an unreadable proxy owner or a PAC does not change, so these rows
@@ -171,7 +171,7 @@ row({ n: 21, title: 'the owner of the proxy port cannot be read: that hop is 「
   facts: facts('hermes', { listeners: [{ addr: '127.0.0.1', port: 7891, unknown: { reason: 'owner-unreadable', detail: 'ss lists no process for it' } }] },
     { setting: proxyOf('http://127.0.0.1:7891', [{ kind: 'env', where: 'ALL_PROXY' }]), procs: [proc(6001, { name: 'hermes', exe: '/usr/bin/python3', version: null })] }),
   kinds: [['agent', 'trocar-engine', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['hermes (pid 6001) -> [ebpf] trocar :47123 -> [CONNECT passed on as it is] 127.0.0.1:7891 (unknown: owner not known) -> internet'], findings: ['inferred-behaviour'] })
+  compact: ['hermes (pid 6001) -> [ebpf] trocar :47123 -> [CONNECT passed on as it is] :7891 (unknown: owner not known) -> internet'], findings: ['inferred-behaviour'] })
 
 row({ n: 22, title: 'the OS proxy is a PAC and the agent follows it for HTTP (not for WebSocket): the HTTP branch ends at 「不知道 · pac」', h: 'codex',
   facts: facts('codex', {}, { systemProxy: { value: null, pac: true }, procs: [proc(5530, { name: 'codex app-server', exe: '/home/u/.codex/codex', version: '0.160.1' })] }),
@@ -183,13 +183,13 @@ row({ n: 23, title: 'Windows: a kernel-level filter this user cannot see is said
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], on_path: true, captured: true, reason: null,
   compact: ['claude (pid 4121) -> [settings env.HTTPS_PROXY, written by trocar] trocar :17991 -> api.anthropic.com (direct)'], findings: [], notes: ['A kernel filter such as WFP is not visible to your user.'] })
 
-// Row 24 is not in the spec's table of §9.3 as an example of its own: it is the case the table's rows left out, found by running the real binary (a proxy whose owner is a readable process). D49: the hop is named by
-// its executable and keeps its port; trocar does not say which product it is.
+// Row 24 is not in the spec's table of §9.3 as an example of its own: it is the case the table's rows left out, found by running the real binary (a proxy whose owner is a readable process). D49: the hop is its address
+// and port with the owner's pid; the owner's program name is never said (a proxy's program is its product).
 export const SCRIPT_PROXY = { addr: '127.0.0.1', port: 38743, pid: 898, exe: '/usr/bin/node' }
-row({ n: 24, title: 'the proxy port is owned by a process trocar can read (a script, ssh -D, squid, a VPN client …): the hop is that process with its port, nothing is guessed about what it is, and the exit is just the exit', h: 'claude-code',
+row({ n: 24, title: 'the proxy port is owned by a process trocar can read (a script, ssh -D, squid, a VPN client …): the hop is its port with that process\'s pid, nothing is guessed about what it is, and the exit is just the exit', h: 'claude-code',
   facts: facts('claude-code', { listeners: [SCRIPT_PROXY] }, { setting: proxyOf('http://127.0.0.1:38743') }),
   kinds: [['agent', 'trocar-engine', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['claude (pid 4121) -> [ebpf] trocar :47123 -> [CONNECT passed on as it is] node :38743 -> internet'], findings: [] })
+  compact: ['claude (pid 4121) -> [ebpf] trocar :47123 -> [CONNECT passed on as it is] :38743 -> internet'], findings: [] })
 
 /** The same facts with the OS proxy off / without a VPN product (V45). */
 export const withSystemProxyOff = (f) => ({ ...f, harnesses: Object.fromEntries(Object.entries(f.harnesses).map(([h, x]) => [h, { ...x, systemProxy: x.systemProxy ? { value: null, pac: false } : null, forms: x.forms ? x.forms.map((fm) => ({ ...fm, systemProxy: { value: null, pac: false } })) : null }])) })

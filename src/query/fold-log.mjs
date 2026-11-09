@@ -28,7 +28,7 @@ import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
 import { sessionDir, lineIndex, lru, staleHeader, HEAP_PER_LINE_BYTE } from './projection.mjs';
 
-export const FOLD_V = 3;
+export const FOLD_V = 9; // past both lines that each moved it (the reads line's 8, the desk line's 2)
 /** The heap the read cache keeps of parsed lines (two times it): a K term of the reduction's bound (3.5 §内存有界). */
 export const LOG_BYTES = 4 << 20;
 const CHAIN = { c: 'rid', g: 'rid', l: 'lane', lg: 'lane' };

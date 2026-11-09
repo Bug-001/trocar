@@ -85,7 +85,7 @@ test('1.2 #23 back to a parked desk (library row, overview Back, library Back): 
     await page.evaluate((h) => { location.hash = h }, href)
     await drawn(page)
     assert.equal(reads(b, mark, 'd/open.main')[0]?.range, null, 'a new page reads its tail whole')
-    const M = +(/\/\s*(\d+)/.exec((await view(page)).no) || [])[1]
+    const M = await page.evaluate(() => window.__stepNo().m)
     assert.ok(M > 120, `the anchor lane spans several pages (${M} steps)`)
     await page.evaluate(([h, n]) => { location.hash = `${h}?step=${n}` }, [href, Math.floor(M / 2)])
     await until(page, () => document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'false')

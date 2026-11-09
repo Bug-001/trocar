@@ -50,7 +50,7 @@ export const classesLog = (home = trocarHome()) => path.join(home, 'logs', 'clas
 // place) can no longer remove it. The keychain identifies a root by its subject name, not its path,
 // so an existing CA keeps working wherever it sits: if the legacy directory holds one, that IS the
 // CA, and we use it in place. Only a machine with no CA at all gets one in the new home.
-// (The subject name `CA_CN` is frozen for exactly this reason — see D27's explicit non-scope.)
+// (The old root's subject name is frozen for exactly this reason — see D27's explicit non-scope.)
 export function caDir({ home = trocarHome(), legacyCa = path.join(os.homedir(), '.atrace', 'ca') } = {}) {
   const fresh = path.join(home, 'ca');
   if (existsQuiet(fresh)) return fresh;

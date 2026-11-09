@@ -107,6 +107,9 @@ const CLOSES = /`[.,;:)]*$/
 // §1.1⑤⑥: a size (`size()`: a number, then B / KB / MB / GB) is one word, and a bracketed size goes with the word before it — the thing it is the size
 // of (`~/.trocar/raw/ (1.3 GB)`), so a fold never leaves `(3.2 KB)` alone on a line, nor `3.2` at the end of one and `KB` at the start of the next
 const NUMBER = /^\(?\d[\d.,]*$/, UNIT = /^[KMG]?B\)?[.,;:]?$/
+// §1.1⑥: a path is one word, its spaces too (`~/Library/Application Support/…`): a word that starts a path takes the next while that one goes on the
+// path — it has a separator in it and does not start a path of its own
+const PATH_START = /^["'(]?(~?[\\/]|[A-Za-z]:\\)/, ON_PATH = /[\\/]/
 function words(text) {
   const ws = String(text).split(/\s+/).filter(Boolean), out = []
   for (let i = 0; i < ws.length; i++) {
@@ -117,6 +120,7 @@ function words(text) {
       w += ` ${ws[++i]}`
       while (/[a-z-]$/.test(w) && /^--?[a-z]/.test(ws[i + 1] || '')) w += ` ${ws[++i]}`
     }
+    else if (PATH_START.test(w)) { while (ws[i + 1] && ON_PATH.test(ws[i + 1]) && !PATH_START.test(ws[i + 1])) w += ` ${ws[++i]}` }
     else if (NUMBER.test(w) && UNIT.test(ws[i + 1] || '')) {
       w += ` ${ws[++i]}`
       if (w.startsWith('(') && out.length) { out[out.length - 1] += ` ${w}`; continue }
@@ -139,3 +143,15 @@ export function wrap(text, width = WIDTH, hang = '') {
 
 /** The one way to say a value could not be read (§1.1「读不到就说读不到」): `unknown`, with the reason when there is one. */
 export const unknown = (reason) => (reason ? `unknown (${reason})` : 'unknown')
+
+/** `a`, `a and b`, `a, b and c`: a list said as a sentence says it (§1.1 ④). */
+export const andList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs.length ? String(xs[0]) : '')
+
+/** Items counted by a key, said as `5 codex and 13 pi processes` (§1.1 ④ rule 5: a list of processes is a count and what to do). Keys keep the
+ *  order they first appear in; the noun takes its plural from the total. */
+export function countsBy(items, keyOf, noun = 'process', plural = `${noun}es`) {
+  if (!items.length) return ''
+  const n = new Map()
+  for (const x of items) n.set(keyOf(x), (n.get(keyOf(x)) || 0) + 1)
+  return `${andList([...n].map(([k, c]) => `${c} ${k}`))} ${items.length === 1 ? noun : plural}`
+}

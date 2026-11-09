@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { createSynthKeys, createSynthAssigner, synthFactsOf, SYNTH_GAP_MS, SYNTH_TTL_MS, SYNTH_CAP } from '../../src/dissect/synth-key.mjs'
+import { createSynthAssigner, synthFactsOf, SYNTH_GAP_MS, SYNTH_TTL_MS, SYNTH_CAP } from '../../src/dissect/synth-key.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
 import fs from 'node:fs'
@@ -10,6 +10,8 @@ import path from 'node:path'
 import { indexRows } from '../../src/query/rows.mjs'
 import { fillUsage } from '../../src/query/usage.mjs'
 import { segmentIndex, indexDir } from '../../src/query/index-build.mjs'
+// the key each record gets, in the order asked: the assigner the segment index feeds (createSynthAssigner in src/query/rows.mjs, over synthFactsOf from src/query/index-build.mjs), fed one record's facts at a time
+const keysOf = () => { const assign = createSynthAssigner(); return (rec) => assign(synthFactsOf(rec))?.key ?? null }
 import { reduction, skeletonDoc, memoryLog, BlockUnread } from '../../src/view/reduce.mjs'
 import { extractMembers, blockAt } from '../../src/view/extract.mjs'
 import { openProjection } from '../../src/query/projection.mjs'
@@ -41,7 +43,7 @@ test('systemTextOf: the first system / developer item of a Responses input is th
   for (const role of ['developer', 'system']) {
     for (const [shape, content] of Object.entries(shapes)) {
       const recs = prompts.map((p) => piResp({ role, content: content(p) }))
-      const { keyOf } = createSynthKeys()
+      const keyOf = keysOf()
       const keys = recs.map(keyOf)
       assert.notEqual(keys[0], keys[1], `${role}/${shape}: two prompts, two sessions`)
       keys.forEach((k, i) => {
@@ -82,8 +84,8 @@ test('synthesized keys: consecutive keyless calls of one task form one session, 
   recs.push(...inter.map((x) => x.r))
   recs.sort((x, y) => Date.parse(x.ts_request) - Date.parse(y.ts_request))
 
-  const k = createSynthKeys()
-  const keyOf = new Map(recs.map((r) => [r, k.keyOf(r)]))
+  const k = keysOf()
+  const keyOf = new Map(recs.map((r) => [r, k(r)]))
   for (const r of recs) assert.match(keyOf.get(r) || '', KEY)
   for (const { a, b, together } of pairs) {
     assert.equal(keyOf.get(a) === keyOf.get(b), together, `${a.req_body} → ${b.req_body} (pid ${a.proc.pid}→${b.proc.pid})`)
@@ -886,7 +888,7 @@ test('gemini: contents and systemInstruction anchor the chain; two unrelated con
   const f = synthFactsOf(a1)
   assert.equal(f.hash, createHash('sha256').update('You are pi.', 'utf8').digest('hex'), 'the system text is systemInstruction')
   assert.ok(f.chain.length > 0, 'the history is contents')
-  const { keyOf } = createSynthKeys()
+  const keyOf = keysOf()
   const [ka1, kb1, ka2] = [a1, b1, a2].map(keyOf)
   assert.notEqual(kb1, ka1, 'an unrelated conversation is another session')
   assert.equal(ka2, ka1, 'a conversation that extends stays one session')

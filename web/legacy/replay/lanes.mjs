@@ -21,7 +21,7 @@ export function buildLanes(desk, probes, { prev = null, changed = null } = {}) {
     // a count_tokens measurement is a ruler, not a conversation and not a lane of the server's: its own row key
     // 'token-count' (2.1's table) never collides with the server's `probe` lane (a warm-up request) — 1.3 #16.
     const count = (probes && probes.count) || series.length // the full truth: series only holds the ones with a size
-    const calls = series.map((p, i) => ({ rid: `token-count:${i}`, ts: p.ts, ctx: p.tokens || 0, probe: true, usage: null }))
+    const calls = series.map((p, i) => ({ rid: `token-count:${i}`, ts: p.ts, ctx: p.tokens || 0, probe: true, usage: null, retention: p.retention }))
     ls.push({ id: 'token-count', kind: 'token-count', label: 'token count', calls, count, base: 0, events: [],
       ridLocal: new Map(calls.map((c, i) => [c.rid, i])), peakCtx: calls.reduce((m, c) => Math.max(m, c.ctx), 1), flagged: false })
   }
@@ -41,7 +41,8 @@ export function stepOfMark(s, rid) {
 }
 
 // the steps: the main lane's calls; a session without a main lane anchors on its first lane (K-04)
-export const anchorLane = (lanes) => (lanes || []).find((l) => l.kind === 'main') || (lanes || [])[0] || null
+// (the token-count row is no lane, 2.1:17: never the anchor; a session of token counts alone keeps its K-04 empty state)
+export const anchorLane = (lanes) => (lanes || []).find((l) => l.kind === 'main') || (lanes || []).find((l) => l.kind !== 'token-count') || null
 export const stepsOf = (lanes) => { const a = anchorLane(lanes); return a ? a.calls : [] }
 
 // ── numbering (1.2 §编号): the ONE conversion from a record id to the words the board shows ──────────────────────────
@@ -93,6 +94,7 @@ export function inWindow(anchorTs, view, ts) {
 // whose times lie in [anchorTs[lo], anchorTs[hi]] is looked at (two binary searches), and inWindow decides each of those. What a render
 // costs follows the window it draws, not the length of the lane.
 export function windowCalls(lane, anchorTs, view) {
+  if (view.none) return [] // a window with steps not held yet: the ticks wait for their rows
   const calls = lane.calls, n = anchorTs.length, lo = view.lo | 0, hi = Math.max(lo + 1, view.hi || n)
   const first = (pred) => { let a = 0, b = calls.length; while (a < b) { const m = (a + b) >> 1; if (pred(toMs(calls[m].ts))) b = m; else a = m + 1 } return a }
   const from = lo > 0 && lo < n ? first((t) => t >= anchorTs[lo]) : 0

@@ -11,7 +11,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createDesk, listOf, stepOf, indexOf, ridAt, laneEvents } from '../../web/legacy/replay/model.mjs'
 import { parseLines, applyFile, applyHead } from '../../web/legacy/replay/packs.mjs'
-import { behindOf, readStateHtml } from '../../web/legacy/replay/header.mjs'
+import { behindOf } from '../../web/legacy/replay/header.mjs'
+import { sessionHeadModel } from '../../web/src/screens/replay/models.mjs'
 import { world } from './desk-world.mjs'
 import { drain } from '../helpers/bounded.mjs'
 
@@ -313,7 +314,17 @@ test('1.5 K-31, K-33: the three states from the head alone: plain pending reads,
     const desk = createDesk()
     applyHead(desk, { mark: 'S:1', lanes: [], pending })
     assert.equal(desk.firstPending, first, J(pending))
-    assert.equal(readStateHtml(desk).match(/data-read-state="([^"]+)"/)?.[1] ?? null, state, J(pending))
+    assert.equal(sessionHeadModel({ desk, meta: { session_id: 'S' }, lanes: [] }).read?.state ?? null, state, J(pending))
+  }
+})
+
+// 1.2 #6 · 3.5 §会话读: the head's `probes` is the token-count calls as {count, series} (a tier-0 head may carry the bare count);
+// the desk holds the count, whichever shape came
+test('1.2 #6: the desk holds the head\'s token-count calls as a count, from {count, series} or a bare number; none is 0', () => {
+  for (const [probes, n] of [[{ count: 3, series: [{ ts: '2026-10-07T00:00:01.000Z', tokens: 10 }] }, 3], [{ count: 0, series: [] }, 0], [4, 4], [undefined, 0], [null, 0]]) {
+    const desk = createDesk()
+    applyHead(desk, { mark: 'S:1', lanes: [], probes })
+    assert.equal(desk.probes, n, J(probes))
   }
 })
 

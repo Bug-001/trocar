@@ -13,8 +13,9 @@ import nodeFs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { INGRESS_FILE } from '../../off/door-value.mjs'
 
-export const INGRESS_FILE = 'ingress.json'
+export { INGRESS_FILE } // one copy, in src/off: the marker undo reads the door ports from the same file
 export const ENGINE_RANGE = Object.freeze([17990, 18989])
 export const GROUP_RANGE = Object.freeze([17991, 18989])
 export const BOARD_RANGE = Object.freeze([9800, 9899])

@@ -21,7 +21,9 @@ import zlib from 'node:zlib'
 // decoded only up to NON_INFERENCE_MAX_DECODED_BYTES (D40: any host of any agent can send a compressed body; 204 KB of gzip once
 // became a 200 MiB req_body and pushed the NDJSON line past V8's string limit). Over a limit the wire bytes are kept
 // (req_body_b64) and the call says so (req_encoding_error), the way a body that does not decode does.
-import { MAX_DECODED_BYTES, NON_INFERENCE_MAX_DECODED_BYTES } from '../dissect/request-body.mjs'
+import { MAX_DECODED_BYTES, NON_INFERENCE_MAX_DECODED_BYTES, nonIdentityEncoding } from '../dissect/request-body.mjs'
+// the one rule for what counts as compressed, shared with the reader's label (resp-decoded-only), so the two halves cannot disagree
+export { nonIdentityEncoding }
 // The most of one body (either direction) an envelope stores — the collector's engine, its WebSocket frames and both old
 // capture paths. What is past it is counted (body_wire_bytes) but not kept, and the envelope says so (req_truncated /
 // resp.truncated).

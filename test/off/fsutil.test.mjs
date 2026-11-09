@@ -82,19 +82,34 @@ test('pathKey(win32): an 8.3 short name in the parent (RUNNER~1) is the same fil
 })
 
 test('pathKey: a parent that is not there falls back to the resolved path (a deeper ancestor that is there still resolves)', () => {
-  const fake = realTable({ 'c:\\users\\runner~1': 'C:\\Users\\runneradmin' })
+  const fake = realTable({ 'c:\\users\\runner~1': 'C:\\Users\\runneradmin', 'c:\\users\\runneradmin': 'C:\\Users\\runneradmin' })
   const k = (p) => pathKey(p, { platform: 'win32', realpath: fake.realpathSync.native })
   assert.equal(k('C:\\Users\\RUNNER~1\\.gone\\x.env'), k('C:\\Users\\runneradmin\\.gone\\x.env'))
   assert.equal(k('D:\\nowhere\\x.env'), 'd:/nowhere/x.env')
 })
 
-test('pathKey(darwin): case folds and a symlinked directory is the directory it links to (real directories in a temp dir)', () => {
+// A volume as realpath sees it: `dirs` (on-disk case) exist; a case-insensitive one finds them under any case and answers the on-disk case.
+const volume = (dirs, { caseInsensitive }) => (d) => { const hit = dirs.find((x) => (caseInsensitive ? x.toLowerCase() === d.toLowerCase() : x === d)); if (hit) return hit; throw errno('ENOENT') }
+
+test('pathKey(darwin): on a case-insensitive volume two spellings differing only by case are one file, existing or not', () => {
+  const k = (p) => pathKey(p, { platform: 'darwin', realpath: volume(['/', '/Users', '/Users/Al', '/Users/Al/.codex'], { caseInsensitive: true }) })
+  assert.equal(k('/users/al/.CODEX/Config.toml'), k('/Users/Al/.codex/config.toml'))
+  assert.equal(k('/Users/Al/.gone/X.env'), k('/users/al/.gone/x.env'))
+})
+
+test('pathKey(darwin): on a case-sensitive volume two files differing only by case are two keys', () => {
+  const k = (p) => pathKey(p, { platform: 'darwin', realpath: volume(['/', '/Volumes', '/Volumes/Dev', '/Volumes/Dev/proj'], { caseInsensitive: false }) })
+  assert.notEqual(k('/Volumes/Dev/proj/Settings.json'), k('/Volumes/Dev/proj/settings.json'))
+  assert.notEqual(k('/Volumes/Dev/proj/New/a.env'), k('/Volumes/Dev/proj/new/a.env'))
+  assert.equal(k('/Volumes/Dev/proj/../proj/a.env'), k('/Volumes/Dev/proj/a.env'))
+})
+
+test('pathKey(darwin): a symlinked directory is the directory it links to (real directories in a temp dir)', () => {
   const dir = fs.realpathSync(tmpDir('trocar-pk-'))
   fs.mkdirSync(path.join(dir, 'Home', 'Codex'), { recursive: true })
   fs.symlinkSync(path.join(dir, 'Home', 'Codex'), path.join(dir, 'link'))
   const k = (p) => pathKey(p, { platform: 'darwin', realpath: fs.realpathSync.native })
   assert.equal(k(path.join(dir, 'link', '.env')), k(path.join(dir, 'Home', 'Codex', '.env')))
-  assert.equal(k(path.join(dir, 'HOME', 'codex', '.ENV')), k(path.join(dir, 'Home', 'Codex', '.env')))
   // APFS looks names up without regard to Unicode normalisation: NFC and NFD spellings are one file
   assert.equal(k(path.join(dir, 'caf\u00e9.env')), k(path.join(dir, 'cafe\u0301.env')))
 })

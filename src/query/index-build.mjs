@@ -7,7 +7,7 @@
 //
 // Per record it holds exactly what the list queries print (1.6 §4.1 「段索引每条记录存什么」): id, time,
 // harness, class, host, path, status, stored and wire bytes, session key, and whether it is a model call.
-// No body, no headers — those are read back from the segment itself (src/query/records.mjs readRecord).
+// No body, no headers — those are read back from the segment itself (src/query/records.mjs recordReader).
 //
 // INVALIDATION is the identity rule of src/query/source.mjs (size, mtime, ctime + the first and last 4 KB
 // before the last indexed line), not a rule of its own: a segment that only GREW is resumed from the
@@ -383,6 +383,10 @@ export function segmentSource(home, segment, fs = nodeFs) {
   return fs.existsSync(plainPath) ? plainPath : path.join(rawDir(home), `${segment}.sealed`);
 }
 
+/** Whether a read of plaintext `file` failed because the seal worker unlinked it after the look: it does so only with the sealed copy in
+ *  place (4.2 读者与封存并发), so that copy holds the bytes. A plaintext still there and unreadable is a failure: it wins while it exists. */
+export const plainWentSealed = (home, segment, fs, file) => !file.endsWith('.sealed') && !fs.existsSync(file) && fs.existsSync(path.join(rawDir(home), `${segment}.sealed`));
+
 // The mark of a plaintext segment covered up to byte `end` (just past line `lines`), the way a scan builds it: `size`
 // claims only what was covered, so a file that is longer reads as GROWN and resumes from `end` (usability below).
 export function plainMark(fs, source, end, lines) {
@@ -521,6 +525,7 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
       : (owner && fromEntries(fs, source, stored, how, entries))
         || await scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes, progress, ease);
   } catch (e) {
+    if (plainWentSealed(home, segment, fs, source)) return segmentIndex({ home, segment, fs, maxBytes, owner, entries, past, progress });
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(source)}: ${String((e && e.message) || e)}` });
     return { segment, source, records: stored && how === 'resume' ? stored.records || [] : [], problems: [...prior, ...problems], bytesRead: 0, done: true, stored: kept, grown: false };
   }
@@ -569,16 +574,16 @@ export const segStamp = (home, segment, fs, at = null) => {
   if (!f) stampFiles.set(k, (f = [path.join(rawDir(home), `${segment}.ndjson`), path.join(rawDir(home), `${segment}.sealed`)]));
   return `${!at || at.plain ? statKey(f[0], fs) : null}|${!at || at.sealed ? statKey(f[1], fs) : null}`;
 };
-/** warmSegmentIndex({home, segment, fs, at, progress, ease}) → the same `segmentIndex()` answer, read from disk only when that segment's
+/** warmSegmentIndex({home, segment, fs, at, progress, ease, warmOnly}) → the same `segmentIndex()` answer, read from disk only when that segment's
  *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory.
  *  A note (`level`, e.g. `index-cold`) is about the read that RAN segmentIndex, so it is never kept: a later read
  *  served from memory did none of that work, and an index write does not move the stamp (3.5 读不全 #17). */
-export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null, progress = null, ease = null } = {}) => {
+export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null, progress = null, ease = null, warmOnly = false } = {}) => {
   let notes = [];
   const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs, at), async (old) => {
     // the answer this segment had: its index read goes on from where that one stopped (4.2:49)
     const prev = old ? await Promise.resolve(old).catch(() => null) : null; // kept as the promise it was computed as
-    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored, progress, ease }), segment);
+    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored, progress, ease, warmOnly }), segment);
     if (got.grown && got.records !== prev.records && got.records.length >= prev.records.length) grew.set(got.records, recordsId(prev.records));
     notes = got.problems.filter((p) => p.level);
     return notes.length ? { ...got, problems: got.problems.filter((p) => !p.level) } : got;

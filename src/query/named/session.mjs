@@ -42,6 +42,7 @@ import { releaseParts } from '../line-file.mjs';
 import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yieldCaches } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
+import { isMarked } from '../../view/head-cols.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
 import { lineageKnown, titleOf, withLineage } from '../titles.mjs';
 import { projectFields } from '../../dissect/project.mjs';
@@ -133,6 +134,12 @@ const FITS_KEPT = 64;
 // one (its first member and the last one's last member at the same places) extends the plan by its new members; any other (a segment
 // indexed again, a store opened again) makes it afresh. So a slice and an answer cost by the new members (3.5 后台抽取与归约).
 // Exported for test/query/cut-grows.test.mjs, which grows a plan without records.
+const earlyArrays = new WeakSet(); // the member arrays of a provisional list (groupsOf)
+/** groupsOf(index) → the session groups of a request's index; a provisional list's member arrays are marked early (cutOf). */
+const groupsOf = (index) => {
+  const g = sessionGroups(index.rows);
+  return index.early ? { get: (id) => { const ms = g.get(id); if (ms) earlyArrays.add(ms); return ms; } } : g;
+};
 export function planOf(members, k, store, id, fit = fits.get(k) ?? Infinity) {
   let p = store.plan;
   if (p && p.members === members && p.n === members.length && p.fit === fit) return p;
@@ -143,7 +150,7 @@ export function planOf(members, k, store, id, fit = fits.get(k) ?? Infinity) {
   }
   const added = members.slice(p.n || 0);
   for (const r of added) { p.byId.set(String(r.id), r); sum(p.all, r); p.facts.add(r); }
-  p.members = members; p.n = members.length; p.last = String(members[members.length - 1].id);
+  p.members = members; p.n = members.length; p.last = String(members[members.length - 1].id); p.early = earlyArrays.has(members);
   p.key = `${p.all.n}:${p.first}:${p.last}:${p.all.stored + p.all.n}`;
   cut(p, fit, added);
   p.gen++;
@@ -198,7 +205,8 @@ const keyOf = ({ fs, home, writer }, id) => `${fsTag(fs)}\n${home}\n${id}\n${wri
 
 // The segment index of THIS request, read once whether version() asked first (src/query/answers.mjs) or not; the worker's
 // background reads it through here too, once per kick (src/query/worker.mjs kickedSessions).
-export async function indexed({ home, fs, once, progress }) {
+export async function indexed({ home, fs, once, progress, early }) {
+  if (early) return early; // the worker's boot pass is still reading: the rows it read so far (worker.mjs earlyRows)
   if (once && once.index) return once.index;
   const errors = [], got = { rows: await indexRows({ home, fs, errors, progress }), errors };
   if (once) once.index = got;
@@ -272,6 +280,9 @@ const states = warmCache({ cost: (v) => v.cost, drop: letGoState });
 /** How long after a request a session counts as being read (3.5 §内存有界): the worker's idle branch waits as long, so its slices find no reader. */
 export const READING_MS = 2000;
 let reading = { k: null, at: -Infinity }; // the session of the last request's read
+/** roomFor() → whether the heap has room for a session that waits for it (heapHasRoom); null while a session is read: the look would let
+ *  its state go (3.5 §内存有界「正被读」, #62). */
+export const roomFor = () => (performance.now() - reading.at < READING_MS ? null : heapHasRoom());
 // The ledger let `st` go (3.5 §内存有界): the references that would keep it in the heap go, the ones keyed by something else than this
 // state compared first. Never closed: a request may be answering from it; its descriptor goes when it is collected (line-file.mjs).
 function letGoState(st) {
@@ -367,13 +378,18 @@ function sidecars(store) {
 // TROCAR_CHECKPOINT_MS, read once, shortens it for a test.
 const SAVE_MIN = 256, SAVE_PART = 8, CHECKPOINT_MS = Number(process.env.TROCAR_CHECKPOINT_MS) || 60_000;
 const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : null);
+// an early plan (members from the boot pass's provisional list, 3.5 §行表先读「先答的会话」) is named in its mark by `~` and its first
+// member: older members can still come before the mark, so a delta from an early document is taken against no other plan (a whole
+// answer). Only the mark: the fold's cut stays the cut, so the state folded early goes on under the full list.
+const markCut = (plan) => (cutOf(plan) ?? '') + (plan.early ? `~${plan.first}` : '') || null;
 /** markOn(plan, rid) → the mark on the wire (3.5 id): the frontier rid, and when the plan is cut `@` and its cut's first rid, so a
- *  mark names the cut its document was answered under. sinceAt(plan, M) → the rid M names when its cut is this plan's, else null:
- *  a document under another cut has members the cut's move let in or out that no delta carries (3.5 #19), so M is not known. */
-export const markOn = (plan, rid) => (rid == null || !cutOf(plan) ? rid : `${rid}@${cutOf(plan)}`);
+ *  mark names the cut its document was answered under (and an early plan `~` and its first member). sinceAt(plan, M) → the rid M names
+ *  when its cut is this plan's, else null: a document under another cut has members the cut's move let in or out that no delta carries
+ *  (3.5 #19), so M is not known. */
+export const markOn = (plan, rid) => (rid == null || !markCut(plan) ? rid : `${rid}@${markCut(plan)}`);
 export function sinceAt(plan, M) {
   const i = M.indexOf('@');
-  return (i < 0 ? null : M.slice(i + 1)) === cutOf(plan) ? (i < 0 ? M : M.slice(0, i)) : null;
+  return (i < 0 ? null : M.slice(i + 1)) === markCut(plan) ? (i < 0 ? M : M.slice(0, i)) : null;
 }
 // Whether a fold log was folded under this plan's cut: its last frontier's `n` (the members folded) = the members of the cut up to
 // its `f` that did not fail. A log folded under another cut would serve a reader that must cut a log folded uncut.
@@ -526,7 +542,7 @@ export const costOf = (st) => Math.max(st.meter.held, Math.min(heapBudget(), Mat
 // frontier (`writing`), and the fold takes up what came when it ends (3.5 后台抽取与归约).
 async function advance(ctx, id, { budgetMs, request, said = [] }) {
   const t0 = performance.now(), index = await indexed(ctx);
-  const members = sessionGroups(index.rows).get(id);
+  const members = groupsOf(index).get(id);
   if (!members) return null;
   const errors = [...index.errors, ...said], k = keyOf(ctx, id), progress = ctx.progress || (() => {});
   const store = storeOf(ctx, id, k);
@@ -586,7 +602,14 @@ async function advance(ctx, id, { budgetMs, request, said = [] }) {
       // the measured bound: the rows the stopped fold got through are the rows that fit, never fewer than half those asked for,
       // rounded down to a quarter power of two (3.5 §内存有界); the stopped state is closed and garbage by now
       const got = Math.max(e.rows, Math.floor(plan.read.length / 2)) - 1, fit = got < 1 ? 0 : Math.floor(2 ** (Math.floor(Math.log2(got) * 4) / 4));
-      if (fit < 1 || beside) throw Object.assign(new Error(`the heap holds no room for this session${beside ? ' beside the one being read' : ''} (${mb(heapBudget())} MB budget)`), { code: 'heap-no-room' });
+      if (fit < 1 || beside) {
+        // bounded() let every warm entry but the reader's go before it threw; this fold's state is closed and its plan holds every member (PLAN_PER_MEMBER): a live heap past the line without the plan is
+        // held by others (another session's state, the fill), and the session waits for room (heap-busy); else it does not fit with the
+        // heap otherwise free (heap-no-room, 3.5 §内存有界)
+        kept.clear();
+        const busy = beside || liveHeap() - members.length * PLAN_PER_MEMBER > heapLine();
+        throw Object.assign(new Error(`the heap holds no room for this session${beside ? ' beside the one being read' : busy ? ' while other work holds it' : ''} (${mb(heapBudget())} MB budget)`), { code: busy ? 'heap-busy' : 'heap-no-room' });
+      }
       fits.delete(k);
       fits.set(k, fit);
       if (fits.size > FITS_KEPT) fits.delete(fits.keys().next().value);
@@ -646,32 +669,38 @@ export async function extendSession(ctx, id, budgetMs) {
 // (and cut) it was last written at is not made again while its file is there.
 const heads = new Map(); // session id → {sig, shape} of its last head write in this worker
 const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write (advance lets it go before a slice)
-const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title]);
+// the index's codes too: a head written while capture files were still re-indexed (index-pending) is written again when that ends, at the same mark
+const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated, s.title, s.indexErrors.filter((e) => e.level !== 'note').map((e) => e.code)]);
 // the parts only the head carries, in O(packs): tier, axis, the packs (with their tags) and the open span, the compactions (a new
-// chapter on the axis; one on another lane too), the cut, pending's presence, the failures and the index's codes, and the meta the
+// chapter on the axis; one on another lane too) and whether the axis ends on a marked one (its chapter opens on the step after it,
+// which counts no compaction: 1.3 §章), the cut, pending's presence, the failures and the index's codes, and the meta the
 // board takes from the head alone (web/legacy/replay/header.mjs) — never a count that grows with each call
 const META = ['title', 'title_source', 'session_id', 'harness', 'harnesses', 'project_slug', 'project_path', 'lineage_source', 'parent_session_id', 'fork_of_session_id'];
 function shapeOf(s) {
   if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code), s.title]);
   const V = s.V, ax = V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || null, meta = { ...V.meta, ...s.title };
-  return JSON.stringify([1, ax && ax.lane, s.files || null, V.stats.compactions, s.truncated, !!s.pending, s.failed.length,
-    s.indexErrors.filter((e) => !e.level).map((e) => e.code), META.map((k) => meta[k])]);
+  return JSON.stringify([1, ax && ax.lane, s.files || null, V.stats.compactions, !!ax && isMarked(V.cols.fl[V.cols.slotOf(ax.last)]), s.truncated, !!s.pending, s.failed.length,
+    s.indexErrors.filter((e) => e.level !== 'note').map((e) => e.code), META.map((k) => meta[k])]);
 }
 // A background fold that stopped (3.5 §会话读「`session --head`」 pending.stopped, D38②): the slice that threw writes the head at once,
 // with the stop's code (FOLD_STOPS) and the first line of its message; the same stop again writes nothing. The session's next slice
 // that does not throw clears it (extendSession). A request's own failure is its answer (a 500), not a stop.
 const stops = new Set(); // the session ids whose last background slice threw
+const callsNow = (ctx, id, members) => { const store = stores.get(keyOf(ctx, id)); return callsPast({ members, n: members.length }, reachOf(ctx, id, store && fileLogs.get(store)?.log, members)); };
+/** noRoomStop(ctx, id): a session that waited for room (heap-busy) while nothing else in the heap could give way does not fit: its
+ *  heap-no-room stop, as a background slice writes it (3.5 §内存有界). */
+export const noRoomStop = (ctx, id) => stopped(ctx, id, Object.assign(new Error(`the heap holds no room for this session (${mb(heapBudget())} MB budget)`), { code: 'heap-no-room' }));
 async function stopped(ctx, id, e) {
-  if (ctx.writer !== true || e instanceof HandOff) return;
+  if (ctx.writer !== true || e instanceof HandOff || e?.code === 'heap-busy') return; // heap-busy: the session waits for room, no stop
   const stop = { code: e && e.code === 'heap-no-room' ? 'heap-no-room' : 'fold-failed', reason: String((e && e.message) || e).split('\n')[0] };
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, sig = JSON.stringify(['stopped', stop]), h = heads.get(id);
   stops.add(id);
   lagging.delete(id);
   if (h && h.sig === sig && hasHead(home, id, fs)) return;
   try {
-    const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
+    const index = await indexed(ctx), members = groupsOf(index).get(id);
     if (members) {
-      const k = keyOf(ctx, id), store = stores.get(k), calls = callsPast({ members, n: members.length }, reachOf(ctx, id, store && fileLogs.get(store)?.log, members));
+      const calls = callsNow(ctx, id, members);
       writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ ...d.pending, done, total: members.length, ...seenOf(d), calls, stopped: stop }), fs, titleOf({ home, fs, id, members })), fs);
       heads.set(id, { sig, shape: null });
     }
@@ -809,8 +838,8 @@ function stateAt(ctx, r, id, reading = false) {
 export async function version(ctx) {
   const p = ctx.params;
   if (p.id == null || p.id === '') return null;
-  const { rows, errors } = await indexed(ctx);
-  const members = sessionGroups(rows).get(String(p.id));
+  const index = await indexed(ctx), { errors } = index;
+  const members = groupsOf(index).get(String(p.id));
   if (!members) return null;
   const k = keyOf(ctx, p.id), store = storeOf(ctx, String(p.id), k), plan = planOf(members, k, store, p.id);
   // a re-read answers off the disk at one frontier: its answer may not be kept past the switch
@@ -836,15 +865,25 @@ function thenOf(s, M) {
 const headKept = (ctx, id) => readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs);
 // the head a request answers while the disk's stands or a write failed: the file, else the tier-0 head (never a head that lists what is not on disk)
 const headStanding = (ctx, s) => pendingHead(ctx.home ?? trocarHome(), s.id, s.rows, s.indexErrors, (d) => d.pending, ctx.fs || nodeFs, s.title);
+/** headAsked(params) → whether a `session` request asks for the head (`--head`). */
+export const headAsked = (p) => p.head != null && p.head !== false && p.head !== 'false' && p.head !== '0';
 export async function run(ctx) {
   const { params: p, errors } = ctx;
   const id = one(p.id), since = one(p.since), before = one(p.before);
   if (id == null) throw new QueryArgError('trocar query session: --id is required (a session id; `trocar query sessions` lists them)');
   if (since != null && before != null) throw new QueryArgError('trocar query session: --since and --before cannot be given together');
-  const asHead = p.head != null && p.head !== false && p.head !== 'false' && p.head !== '0';
+  const asHead = headAsked(p);
   if (asHead && (since != null || before != null || p.limit != null)) throw new QueryArgError('trocar query session: --head cannot be given with --since, --before or --limit');
   const limit = limitOf(p.limit);
-  const s = await sessionState(ctx, id);
+  let s;
+  try { s = await sessionState(ctx, id); } catch (e) {
+    if (!asHead || e?.code !== 'heap-busy') throw e;
+    // others hold the heap: the head as it stands, the file's or the tier-0 one, with a pending of now and no stop (3.5 §内存有界); nothing written
+    const idx = await indexed(ctx), members = sessionGroups(idx.rows).get(id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
+    const doc = pendingHead(home, id, members, idx.errors, (d, done) => ({ done, total: members.length, ...seenOf(d), calls: callsNow(ctx, id, members) }), fs, titleOf({ home, fs, id, members }));
+    errors.push(...doc.errors);
+    return doc;
+  }
   if (!s) {
     const idx = await indexed(ctx);
     errors.push(...idx.errors, { where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });

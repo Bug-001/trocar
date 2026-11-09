@@ -1,4 +1,4 @@
-// web/src/screens/replay/Window.tsx — the new desk's context window (2.3 §读与画「长对话的窗口」, 1.4 中栏): one virtual list (D75⑤) over the
+// web/src/screens/replay/Window.tsx — the desk's context window (2.3 §读与画「长对话的窗口」, 1.4 中栏): one virtual list (D75⑤) over the
 // window model's items (window-model.mjs windowItems), each keyed by the model's key (D75④), rows drawn with the decision-4 head and the
 // React cell (Cell.tsx). It owns #ctxwin and everything in it but each open cell's body leaf (R2 decision 13).
 //   · The DOM holds the items within one window height of the visible box, plus the pins (withPins): the change line, the reply, the
@@ -11,6 +11,7 @@
 //     left the bounded cache, on a repaint of the step it stays on. A step painted with a row already open shows the pending cell
 //     until the step's own read paints the window again (view.window()).
 //   · A paint of the 'window' area (view.ts) re-renders it; the window's own actions mutate the desk's state and re-render it alone.
+//   · A step reached before the markdown renderer (md-load.ts) keeps the rough page's frame: its rows and its landing wait for it.
 import { flushSync } from 'react-dom'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
 import { useVirtualizer, type Range } from '@tanstack/react-virtual'
@@ -20,15 +21,18 @@ import { isTyping } from '../../../legacy/core/keys.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../../../legacy/labels/shell.mjs'
 import * as C from '../../../legacy/labels/cells.mjs'
-import { bodyVersion, cellOf, deskMode, gotOf, hasInline, inlineText, isAddressed, isRetryable, leftCache, loadBody, onModeChange, say, setDeskMode } from '../../../legacy/replay/cell.mjs'
+import { bodyVersion, cellOf, deskMode, gotOf, hasInline, headNote, isAddressed, isRetryable, leftCache, loadBody, modeOf, modeVersion, onModeChange, say, setDeskMode } from '../../../legacy/replay/cell.mjs'
 import { cellKey } from '../../../legacy/replay/keymap.mjs'
 import { setFold, turnAnchorKey } from '../../../legacy/replay/fold.mjs'
 import { stepOf } from '../../../legacy/replay/model.mjs'
 import { tagWord } from '../../../legacy/replay/blocks.mjs'
+import { hasMarkdown } from '../../../legacy/replay/kinds.mjs'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { Svg } from '../../ui/Svg'
-import { Cell } from './Cell'
+import { Cell, CellBar, type CellModel } from './Cell'
+import { Details, Impact } from './CallDetails'
 import { faithOf, windowItems, landed, landingFor, turnsOf, turnOpen } from './window-model.mjs'
+import { loadMarkdown } from './md-load'
 import { useDeskVersion } from './useDesk'
 import type { DeskState, DeskView, Reveal } from './view'
 
@@ -58,26 +62,25 @@ function withPins(range: { startIndex: number, endIndex: number, count: number, 
 }
 // ── the items ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 const plainHead = (b: any) => b.head || { role: b.role || '', tag: b.kind || '', label: '' }
-// an open row's body: the cell of its bytes (addressed: the cache, `fail`, else pending), or the body the block carries itself
-function Body({ b, fail, api }: { b: any, fail: any, api: any }) {
-  if (isAddressed(b)) return <Cell cell={cellOf(b)} fail={fail} api={api} />
-  const inline = hasInline(b) || (b.sec === 'tools' && (b.name != null || b.descChars != null || (b.props && b.props.length)))
-  if (!inline) return <div className="cbsrc warn"><Svg html={HALF} />{' ' + W.NO_BODY}</div>
-  return <>
-    {b.unaddressable ? <div className="cbsrc warn" title={b.unaddressable}>{W.INLINE_NOTE}</div> : null}
-    <Cell cell={cellOf({ ...b, text_ref: undefined, inline: String(inlineText(b) ?? '') })} api={api} />
-  </>
+// the cell an open row holds: its bytes (addressed: the cache, `fail`, else pending), or the body the block carries itself; null: neither
+const cellFor = (b: any): CellModel | null => (isAddressed(b) || hasInline(b) || (b.sec === 'tools' && (b.name != null || b.descChars != null || (b.props && b.props.length))) ? cellOf(b) : null)
+// the words at an open row's label place: what its cell says of itself (headNote, by the cell's mode), else the row's own label
+function HeadNote({ cell, label, id }: { cell: CellModel, label: string, id: string }) {
+  const mode = useSyncExternalStore(onModeChange, () => modeOf(cell.bid)), got = gotOf(cell)
+  const text = (got?.status === 'ok' && headNote(cell, got, mode)) || label
+  return text ? <span className="cblabel" id={id} title={text}>{text}</span> : null
 }
 const FfBadge = ({ f, tech = '' }: { f: string, tech?: string }) => (f == null || f === 'verbatim' ? null
   : <span className={`ffbadge ff-${f}`} data-ff={f} title={tech || W.FF_WORD[f as keyof typeof W.FF_WORD] || W.FF_WORD.unknown}><Svg html={HALF} />{' ' + (W.FF_WORD[f as keyof typeof W.FF_WORD] || W.FF_WORD.unknown)}</span>)
 const SrWord = ({ f }: { f: string }) => <span className="sr-only">,{W.FF_WORD[f as keyof typeof W.FF_WORD]}</span>
 
 // THE row (2.3 §block 卡, decision 4): a plain click anywhere on the head toggles (one onClick on .cbh; the button's keyboard click
-// bubbles to it); the button holds the chevron and the role, the reading text sits after it, so a drag over the label selects
+// bubbles to it); the button holds the chevron and the role, the reading text sits after it, so a drag over the label selects. Open,
+// the head holds the cell's controls where the preview was (`head.preview`: the row's words only while closed)
 type RowProps = { cls: string, attrs: Record<string, string | number | undefined>, head: any, open: boolean, chars: number | null,
-  marks: ReactNode, onToggle: () => void, body: () => ReactNode }
-function RowView({ cls, attrs, head, open, chars, marks, onToggle, body }: RowProps) {
-  const id = useId(), tag = tagWord(head.tag), label = head.label || ''
+  marks: ReactNode, onToggle: () => void, b: any, fail: any, api: any }
+function RowView({ cls, attrs, head, open, chars, marks, onToggle, b, fail, api }: RowProps) {
+  const id = useId(), tag = tagWord(head.tag), label = (open ? head.label : head.label || head.preview) || '', cell = open ? cellFor(b) : null
   return (
     <div className={`cblk${open ? '' : ' collapsed'} ${cls}`} {...attrs}>
       <div className="cbh" onClick={onToggle}>
@@ -85,11 +88,13 @@ function RowView({ cls, attrs, head, open, chars, marks, onToggle, body }: RowPr
           <Svg html={discChev(open)} /><span className="cbrole" id={id + 'r'}>{head.role}</span>
         </button>
         <span className="cbtag" title={tag || String(head.tag || '')}>{tag || W.TAG_UNKNOWN}</span>
-        {label ? <span className="cblabel" id={id + 'l'} title={label}>{label}</span> : null}
+        {cell ? <HeadNote cell={cell} label={label} id={id + 'l'} /> : label ? <span className="cblabel" id={id + 'l'} title={label}>{label}</span> : null}
         {marks}
         {typeof chars === 'number' ? <span className="cbchars">{`${kf(chars)} ${W.CHARS_WORD}`}</span> : null}
+        {cell ? <CellBar cell={cell} api={api} /> : null}
       </div>
-      <div className="cbc" id={id + 'c'} hidden={!open}>{open ? body() : null}</div>
+      <div className="cbc" id={id + 'c'} hidden={!open}>{!open ? null : cell ? <Cell cell={cell} fail={fail} api={api} bar={false} />
+        : <div className="cbsrc warn"><Svg html={HALF} />{' ' + W.NO_BODY}</div>}</div>
     </div>
   )
 }
@@ -99,15 +104,15 @@ const Row = memo(function Row({ it, acts, hl }: { it: Item, acts: Acts, hl: bool
   const { b, marks: m, open } = it, h = plainHead(b)
   return <RowView cls={`${m.isNew ? 'is-new' : ''} s-${b.sec} r-${b.role} k-${b.kind}${it.turn != null ? ' cwtrow' : ''}${hl ? ' hl' : ''}`}
     attrs={{ 'data-bi': it.bi, 'data-sec': b.sec, 'data-ff': m.ff, 'data-rk': b.resKey || undefined, 'data-turn': it.turn ?? undefined }}
-    head={{ role: h.role, tag: h.tag, label: h.label || b.preview || '' }} open={open} chars={typeof b.chars === 'number' ? b.chars : null}
+    head={{ role: h.role, tag: h.tag, label: h.label, preview: b.preview }} open={open} chars={typeof b.chars === 'number' ? b.chars : null}
     marks={<>
       {m.cacheMark ? <span className="bpbadge" title={`${W.CACHE_MARK_TIP} · declared value: ${JSON.stringify(m.cacheMark)}`}>{W.CACHE_MARK}</span> : null}
       {m.volatile ? <span className="volbadge" title={W.VOLATILE_MARK_TIP}>{W.VOLATILE_MARK}</span> : null}
       {m.isNew ? <span className="newmark" title={W.NEW_MARK_TIP}>{W.NEW_MARK}</span> : null}
       {m.badge ? <FfBadge f={m.ff} tech={m.tech} /> : null}
-      {m.sr ? <SrWord f={m.ff} /> : null}
+      {m.sr ? <SrWord f={m.sr} /> : null}
     </>}
-    onToggle={() => acts.row(it)} body={() => <Body b={b} fail={it.fail} api={acts.api} />} />
+    onToggle={() => acts.row(it)} b={b} fail={it.fail} api={acts.api} />
 }, (p, n) => p.it.key === n.it.key && p.it.b === n.it.b && p.it.open === n.it.open && p.it.fail === n.it.fail && p.it.turn === n.it.turn
   && sameMarks(p.it.marks, n.it.marks) && p.hl === n.hl && p.acts === n.acts && (!n.it.open || p.bv === n.bv))
 
@@ -148,7 +153,7 @@ const Removed = memo(function Removed({ it, acts }: { it: Item, acts: Acts }) {
     {it.open ? <div className="cwrembody">{it.blocks.map((b: any, j: number) => (
       <RowView key={it.keys[j]} cls="removed" attrs={{ 'data-rm': j, 'data-sec': b.sec }} head={plainHead(b)} open={open.has(it.keys[j])} chars={null}
         marks={<><FfBadge f={faithOf(b)} tech={b.unaddressable} /><span className="remnote" title={`The full text is read back from its location in step ${it.refK ?? '?'}`}>removed</span></>}
-        onToggle={() => flip(it.keys[j])} body={() => <Body b={b} fail={acts.fail(b)} api={acts.api} />} />
+        onToggle={() => flip(it.keys[j])} b={b} fail={acts.fail(b)} api={acts.api} />
     ))}</div> : null}
   </div>
 })
@@ -160,21 +165,20 @@ const Reply = memo(function Reply({ it, acts }: { it: Item, acts: Acts, bv: numb
   else if (it.empty) inner = <div className="cwrline">{it.empty === 'unread' ? W.UNREAD_REPLY : W.EMPTY_REPLY}{stop}</div>
   else {
     inner = <div className="cwrrows">{it.rows.map((r: any) => (
-      <RowView key={r.key} cls={`r-assistant k-${r.b.kind}`} attrs={{ 'data-rp': r.key, 'data-ff': r.mark }} head={{ role: 'assistant', tag: r.tag, label: r.b.preview || '' }}
-        open={r.open} chars={typeof r.b.chars === 'number' ? r.b.chars : null}
-        marks={<>{r.mark === 'verbatim' ? <SrWord f="verbatim" /> : <FfBadge f={r.mark} />}{r.last ? stop : null}</>}
-        onToggle={() => acts.reply(r)} body={() => <Body b={r.b} fail={acts.fail(r.b)} api={acts.api} />} />
+      <RowView key={r.key} cls={`r-assistant k-${r.b.kind}`} attrs={{ 'data-rp': r.key, 'data-ff': r.mark }} head={{ role: 'assistant', tag: r.tag, preview: r.b.preview }}
+        open={r.open} chars={typeof r.b.chars === 'number' && !r.hideChars ? r.b.chars : null}
+        marks={<>{r.mark === 'verbatim' ? <SrWord f={r.sr} /> : <FfBadge f={r.mark} />}{r.last ? stop : null}</>}
+        onToggle={() => acts.reply(r)} b={r.b} fail={acts.fail(r.b)} api={acts.api} />
     ))}</div>
   }
-  return <div className="cwreply" role="group" aria-label={W.REPLY_WORD}>{inner}</div>
+  return <div className="cwreply" role="group" aria-label={W.REPLY_WORD}>{inner}{it.assembled ? <div className="cwrline" data-assembled="">{C.ASSEMBLED}</div> : null}</div>
 })
 const Fid = ({ it }: { it: Item }) => <div className="cwfline"><Half />{' '}<span className="cwffacts">{it.facts.join(' · ')}</span><Tech rows={it.tech} /></div>
 const Win = ({ it }: { it: Item }) => <div className="cwwin"><Half />{' ' + W.WINDOW_LINE}<Tech rows={it.reasons.map((r: string, i: number) => [`reason ${i + 1}`, r])} /></div>
 const FoldAll = ({ acts }: { acts: Acts }) => <div className="cwfoldall">
   <button type="button" className="foldallbtn" data-foldall="open" title={W.FOLD_ALL_OPEN_TIP} onClick={() => acts.foldAll(true)}>{W.FOLD_ALL_OPEN}</button>
   <button type="button" className="foldallbtn" data-foldall="close" title={W.FOLD_ALL_CLOSE_TIP} onClick={() => acts.foldAll(false)}>{W.FOLD_ALL_CLOSE}</button></div>
-const Unparsed = ({ it }: { it: Item }) => <div className="cwunparsed"><div className="cwuhd">{W.UNPARSED_TITLE}</div><div className="cwub">{W.UNPARSED_KEEP}</div>
-  {it.errMsg ? <Tech rows={[['errMsg', it.errMsg]]} /> : null}</div>
+const Unparsed = () => <div className="cwunparsed"><div className="cwuhd">{W.UNPARSED_TITLE}</div><div className="cwub">{W.UNPARSED_KEEP}</div></div>
 // ⑧ no text, no control: the frames of a step whose lane is not held (2.3 §车道未到手)
 const Frames = ({ it }: { it: Item }) => <div className="cwbusy" aria-busy="true">{it.frames.map((f: any) => <div key={f.sec} className="cwframe" data-sec={f.sec} style={{ '--fr': f.fr } as React.CSSProperties} />)}</div>
 const Busy = ({ n = 0 }: { n?: number }) => <div className="cwbusy" aria-busy="true" style={n > 0 ? { '--n': n } as React.CSSProperties : undefined} />
@@ -187,16 +191,18 @@ function ItemView({ it, acts, hl, bv }: { it: Item, acts: Acts, hl: boolean, bv:
     case 'chline': return <Chline it={it} />
     case 'removed': return <Removed it={it} acts={acts} />
     case 'reply': return <Reply it={it} acts={acts} bv={bv} />
+    case 'impact': return <Impact it={it} />
+    case 'details': return <Details it={it} acts={acts} />
     case 'fid': return <Fid it={it} />
     case 'win': return <Win it={it} />
     case 'foldall': return <FoldAll acts={acts} />
     case 'noreq': return <div className="cwnoreq">{W.NO_REQUEST}</div>
-    case 'unparsed': return <Unparsed it={it} />
+    case 'unparsed': return <Unparsed />
     case 'frames': return <Frames it={it} />
     default: return null
   }
 }
-// ── the actions (wireCtxWin's semantics): mutate the desk's state, then re-render ─────────────────────────────────────
+// ── the actions: a reader's open, fold or flip mutates the desk's state, then re-renders ─────────────────────────────────────
 function makeActs(s: DeskState, bump: () => void) {
   // the window asks for a body: once per ref in flight (cell.mjs joins a second ask); a retryable failure is kept in s.bodyFail, so
   // the poll asks again and the row says why (2.3 §读失败)
@@ -213,6 +219,7 @@ function makeActs(s: DeskState, bump: () => void) {
     fail: (b: any) => (s.bodyFail && b.text_ref && s.bodyFail.get(b.text_ref)) || null,
     row(it: Item) { flipKey(it.key); if (!it.open) ask(it.b); bump() },
     reply(r: any) { flipKey(r.key); if (!r.open) ask(r.b); bump() },
+    details(key: string) { flipKey(key); bump() },
     turn(it: Item) { setFold(s.turnFold, it.anchor, !it.open); s.persistFold(); bump() },
     foldAll(open: boolean) { for (const t of turnsOf(s.curFlat).list) setFold(s.turnFold, turnAnchorKey(s.curFlat, t), open); s.persistFold(); bump() },
     removed() { if (s.navOpen.has('cwremoved')) s.navOpen.delete('cwremoved'); else s.navOpen.add('cwremoved'); bump() },
@@ -229,13 +236,14 @@ function readPitch(el: HTMLElement): Pitch {
   p.remove()
   return out
 }
+const rowEst = (open: boolean, P: Pitch) => (open ? P.row * 6 : P.row)
 const estimate = (it: Item | undefined, P: Pitch) => {
   if (!it) return P.row
   switch (it.type) {
-    case 'row': return it.open ? P.row * 6 : P.row
+    case 'row': return rowEst(it.open, P)
     case 'card': return P.turn
     case 'sec': return P.sec
-    case 'reply': return P.line + P.row * Math.max(1, it.rows.length)
+    case 'reply': return P.line + (it.rows.reduce((a: number, r: any) => a + rowEst(r.open, P), 0) || P.row)
     case 'frames': return it.frames.reduce((a: number, f: any) => a + f.fr * P.row, 0) || P.row
     default: return P.line
   }
@@ -256,7 +264,7 @@ export function Window({ desk }: { desk: DeskView }) {
   const ref = useRef<HTMLDivElement>(null)
   useDeskVersion(desk, 'window') // a paint of the 'window' area re-renders it
   const [, bump] = useReducer((n: number) => n + 1, 0)
-  useSyncExternalStore(onModeChange, () => deskMode()) // a Shift+V re-renders the section claims
+  useSyncExternalStore(onModeChange, modeVersion) // a mode change re-renders the section claims and the reply's closing line
   const acts = useMemo(() => makeActs(s, bump), [s])
   const [P, setP] = useState<Pitch | null>(null)
   const [hl, setHl] = useState<string | null>(null)
@@ -267,7 +275,9 @@ export function Window({ desk }: { desk: DeskView }) {
   // the model of this render: the step's items, its landing (pure; a folded turn holding the target opens for this display)
   const w = s.win || { kind: 'empty', msg: '' }
   let items: Item[] | null = null, land: any = null
-  if (w.kind === 'step') {
+  const waiting = w.kind === 'step' && !hasMarkdown()
+  useEffect(() => { if (waiting) void loadMarkdown().then(() => bump()) }, [waiting])
+  if (w.kind === 'step' && !waiting) {
     resetReplyFlips(s)
     land = landingFor(s, boxTop)
     if (land && land.turn != null) s.turnLanded.add(land.turn)
@@ -377,22 +387,26 @@ export function Window({ desk }: { desk: DeskView }) {
     const cell = row.querySelector<HTMLElement>(':scope > .cbc .cell')
     if (a.flipDesk) { flipDesk(); return }
     if (!cell) return
-    if (a.flip) cell.querySelector<HTMLButtonElement>(`[data-cellmode="${cell.dataset.mode === 'raw' ? 'read' : 'raw'}"]`)?.click()
-    else cell.querySelector<HTMLButtonElement>('[data-cellcopy]')?.click()
+    const control = (sel: string) => row.querySelector<HTMLButtonElement>(`:scope > .cbh ${sel}`) // the controls sit in the row's head
+    const flip = a.flip ? control(`[data-cellmode="${cell.dataset.mode === 'raw' ? 'read' : 'raw'}"]`) : null
+    if (!a.flip) control('[data-cellcopy]')?.click()
+    else if (flip) flip.click()
+    else if (cell.dataset.only) say(C.RAW_ONLY)
   }
 
   let body: ReactNode
   if (w.kind === 'step' && items) {
-    const vis = virt.getVirtualItems()
+    const vis = virt.getVirtualItems() // placed by `top`: in a transformed item an open row's sticky head does not stick
     body = <div className="cwlist" style={{ height: virt.getTotalSize() }}>
       {vis.map((x) => {
         const it = list[x.index]
         if (!it) return null
         return <div key={it.key} className="cwit" data-index={x.index} data-key={it.key} ref={virt.measureElement}
-          style={{ transform: `translateY(${x.start}px)` }}><ItemView it={it} acts={acts} hl={hl === it.key} bv={bv} /></div>
+          style={{ top: x.start }}><ItemView it={it} acts={acts} hl={hl === it.key} bv={bv} /></div>
       })}
     </div>
   } else if (w.kind === 'rough') body = <Busy n={w.n} />
+  else if (waiting) body = <Busy n={s.desk?.head?.last?.n ?? 0} />
   else if (w.kind === 'notlisted') body = <div className="empty" id="notlisted">{SESSION_NOT_LISTED + ' · '}<a href="#/sessions">{BACK_TO_SESSIONS}</a></div>
   else if (w.kind === 'none') body = <div className="empty">{w.msg}</div>
   else if (w.kind === 'empty' && w.msg) {

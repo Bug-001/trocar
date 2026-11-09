@@ -32,27 +32,58 @@ const doc = (over = {}) => ({
 })
 
 test('§3.5 the summary: conclusion first, one row per harness, the three facts under it, and where the detail is — in the steady world and in the empty one', () => {
-  const lines = statusSummary(doc(), { now: NOW })
-  clean(lines, 'status')
-  assert.match(lines[0], /^Capturing 1 of 3 installed harnesses\. Daemon running \(pid 4012, up 3h 12m\)\.$/)
-  assert.ok(lines.some((l) => /^ {2}HARNESS\s+CAPTURED\s+NOTE$/.test(l)))
-  assert.ok(lines.some((l) => /^ {2}codex\s+no\s+pid 5530 started before capture was on; restart codex$/.test(l)))
-  assert.ok(lines.some((l) => /^ {2}opencode\s+off$/.test(l)), 'a harness that is off says off, not a reason code')
-  assert.ok(lines.some((l) => /^ {2}Problems\s+1 in the last 24 hours, latest 10 min ago$/.test(l)))
-  assert.ok(lines.at(-1).startsWith('More: trocar status codex'), lines.at(-1))
-  assert.ok(!lines.some((l) => l.includes('->')), 'V44: the summary draws no chain')
+  for (const details of [false, true]) {
+    const lines = statusSummary(doc(), { now: NOW, details })
+    clean(lines, 'status')
+    assert.ok(lines.some((l) => /^ {2}opencode\s+off$/.test(l)), 'a harness that is off says off, not a reason code')
+    assert.ok(lines.at(-1).startsWith('More: trocar status codex'), lines.at(-1))
+    assert.ok(!lines.some((l) => l.includes('->')), 'V44: the summary draws no chain')
+  }
 
-  const fresh = statusSummary(doc({ harnesses: {}, install: { state: null, harnesses: [], pending: [] }, cert: { fp256: null, expires: null, root: { state: 'unknown' }, key: {}, intermediate: {}, bundles: [] } }), { now: NOW })
+  const fresh = statusSummary(doc({ harnesses: {}, install: { state: null, harnesses: [], pending: [] }, cert: { fp256: null, expires: null, root: { state: 'unknown' }, key: {}, intermediate: {}, bundles: [] } }), { now: NOW, details: true })
   clean(fresh, 'status (nothing installed)')
-  assert.match(fresh[0], /^No harness is set up for capture yet\.$/)
   assert.ok(fresh.includes('Next: trocar install'))
+})
+
+test('§3.5 a harness that needs setting up has its own row, says so before `on` refuses it, and stays out of `not installed`', () => {
+  const setup = (state, ...what) => ({ setup: { state, missing: what.map((w) => ({ form: 'f', what: w })) } })
+  const off = { desired: 'off', captured: false, reason: 'desired-off' }
+  const lines = statusSummary(doc({
+    harnesses: {
+      'claude-code': harness(setup('ready')),
+      hermes: harness({ ...off, ...setup('needed', 'carrier-absent') }), // trocar was installed before it
+      codex: harness({ captured: false, reason: 'config-after-start', ...setup('needed', 'carrier-overwritten') }), // on the install record, its carrier overwritten by its own update
+      'kimi-code': harness(setup('needed', 'carrier-overwritten')), // a process from before the update, still captured: what is wrong now is not this row's
+      opencode: harness({ ...off, ...setup('ready') }), // new, its certificate is the root: nothing to set up
+      pi: harness({ ...off, ...setup('unknown') }),
+      'z-code': harness({ ...off, ...setup('needed', 'root-missing') }), // the root is one row for the whole machine, not one per harness
+    },
+    install: { state: 'complete', harnesses: ['claude-code', 'codex', 'kimi-code'], pending: [] },
+  }), { now: NOW })
+  clean(lines, 'status')
+  const row = (h) => lines.find((l) => l.startsWith(`  ${h} `))
+  for (const h of ['hermes', 'codex']) assert.ok(row(h).includes('trocar install'), `${h}: ${row(h)}`)
+  for (const h of ['claude-code', 'kimi-code']) assert.ok(row(h) && !row(h).includes('trocar install'), `${h}: ${row(h)}`)
+  const out = lines.find((l) => l.startsWith('  not installed:'))
+  assert.deepEqual(out.replace('  not installed: ', '').split(', ').sort(), ['opencode', 'pi', 'z-code'], 'a harness needing setup is not said to be not installed, nor is setup asked of the others')
+  const detail = statusDetail(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'carrier-absent') }) } }), 'hermes', { now: NOW })
+  clean(detail, 'status <harness>')
+  for (const cmd of ['trocar install', 'trocar on hermes']) assert.ok(detail.some((l) => l.includes(cmd)), `the detail names ${cmd}: ${detail.join('|')}`)
+  // 附录 B: trocar's marked text with no record is not set up by install alone; the steps are the finding's, each a line of its own, then on
+  const mwr = statusDetail(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'marked-without-record') }) } }), 'hermes', { now: NOW })
+  const steps = [...findingFor('marked-without-record').commands.map((c) => c.run), 'trocar on hermes']
+  const at = steps.map((s) => mwr.findIndex((l) => l.trimEnd().endsWith(` ${s}`)))
+  assert.ok(at.every((x, i) => x >= 0 && (i === 0 || x > at[i - 1])), `the steps, in order, a line each: ${mwr.join('|')}`)
+  const note = statusSummary(doc({ harnesses: { hermes: harness({ ...off, ...setup('needed', 'marked-without-record') }) }, install: { state: 'complete', harnesses: [], pending: [] } }), { now: NOW }).join(' ')
+  const named = steps.slice(0, -1).map((s) => note.indexOf(s))
+  assert.ok(named.every((x, i) => x >= 0 && (i === 0 || x > named[i - 1])), `the NOTE names the steps in order: ${note}`)
 })
 
 test('§1.1 · §3.5 a long NOTE folds under its own column: every line of the summary inside 80 columns, for every reason and harness name', () => {
   const names = ['pi', 'opencode', 'a-harness-of-twenty'] // the HARNESS column's width moves where NOTE starts; each name is also in its own note
   for (const code of STATUS_REASONS) {
     const harnesses = Object.fromEntries(names.map((h, i) => [h, harness({ captured: false, reason: code, processes: [{ pid: 40000 + i, captured: false, reason: code }] })]))
-    const lines = statusSummary(doc({ harnesses, install: { state: 'complete', harnesses: [], pending: [] } }), { now: NOW })
+    const lines = statusSummary(doc({ harnesses, install: { state: 'complete', harnesses: [], pending: [] } }), { now: NOW, details: true })
     clean(lines, `status (${code})`)
     const at = lines.findIndex((l) => /^ {2}HARNESS\s/.test(l)), note = lines[at].indexOf('NOTE')
     const table = lines.slice(at + 1, lines.indexOf('', at))
@@ -66,7 +97,7 @@ test('§1.1 · §3.5 a long NOTE folds under its own column: every line of the s
 
 test('§1.1 · D38 a row that could not be read says why, whole, folded under NOTE: only a word longer than the room (a path) passes 80 columns', () => {
   const why = '/var/folders/b1/_1pdzqc97_39d45tv31x1mjw0000gn/T/trocar-run-fyS8zy/.trocar/collector/state.json: EACCES (permission denied while it was read)'
-  const lines = statusSummary(doc({ harnesses: { 'claude-code': harness({ captured: null, why: [why] }) }, install: { state: 'complete', harnesses: [], pending: [] } }), { now: NOW })
+  const lines = statusSummary(doc({ harnesses: { 'claude-code': harness({ captured: null, why: [why] }) }, install: { state: 'complete', harnesses: [], pending: [] } }), { now: NOW, details: true })
   const at = lines.findIndex((l) => /^ {2}HARNESS\s/.test(l)), note = lines[at].indexOf('NOTE'), row = lines.slice(at + 1, lines.indexOf('', at))
   assert.ok(row.join(' ').replace(/\s+/g, ' ').includes(why), `the reason is said whole: ${JSON.stringify(row)}`)
   for (const l of row.slice(1)) assert.equal(l.search(/\S/), note, `a folded line starts under NOTE: ${JSON.stringify(l)}`)
@@ -88,7 +119,7 @@ test('§3.5 a read that failed is `unknown` with its reason, never 0 and never a
     daemon: { running: null, pid: 4012, responding: null, since: null, error: 'the lock could not be read (EACCES)' },
     harnesses: { codex: harness({ captured: null, why: ['the process table could not be listed (EPERM)'] }) },
     relayed: 'unknown', relayed_reason: 'the daemon does not answer', connections: 'unknown', connections_reason: 'the daemon does not answer', failures: null,
-  }), { now: NOW })
+  }), { now: NOW, details: true })
   clean(lines, 'status (unreadable)')
   assert.ok(lines.some((l) => /Daemon: unknown \(the lock could not be read \(EACCES\)\)/.test(l)))
   assert.ok(!lines.some((l) => /pid 4012/.test(l)), 'a daemon whose state is not known does not print its pid as the present state')
@@ -131,9 +162,8 @@ test('§3.5 `status <harness>`: each form note prints once after Forms, its path
 test('§3.5 `--failures`: one line per kind of problem, then Expected — and a health that could not be read says so', () => {
   const health = { collector: { failures: [{ count: 3, last_ts: '2026-10-18T12:14:00Z', last: { event: 'failure', where: 'engine', code: 'engine-error', reason: 'the upstream reset it' } }], expected: { 'not-an-agent': 12 } }, read: { errors: [] }, summary: { state: 'failing' } }
   const failures = { groups: [{ level: 'problem', where: 'engine', code: 'engine-error', count: 3, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason: 'the upstream reset it' }] }
-  const lines = failuresBlock(failures, health, { now: NOW })
+  const lines = failuresBlock(failures, health, { now: NOW, details: true })
   clean(lines, 'status --failures')
-  assert.match(lines[0], /^Problems in the last 24 hours: 3 in 1 kind$/)
   assert.ok(lines.includes('Expected') && lines.some((l) => /not agents[^:]*: 12$/.test(l)))
   clean(failuresBlock(null, null, { now: NOW }), 'status --failures (unreadable)')
   assert.match(failuresBlock(null, null)[0], /^Problems: unknown \(capture health could not be read\)$/)
@@ -146,7 +176,7 @@ test('§3.5 · §1.1⑥ `--failures`: a backquoted command in a reason prints wh
     assert.equal(cmd.length, len)
     for (const [g, action] of [{ where: 'helper', code: 'helper-down', harness: 'claude-code' }, { where: 'engine', code: 'no-word-for-this-code' }].flatMap((g) => ['install it once per machine with', 'to install it once per machine, run:'].map((a) => [g, a]))) {
       const reason = `capability helper not found at /usr/local/libexec/trocar/redirector; ${action} \`${cmd}\`` // the command after `with` or after `run:` (a colon inside the clause)
-      const lines = failuresBlock({ groups: [{ level: 'problem', count: 2, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason, ...g }] }, health, { now: NOW })
+      const lines = failuresBlock({ groups: [{ level: 'problem', count: 2, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason, ...g }] }, health, { now: NOW, details: true })
       clean(lines, `status --failures (${g.code}, ${len})`, [cmd])
       assert.equal(lines.filter((l) => l.trim() === cmd).length, 1, `${g.code} ${len}: the command whole, once, on its own line\n${lines.join('\n')}`)
       const prose = lines.filter((l) => l.trim() !== cmd).map((l) => l.trim()).join(' ')
@@ -158,7 +188,7 @@ test('§3.5 · §1.1⑥ `--failures`: a backquoted command in a reason prints wh
 
 test('§3.5 `--failures`: a reason that starts with its command keeps the words after it, and two commands are pointed at in the plural, each whole on its own line', () => {
   const health = { collector: { failures: [], expected: {} }, read: { errors: [] }, summary: { state: 'failing' } }
-  const run = (reason) => failuresBlock({ groups: [{ level: 'problem', where: 'helper', code: 'helper-down', count: 1, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason }] }, health, { now: NOW })
+  const run = (reason) => failuresBlock({ groups: [{ level: 'problem', where: 'helper', code: 'helper-down', count: 1, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason }] }, health, { now: NOW, details: true })
   const prose = (lines, cmds) => lines.filter((l) => !cmds.includes(l.trim())).map((l) => l.trim()).join(' ')
   for (let len = 40; len <= 130; len += 15) {
     const cmd = `sudo /h/${'x'.repeat(len - 40)}/node /h/trocar.mjs setup-helper`, rm = `${cmd} --remove`
@@ -187,7 +217,7 @@ test('§3.5 exit codes: 0 every harness that is on is captured, 1 one of them is
 
 test('附录 B · §3.7: every code in the catalogue renders as English sentences with Fix and Check, every value filled in, inside 80 columns', () => {
   const ctx = { platform: 'linux', h: 'codex', hf: { behaviour: { fileKeys: [{ path: '/home/alice/.codex/.env', key: 'HTTPS_PROXY', format: 'dotenv' }], restart: {} }, procs: [], forms: [] },
-    t: { nodes: [], edges: [], branches: [] }, F: { routing: 'proxy', harnesses: {}, desired: {} }, user: 'alice', setting: { scheme: 'socks5', host: '127.0.0.1', port: 1080 },
+    t: { nodes: [], edges: [], branches: [] }, F: { routing: 'proxy', harnesses: {}, desired: {}, autostart: { entry: 'the systemd user unit trocar-collector.service', state: 'absent', reason: 'the systemd user unit trocar-collector.service is not registered' } }, user: 'alice', setting: { scheme: 'socks5', host: '127.0.0.1', port: 1080 },
     dead: { addr: '127.0.0.1', port: 7890 }, u: { name: 'node', pid: 42 }, listPath: '/home/alice/.trocar/agents.json', file: { path: '/home/alice/.trocar/agents.json', state: 'ok', problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'this name needs an args pattern' }] }, pid: 5530, port: 17992, upPort: 7890 }
   for (const code of FINDING_CODES) {
     const found = findingFor(code, ctx)

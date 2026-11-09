@@ -198,6 +198,10 @@ sweep() { # leftovers of runs whose process is gone
   done
 }
 
+# trocar's install record; with none (a first `trocar install` cancelled, or `uninstall` kept the code for a machine-wide helper) the next
+# command is `install`, which shows its plan and asks; with one it is `update`. trocar keeps it under this HOME's .trocar (src/off/manifest.mjs).
+installed() { [ -f "$HOME/.trocar/collector/install-manifest.json" ]; }
+
 handoff() { # <verb>
   bin="$HOME/.trocar/bin/trocar"
   other=$(command -v trocar 2>/dev/null) || other=
@@ -232,7 +236,7 @@ main() {
   if [ "$cur_v" = "$v" ] && [ -x "$APP/node/$cur_n/bin/node" ]; then
     if [ "$mode" = stage ]; then result "up-to-date $v"; return 0; fi
     say "trocar $v is already installed: $HOME/.trocar/bin/trocar"
-    handoff update # a first run whose `trocar install` was cancelled leaves the pointer: the re-run still says what comes next
+    if installed; then handoff update; else handoff install; fi
     return 0
   fi
   if [ -n "$cur_v" ] && older "$v" "$cur_v"; then
@@ -285,14 +289,14 @@ main() {
   got=$("$ndir/bin/node" --version </dev/null 2>"$STAGE/err") || got=
   [ "$got" = "v$nver" ] || die "This Node build does not run here: $(head -c 300 "$STAGE/err" 2>/dev/null)"
   got=$("$ndir/bin/node" "$pkgdir/bin/trocar.mjs" --version </dev/null 2>"$STAGE/err") || got=
-  [ "$got" = "trocar $v" ] || die "trocar $v does not start on Node $nver: $got $(head -c 300 "$STAGE/err" 2>/dev/null)"
+  case "$got" in "trocar $v" | "trocar $v+"[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) die "trocar $v does not start on Node $nver: $got $(head -c 300 "$STAGE/err" 2>/dev/null)" ;; esac # the version, then what code it is
 
   if [ ! -x "$APP/node/$nid/bin/node" ]; then mv "$STAGE/node" "$APP/node/$nid" || die "Cannot place Node in $APP/node."; fi
   if [ ! -f "$APP/$v/bin/trocar.mjs" ]; then mv "$STAGE/$v" "$APP/$v" || die "Cannot place trocar in $APP."; fi
   if [ "$mode" = stage ]; then result "staged $v $APP/$v"; return 0; fi
 
   verb=install
-  if [ -n "$cur_v" ]; then verb=update; fi
+  if [ -n "$cur_v" ] && installed; then verb=update; fi
   "$APP/node/$nid/bin/node" "$APP/$v/bin/trocar.mjs" place "$APP/$v" </dev/null \
     || die "Could not switch to trocar $v (trocar place failed). The version that was active stays active."
   rm -rf "$STAGE"

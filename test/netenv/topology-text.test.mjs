@@ -4,6 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildTopology, renderCompact, renderDetail, verdictText, firstHopAfterTrocar, firstHopOff, hopKey } from '../../src/netenv/topology.mjs'
 import { ROWS, squash, withoutVpn } from './fixtures/rows.mjs'
+import { ROWS as ROWS_WIN } from './fixtures/rows-win32.mjs'
 
 for (const row of ROWS) {
   test(`V41 row ${row.n} (text): the compact line of each branch is the chain of the spec's table`, () => {
@@ -49,8 +50,8 @@ test('renderDetail (§3.5): the Routes block, a chain to a line, the path with t
   const lines = renderDetail(buildTopology(row.facts)['claude-code'])
   assert.equal(lines[0], '  Routes')
   assert.ok(lines.some((l) => /^ +pid 4121/.test(l)), lines.join('\n')) // its branch is drawn from that process (1.6 A.1)
-  assert.ok(lines.join('\n').includes('claude (pid 4121) -> trocar :47123 -> mihomo :7890 (pid 777) -> internet'))
-  assert.ok(lines.some((l) => /^ +without trocar +claude \(pid 4121\) -> mihomo :7890 \(pid 777\) -> internet$/.test(l)), lines.join('\n'))
+  assert.ok(lines.join('\n').includes('claude (pid 4121) -> trocar :47123 -> :7890 (pid 777) -> internet'))
+  assert.ok(lines.some((l) => /^ +without trocar +claude \(pid 4121\) -> :7890 \(pid 777\) -> internet$/.test(l)), lines.join('\n'))
   assert.match(lines.at(-1), /^ {2}To change the proxy: edit claude-code's own settings/)
   const two = renderCompact(buildTopology(ROWS.find((r) => r.n === 22).facts).codex)
   assert.deepEqual(two.map((l) => l.split(' ')[0]), ['HTTP', 'WebSocket'])
@@ -73,12 +74,12 @@ test('V42 (text): a hop that could not be read says `unknown: <reason>` in the c
   }
 })
 
-test('V42 (text): a proxy hop always has its port — a hop named by its process too, in the compact line and the detail (the pid after it) — and a hop already named host:port says the port once', () => {
+test('V42 (text): a proxy hop always has its port — a local hop is its port alone, in the compact line and the detail (the pid after it), never the program name of its owner — and the port is said once', () => {
   const script = buildTopology(ROWS.find((r) => r.n === 24).facts)['claude-code']
-  assert.match(renderCompact(script)[0], /\[CONNECT passed on as it is\] node :38743 -> internet$/)
-  assert.ok(renderDetail(script).join('\n').includes('node :38743 (pid 898)'), renderDetail(script).join('\n'))
+  assert.match(renderCompact(script)[0], /\[CONNECT passed on as it is\] :38743 -> internet$/)
+  assert.ok(renderDetail(script).join('\n').includes('-> :38743 (pid 898)'), renderDetail(script).join('\n'))
   const unreadable = buildTopology(ROWS.find((r) => r.n === 21).facts).hermes
-  assert.ok(renderCompact(unreadable)[0].includes('127.0.0.1:7891 (unknown'), 'named by its address: the port is not said twice')
+  assert.ok(renderCompact(unreadable)[0].includes('] :7891 (unknown'), 'the port, said once')
   assert.ok(!renderCompact(unreadable)[0].includes('7891:7891') && !/:7891 :7891/.test(renderCompact(unreadable)[0]))
 })
 
@@ -91,7 +92,7 @@ test('V43 (text): every hop of the compact line is a node of the object it was d
       const hops = renderCompact(t)[i].replace(/^(HTTP|WebSocket) /, '').split(' -> ').map((x) => x.replace(/^\[[^\]]*\] /, ''))
       const path = b.path.filter((id, k) => !(k && t.nodes.find((x) => x.id === id).trocar && t.nodes.find((x) => x.id === b.path[k - 1]).trocar)) // trocar's door and engine are one hop (D47)
       assert.equal(hops.length, path.length, `row ${row.n}: one hop for each node`)
-      hops.forEach((hop, k) => { const n = t.nodes.find((x) => x.id === path[k]); assert.ok(n.unknown && n.kind === 'egress' ? hop === 'unknown' : hop.includes(n.kind === 'egress' ? 'internet' : n.name), `row ${row.n}: ${hop} ~ ${n.name}`) })
+      hops.forEach((hop, k) => { const n = t.nodes.find((x) => x.id === path[k]); assert.ok(n.unknown && n.kind === 'egress' ? hop === 'unknown' : hop.includes(n.kind === 'egress' ? 'internet' : n.kind === 'proxy' && !n.remote ? `:${n.port}` : n.name), `row ${row.n}: ${hop} ~ ${n.name}`) })
     })
   }
 })
@@ -101,12 +102,56 @@ test('renderDetail in proxy mode: the way out says HTTP and WebSocket apart when
   const lines = renderDetail(t)
   assert.equal(lines[0], '  Routes')
   assert.equal(lines.filter((l) => /^ +pid 5530/.test(l)).length, 1, 'HTTP and WebSocket take the same path with trocar: one row')
-  assert.ok(lines.join('\n').includes('codex app-server (pid 5530) -> trocar :17992 -> verge-mihomo.exe :7897 (pid 11800) -> internet'))
+  assert.ok(lines.join('\n').includes('codex app-server (pid 5530) -> trocar :17992 -> :7897 (pid 11800) -> internet'))
   assert.ok(lines.some((l) => /^ +without trocar \(HTTP\)/.test(l)), 'the way out differs per branch: HTTP is said apart')
-  assert.ok(lines.join('\n').includes('codex app-server (pid 5530) -> verge-mihomo.exe :7897 (pid 11800) -> internet'))
+  assert.ok(lines.join('\n').includes('codex app-server (pid 5530) -> :7897 (pid 11800) -> internet'))
   assert.equal(lines.filter((l) => /it sees trocar/.test(l)).length, 1)
   assert.match(lines.at(-1), /^ {2}To change the proxy: edit codex's own settings, then run: trocar on codex/)
   const off = renderDetail(buildTopology(ROWS.find((r) => r.n === 14).facts).codex)
   assert.ok(off.includes('    note: 1 process(es) are still connected through trocar, forwarded only; trocar exits once they do'), off.join('\n'))
   assert.ok(off.some((l) => /it sees trocar/.test(l)), 'the kernel still forwards for the agent that is connected: a VPN still sees trocar')
+})
+
+// §3.5 Routes: forms of one harness that go the same way are one line (a Windows run printed one OpenCode sidecar's line once per form, five times
+// with trocar and five without). Generated over the fixture rows: every branch is copied under several forms with the same path
+test('Routes: forms that go the same way are one line, naming the forms only when some go another way', () => {
+  let n = 0
+  for (const row of ROWS) for (const [h, t0] of Object.entries(buildTopology(row.facts))) {
+    if (!t0 || !t0.branches || !t0.branches.length) continue
+    const many = (forms) => ({ ...t0, branches: forms.flatMap((form) => t0.branches.map((b) => ({ ...b, form }))) })
+    const one = renderDetail({ ...t0, branches: t0.branches.map((b) => ({ ...b, form: 'h.a' })) }).filter((l) => / -> /.test(l))
+    const same = renderDetail(many(['h.a', 'h.b', 'h.c'])).filter((l) => / -> /.test(l))
+    assert.deepEqual(same, one, `${row.n} ${h}: three forms that go the same way read as one`)
+    n++
+  }
+  assert.ok(n > 0)
+})
+
+// The other half, over the macOS / Linux and the Windows rows: a form that goes another way. Each block draws every distinct way once, and with
+// more than one way each is named — h.b takes h.a's way without trocar as its way with trocar, or all of h.b on h.a's first branch's ways (h.a split by kind, h.b not)
+test('Routes: a form that goes another way — one line per distinct way in each block, each named', () => {
+  let n = 0
+  for (const row of [...ROWS, ...ROWS_WIN]) for (const [h, t0] of Object.entries(buildTopology(row.facts))) {
+    if (!t0 || !t0.branches || !t0.branches.length) continue
+    const a = t0.branches.map((b) => ({ ...b, form: 'h.a' }))
+    // h.b: h.a's way without trocar as its way with trocar; or every branch of h.b on h.a's first branch's ways (h.a may split by kind, h.b not)
+    for (const b of [t0.branches.map((x) => ({ ...x, form: 'h.b', path: x.off_path })), t0.branches.map((x) => ({ ...x, form: 'h.b', path: t0.branches[0].path, off_path: t0.branches[0].off_path }))]) {
+    const lines = renderDetail({ ...t0, branches: [...a, ...b] })
+    const blocks = new Map()
+    let head = null
+    for (const l of lines) {
+      const inline = /^ {4}(\S.*?) {2}(\S.* -> .*)$/.exec(l) // a heading and its one way on one line
+      if (/^ {4}\S/.test(l)) head = inline ? inline[1] : l.trim()
+      const chain = inline ? inline[2] : /^ {6}\S/.test(l) && / -> /.test(l) ? l.trim() : null
+      if (chain && head) { const k = head.replace(/\s*\(.*\)$/, ''); if (!blocks.has(k)) blocks.set(k, []); blocks.get(k).push({ head, chain }) }
+    }
+    for (const [k, ls] of blocks) {
+      const chains = ls.map((x) => x.chain)
+      assert.equal(new Set(chains).size, chains.length, `${row.n} ${h} · ${k}: a way drawn twice: ${JSON.stringify(ls)}`)
+      if (ls.length > 1) for (const x of ls) assert.match(x.head, /\(.+\)$/, `${row.n} ${h} · ${k}: with more than one way, each is named (its forms, or HTTP / WebSocket when every form splits the same way): ${x.head}`)
+    }
+    n++
+    }
+  }
+  assert.ok(n > 3, 'the axis runs over the rows')
 })
