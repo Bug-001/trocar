@@ -413,9 +413,9 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // written — is 'failed'; 'uninstalled' only when the run is clean
     const failedRun = blocked || (receipt.problems.length > 0 && !left)
     const outcome = failedRun ? 'failed' : left ? 'left' : 'uninstalled'
-    // a purge took flows/ with it: nothing to append to. A clean run never makes the records dir for its own result (1.6 §3.6): after an earlier --purge-data
-    // nothing of trocar's is to stay, and D38 asks for a durable record of what failed, which is always written (the failure lines above, a failed or left result)
-    if (!(purgeData && !purgeHeld) && (outcome !== 'uninstalled' || fs.existsSync(path.join(w.dir, 'flows')))) {
+    // a purge took flows/ with it: nothing to append to. A clean run with no warning never makes the records dir for its result (1.6 §1.1, 4.6 §卸载 5): after
+    // an earlier --purge-data nothing of trocar's is to stay; a failure and a warning are what D38 keeps, and they write, the dir made for them
+    if (!(purgeData && !purgeHeld) && (outcome !== 'uninstalled' || noted.length || fs.existsSync(path.join(w.dir, 'flows')))) {
       for (const n of noted) put(n)
       put({ kind: 'result', outcome, counts: { entries: (u.results || []).length, left, ...(receipt.left.length > left ? { shared: receipt.left.length - left } : {}), still_trusting: u.still_trusting.length, notes: noted.length }, reason: failedRun ? `uninstall did not finish: ${receipt.problems[0]}` : left ? `uninstalled, except ${left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${(u.results || []).length} trust entr${(u.results || []).length === 1 ? 'y' : 'ies'} undone, ${noted.length} note(s)` })
     }
@@ -444,6 +444,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (!blocked && !left && !receipt.problems.length && !helperRow) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot(), run })
     if (bare && !helperRow) receipt.notes.push(goneCount() > was ? `there was no install record for this user: only trocar's own program was left, and it is removed${receipt.scheduled.length > wasScheduled ? ' once this command exits' : ''}` : 'nothing is installed for this user')
     receipt.ok = receipt.problems.length === 0 && undone() === 0
+    // no record written (a clean run after a purge, or the purge itself): the receipt names none; Windows' scheduled step may still write its failure there
+    if (!receipt.scheduled.length && !fs.existsSync(receipt.log)) receipt.log = null
     // §3.6: a left row with its own command (the helper's) is the next step itself; only the rows without one need this line
     const bareLeft = receipt.left.filter((l) => !l.command).length
     if (bareLeft && !receipt.problems.length) receipt.problems.push(`${bareLeft} item(s) could not be undone${m ? '; the install manifest is kept' : ''}. Fix them, then run trocar uninstall again`)

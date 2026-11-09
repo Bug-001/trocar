@@ -147,6 +147,7 @@ test('1.6 §3.6: a helper still installed: exit 0, one shared left row with the 
   // 1.6 §3.6: --purge-data asked that nothing of trocar's stay, and the second run is clean: it starts no new record of its own (a clean result line never creates
   // the records dir; D38 asks for failures, which always write): no ~/.trocar entry stays
   assert.deepEqual([fs.readFileSync(s.rc, 'utf8'), r2.left, r2.kept, fs.existsSync(path.join(s.home, '.trocar'))], ['alias ll="ls -l"\n', [], [], false], 'nothing of trocar stays')
+  assert.equal(r2.log, null, 'the receipt names no record it did not write')
   assert.deepEqual([fs.existsSync(appDir(s.home)), fs.existsSync(launcherPath(s.home, 'linux'))], [false, false])
 })
 
@@ -161,6 +162,20 @@ test('1.6 §3.6 · D38: after --purge-data a second uninstall that fails writes 
   const io = fakeIo()
   assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(io, false)), 1, io.text())
   assert.ok(flowEvents(dir).some((e) => e.kind === 'result' && e.outcome !== 'uninstalled'), 'the failed run is recorded')
+})
+
+// D38 (4.6 §卸载 5): a warning is of the failure class: a run that is otherwise clean (outcome `uninstalled`) still writes it, the records dir made for it
+test('1.6 §3.6 · D38: after --purge-data a clean second uninstall with a warning writes it, the records dir made for it', async () => {
+  const s = scriptLinux({ helper: true })
+  assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
+  assert.equal(await runUninstallCli(['--purge-data', '--yes', '--json'], s.ctx(fakeIo())), 0)
+  const dir = path.join(s.home, '.trocar', 'collector'), ingress = path.join(dir, 'ingress.json')
+  fs.writeFileSync(ingress, '{}\n')
+  const ctx = s.ctx(fakeIo(), false), io = fakeIo()
+  const stuck = { ...fs, rmSync: (p, o) => { if (p === ingress) throw Object.assign(new Error('busy'), { code: 'EBUSY' }); return fs.rmSync(p, o) } }
+  assert.equal(await runUninstallCli(['--yes', '--json'], { ...ctx, io, deps: { ...ctx.deps, fs: stuck } }), 0, io.text())
+  const r = JSON.parse(io.text())
+  assert.deepEqual([r.log, flowEvents(dir).filter((e) => e.code === 'residue-not-removed').map((e) => e.path)], [path.join(dir, 'flows'), [ingress]], 'the warning is recorded')
 })
 
 test('D38: a PATH item record that cannot be read is said, never taken as no PATH item', async () => {
