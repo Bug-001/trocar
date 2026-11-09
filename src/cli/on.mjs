@@ -117,7 +117,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
       roots: deps.roots || null, unit, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (p) => say(planText(p)),
-      request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
+      request: deps.request, exec: deps.exec || null, identity: deps.identity || null, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
     // 1.6 §3.3: a run whose only shortfall is a harness refused for setup turned the others on: their proxies are recorded as on any done run
     if (adoption && adoption.error) receipt.notes.push(adoption.error)

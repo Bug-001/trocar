@@ -11,7 +11,8 @@ import nodeOs from 'node:os'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { appDir, launcherPath, collectorDir, opLockFile } from '../off/paths.mjs'
-import { acquireOpLock } from '../off/lock.mjs'
+import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
+import { identityFor } from '../off/proc.mjs'
 import { readManifest } from '../off/manifest.mjs'
 import { EXIT } from './schema.mjs'
 
@@ -110,8 +111,11 @@ export async function runPlaceCli(argv, { io, home = nodeOs.homedir(), platform 
   let lock
   try {
     fs.mkdirSync(collectorDir(home), { recursive: true, mode: 0o700 })
-    lock = await acquireOpLock({ file: opLockFile(home), waitMs: 30_000, fs })
-  } catch (e) { io.err(`trocar place: another trocar command is changing this machine (${(e && e.message) || e}). Run this again when it is done.`); return EXIT.incomplete }
+    lock = await acquireOpLock({ file: opLockFile(home), identity: deps.identity || identityFor({ platform, exec: deps.exec || null }), waitMs: 30_000, fs })
+  } catch (e) { // D38: only LOCK_BUSY is another command; anything else says its own reason
+    io.err(e && e.code === LOCK_BUSY ? `trocar place: another trocar command is changing this machine (${e.message}). Run this again when it is done.` : `trocar place: could not take the lock that keeps trocar commands apart (${(e && e.message) || e}).`)
+    return EXIT.incomplete
+  }
   try {
     placeVersion({ dir: argv[0], home, platform, fs })
     return EXIT.ok

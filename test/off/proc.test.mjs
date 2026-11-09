@@ -241,3 +241,12 @@ test('memoProcQuestions in the callback form: the scope is that call\'s async co
   assert.deepEqual([a.ident(), b.ident()], [0, 0], 'each answered the identity out of its own table')
   assert.deepEqual([ia, ib], [{ start_time: String(CREATED_W), boot_id: String(BOOTED_W) }, { start_time: String(CREATED_W), boot_id: String(BOOTED_W) }])
 })
+
+// 1.6 R12: two commands judge one op.lock by the same pid's start time, so the words must not depend on who asks. `ps -o lstart=` prints local time,
+// and a shell's TZ differs from the daemon's (launchd sets none): the identity asks under the machine's own zone, never the caller's TZ
+test('psIdentity asks ps and sysctl without the caller\'s TZ, so a shell with TZ set and the daemon record the same start time', () => {
+  const seen = []
+  const exec = (file, args, o) => { seen.push([file, o && o.env && Object.hasOwn(o.env, 'TZ')]); return file === 'ps' ? { status: 0, stdout: 'Wed Oct  7 04:27:00 2026\n', stderr: '' } : { status: 0, stdout: '{ sec = 1, usec = 0 }\n', stderr: '' } }
+  psIdentity(4242, { exec, env: { ...process.env, TZ: 'Asia/Tokyo' } })
+  assert.deepEqual(seen, [['ps', false], ['sysctl', false]])
+})

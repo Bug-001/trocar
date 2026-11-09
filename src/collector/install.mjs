@@ -36,6 +36,7 @@ import { replacedNote } from '../off/backup.mjs'
 import { readOrNull } from '../off/fsutil.mjs'
 import { userCertsIn } from '../off/pem.mjs'
 import { acquireOpLock, LOCK_BUSY, tryOpLock } from '../off/lock.mjs'
+import { identityFor } from '../off/proc.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { OFF_VERSION, installComplete, daemonMayStart } from '../off/manifest.mjs'
@@ -505,7 +506,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *    arch       the arch, asked for the combined bundles' OS roots (planOn)   roots  overrides them
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, userFilesFor = null, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, userFilesFor = null, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS, exec = null, identity = null } = opts
   refuseRoot('on', getuid)
   const dir = collectorHome(path.join(home, '.trocar'))
   const stateF = path.join(dir, 'state.json')
@@ -607,7 +608,7 @@ export async function turnOn(opts = {}) {
     // ── confirmed: from here on, writes — one state-changing command at a time (R12): the lock is held to the end of this callback (the try below), and
     // the desired state is read again under it, so what an `off` that has just finished left is the base of what is written, not the read of a minute ago
     let lock
-    try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: lockWaitMs, fs }) } catch (e) {
+    try { lock = await acquireOpLock({ file: opLockFile(home), identity: identity || identityFor({ platform: osName, exec, env }), waitMs: lockWaitMs, fs }) } catch (e) {
       if (e && e.code === LOCK_BUSY) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, String((e && e.message) || e)] }), manifest: plan._.prior, plan, exit: 1 }
       throw e
     }
@@ -757,7 +758,7 @@ export async function kickDaemon({ osName, dir, env, fs = nodeFs, unit = null, s
   return { was, rr, startAt, startMs: ms() - startAt }
 }
 
-export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = null, register = false, reload = false, socketPath = null, request = null, pause = sleep, put = () => {}, halted = () => false, ms = Date.now, early = null }) {
+export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, exec = null, unit = null, register = false, reload = false, socketPath = null, request = null, pause = sleep, put = () => {}, halted = () => false, ms = Date.now, early = null }) {
   const p = daemonProbe({ osName, dir, env, fs, socketPath, request, pause })
   const probe = p.probe
   const notes = [], problems = []
@@ -771,8 +772,9 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       // `install` registers and starts (enable); `on` only starts, through the OS mechanism, and itself when that refuses — the reason said, never dropped (D38)
       const startAt = early && early.rr ? early.startAt : ms()
       const held = register ? loginEntry(dir, fs) : null
+      const lockIdentity = identityFor({ platform: osName, exec, env }) // op.lock's question about this process, through the runner this run was given
       // 4.8 §7: a login entry the arch uses instead of its own is recorded (with the user's prior) before it is written
-      const record = (ledger, ours) => recordLoginEntry(dir, fs, { ledger, ours }, ms)
+      const record = (ledger, ours) => recordLoginEntry(dir, fs, { ledger, ours }, ms, lockIdentity)
       let rr = early && early.rr ? early.rr : register ? unit.enable({ now: !was.up, prior: held && held.entry ? held.entry.prior ?? null : null, record }) : (was.up ? null : unit.startNow())
       if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
         const direct = unit.start(daemonEnv(env, dir)) // the direct start carries what the login entry's Environment= would carry
@@ -789,7 +791,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms; trocar waited on the OS, not on work of its own${osName === 'darwin' ? ' (launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default)' : ''}`)
       // 4.8 §7: a login entry the arch took out (the Run value, once the task is registered) leaves the record
       if (register && rr && ['removed', 'restored'].includes(rr.runKey)) {
-        const why = recordLoginEntry(dir, fs, rr, ms)
+        const why = recordLoginEntry(dir, fs, rr, ms, lockIdentity)
         if (why) { notes.push(why); problems.push(why) }
       }
       if (rr && rr.code === 0 && rr.ledger) loginEntryName = `${rr.ledger.hive}\\${rr.ledger.key}\\${rr.ledger.name}` // what the receipt names as the login entry (1.6 C.2)
@@ -853,11 +855,11 @@ function loginEntry(dir, fs) {
 }
 // → null, or why the record could not be put right. A value that was trocar's already (`ours`) keeps the prior the record has.
 // R12: the read and save hold op.lock, and only they: the OS's start of the collector can outlast the 10 s an off waits for the lock (1.6 R12)
-function recordLoginEntry(dir, fs, rr, ms) {
+function recordLoginEntry(dir, fs, rr, ms, identity) {
   const what = rr.ledger ? `the login entry ${rr.ledger.hive}\\${rr.ledger.key}\\${rr.ledger.name}` : 'the login entry trocar took out'
   const after = rr.ledger ? 'so it was not written' : 'trocar uninstall still takes it out' // a new entry is recorded before it is written (4.8 §7 W24)
   let got
-  try { got = tryOpLock({ file: path.join(dir, path.basename(opLockFile())), fs }) } catch (e) { return `${what} could not be recorded (${(e && e.message) || e}); ${after}` }
+  try { got = tryOpLock({ file: path.join(dir, path.basename(opLockFile())), identity, fs }) } catch (e) { return `${what} could not be recorded (${(e && e.message) || e}); ${after}` }
   if (!got.lock) return `${what} could not be recorded: another trocar command (pid ${got.holder && got.holder.pid}) is changing the install record; ${after}`
   try { return saveLoginEntry(dir, fs, rr, ms, what, after) } finally { got.lock.release() }
 }
