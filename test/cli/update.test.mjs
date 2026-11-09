@@ -21,6 +21,7 @@ import { recentFailures } from '../../src/collector/core/events.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
+import { unsaidIn } from '../../src/cli/words.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 const IDENTITY = ['-c', 'user.email=test@trocar.invalid', '-c', 'user.name=trocar test', '-c', 'commit.gpgsign=false']
@@ -340,17 +341,89 @@ test('one plan per update: the process that finishes a handover does not print t
   const s = sandbox({ on: ['codex'] })
   s.ahead('one-plan.md')
   const parent = ctx(s)
+  // the parent's output is its plan alone (the new code is a stand-in here); a finish that prints the plan prints more than its result
+  const linesOf = (t) => t.io.stdoutText().split('\n').filter(Boolean)
   assert.equal(await runUpdateCli(['--yes'], parent.c), EXIT.ok, parent.io.text())
-  assert.match(parent.io.text(), /^Plan$/m, 'the parent prints the plan')
+  const plan = linesOf(parent)
+  assert.ok(plan.length > 0, 'the parent prints the plan')
   assert.equal(parent.calls.childEnv[HANDED_OVER], '1', 'and tells the process it starts that it did')
 
   const child = ctx(s, { env: parent.calls.childEnv })
   assert.equal(await runUpdateCli(['--yes'], child.c), EXIT.ok, child.io.text())
-  assert.doesNotMatch(child.io.text(), /^Plan$/m, 'the finish it hands over to prints no second one')
+  const result = linesOf(child)
+  assert.ok(plan.every((l) => !result.includes(l)), `the finish it hands over to prints no second plan: ${child.io.text()}`)
   const rerun = ctx(s)
   fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
   assert.equal(await runUpdateCli(['--yes'], rerun.c), EXIT.ok, rerun.io.text())
-  assert.match(rerun.io.text(), /^Plan$/m, 'an operator who runs update again to finish one is shown the plan')
+  assert.ok(linesOf(rerun).length > result.length, `an operator who runs update again to finish one is shown the plan: ${rerun.io.text()}`)
+})
+
+// §5.5: a finish that stopped may have stopped on a defect of the code that ran it — the newer code is pulled first, so `trocar update` can be the way out
+test('§5.5: a waiting update.json with newer code upstream fast-forwards first, switches nothing off, and hands the finish to the new code', async () => {
+  const s = sandbox({ on: [] }) // the agents were switched off by the run that stopped
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  const target = s.ahead('the-fix.md')
+  const t = ctx(s)
+  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  assert.equal(head(s.root), target, 'HEAD was fast-forwarded to the upstream')
+  assert.deepEqual([t.calls.off, t.calls.install, t.calls.on], [[], [], []], 'step 1 is skipped, and the old code does not finish')
+  assert.equal(t.calls.child.length, 1, 'the new code finishes, in a process of its own')
+  assert.equal(t.calls.childEnv[HANDED_OVER], '1')
+  assert.deepEqual(s.handover(), { from: '0.1.0+0000000', on: ['codex'] }, 'the file stays for the new code')
+})
+
+test('§5.5: a waiting update.json whose newer code cannot be pulled is finished with the code here, and the receipt says so', async () => {
+  const cases = {
+    'tracked changes of your own': (s) => { fs.writeFileSync(path.join(s.root, 'package.json'), '{"version":"0.1.0","mine":true}\n'); s.ahead() },
+    'no upstream': (s) => { git(s.root, 'checkout', '-b', 'side') },
+    'a commit the upstream does not have': (s) => { fs.writeFileSync(path.join(s.root, 'MINE.md'), 'mine\n'); git(s.root, 'add', '-A'); git(s.root, 'commit', '-m', 'mine'); s.ahead() },
+    'git fetch fails': (s) => { fs.rmSync(s.up, { recursive: true, force: true }) },
+  }
+  for (const [why, set] of Object.entries(cases)) {
+    const s = sandbox({ on: [] })
+    fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+    set(s)
+    const was = head(s.root)
+    const t = ctx(s)
+    assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, `${why}: ${t.io.text()}`)
+    assert.equal(head(s.root), was, `${why}: HEAD did not move`)
+    assert.deepEqual([t.calls.child.length, t.calls.on.map((a) => a.filter((x) => !x.startsWith('--')))], [0, [['codex']]], `${why}: this code finished`)
+    assert.equal(s.handover(), null, `${why}: and the file is gone`)
+    assert.ok(t.io.json().notes.length >= 1, `${why}: a note says the newer code was not pulled`)
+  }
+})
+
+// §5.5 step 1: an agent on when the pull comes (switched on by hand since, or by a finish that got part of the way) is switched off by the code
+// that wrote its entries, before the code changes, and the file names it, so the new code switches it on again
+test('§5.5: a waiting update that pulls switches off what is on first and adds it to update.json', async () => {
+  const s = sandbox({ on: ['opencode'] })
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  const target = s.ahead('on-since.md')
+  const t = ctx(s)
+  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(t.calls.off.map((a) => a.filter((x) => !x.startsWith('--'))), [['opencode']], 'what is on goes off with the old code')
+  assert.deepEqual([head(s.root), t.calls.child.length], [target, 1])
+  assert.deepEqual(s.handover(), { from: '0.1.0+0000000', on: ['codex', 'opencode'] }, 'the new code switches both on')
+})
+
+test('§5.5: the process a pull started finishes with its code, whatever upstream has since; a merge that fails finishes with the code here', async () => {
+  const s = sandbox()
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  s.ahead('after-the-pull.md')
+  const was = head(s.root)
+  const child = ctx(s, { env: { [HANDED_OVER]: '1' } })
+  assert.equal(await runUpdateCli(['--yes'], child.c), EXIT.ok, child.io.text())
+  assert.deepEqual([head(s.root), child.calls.child, child.calls.on.map((a) => a.filter((x) => !x.startsWith('--'))), s.handover()], [was, [], [['codex']], null], 'no second pull, no second process')
+
+  const m = sandbox()
+  fs.writeFileSync(path.join(m.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  m.ahead('merge-refused.md')
+  const before = head(m.root)
+  const exec = (file, args, opts) => (args.includes('merge') ? { status: 1, stdout: '', stderr: 'merge refused' } : spawnSync(file, args, opts))
+  const t = ctx(m, { deps: { exec } })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual([head(m.root), t.calls.child, t.calls.on.map((a) => a.filter((x) => !x.startsWith('--'))), m.handover()], [before, [], [['codex']], null])
+  assert.ok(t.io.json().notes.length >= 1, 'a note says the newest code was not pulled')
 })
 
 // ── V96 · the finish ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -403,7 +476,7 @@ test('V96: a step that writes to stderr as well as its document is read from std
 })
 
 // D38: a step that did not finish says why in its own receipt; without --json that reason is printed too, not only its exit code
-test('V96: an install or on that fails in the finish has its own reason printed; with --json it is in the receipt and stderr stays empty', async () => {
+test('V96: an install or on that fails in the finish has its own reason in --details; with --json it is in the receipt and stderr stays empty', async () => {
   const failing = {
     install: (why) => ({ install: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('install'), ok: false, error: { code: 'x', message: why }, problems: [], notes: [] })); return EXIT.incomplete } }),
     on: (why) => ({ on: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('on'), ok: false, problems: [why], notes: [] })); return EXIT.incomplete } }),
@@ -414,7 +487,7 @@ test('V96: an install or on that fails in the finish has its own reason printed;
       fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
       const why = `reason-${step}-${Math.random().toString(36).slice(2, 8)}`
       const t = ctx(s, { deps: deps(why) })
-      assert.equal(await runUpdateCli(['--yes', ...(json ? ['--json'] : [])], t.c), EXIT.incomplete, t.io.text())
+      assert.equal(await runUpdateCli(['--yes', json ? '--json' : '--details'], t.c), EXIT.incomplete, t.io.text())
       if (json) {
         assert.equal(t.io.stderrText(), '', `${step}: --json keeps stderr empty`)
         assert.ok(JSON.stringify(t.io.json()[step]).includes(why), `${step}: the step's receipt is in update's`)
@@ -423,14 +496,13 @@ test('V96: an install or on that fails in the finish has its own reason printed;
   }
 })
 
-// D38 · 1.6 §5.5: what install's receipt says is still the user's to do (its notes: a key helper kept that only a desktop Terminal can replace) is
-// said by the update that ran it too — an update is often the only install the user sees
-test('V96: the notes of the install a finish ran are printed by the update, once each', async () => {
+// D38 · 1.6 §1.1 ④ rule 10: the notes of the install an update ran are facts the short text leaves out, so --details says each, once
+test('V96: the notes of the install a finish ran are in the update\'s --details, once each', async () => {
   const s = sandbox()
   fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
   const note = `kept-${Math.random().toString(36).slice(2, 8)}: run trocar install from a Terminal in your desktop session`
   const t = ctx(s, { deps: { install: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('install'), ok: true, problems: [], notes: [note] })); return EXIT.ok } } })
-  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  assert.equal(await runUpdateCli(['--yes', '--details'], t.c), EXIT.ok, t.io.text())
   assert.equal(t.io.text().split(note).length - 1, 1, t.io.text())
 })
 
@@ -504,6 +576,46 @@ test('V96: a collector that refuses the off request is not named by a null pid',
   const out = t.io.text()
   assert.match(out, /could not be stopped/)
   assert.doesNotMatch(out, /pid null/, 'D58②: a number the user can act on, or none — never a placeholder')
+})
+
+// §1.1 ④ rule 4: a service that holds its socket, answers nothing and does not stop is not fixed by `trocar update` alone — the way out is the stop
+// that works on this platform, the pid in the command, then `trocar update`
+test('§5.5: a hung service that cannot be stopped: the stop by hand for this platform, then trocar update', async () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const s = sandbox()
+    fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+    const sock = path.join(s.base, 'control.sock')
+    const t = ctx(s, {
+      platform,
+      daemonCode: () => null, // it holds the socket and answers nothing
+      deps: {
+        daemonState: async () => ({ state: 'unresponsive', socket: sock, lock: { pid: 4242 }, reason: 'does not answer' }),
+        request: async () => { const e = new Error('timed out'); e.code = 'ETIMEDOUT'; throw e },
+        stopDaemon: async () => ({ stopped: false, pid: 4242, error: 'it did not exit' }),
+        socketPath: sock, drainMs: 0,
+      },
+    })
+    assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.incomplete, t.io.text())
+    const lines = t.io.text().split('\n').map((l) => l.trim())
+    const stop = lines.findIndex((l) => l === (platform === 'win32' ? 'taskkill /PID 4242 /F' : 'kill -9 4242'))
+    assert.ok(stop >= 0, `${platform}: the stop that works here, with the pid:\n${t.io.text()}`)
+    assert.ok(lines.indexOf('trocar update') > stop, `${platform}: then trocar update:\n${t.io.text()}`)
+    assert.ok(s.handover(), `${platform}: the update stays written down`)
+  }
+})
+
+// §1.1⑥: a command to copy is a line of its own, never broken by the fold — an npm copy's way out with a long scoped name included
+test('§5.5: an npm copy with nothing to finish says npm i -g <name>@latest and trocar update, each whole on a line of its own', async () => {
+  const s = sandbox()
+  const name = '@a-rather-long-scope-of-its-own/trocar-with-a-long-package-name'
+  const npmRoot = path.join(s.base, 'lib', 'node_modules', ...name.split('/'))
+  fs.mkdirSync(npmRoot, { recursive: true })
+  fs.writeFileSync(path.join(npmRoot, 'package.json'), JSON.stringify({ name, version: '0.2.0' }) + '\n')
+  const t = ctx(s, { deps: { root: npmRoot }, daemonCode: () => codeId(npmRoot) })
+  assert.equal(await runUpdateCli([], t.c), EXIT.usage, t.io.text())
+  const lines = t.io.text().split('\n').map((l) => l.trim())
+  for (const c of [`npm i -g ${name}@latest`, 'trocar update']) assert.ok(lines.includes(c), `${c} whole on a line:\n${t.io.text()}`)
+  assert.ok(lines.indexOf(`npm i -g ${name}@latest`) < lines.indexOf('trocar update'), 'npm first')
 })
 
 // ── V124 · the login entry is written before the collector is replaced ─────────────────────────────────────────────────────────────
@@ -700,4 +812,70 @@ test('a script copy on a machine whose last uninstall kept its record (install: 
   const exit = await runUpdateCli(['--dry-run'], t.c)
   assert.equal(exit, EXIT.ok, t.io.text())
   assert.deepEqual([t.calls.install, t.calls.off, t.calls.on, t.calls.child], [[['--dry-run']], [], [], []])
+})
+
+// 1.6 §1.1 ④ (V128): every way an update ends — the plan, a finish, each stop after the code changed, the daemon-only step, a finish whose newer code
+// could not be pulled — says no unsaid word by default, and --details holds every fact of the --json receipt (from, to, the agents, each note, the error)
+test('§1.1 ④: the default text of every update says no unsaid word, and --details holds each fact of --json', async () => {
+  const waitingFor = (s) => fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex', 'pi'] }) + '\n')
+  const failing = (command) => async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt(command), ok: false, error: { code: 'x', message: `the daemon of ${command} said EPIPE` }, problems: [], notes: [] })); return EXIT.incomplete }
+  const cases = {
+    'a git update\'s plan': { on: ['codex', 'pi'], set: (s) => s.ahead('voice.md'), argv: ['--dry-run'] }, // the new code's process prints the rest
+    'a finish': { set: waitingFor },
+    'a finish whose install fails': { set: waitingFor, deps: { install: failing('install') } },
+    'a finish whose on fails': { set: waitingFor, deps: { on: failing('on') } },
+    'an npm install that fails': { on: ['codex'], set: (s) => s.ahead('package-lock.json'), deps: { exec: (f, a, o) => (f === 'npm' ? { status: 1, stdout: '', stderr: 'ENOSPC: no space left' } : spawnSync(f, a, o)) } },
+    'a finishing process killed': { on: ['codex'], set: (s) => s.ahead('killed.md'), childExit: { signal: 'SIGKILL' } },
+    'a finish whose newer code cannot be fetched': { set: (s) => { waitingFor(s); fs.rmSync(s.up, { recursive: true, force: true }) } },
+    'the collector alone': { daemonCode: () => '0.0.9+1234567' },
+    'changes of your own': { on: ['codex'], set: (s) => { fs.writeFileSync(path.join(s.root, 'package.json'), '{"version":"0.1.0","mine":1}\n'); s.ahead('mine.md') } },
+    'no upstream': { on: ['codex'], set: (s) => git(s.root, 'checkout', '-b', 'side') },
+    'a fetch that fails': { on: ['codex'], set: (s) => fs.rmSync(s.up, { recursive: true, force: true }) },
+    'an off that fails': { on: ['codex'], set: (s) => s.ahead('off-fails.md'), deps: { off: failing('off') } },
+    'a merge that fails': { on: ['codex'], set: (s) => s.ahead('merge-fails.md'), deps: { exec: (f, a, o) => (a.includes('merge') ? { status: 1, stdout: '', stderr: '' } : spawnSync(f, a, o)) } },
+  }
+  for (const [what, c] of Object.entries(cases)) {
+    const out = {}
+    for (const mode of ['default', '--details', '--json']) {
+      const s = sandbox({ on: c.on || [] })
+      c.set && c.set(s)
+      const unit = { path: '/login/entry', registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }) }
+      const t = ctx(s, { childExit: c.childExit, ...(c.daemonCode ? { daemonCode: c.daemonCode } : {}), deps: { unit, drainMs: 0, ...(c.deps || {}) } })
+      await runUpdateCli(['--yes', ...(c.argv || []), ...(mode === 'default' ? [] : [mode])], t.c)
+      out[mode] = mode === '--json' ? t.io.json() : t.io.text()
+    }
+    assert.deepEqual(unsaidIn(out.default), [], `${what}:\n${out.default}`)
+    assert.doesNotMatch(out.default, /\bexit \d+\b/, `${what}: a command's exit code is --details' (§1.1 ④ rule 3):\n${out.default}`)
+    for (const c of out.default.split('\n').filter((l) => /^ {4}\S/.test(l))) assert.ok(out['--details'].includes(c.trim()), `${what}: --details has the command ${c.trim()}:\n${out['--details']}`)
+    const same = (x) => x.replace(/\s+/g, ' ').replace(/\+[0-9a-f]{7}\b/g, '+c').replace(/trocar-update-\w+/g, 'sandbox') // each mode had a sandbox (and commits) of its own
+    const details = same(out['--details']), r = out['--json']
+    // the versions are the plan's: a refusal before any plan (no `to`) says why alone
+    const facts = [...(r.to ? [r.from, r.to] : []), ...r.harnesses, ...r.notes, ...(r.error ? [r.error.message] : [])].filter((x) => typeof x === 'string' && x)
+    for (const f of facts) assert.ok(details.includes(same(f)), `${what}: --details says ${JSON.stringify(f)}:\n${out['--details']}`)
+  }
+})
+
+// 1.6 §5.5 · C.2: what the install and the on an update ran leave to the user (`pending`, with the command to run) is the update's to-do: its default
+// text says each item and each command, whether the finish closed or stopped on that step
+test('§5.5: every to-do of the install and the on an update ran is in the update\'s default text and its --details, with its command', async () => {
+  const tag = () => Math.random().toString(36).slice(2, 8)
+  // C.2's shapes: install `pending`; on's `blocked` with a command, its setup-needed `refused` with `commands`, its install-pending notes
+  const install = (ok) => { const p = { what: 'the capability helper', reason: `install-${tag()} is yours to do`, command: `sudo /opt/i-${tag()} setup-helper` }; return { items: [[p.reason, p.command]], deps: { install: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('install'), ok, problems: [], notes: [], pending: [p] })); return ok ? EXIT.ok : EXIT.incomplete } } } }
+  const on = (ok) => {
+    const b = { what: 'trocar on', reason: `on-${tag()} blocks it`, command: `sudo /opt/b-${tag()} fix` }
+    const x = { harness: 'codex', reason: 'setup-needed', why: `setup-${tag()} is missing`, commands: [`trocar uninstall-${tag()}`, 'trocar install'] }
+    const n = { code: 'install-pending', item: 'root', state: 'pending', why: `root-${tag()} waits`, command: 'trocar install' }
+    return { items: [[b.reason, b.command], [x.why, ...x.commands], [n.why, n.command]], deps: { on: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('on'), ok, problems: [], blocked: [b], refused: [x], notes: [n] })); return ok ? EXIT.ok : EXIT.incomplete } } }
+  }
+  for (const [what, steps] of [['an install that finished', [install(true)]], ['an on that finished', [on(true)]], ['an install that stopped', [install(false)]],
+    ['an on that stopped after an install with a to-do', [install(true), on(false)]]]) {
+    for (const mode of [[], ['--details']]) {
+      const s = sandbox()
+      fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+      const t = ctx(s, { deps: Object.assign({}, ...steps.map((x) => x.deps)) })
+      await runUpdateCli(['--yes', ...mode], t.c)
+      const text = t.io.text().replace(/\s+/g, ' ')
+      for (const part of steps.flatMap((x) => x.items.flat())) assert.ok(text.includes(part), `${what} ${mode}: ${part}\n${t.io.text()}`)
+    }
+  }
 })

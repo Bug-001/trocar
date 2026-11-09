@@ -28,6 +28,7 @@ import { runOnCli } from '../../src/cli/on.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
 import { formatRefusal, markedRefusal } from '../../src/cli/receipt.mjs'
+import { unsaidIn } from '../../src/cli/words.mjs'
 
 function fakeIo({ tty = false } = {}) {
   const out = [], err = []
@@ -79,7 +80,6 @@ test('1.6 §1.6: no terminal and no --yes → the plan (cost and residual-risk l
   assert.equal(a.exit, 2)
   assert.match(a.io.text(), /^While installed, programs you run trust certificates issued by this/m) // the cost line (§3.2)
   assert.match(a.io.text(), /^Any program running as you can ask trocar to issue a trusted certificate/m) // the residual risk of a same-user root
-  assert.match(a.io.text(), /^  codex +reads your user trust store$/m, 'every agent found is a line of the plan')
   assert.match(a.io.text(), /Nothing was changed\. Read the plan above, then run it again with --yes/)
   assertEnglish(a.io.text(), 'the install plan')
   assert.equal(fs.existsSync(path.join(a.w.home, '.trocar', 'collector', 'install-manifest.json')), false)
@@ -738,4 +738,29 @@ test('install plan · win32: the autostart row names the task and the Run value 
   assert.equal(exit, 0, io.text())
   const row = JSON.parse(io.text()).planned.find((p) => p.what === 'autostart')
   assert.ok(row && row.detail.includes(RUN_KEY.name), JSON.stringify(row))
+})
+
+// 1.6 §1.1 ④ · §3.2: the default receipt says no unsaid word; its rows — the fingerprint, each carrier and its file, the login entry — are --details'
+test('§1.1 ④: install\'s default receipt says no unsaid word, and --details holds the fingerprint, each carrier\'s file and the login entry', async () => {
+  const short = await cli(['--yes'])
+  assert.equal(short.exit, 0, short.io.text())
+  const plan = (await cli(['--dry-run'])).io.text().split('\n').filter(Boolean).length // the plan above it is the plan's own business (§1.4)
+  const receipt = short.io.text().split('\n').filter(Boolean).slice(plan).join('\n')
+  assert.deepEqual(unsaidIn(receipt), [], receipt)
+  const long = await cli(['--yes', '--details']), json = await cli(['--yes', '--json'], { world: long.w }) // the same machine: the same root and files
+  const r = json.io.json(), text = long.io.text().replace(/\s+/g, ' '), tilde = (p) => p.replace(long.w.home, '~')
+  const facts = [r.fp256, ...r.carriers.filter((c) => c.path).map((c) => tilde(c.path)), tilde(r.autostart.entry)]
+  for (const f of facts) assert.ok(text.includes(f), `--details says ${f}:\n${long.io.text()}`)
+})
+
+// 1.6 §1.4 · §3.2: the default plan lists every file of yours it changes by full path — the login item too — and says trocar's own in one sentence
+test('§1.4: install\'s default plan names each file of yours by full path, none of ~/.trocar, and no unsaid word; --details names every planned row', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  const plan = (await cli(['--dry-run'], { world: w })).io.text(), details = (await cli(['--dry-run', '--details'], { world: w })).io.text()
+  const r = (await cli(['--dry-run', '--json'], { world: w })).io.json()
+  const files = r.planned.flatMap((p) => p.paths || []).filter((p) => !p.startsWith(path.join(w.home, '.trocar')))
+  for (const f of [...files, r.planned.find((p) => p.what === 'autostart') && path.join(w.home, 'Library', 'LaunchAgents')]) if (f) assert.ok(plan.includes(f.replace(w.home, '~')), `${f}:\n${plan}`)
+  assert.doesNotMatch(plan, /~\/\.trocar\//, "trocar's own files are one sentence")
+  assert.deepEqual(unsaidIn(plan), [], plan)
+  for (const p of r.planned) assert.ok(details.replace(/\s+/g, ' ').includes(p.detail.replace(w.home, '~').replace(/\s+/g, ' ').slice(0, 30)), `--details has the row ${p.what}:\n${details}`)
 })

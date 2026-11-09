@@ -14,8 +14,9 @@ import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, homeMismatch, accountHomeOf, collectorDir, backupDir } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
-import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, markedRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
-import { pairs, wrap } from './text.mjs'
+import { fit, tilde, restartLine, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, markedRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
+import { pairs, wrap, andList } from './text.mjs'
+import { plainSentence } from './words.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT, CODE } from '../collector/core/codes.mjs'
 import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
@@ -30,7 +31,7 @@ function needsYes(io, json, planned = [], left = []) {
   return EXIT.usage
 }
 const USAGE = 'usage: trocar install [--dry-run] [--yes] [--details] [--json]'
-const FLAGS = new Set(['--dry-run', '--yes', '--details', '--json']) // --details: today's text is the full one (1.6 §1.1 ④)
+const FLAGS = new Set(['--dry-run', '--yes', '--details', '--json']) // --details: the receipt's rows, which the default text leaves out (1.6 §1.1 ④, §3.2)
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 // 1.6 §3.2: the two lines every plan prints — what being installed costs, and on macOS / Windows the same-user residual risk
 const COST = "While installed, programs you run trust certificates issued by this machine's trocar root. Remove it: trocar uninstall"
@@ -102,6 +103,26 @@ async function placePath({ home, env, platform, fs, deps }) {
   } catch (e) { return { problem: `the PATH item was not added (${(e && e.message) || e}); trocar still runs as ${launcherPath(home, platform)}` } }
 }
 const pathRow = (p) => p && p.rec ? [['PATH', p.rec.element ? `${p.rec.path}: ${p.rec.element} added` : `${p.rec.path}: line added (open a new terminal)`]] : []
+/** 1.6 §1.4 · §3.2: the default plan — every file of yours it changes by full path, one a line (several in one directory: the directory and the count),
+ *  the login item and the PATH file counted as yours; a place not known yet says why; trocar's own things (the root, ~/.trocar) are one sentence;
+ *  the files it leaves as they are are a count, and --details lists them. Read from the same items as `planned`, which --json keeps as they are. */
+function yourFiles({ paths, unknown = [], home, platform, root, own, stale, kept = 0, place = null }) {
+  const P = platform === 'win32' ? path.win32 : path.posix
+  const ours = (p) => p === P.join(home, '.trocar') || String(p).startsWith(P.join(home, '.trocar') + P.sep)
+  const files = [...new Set([...paths.filter((p) => p && !ours(p)), ...(place ? [place.element ? place.where : place.file] : [])])]
+  const byDir = new Map()
+  for (const f of files) { const d = P.isAbsolute(f) ? P.dirname(f) : f; byDir.set(d, [...(byDir.get(d) || []), f]) }
+  const rows = [...byDir.values()].flatMap((fs) => (fs.length > 1 ? [`${tilde(P.dirname(fs[0]), home)} (${fs.length} files)`] : fs.map((f) => tilde(f, home))))
+  const also = [...(root ? ["trust trocar's root certificate for your user (the system asks you once; the key cannot be exported)"] : []), ...(own ? ['keep its own files in ~/.trocar'] : [])]
+  return [rows.length ? `trocar install will change ${rows.length === 1 ? 'this file' : 'these files'} of yours:` : 'trocar install will change no file of yours.',
+    ...rows.map((r) => `  ${r}`), ...unknown.map((u) => `  ${u}`),
+    ...(also.length ? [`It will also ${andList(also)}.`] : []),
+    ...(stale ? ["trocar's service runs other code, so it is restarted on this copy."] : []),
+    ...(kept ? [`${kept} file${kept === 1 ? '' : 's'} of yours ${kept === 1 ? 'is' : 'are'} left as ${kept === 1 ? 'it is' : 'they are'}; trocar install --dry-run --details lists ${kept === 1 ? 'it' : 'them'}.`] : [])]
+}
+
+// 1.6 §3.2 default receipt: the rows above are --details'; what the user does about them is a line — a terminal opened before the PATH item does not have it
+const pathTodo = (p) => (p && p.rec ? ['Open a new terminal to run trocar by its name.'] : [])
 
 /** 1.6 §3.2: an install record install cannot build on, and the way out of each case; null when there is none, or it is usable (an older record is refuseOldManifest's). */
 function unusableRecord(home, fs) {
@@ -130,7 +151,8 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
  * carriers only; the root, its custody, trocar-off and the login entry are install's own steps, read back when in place (V67). The CLI never passes it.
  */
 export async function install({ io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {}, flags, only = null }) {
-  const json = flags.has('--json')
+  const json = flags.has('--json'), details = flags.has('--details')
+  const worded = details ? String : plainSentence // §1.1 ④ rule 3: the default text says the service and no error code; --details says the sentence as written
   const lines = [] // §1.2: with --json stderr stays empty — the plan is a key of the one document on stdout
   const say = json ? (s) => lines.push(s) : io.out
   if ((deps.getuid || processUid)() === 0) { io.err('trocar install: run this as your own user, not as root.'); return EXIT.usage }
@@ -207,9 +229,13 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     // a custody that cannot be used refuses before the plan, the lock and the first write: no plan is offered for a run that would refuse, and the HOME
     // stays as it was; a dry run says it in `blocked` (1.6 §3.2). Only a gate: runInstall asks the custody again under the lock
     const { refusal: refused } = await custodyPreflight({ os: platform, custody: b.gateCustody || b.custody })
-    if (!refused || flags.has('--dry-run')) say(fit([`trocar install will change ${changes.length} thing${changes.length === 1 ? '' : 's'}:`,
+    const place = pathItem && (await import('../off/path-item.mjs')).pathItemTarget({ platform, env, home })
+    if (!refused || flags.has('--dry-run')) say(fit([...(details ? [`trocar install will change ${changes.length} thing${changes.length === 1 ? '' : 's'}:`,
       ...pairs(changes.map((p) => [p.what, p.detail]), { home }),
-      ...(left.length ? ['Left as they are:', ...pairs(left.map((p) => [p.what, p.detail]), { home })] : []),
+      ...(left.length ? ['Left as they are:', ...pairs(left.map((p) => [p.what, p.detail]), { home })] : [])]
+      : yourFiles({ paths: [...changes.flatMap((c) => c.paths || []), ...(unit && !only ? [platform === 'win32' ? 'the scheduled task \\trocar\\collector' : unit.path] : [])], place, home, platform,
+        unknown: changes.filter((c) => c.carrier && c.carrier !== 'root' && !(c.paths && c.paths.length)).map((c) => `${c.harness}: ${c.detail}`),
+        root: changes.some((c) => c.what === 'root'), own: !only, stale, kept: new Set(left.flatMap((l) => l.paths || [])).size })),
       ...(only ? (changes.length ? [] : [left.length ? `There is nothing that install can set up for ${only}.` : `${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
       ...wrap(COST), ...wrap(RISK), ...(stale ? wrap(CUT) : [])], { home }).join('\n'))
     if (flags.has('--dry-run')) {
@@ -276,12 +302,12 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     // a refusal installed nothing: the fingerprint, the risk of an installed root and "Next" would all be untrue, so the stop and its reason are the whole receipt
     else if (refusal) io.out(fit([`trocar install stopped: ${refusal.message || refusal.reason}`, 'Nothing of yours was changed.'], { home }).join('\n'))
     else io.out(fit([receipt.ok ? "Installed. trocar's root certificate is trusted by your user." : 'trocar install did not finish. What is missing is below.',
-      ...pairs([['Fingerprint (SHA-256)', r.fp256 || 'unknown (no root was made)']], { home }), // the hex is one unbroken word under its label: one block, and in a block of its own, so it does not widen the rows below
+      ...(!details ? pathTodo(r.path) : pairs([['Fingerprint (SHA-256)', r.fp256 || 'unknown (no root was made)']], { home })), // the hex is one unbroken word under its label: one block, and in a block of its own, so it does not widen the rows below
       // the login entry install registered, confirmed like every other row (a Windows test machine 2026-10-18: the receipt said nothing about it) — in the carriers' own pairs() call, so its label column lines up with theirs (a Windows test machine 2026-10-19)
-      ...pairs([...carrierRows, ...replacedRow(rep, root), ...pathRow(r.path), ...(receipt.autostart ? [['autostart', `${receipt.autostart.entry}: ${receipt.autostart.enabled ? 'enabled, and a collector starts at every login' : 'NOT enabled (see the problem below): no collector starts at login'}`]] : [])], { home }),
-      ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: trocar install`),
-      ...receipt.notes.map((n) => `Note: ${n}`),
-      ...r.problems.filter((p) => !(mwr && mwr.problems.includes(p))).map((p) => `Problem: ${p}`),
+      ...(!details ? [] : pairs([...carrierRows, ...replacedRow(rep, root), ...pathRow(r.path), ...(receipt.autostart ? [['autostart', `${receipt.autostart.entry}: ${receipt.autostart.enabled ? 'enabled, and a collector starts at every login' : 'NOT enabled (see the problem below): no collector starts at login'}`]] : [])], { home })),
+      ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${worded(p.reason)}). Run again: trocar install`),
+      ...(details ? receipt.notes : r.notes).map((n) => `Note: ${worded(n)}`), // dmnNotes (the service's start) are --details' (§1.1 ④ rule 7)
+      ...r.problems.filter((p) => !(mwr && mwr.problems.includes(p))).map((p) => `Problem: ${worded(p)}`),
       // the residual risk (RISK) is the last line of the plan printed just above in this same run (§3.2 prints it there, and the
       // receipt sample does not carry it); printing it again put the paragraph on the screen twice (a macOS test machine 2026-10-18).
       // `--json` keeps it as `residual_risk`, because a document has no plan above it.
@@ -296,6 +322,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
 // (d)-level plugins) and the (c)-level config keys — every item phase 'install', as `on` wrote them before — plus trocar-off and the liveness record.
 // No unit, no state, no daemon: those are `on`'s. The plan printed is the one `on` used to print (formatPlan) with D55's cost line.
 async function linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked, only }) {
+  const details = flags.has('--details'), worded = details ? String : plainSentence
   const { readAgentList } = await import('../off/identity.mjs')
   const { writeStandalone, standaloneDue } = await import('../off/standalone.mjs')
   const { formatPlan, changeLines } = await import('./receipt.mjs')
@@ -328,7 +355,10 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const daemonItem = [...staleItem(stale, root), ...(pathItem ? [pathItem] : [])]
   const planned = [...planItems({ ...plan, standalone: due }, { home, platform }), ...daemonItem]
   const why = (plan._ && plan._.drift) || [] // a bundle written again says why in the plan too (D38), not only in the receipt
-  say([formatPlan({ ...plan, standalone: due }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail]), { home }), ...fit(why.map((n) => `Note: ${n}`), { home }), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
+  const place = pathItem && (await import('../off/path-item.mjs')).pathItemTarget({ platform, env, home })
+  say([...(details ? [formatPlan({ ...plan, standalone: due }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail]), { home })]
+    : fit([...yourFiles({ paths: planned.map((i) => i.path), place, home, platform, root: false, own: true, stale, unknown: (plan.skipped || []).map((x) => `${tilde(x.what, home)}: skipped (${x.reason})`) }), ...restartLine(plan)], { home })), // 1.6 §3.3: on's line; each process and its pid are --details'
+  ...fit(why.map((n) => `Note: ${n}`), { home }), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
   if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...due, ...plan.created], skipped: plan.skipped || [], ...(why.length ? { notes: why } : {}) }); return EXIT.ok }
   if ((plan.writing || stdNew || stale || pathItem) && !flags.has('--yes')) {
     if (json || !isInteractive(io)) return needsYes(io, json, planned)
@@ -368,13 +398,13 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
     // registering run and makes any answer but present its unitFailed, so a run that halted on a stuck daemon (and enabled nothing) says false here too
     ...(r.daemon ? { daemon: daemonRow(dmn, rep), autostart: { entry: args.unit.path, enabled: !dmn.unitFailed } } : {}) }
   if (json) printJson(io, receipt)
-  else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && ((r.entryBefore && r.entryBefore !== 'present') || dmn.started) ? 'Installed. The certificates were in place; the login entry and the collector are up again.' : r.already && !(rep && rep.replaced) ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
-    ...(r.already ? [] : changeLines(receipt, { home })),
-    ...pairs([...replacedRow(rep, root), ...pathRow(done.path)], { home }),
-    ...[...notes, ...(helperNote ? [helperNote] : [])].map((n) => `Note: ${n}`), // the helper's command is the Next step below, on a line of its own
-    ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: trocar install`] : []),
-    ...problems.map((p) => `Problem: ${p}`),
-    ...(problems.length ? [] : sudoHelper ? ['Next: install the capability helper with this line, then run trocar on:', commandLine(sudoHelper)] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3) or the helper (§3.8): neither is a next step until it is there
+  else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && ((r.entryBefore && r.entryBefore !== 'present') || dmn.started) ? (details ? 'Installed. The certificates were in place; the login entry and the collector are up again.' : "Installed. The certificates were in place; trocar's service is running again.") : r.already && !(rep && rep.replaced) ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
+    ...(r.already || !details ? [] : changeLines(receipt, { home })),
+    ...(details ? pairs([...replacedRow(rep, root), ...pathRow(done.path)], { home }) : pathTodo(done.path)),
+    ...(details ? [...notes, ...(helperNote ? [helperNote] : [])] : (r.plan ? r.plan.notes : plan.uncaptured).filter((n) => !ofSkipped.has(n))).map((n) => `Note: ${worded(n)}`), // the helper's command is the Next step below, on a line of its own
+    ...(board ? [`Not done yet: the board's port is pending (${worded(board.reason)}). Run again: trocar install`] : []),
+    ...problems.map((p) => `Problem: ${worded(p)}`),
+    ...(problems.length ? [] : sudoHelper ? [details ? 'Next: install the capability helper with this line, then run trocar on:' : 'Next: trocar captures nothing until its helper is installed. Run this line, then trocar on:', commandLine(sudoHelper)] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3) or the helper (§3.8): neither is a next step until it is there
     ...breakGlass(home, platform)], { home }).join('\n'))
   return board || problems.length ? EXIT.incomplete : EXIT.ok
 }

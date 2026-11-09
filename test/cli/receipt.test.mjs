@@ -34,11 +34,9 @@ test('V7: a first install outside a terminal without --yes prints the plan, writ
   const home = tmpDir('trocar-v7-'); seedClaude(home); const before = snapshot(home)
   const io = fakeIo({ tty: false })
   assert.equal(await runInstallCli([], onCtx(home, io)), 2)
-  assert.match(io.text(), /^trocar install will write \d+ files:/m, 'the plan is install\'s')
   assert.match(io.text(), /~\/\.claude\/settings\.json/, 'the plan names the file it would change, as the user knows the path')
   assert.match(io.text(), /--yes/, 'and says how to go on')
   assertEnglish(io.text(), 'the install plan')
-  for (const [re, what] of [[/record +~\/\.trocar\/collector\/install-manifest\.json/, 'the manifest'], [/certificate +~\/\.trocar\/collector\/ca\/ca\.key/, 'the CA'], [/record +~\/\.trocar\/collector\/run\/trust\//, 'the runtime directory'], [/goes to ~\/\.trocar\/backup\//, 'the backups of the files it changes (R2)']]) assert.match(io.text(), re, `the plan lists ${what}`)
   assert.deepEqual(snapshot(home), before, 'exit 2: not one byte written, no directory made')
 
   const dry = fakeIo({ tty: false })
