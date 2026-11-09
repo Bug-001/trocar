@@ -37,7 +37,8 @@ import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
 import { buildTopology } from '../netenv/topology.mjs'
 import { diagnose } from '../netenv/findings.mjs'
-import { codeId } from '../version.mjs'
+import { codeId, packageRoot } from '../version.mjs'
+import { refreshCommand } from './refresh.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { trustReasonText, CODE } from '../collector/core/codes.mjs'
 import { pacStale } from '../collector/core/proxymode/entries.mjs'
@@ -619,7 +620,11 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
       const finding = found.find((x) => x.harness === h && x.class !== 'note') || null
       for (const l of statusDetail(shown, h, { finding, now, colors: c, home })) io.out(l)
     })
-  } else if (details || !failures) for (const l of statusSummary(tildeAll(doc), { now, colors: c, home, details })) io.out(l) // §3.5: --failures alone is its own screen
+  } else if (details || !failures) {
+    // §3.5: the way out of a service on other code, asked only when the service runs other code (its judgement reads the record and the login entry)
+    const refresh = doc.daemon && doc.daemon.runs_this_code === false ? await refreshCommand({ home, root: deps.root || packageRoot(), env, platform, deps, fs: deps.fs || nodeFs }) : undefined
+    for (const l of statusSummary(tildeAll(doc), { now, colors: c, home, details, refresh })) io.out(l) // §3.5: --failures alone is its own screen
+  }
   if (failures) { if (detail.length || details) io.out(''); const restart = restartNames(doc), alone = !detail.length && !details
     for (const [i, l] of failuresBlock(doc.failures, effectiveHealth(f).health, { now, details, restart, more: alone && exit !== EXIT.ok && !restart.length }).entries()) io.out(i || !alone ? l : c.bold(l)) } // its own screen: the conclusion bold
   return { exit, f }

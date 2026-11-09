@@ -32,6 +32,7 @@ import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { codeId } from '../../src/version.mjs'
+import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { listenLocalhost } from '../helpers/localhost.mjs'
 
 const CHILD = fileURLToPath(new URL('../collector/fixtures/model-daemon-child.mjs', import.meta.url))
@@ -111,6 +112,8 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { skip: awa
     box = await liveUnit({ w, platform, daemon: { code: codeId(root) } })
     // ws: an update waiting to finish, under a login entry that starts this code: the real install rewrites the entry beside the old daemon, and leaves that daemon to the update (V124)
     const script = path.join(root, 'bin', 'trocar.mjs'), rendered = `${script}\nnew line\n`, pulledFrom = []
+    // the copy being updated ran the last install: only the daemon runs other code (§5.5), not a pull past the install, which would switch codex off first
+    const m = readManifest(w.dir); m.install = { ...m.install, code: codeId(root) }; saveManifest(w.dir, m)
     if (kind === 'ws') {
       fs.writeFileSync(path.join(w.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: [] }) + '\n')
       fs.writeFileSync(box.unit.path, `${script}\n`)

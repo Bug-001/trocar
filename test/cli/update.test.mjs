@@ -618,6 +618,56 @@ test('§5.5: an npm copy with nothing to finish says npm i -g <name>@latest and 
   assert.ok(lines.indexOf(`npm i -g ${name}@latest`) < lines.indexOf('trocar update'), 'npm first')
 })
 
+// §5.5 已是最新: HEAD equal to upstream is not up to date when this copy was pulled past its own install (install.code other, the login entry starts
+// this copy). The finish is an update's: what is on goes off, then the service, install and on; install alone cannot redo on's entries (D55①)
+const pulledWorld = (s, { entryCopy = s.root, code = '0.1.0+0000000', on = ['codex'] } = {}) => {
+  installedBy(s, code)
+  const file = path.join(s.base, 'login-entry'), line = (root) => `<string>${path.join(root, 'bin', 'trocar.mjs')}</string>`
+  fs.writeFileSync(file, `${line(entryCopy)}\n`)
+  const log = []
+  const t = ctx(s, { deps: {
+    unit: { path: file, text: () => `${line(s.root)}\n`, registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }) },
+    off: async (argv) => { log.push(['off', ...argv.filter((x) => !x.startsWith('--'))]); return EXIT.ok },
+    install: async () => { log.push(['install']); return EXIT.ok },
+    on: async (argv) => { log.push(['on', ...argv.filter((x) => !x.startsWith('--'))]); return EXIT.ok },
+  } })
+  return { t, log, on }
+}
+test('§5.5: after a git pull by hand, update switches off what is on, then installs and switches it on again, in that order', async () => {
+  const s = sandbox({ on: ['codex'] })
+  const { t, log } = pulledWorld(s)
+  assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(log, [['off', 'codex'], ['install'], ['on', 'codex']], t.io.text())
+  assert.equal(s.handover(), null, 'finished: the file is gone')
+})
+test('§5.5: not a pull past this copy\'s install — another copy installed (its entry), this code installed, or a record that cannot be read: nothing is switched off', async () => {
+  for (const [why, set] of [
+    ['another copy installed and its login entry starts it', (s) => pulledWorld(s, { entryCopy: path.join(s.base, 'other-copy') })],
+    ['this code installed', (s) => pulledWorld(s, { code: codeId(s.root) })],
+    ['a record that cannot be read', (s) => { const w = pulledWorld(s); fs.writeFileSync(path.join(s.dir, 'install-manifest.json'), '{ not json'); return w }],
+  ]) {
+    const s = sandbox({ on: ['codex'] })
+    const { t, log } = set(s)
+    await runUpdateCli(['--yes'], t.c)
+    assert.deepEqual(log.filter(([c]) => c === 'off'), [], `${why}: nothing switched off:\n${t.io.text()}`)
+    assert.equal(s.handover(), null, `${why}: no update written down`)
+  }
+})
+test('§5.5: a pull past the install finishes offline with a note; --dry-run and no --yes without a terminal change nothing', async () => {
+  const s = sandbox({ on: ['codex'] })
+  const { t, log } = pulledWorld(s)
+  fs.rmSync(s.up, { recursive: true, force: true }) // git fetch fails
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(log, [['off', 'codex'], ['install'], ['on', 'codex']])
+  assert.ok(t.io.json().notes.length >= 1, 'a note says the newest code was not pulled')
+  for (const argv of [['--dry-run'], []]) {
+    const d = sandbox({ on: ['codex'] })
+    const w = pulledWorld(d)
+    await runUpdateCli(argv, w.t.c)
+    assert.deepEqual([w.log, d.handover()], [[], null], `${argv}: nothing called, nothing written`)
+  }
+})
+
 // ── V124 · the login entry is written before the collector is replaced ─────────────────────────────────────────────────────────────
 /** The world of a finish whose daemon may run another code, on a REAL entry file: `disk` is what the file holds now (default: this copy's
  *  program line under the older text), the entry this code renders has one line more, and `install` writes that text when it runs. The login
@@ -877,5 +927,25 @@ test('§5.5: every to-do of the install and the on an update ran is in the updat
       const text = t.io.text().replace(/\s+/g, ' ')
       for (const part of steps.flatMap((x) => x.items.flat())) assert.ok(text.includes(part), `${what} ${mode}: ${part}\n${t.io.text()}`)
     }
+  }
+})
+
+// §5.5 pulled by hand: the new code switches off what the OLD code's `on` wrote. off undoes by the record (path, hashes, the ops it wrote), never by a
+// descriptor, so a key the new code no longer writes still comes out; one it cannot reverse is named in the receipt (D38), never silently left
+test('§5.5: off by the new code takes out a key only an older on wrote, by its record; a record it cannot reverse is named', async () => {
+  const { installedHome } = await import('../off/fixtures/off-ctx.mjs')
+  const { applyJsonKey, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
+  for (const edited of [false, true]) {
+    const s = await installedHome({ names: ['claude-code'] })
+    const file = path.join(s.home, '.claude', 'settings.json')
+    const m = readM(s.dir)
+    // an older build's on wrote a key no descriptor of this code knows, through the same writer and record
+    applyJsonKey({ dir: s.dir, manifest: m, harness: 'claude-code', phase: 'on', file, keys: ['env', 'TROCAR_OLDER_BUILD_KEY'], value: 'http://127.0.0.1:1', home: s.home })
+    saveM(s.dir, m)
+    if (edited) fs.appendFileSync(file, '\n{ not json') // a file trocar can no longer read: its record cannot be reversed
+    const r = await s.off({})
+    const rec = r.receipt || r
+    if (!edited) assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /TROCAR_OLDER_BUILD_KEY/, 'the key only the older on wrote is gone, by its record')
+    else assert.ok((rec.left || []).some((x) => x.path === file && /TROCAR_OLDER_BUILD_KEY/.test(x.reason)), `named with its key, not silently left:\n${JSON.stringify(rec.left)}`)
   }
 })

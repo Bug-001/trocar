@@ -14,6 +14,7 @@ import { fakeIo, recordingExec } from './fixtures/on-ctx.mjs'
 import { reply, asDaemon, SOCK } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
+import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 
 /** A copy of trocar's shape: package.json with `version`, and `files` under it. */
 function tree(files, version = '1.2.3') {
@@ -94,4 +95,33 @@ test('doctor: a collector on other code is a problem, daemon-other-code, fixed b
   assert.ok(f && f.class === 'problem', JSON.stringify(f))
   assert.ok(f.commands.some((c) => c.run === 'trocar install'))
   assert.equal((await run(codeId())).some((x) => x.code === 'daemon-other-code'), false)
+})
+
+// §3.5 · §3.7: a copy pulled past its own install (install.code other, its login entry starts this copy) is put on its code by `trocar update`; a
+// service another copy installed and starts (its entry), or this code installed, by `trocar install`
+test('a service on other code: status and doctor say trocar update for a pull past this copy\'s install, trocar install for another copy\'s', async () => {
+  const s = await installedHome()
+  const dir = path.join(s.home, '.trocar', 'collector')
+  const root = tree(CODE); fs.mkdirSync(path.join(root, '.git')); fs.writeFileSync(path.join(root, '.git', 'HEAD'), `${'cd'.repeat(20)}\n`) // a checkout: channel git
+  const entry = path.join(s.home, 'login-entry'), line = (r) => `ExecStart=${path.join(r, 'bin', 'trocar.mjs')}`
+  const unit = { path: entry, text: () => `${line(root)}\n` }
+  const deps = { root, unit, script: path.join(root, 'bin', 'trocar.mjs'), spawn: absentSpawn, has: () => true, request: asDaemon(reply({ code: '9.9.9+fffffff' })), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice', exec: recordingExec().run }
+  const env = { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }
+  const fix = async () => {
+    const io = fakeIo()
+    await runDoctor(['--json'], { io, home: s.home, platform: 'linux', env, deps })
+    const f = (JSON.parse(io.stdoutText()).findings || []).find((x) => x.code === 'daemon-other-code')
+    const st = fakeIo()
+    await runStatusCli([], { io: st, home: s.home, platform: 'linux', env, deps })
+    const out = st.stdoutText(), at = out.indexOf('other code'), service = at < 0 ? '' : out.slice(at, out.indexOf('\n\n', at)) // the service's sentence (it wraps): the other rows have ways out of their own
+    return [f && f.commands.map((c) => c.run), ['trocar update', 'trocar install'].filter((c) => service.includes(c))]
+  }
+  const installedAs = (code) => { const m = readManifest(dir); m.install = { ...m.install, code }; saveManifest(dir, m) }
+  installedAs('0.0.1+0000000')
+  fs.writeFileSync(entry, `${line(root)}\n`)
+  assert.deepEqual(await fix(), [['trocar update'], ['trocar update']], 'pulled past its own install: update')
+  fs.writeFileSync(entry, `${line(path.join(s.home, 'another-copy'))}\n`)
+  assert.deepEqual(await fix(), [['trocar install'], ['trocar install']], 'another copy installed and its entry starts it: install')
+  fs.writeFileSync(entry, `${line(root)}\n`); installedAs(codeId(root))
+  assert.deepEqual(await fix(), [['trocar install'], ['trocar install']], 'this code installed: install')
 })
