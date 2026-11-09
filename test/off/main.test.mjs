@@ -14,11 +14,12 @@ import { validateReceipt } from '../../src/cli/schema.mjs'
 import { fakeIo, snapshot } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, onSwitch, flowEvents } from './fixtures/off-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const ctx = (s, io, { deps = {}, platform = 'linux' } = {}) => ({ io, home: s.home, env: s.sh.env, platform, deps: s.offDeps({ getuid: () => 1000, ...deps }) })
 const changedRel = (s, r) => r.changed.map((c) => path.relative(s.home, c.path)).sort()
 
-test('V6 (off): an unknown option and an unknown harness exit 2, name what is known, and leave the sandbox HOME byte for byte; a name given twice or by alias is one harness', async () => {
+test('V6 (off): an unknown option and an unknown harness exit 2, name what is known, and leave the sandbox HOME byte for byte; a name given twice or by alias is one harness', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); const before = snapshot(s.home)
   let io = fakeIo(); assert.equal(await runOffCli(['--nope'], ctx(s, io)), 2); assert.match(io.text(), /unknown option '--nope'/)
   io = fakeIo(); assert.equal(await runOffCli(['clade', 'codex'], ctx(s, io)), 2)
@@ -27,7 +28,7 @@ test('V6 (off): an unknown option and an unknown harness exit 2, name what is kn
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), [])
 })
 
-test('V5 (names and --json): off claude and off claude-code give the same result; --json is ONE document that names claude-code only, never the alias; the receipt validates (R5)', async () => {
+test('V5 (names and --json): off claude and off claude-code give the same result; --json is ONE document that names claude-code only, never the alias; the receipt validates (R5)', { skip: POSIX_WORLD }, async () => {
   const a = await installedHome({ names: ['claude-code', 'codex'] }), b = await installedHome({ names: ['claude-code', 'codex'] })
   const ioA = fakeIo(), ioB = fakeIo()
   assert.equal(await runOffCli(['claude', '--json'], ctx(a, ioA)), 0)
@@ -72,7 +73,7 @@ test('D62 ⑥: in proxy and driver mode an off with no names asks the daemon to 
   }
 })
 
-test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing asked of the daemon — exits 0, prints the same files in the future tense as the real run then changes; --now is passed on; the old --remove-ca is a plain unknown option now', async () => {
+test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing asked of the daemon — exits 0, prints the same files in the future tense as the real run then changes; --now is passed on; the old --remove-ca is a plain unknown option now', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); const before = snapshot(s.home); const calls = s.sys.exec.calls.length
   const dry = fakeIo()
   assert.equal(await runOffCli(['--dry-run', '--json'], ctx(s, dry)), 0)
@@ -89,7 +90,7 @@ test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing as
   assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true}'])
 })
 
-test('§3.4: the receipt text of an off with no names — no certificate item (D55①), the daemon with its connections, who still trusts the certificate, the processes the user started — and a failed off says what is left', async () => {
+test('§3.4: the receipt text of an off with no names — no certificate item (D55①), the daemon with its connections, who still trusts the certificate, the processes the user started — and a failed off says what is left', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
   fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EXTRA=1\n')
   const procs = async () => [
@@ -114,7 +115,7 @@ test('§3.4: the receipt text of an off with no names — no certificate item (D
 
 // V82 · 1.6 §4.2「与开关无关」/ §3.6「流量类别表不删」: the class table says what to keep of FUTURE calls — it is not trocar's
 // effect on an agent, so neither `off` nor `uninstall --purge-data` (test/cli/uninstall.test.mjs R6) may touch it or its change log.
-test('V82: `off` leaves ~/.trocar/classes.json and logs/classes.ndjson byte for byte — the table is not part of what off undoes', async () => {
+test('V82: `off` leaves ~/.trocar/classes.json and logs/classes.ndjson byte for byte — the table is not part of what off undoes', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const file = path.join(s.home, '.trocar', 'classes.json'), log = path.join(s.home, '.trocar', 'logs', 'classes.ndjson')
   fs.mkdirSync(path.dirname(log), { recursive: true })
@@ -128,7 +129,7 @@ test('V82: `off` leaves ~/.trocar/classes.json and logs/classes.ndjson byte for 
   assert.deepEqual(io.json().changed.filter((c) => /classes/.test(c.path)), [], 'the receipt names neither of them')
 })
 
-test('R6 · 附录 C.2: the dry run plans every file off takes out by its role: a switch file is a row of `planned`, is in `removed`, and is gone after the real run', async () => {
+test('R6 · 附录 C.2: the dry run plans every file off takes out by its role: a switch file is a row of `planned`, is in `removed`, and is gone after the real run', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['codex'] })
   const file = path.join(s.home, '.codex', 'switch'), manifest = path.join(s.dir, 'install-manifest.json')
   fs.writeFileSync(file, 'trocar')

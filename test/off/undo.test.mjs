@@ -16,6 +16,7 @@ import { certBlocks, composeBundle } from '../../src/off/pem.mjs'
 import { lineComment } from '../../src/off/text-edit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { applyTextEntry } from '../../src/collector/core/trust/journal.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const ROOT = createCa({ commonName: 'undo root' }), CORP = createCa({ commonName: 'undo corp relay' }), OSROOT = createCa({ commonName: 'undo os root' })
 const roots = { node: [ROOT.certPem], osText: '' }
@@ -61,7 +62,7 @@ async function setup(pick = (b) => [repH(b, 'aa'), repH(b, 'bb'), jsonH(b), plug
   return { b, user, run, hashes: () => Object.fromEntries([...user, ...fs.readdirSync(b.ca('.')).map((n) => b.ca(n))].map((f) => [path.relative(b.home, f), sha(f)])) }
 }
 
-test('off one harness: its entry, bundle, extra file, plugin and rows go, byte for byte; every file of the others is unchanged, trocar-ca.pem stays, and so does what is not trocar\'s', async () => {
+test('off one harness: its entry, bundle, extra file, plugin and rows go, byte for byte; every file of the others is unchanged, trocar-ca.pem stays, and so does what is not trocar\'s', { skip: POSIX_WORLD }, async () => {
   const s = await setup()
   const before = s.hashes()
   const r = await s.run({ ids: ['aa'] })
@@ -83,7 +84,7 @@ test('off one harness: its entry, bundle, extra file, plugin and rows go, byte f
   assert.deepEqual(p.residue, [], 'nothing appeared where the agent writes')
 })
 
-test('off all: every entry out in the 4.6 order (config keys, then rows), the CA files stay unless dropCa (uninstall), and the manifest keeps only what is not trocar\'s harness work', async () => {
+test('off all: every entry out in the 4.6 order (config keys, then rows), the CA files stay unless dropCa (uninstall), and the manifest keeps only what is not trocar\'s harness work', { skip: POSIX_WORLD }, async () => {
   const s = await setup()
   const r = await s.run()
   assert.deepEqual(r.results.map((x) => x.result).sort(), ['restored', 'restored', 'restored', 'restored'])
@@ -96,7 +97,7 @@ test('off all: every entry out in the 4.6 order (config keys, then rows), the CA
   assert.ok(fs.existsSync(s.b.ca('ca.key')))
 })
 
-test('backups (R2): dropped when the file is back at its pre_sha256, kept and listed in kept_backups when the user changed the file after trocar did; an entry that cannot be undone keeps its backup and stays', async () => {
+test('backups (R2): dropped when the file is back at its pre_sha256, kept and listed in kept_backups when the user changed the file after trocar did; an entry that cannot be undone keeps its backup and stays', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb'), jsonH(b)])
   const m = readManifest(s.b.dir)
   const backups = [0, 1, 2].map((n) => m.entries.find((e) => e.path === s.user[n]).backup) // the run takes undone entries out of m
@@ -127,7 +128,7 @@ test('backups (R2): dropped when the file is back at its pre_sha256, kept and li
 
 // 4.11 P13: the kinds the collector model adds. A json-array-item is a file entry (step 1); `switch` and `config-entry` files go with the plugins; a
 // `wrapper` and the `root-key` are install items: only uninstall (dropCa) undoes them, the key last, through the custody handed in.
-test('P13 json-array-item, switch and config-entry are undone by off; wrapper and root-key stay for off (the key is listed) and go with uninstall, the key last through custody.remove', async () => {
+test('P13 json-array-item, switch and config-entry are undone by off; wrapper and root-key stay for off (the key is listed) and go with uninstall, the key last through custody.remove', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(s.b.dir)
   const arr = write(s.b, '.aa/settings.json', '{\n  "list": [\n    "u",\n    "http.proxy"\n  ]\n}\n')
@@ -157,7 +158,7 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
 
 // 4.6 「off 的撤销」: off takes only phase-on items, so step 5 (who may still trust trocar) is uninstall's alone — a live process of a harness whose
 // entry re-reads (jj) and one of a harness no identity tells apart (aa) are reported by neither still_trusting nor trust_unknown under off
-test('off reports no process as still trusting, nor a harness whose trust it cannot judge: step 5 runs only for install items', async () => {
+test('off reports no process as still trusting, nor a harness whose trust it cannot judge: step 5 runs only for install items', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa'), jsonH(b)])
   const m = readManifest(s.b.dir)
   delete m.liveness.aa.identity
@@ -167,7 +168,7 @@ test('off reports no process as still trusting, nor a harness whose trust it can
 })
 
 // rule U's certificate block (phase install) in the user's own file: `off` lists it and leaves the file byte for byte; `uninstall` takes the block out
-test('P13 pem-block: off leaves the user\'s certificate file byte-identical and lists the block; uninstall takes only the block out', async () => {
+test('P13 pem-block: off leaves the user\'s certificate file byte-identical and lists the block; uninstall takes only the block out', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(s.b.dir)
   const file = write(s.b, 'certs/mine.pem', OSROOT.certPem), before = fs.readFileSync(file)
@@ -185,7 +186,7 @@ test('P13 pem-block: off leaves the user\'s certificate file byte-identical and 
 // a config-library entry trocar created (4.11 P5 / CM18): the agent writes the user's settings into it while it is the applied one, so off removes it only
 // while it is what trocar wrote; edited, it is the user's and stays (D48②), said
 for (const [what, edit, gone] of [['untouched', null, true], ['edited during on', '{"egressProxyPacUrl":"x","theme":"dark"}\n', false]]) {
-  test(`P13 config-entry ${what}: off ${gone ? 'removes it' : 'keeps it and says so'}`, async () => {
+  test(`P13 config-entry ${what}: off ${gone ? 'removes it' : 'keeps it and says so'}`, { skip: POSIX_WORLD }, async () => {
     const s = await setup((b) => [repH(b, 'aa')])
     const m = readManifest(s.b.dir)
     const cfg = write(s.b, 'lib/trocar.json', '{"egressProxyPacUrl":"x"}\n')
@@ -198,7 +199,7 @@ for (const [what, edit, gone] of [['untouched', null, true], ['edited during on'
   })
 }
 
-test('P13 uninstall: a wrapper the agent updated over is left in place and only the moved copy goes; a key with no custody backend is left, with how to remove it by hand', async () => {
+test('P13 uninstall: a wrapper the agent updated over is left in place and only the moved copy goes; a key with no custody backend is left, with how to remove it by hand', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(s.b.dir)
   const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.trocar-real/aa', 'OLD PROGRAM')
@@ -212,7 +213,7 @@ test('P13 uninstall: a wrapper the agent updated over is left in place and only 
   assert.match(k.left[0].reason, /no custody backend.*by hand: open Keychain Access/)
 })
 
-test('P13 liveness.<h> may carry on_at / off_at or not: the judgement is the same and the fields are kept', async () => {
+test('P13 liveness.<h> may carry on_at / off_at or not: the judgement is the same and the fields are kept', { skip: POSIX_WORLD }, async () => {
   const pick = (b) => [repH(b, 'aa'), repH(b, 'bb')]
   const s = await setup(pick), plain = await setup(pick)
   const m = readManifest(s.b.dir)
@@ -223,7 +224,7 @@ test('P13 liveness.<h> may carry on_at / off_at or not: the judgement is the sam
   assert.deepEqual(readManifest(s.b.dir).liveness.bb.on_at, '2026-10-15T00:00:00.000Z')
 })
 
-test('an entry of a kind this build does not know is left alone, and so is a manifest of a version it does not read (R3)', async () => {
+test('an entry of a kind this build does not know is left alone, and so is a manifest of a version it does not read (R3)', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(s.b.dir)
   m.entries.push({ phase: 'on', kind: 'mystery', harness: 'aa', path: path.join(s.b.home, 'x'), undo_by_hand: 'rm x' })
@@ -258,7 +259,7 @@ test('residue and changed plugins are reported, not deleted: a path the agent wr
   assert.deepEqual([r.removed.includes(plugin), fs.existsSync(plugin), r.left.some((x) => x.path === plugin)], [false, true, true])
 })
 
-test('bundle: a process of the harness that started after install, one that re-reads its entry, or a child whose environ names it keeps the bundle without the trocar CA; one from before install does not; the next run removes it', async () => {
+test('bundle: a process of the harness that started after install, one that re-reads its entry, or a child whose environ names it keeps the bundle without the trocar CA; one from before install does not; the next run removes it', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb', { rereadsEntry: true })])
   const installedAt = Date.parse(readManifest(s.b.dir).entries[0].installed_at)
   const table = [proc(70, '/x/aa', { startedAt: installedAt + 1000 }), proc(71, '/bin/git', { startedAt: installedAt + 2000, env: { SSL_CERT_FILE: s.b.ca('combined-aa.pem') } }), proc(72, '/x/aa', { startedAt: installedAt - 60000 }), proc(73, '/x/bb', { startedAt: 1 }), proc(74, '/x/aa', { startedAt: null })]
@@ -273,7 +274,7 @@ test('bundle: a process of the harness that started after install, one that re-r
   assert.deepEqual([again.kept_bundles, again.removed.map((p) => path.basename(p)).sort(), fs.readdirSync(s.b.ca('.')).sort()], [[], ['combined-aa.pem', 'combined-bb.pem'], ['ca.key', 'trocar-ca.pem']], 'nobody holds them now (or never could)')
 })
 
-test('bundle gone while a live process may use it: rebuilt without the CA from Node\'s roots and the recorded user CAs (said), a lost source named; nobody uses it: nothing is made; no roots given: an item left', async () => {
+test('bundle gone while a live process may use it: rebuilt without the CA from Node\'s roots and the recorded user CAs (said), a lost source named; nobody uses it: nothing is made; no roots given: an item left', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   const live = [proc(70, '/x/aa'), proc(71, '/x/bb')]
   fs.rmSync(s.b.ca('combined-aa.pem')); fs.rmSync(s.b.ca('combined-bb.pem')); fs.rmSync(path.join(s.b.home, 'corp.pem'))
@@ -289,7 +290,7 @@ test('bundle gone while a live process may use it: rebuilt without the CA from N
   assert.deepEqual([noRoots.left.map((l) => l.result), noRoots.kept_bundles.map((k) => [k.pids, k.error]), fs.existsSync(t.b.ca('combined-aa.pem'))], [['error'], [[[70], 'no trusted roots were given to rebuild it from']], false])
 })
 
-test('bundle that cannot be read: with a live process it still holds the CA (an item left, kept as it is); nobody holds it: removed whatever it is', async () => {
+test('bundle that cannot be read: with a live process it still holds the CA (an item left, kept as it is); nobody holds it: removed whatever it is', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   for (const n of ['combined-aa.pem', 'combined-bb.pem']) { fs.rmSync(s.b.ca(n)); fs.mkdirSync(s.b.ca(n)) } // EISDIR
   const r = await s.run({ procs: async () => [proc(70, '/x/aa')] })
@@ -346,7 +347,7 @@ test('an extra trust file whose holder\'s environment cannot be read: a process 
   assert.deepEqual(known.kept_bundles, [{ path: w.b.ca('extra-jj.pem'), harness: 'jj', pids: [74] }])
 })
 
-test('a process table that cannot be read is not "nobody is alive": the bundle is kept without the CA and unjudged, an item left; so is a harness with no liveness record while a process that may have read its entry runs — with none, nobody holds it', async () => {
+test('a process table that cannot be read is not "nobody is alive": the bundle is kept without the CA and unjudged, an item left; so is a harness with no liveness record while a process that may have read its entry runs — with none, nobody holds it', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const r = await s.run({ procs: async () => { throw new Error('ps: boom') } })
   assert.deepEqual(r.kept_bundles, [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [], unjudged: true, error: 'ps: boom' }])
@@ -366,7 +367,7 @@ test('a process table that cannot be read is not "nobody is alive": the bundle i
   assert.deepEqual([older.kept_bundles, older.left, older.trust_unknown, fs.existsSync(v.b.ca('combined-aa.pem'))], [[], [], [], false], 'no process that may have read the entry: nobody holds the bundle, signature or not')
 })
 
-test('step 5: only a process that may have read the entry is reported, with until from the snapshot; untilEnviron limits it to a process whose environ names a file of trocar\'s — where the OS never shows an environment (macOS, Windows) such a process is reported, one whose read failed is not', async () => {
+test('step 5: only a process that may have read the entry is reported, with until from the snapshot; untilEnviron limits it to a process whose environ names a file of trocar\'s — where the OS never shows an environment (macOS, Windows) such a process is reported, one whose read failed is not', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa', { afterUninstall: 'next-connection' }), { ...repH(b, 'bb', { afterUninstall: 'restart', untilEnviron: 'SSL_CERT_FILE' }) }, jsonH(b)])
   const t0 = Date.parse(readManifest(s.b.dir).entries[0].installed_at)
   const r = await s.run({ ids: ['aa', 'bb', 'jj'], procs: async () => [
@@ -382,7 +383,7 @@ test('step 5: only a process that may have read the entry is reported, with unti
   assert.deepEqual((await only.run({ ids: ['aa'], procs: async () => [proc(1, '/x/bb')] })).still_trusting, [], 'a process of a harness that was not undone is not reported')
 })
 
-test('a bundle nobody holds that cannot be removed still holds the CA: an item left with its reason, not a crash that leaves the rest undone; so is a CA file that cannot be removed', async () => {
+test('a bundle nobody holds that cannot be removed still holds the CA: an item left with its reason, not a crash that leaves the rest undone; so is a CA file that cannot be removed', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   const refuse = (names) => ({ ...fs, rmSync: (p, o) => { if (names.some((n) => String(p).endsWith(n))) throw Object.assign(new Error(`EACCES: permission denied, rm '${p}'`), { code: 'EACCES' }); return fs.rmSync(p, o) } })
   const r = await s.run({ fs: refuse(['combined-aa.pem', 'trocar-ca.pem']), dropCa: true })
@@ -393,7 +394,7 @@ test('a bundle nobody holds that cannot be removed still holds the CA: an item l
   assert.deepEqual(r.manifest.files.filter((f) => f.role === 'bundle' || f.role === 'ca-cert').map((f) => path.basename(f.path)).sort(), ['combined-aa.pem', 'trocar-ca.pem'], 'what is left stays in the manifest')
 })
 
-test('an entry step 1 could not undo still names its bundle: the bundle is kept without the trocar CA, held or not (no bundle, no network at the agent\'s next start), rebuilt when gone, and removed once the entry is undone (4.6 安装 / 卸载不静默)', async () => {
+test('an entry step 1 could not undo still names its bundle: the bundle is kept without the trocar CA, held or not (no bundle, no network at the agent\'s next start), rebuilt when gone, and removed once the entry is undone (4.6 安装 / 卸载不静默)', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   const trocarFp = certBlocks(fs.readFileSync(s.b.ca('trocar-ca.pem'), 'utf8'))[0].fp
   const bundle = s.b.ca('combined-aa.pem')
@@ -422,7 +423,7 @@ test('an entry step 1 could not undo still names its bundle: the bundle is kept 
   assert.deepEqual([bb.left, bb.kept_bundles, fs.existsSync(t.b.ca('combined-aa.pem'))], [[], [], true], 'aa is not in this run (nothing of it is touched)')
 })
 
-test('uninstall twice with a process still holding a kept bundle: the second run finds it as the first left it — without the CA, whose certificate the first run removed — and says the same, not "still holds the trocar CA"', async () => {
+test('uninstall twice with a process still holding a kept bundle: the second run finds it as the first left it — without the CA, whose certificate the first run removed — and says the same, not "still holds the trocar CA"', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa'), jsonH(b)])
   const live = [proc(70, '/x/aa'), proc(71, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: s.b.ca('extra-jj.pem') } })]
   const first = await s.run({ procs: async () => live, dropCa: true })
@@ -453,7 +454,7 @@ for (const [form, edit] of [
   ['spaces around =', (t) => t.replace(/^SSL_CERT_FILE=/m, 'SSL_CERT_FILE = ')],
   ['quoted value', (t) => t.replace(/^SSL_CERT_FILE=(.*)$/m, 'SSL_CERT_FILE="$1"')],
 ]) {
-  test(`a dotenv block an editor has rewritten (${form}) is still found: the entry is undone, not "already removed", and the bundle goes only with it — never an entry that names a bundle that is gone`, async () => {
+  test(`a dotenv block an editor has rewritten (${form}) is still found: the entry is undone, not "already removed", and the bundle goes only with it — never an entry that names a bundle that is gone`, { skip: POSIX_WORLD }, async () => {
     const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
     fs.writeFileSync(s.user[0], edit(fs.readFileSync(s.user[0], 'utf8')))
     const r = await s.run()
@@ -464,7 +465,7 @@ for (const [form, edit] of [
   })
 }
 
-test('trocar\'s text in a shape the removal cannot read is NOT "already removed": the file is not touched, the entry is left (left-text, exit 1 through the receipt), and the bundle it names is kept without the CA, with the line numbers and the command that puts the file back from its backup (R2)', async () => {
+test('trocar\'s text in a shape the removal cannot read is NOT "already removed": the file is not touched, the entry is left (left-text, exit 1 through the receipt), and the bundle it names is kept without the CA, with the line numbers and the command that puts the file back from its backup (R2)', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   const bundle = s.b.ca('combined-aa.pem')
   const trocarFp = certBlocks(fs.readFileSync(s.b.ca('trocar-ca.pem'), 'utf8'))[0].fp
@@ -512,7 +513,7 @@ test('before a bundle is removed the entry files of its harness are read again: 
   assert.deepEqual(r.manifest.entries.map((e) => e.path), [file], 'the entry is put back for the next run')
 })
 
-test('an entry that cannot be undone gives its backup and the cp command that puts the file back, and what that loses (R2) — in `reason` and as `backup` / `restore`; one without a backup (trocar made the file) gives neither', async () => {
+test('an entry that cannot be undone gives its backup and the cp command that puts the file back, and what that loses (R2) — in `reason` and as `backup` / `restore`; one without a backup (trocar made the file) gives neither', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa'), jsonH(b)])
   const m = readManifest(s.b.dir)
   const backup = m.entries.find((e) => e.path === s.user[2]).backup
@@ -532,7 +533,7 @@ test('an entry that cannot be undone gives its backup and the cp command that pu
 // D38 · invariant 5: a custody that cannot reach the key now ('unavailable', the helper's exit 3) or answers out of its contract has not removed it —
 // the record stays and the key is listed as left with how to remove it by hand; only { removed: true | false } drops the record
 for (const [what, answer] of [['unavailable', 'unavailable'], ['no answer', undefined], ['a bare number', 1], ['an object without removed', { ok: true }]]) {
-  test(`P13 uninstall: a custody remove that answers ${what} keeps the root-key record and lists the key as left`, async () => {
+  test(`P13 uninstall: a custody remove that answers ${what} keeps the root-key record and lists the key as left`, { skip: POSIX_WORLD }, async () => {
     const s = await setup((b) => [repH(b, 'aa')])
     const m = readManifest(s.b.dir)
     m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'keychain:trocar-root', custody: { kind: 'keychain', id: 'trocar-root' }, fp256: 'AB' })
@@ -542,7 +543,7 @@ for (const [what, answer] of [['unavailable', 'unavailable'], ['no answer', unde
   })
 }
 for (const removed of [true, false]) {
-  test(`P13 uninstall: a custody remove that answers { removed: ${removed} } drops the root-key record`, async () => {
+  test(`P13 uninstall: a custody remove that answers { removed: ${removed} } drops the root-key record`, { skip: POSIX_WORLD }, async () => {
     const s = await setup((b) => [repH(b, 'aa')])
     const m = readManifest(s.b.dir)
     m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'keychain:trocar-root', custody: { kind: 'keychain', id: 'trocar-root' }, fp256: 'AB' })
@@ -556,7 +557,7 @@ for (const removed of [true, false]) {
 // changed config-library entry is the user's settings now and leaves the manifest with a note (D48②)
 for (const role of ['plugin', 'shim', 'switch', 'config-entry']) {
   for (const bytes of ['trocar', 'changed', 'unreadable', 'no-record']) {
-    test(`owned file guard · ${role} · ${bytes}`, async () => {
+    test(`owned file guard · ${role} · ${bytes}`, { skip: POSIX_WORLD }, async () => {
       const s = await setup((b) => [repH(b, 'aa')])
       const m = readManifest(s.b.dir)
       const f = write(s.b, `.aa/owned/${role}`, 'trocar wrote this\n'), rec = sha(f)
@@ -576,7 +577,7 @@ for (const role of ['plugin', 'shim', 'switch', 'config-entry']) {
   }
 }
 
-test('owned file guard · wrapper: a moved real program whose bytes are not the ones trocar recorded is left, not deleted', async () => {
+test('owned file guard · wrapper: a moved real program whose bytes are not the ones trocar recorded is left, not deleted', { skip: POSIX_WORLD }, async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(s.b.dir)
   const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.trocar-real/aa', 'REAL PROGRAM')

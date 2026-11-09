@@ -12,6 +12,7 @@ import { planByMarker, undoByMarker } from '../../src/off/marker.mjs'
 import { lineComment } from '../../src/off/text-edit.mjs'
 import { commandNamed } from '../../src/cli/commands.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 // what tag v0.1.0 (npm trocar-cli 0.0.1) named in every marker: `trocar collector install` / `trocar collector uninstall`, whatever the phase
 const RELEASED = (s) => s.replace(/`trocar (?:install|on)`/g, '`trocar collector install`').replace(/`trocar (?:uninstall|off)`/g, '`trocar collector uninstall`')
@@ -19,7 +20,7 @@ const WORDS = { released: RELEASED, current: (s) => s }
 const PEM = (b) => `-----BEGIN CERTIFICATE-----\n${b}\n-----END CERTIFICATE-----\n`
 
 const PRIMITIVES = [
-  { name: 'dotenv block (top)', file: '.codex/.env', user: 'OPENAI_API_KEY=sk-1\n', phase: 'install', edit: (h) => ({ format: 'dotenv-block', vars: { SSL_CERT_FILE: `${h}/.trocar/collector/ca/combined-codex.pem` } }), marker: 'codex' },
+  { name: 'dotenv block (top)', file: '.codex/.env', user: 'OPENAI_API_KEY=sk-1\n', phase: 'install', edit: (h) => ({ format: 'dotenv-block', vars: { SSL_CERT_FILE: `${h}/.trocar/collector/ca/combined-codex.pem` } }), marker: 'codex', homePath: true }, // its value is a path under the home: POSIX only
   { name: 'dotenv block (end)', file: '.hermes/.env', user: 'K=1\r\nHTTPS_PROXY=http://corp:8080\r\n', phase: 'on', edit: () => ({ format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:17991' }, at: 'end' }) },
   { name: 'pem block', file: 'corp.pem', user: PEM('USER'), phase: 'install', edit: () => ({ format: 'pem-block', pem: PEM('TROCAR') }) },
   { name: 'text line', file: '.zshrc', user: 'export A=1\n', phase: 'install', edit: (h) => ({ format: 'line', line: `export PATH="${h}/.trocar/collector/bin:$PATH" ${lineComment('runs kimi through its trocar launch shim')}` }), marker: 'kimi-code' },
@@ -43,7 +44,7 @@ function placed(p, words) {
 
 for (const p of PRIMITIVES) {
   for (const words of Object.keys(WORDS)) {
-    test(`marker words · ${p.name} · ${words} words: install and on find the entry and write nothing; undo gives back the user's bytes`, () => {
+    test(`marker words · ${p.name} · ${words} words: install and on find the entry and write nothing; undo gives back the user's bytes`, { skip: p.homePath && POSIX_WORLD }, () => {
       const x = placed(p, words)
       const again = applyTextEntry({ dir: x.dir, manifest: x.manifest, harness: 'h', phase: p.phase, file: x.file, edit: p.edit(x.home), home: x.home })
       assert.equal(again, null, 'already there: nothing applied')
@@ -55,7 +56,7 @@ for (const p of PRIMITIVES) {
       assert.ok(['restored', 'reverted', 'reverted-not-identical'].includes(u.result) || u.result.startsWith('restored'), JSON.stringify(u))
       assert.equal(fs.readFileSync(x.file, 'utf8'), p.user, "undo: the user's bytes")
     })
-    if (p.marker) test(`marker words · ${p.name} · ${words} words: the marker undo (no manifest) takes it out byte for byte`, () => {
+    if (p.marker) test(`marker words · ${p.name} · ${words} words: the marker undo (no manifest) takes it out byte for byte`, { skip: p.homePath && POSIX_WORLD }, () => {
       const x = placed(p, words)
       const plan = planByMarker({ home: x.home, ids: [p.marker], env: { HOME: x.home }, platform: 'linux', phases: ['install', 'on'] }).filter((i) => i.path === x.file)
       assert.equal(plan.length, 1, JSON.stringify(plan))
@@ -66,7 +67,7 @@ for (const p of PRIMITIVES) {
   }
 }
 
-test('marker words: every command a freshly written marker names is a command of trocar (D58: the words are true)', () => {
+test('marker words: every command a freshly written marker names is a command of trocar (D58: the words are true)', { skip: POSIX_WORLD }, () => {
   for (const p of PRIMITIVES) {
     const x = placed(p, 'current')
     const named = [...x.text.matchAll(/`trocar ([a-z-]+)`/g)].map((m) => m[1])
