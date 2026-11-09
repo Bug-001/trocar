@@ -25,8 +25,8 @@ test('Linux install: CA + trust entries (phase install) + trocar-off, no unit, n
   seedClaude(home)
   const ctx = (io) => ({ ...onCtx(home, io), platform: 'linux' })
   const io = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], ctx(io)), 0, io.text())
-  // R1: the receipt says each user file it changed — path, what was changed, where the backup is — not only the plan before the yes
+  assert.equal(await runInstallCli(['--yes', '--details'], ctx(io)), 0, io.text())
+  // R1 · 1.6 §1.1 ④ rule 10: the receipt's --details says each user file it changed — path, what was changed, where the backup is
   const receipt = io.text().slice(io.text().indexOf("Installed. trocar's certificates are in place."))
   assert.match(receipt.replace(/\s+/g, ' '), /~\/\.claude\/settings\.json env\.NODE_EXTRA_CA_CERTS added \(backup/, receipt)
   assert.match(receipt.replace(/\s+/g, ' '), /trocar's own files: .*trocar-off/, receipt)

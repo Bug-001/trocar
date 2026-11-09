@@ -28,6 +28,7 @@ import { runOnCli } from '../../src/cli/on.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
 import { formatRefusal, markedRefusal } from '../../src/cli/receipt.mjs'
+import { unsaidIn } from '../../src/cli/words.mjs'
 
 function fakeIo({ tty = false } = {}) {
   const out = [], err = []
@@ -727,4 +728,17 @@ test('install plan · win32: the autostart row names the task and the Run value 
   assert.equal(exit, 0, io.text())
   const row = JSON.parse(io.text()).planned.find((p) => p.what === 'autostart')
   assert.ok(row && row.detail.includes(RUN_KEY.name), JSON.stringify(row))
+})
+
+// 1.6 §1.1 ④ · §3.2: the default receipt says no unsaid word; its rows — the fingerprint, each carrier and its file, the login entry — are --details'
+test('§1.1 ④: install\'s default receipt says no unsaid word, and --details holds the fingerprint, each carrier\'s file and the login entry', async () => {
+  const short = await cli(['--yes'])
+  assert.equal(short.exit, 0, short.io.text())
+  const plan = (await cli(['--dry-run'])).io.text().split('\n').filter(Boolean).length // the plan above it is the plan's own business (§1.4)
+  const receipt = short.io.text().split('\n').filter(Boolean).slice(plan).join('\n')
+  assert.deepEqual(unsaidIn(receipt), [], receipt)
+  const long = await cli(['--yes', '--details']), json = await cli(['--yes', '--json'], { world: long.w }) // the same machine: the same root and files
+  const r = json.io.json(), text = long.io.text().replace(/\s+/g, ' '), tilde = (p) => p.replace(long.w.home, '~')
+  const facts = [r.fp256, ...r.carriers.filter((c) => c.path).map((c) => tilde(c.path)), tilde(r.autostart.entry)]
+  for (const f of facts) assert.ok(text.includes(f), `--details says ${f}:\n${long.io.text()}`)
 })
