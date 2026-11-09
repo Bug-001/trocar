@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { createQueryService } from '../../src/query/service.mjs'
 import { indexDir, segmentFiles } from '../../src/query/index-build.mjs'
 import { indexRows, provisionalRows, sessionGroups } from '../../src/query/rows.mjs'
-import { readHead, PACK_MEMBERS } from '../../src/query/ctx-files.mjs'
+import { readHead, PACK_MEMBERS, docErrors } from '../../src/query/ctx-files.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
 import { markOn, sinceAt } from '../../src/query/named/session.mjs'
 import { validateQueryDoc } from '../../src/cli/schema.mjs'
@@ -181,6 +181,17 @@ test('3.5 §行表先读: a pack sealed before the pass ended is written again o
       assert.equal(f(home), f(one), `open.${part}: its doc head is the one-pass fold's`)
     }
   } finally { svc.stop(); ref.svc.stop() }
+})
+
+test('3.5 读不全不静默: the files are written again when the doc head\'s errors move: a state by its kind, not by the count in its reason', () => {
+  const pending = (n) => ({ where: 'index', code: 'index-pending', level: 'state', reason: `${n} of 50 capture files are still being re-indexed` })
+  const bad = (why) => ({ where: 'segments/20261020T164700Z', code: 'segment-unreadable', reason: why })
+  const same = (a, b) => docErrors({ indexErrors: a }) === docErrors({ indexErrors: b })
+  assert.ok(same([pending(40)], [pending(35)]), 'the boot pass counting on moves nothing')
+  assert.ok(same([pending(40), { where: 'index', code: 'index-cold', level: 'note', reason: 'x' }], [pending(40)]), 'a note is no doc head\'s')
+  assert.ok(!same([pending(1)], []), 'the state passing moves them')
+  assert.ok(!same([bad('EACCES')], [bad('EIO')]), 'another error\'s reason moves them')
+  assert.ok(!same([pending(1), bad('EIO')], [pending(1)]), 'an error coming moves them')
 })
 
 test('3.5 §行表先读: a session the synthesized-key rule decides waits for the pass, even when its calls are all read', async () => {

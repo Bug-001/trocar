@@ -227,7 +227,7 @@ export const renderSpan = (s, n, part, tail = false) => drain(rendering(s, n, pa
 const drain = (it) => { for (;;) { const r = it.next(); if (r.done) return r.value; } };
 // the errors a doc head carries (errorsOf, as docLine writes it), a state's by kind only: `index-pending`'s reason counts the capture files
 // still being re-indexed, and every pack re-rendered at each step of the boot pass would be work thrown away at its end
-const docErrors = (s) => JSON.stringify(errorsOf(s.indexErrors, []).map((e) => (e.level === 'state' ? [e.where, e.code, e.level] : e)));
+export const docErrors = (s) => JSON.stringify(errorsOf(s.indexErrors, []).map((e) => (e.level === 'state' ? [e.where, e.code, e.level] : e)));
 // a span's doc-head line
 const docLine = (s, n, part, tail, [s0, s1] = axisSpans(s)[n]) => docOf(errorsOf(s.indexErrors, []), { id: s.id, ...(tail ? { tail: { n, part, s0 } } : { pack: { n, part, s0, s1 } }) }, 'lane');
 // → {buf, wrote}: the span's text, rendered a call at a time (it yields after each: the writer's unit, 3.5 后台抽取与归约). Its lane steppers
