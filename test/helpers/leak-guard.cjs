@@ -133,7 +133,8 @@ function sweep(runDir) {
   try { fs.writeFileSync(path.join(runDir, RUNNER), JSON.stringify({ pid: process.pid, start: running.get(process.pid) ?? null, utc: utc.get(process.pid) ?? null })) } catch { /* not recorded: swept once a day old */ }
   for (const [n, owner] of owners) {
     const dir = path.join(tmp, n), [now, was] = owner && owner.utc != null ? [utc, owner.utc] : [running, owner && owner.start]
-    const gone = owner && running.has(process.pid) && (!running.has(owner.pid) || (was != null && now.get(owner.pid) !== was))
+    // `now` names this runner too, or that ps said nothing: then nothing is known, and nothing is removed
+    const gone = owner && now.has(process.pid) && (!now.has(owner.pid) || (was != null && now.get(owner.pid) !== was))
     if (owner ? gone : old(dir)) removeTree(dir)
   }
 }

@@ -15,6 +15,7 @@ import { QUERIES, QueryArgError, runQuery } from '../../src/query/named/index.mj
 import { rawHome, writeSegment, requiredFor } from '../query/raw-home.mjs';
 import { serveFace, request, withToken } from './face.mjs';
 import { bigSession } from '../query/big-session.mjs';
+import { listed } from '../helpers/head-done.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SEGMENT = '20261018T100000Z';
@@ -96,7 +97,7 @@ test('3.5 lane: /api/lane with ledger is runQuery lane --ledger; ledger with fro
   const f = await serveFace({ home: h });
   const api = async (params) => get(f.port, `/api/lane?${new URLSearchParams(params)}`);
   try {
-    for (let i = 0; i < 200 && JSON.parse((await get(f.port, `/api/session?id=${s.id}`)).body).pending; i++);
+    for (let i = 0; i < 200; i++) { const d = JSON.parse((await get(f.port, `/api/session?id=${s.id}`)).body); if (!d.pending && listed(d)) break }
     const doc = JSON.parse((await get(f.port, `/api/session?id=${s.id}`)).body), lane = doc.lanes.find((l) => l.kind === 'main').lane;
     const tail = JSON.parse((await api({ id: s.id, lane })).body);
     assert.ok(tail.ledger_next, 'the lane\'s ledger goes past its tail page');

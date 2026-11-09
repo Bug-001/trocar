@@ -180,6 +180,17 @@ test('leak-guard: a runner in another time zone is still running: its run direct
   assert.equal(live.runner.exitCode, 0, 'it finished its run')
 })
 
+test('leak-guard: when ps says nothing in UTC, a live runner\'s directory is kept', async () => {
+  const scratch = tmpDir('trocar-guardtest-'), live = await waitingRunner(scratch)
+  // loaded before the guard: the ps it runs with TZ=UTC fails, as a spawn can under load (EAGAIN); the one in the local zone answers
+  const stub = path.join(tmpDir('trocar-guardstub-'), 'ps-utc-fails.cjs')
+  fs.writeFileSync(stub, `const cp = require('node:child_process'), spawnSync = cp.spawnSync\ncp.spawnSync = (f, a, o) => (f === '/bin/ps' && o && o.env && o.env.TZ === 'UTC' ? { status: null, stdout: '', error: Object.assign(new Error('spawnSync /bin/ps EAGAIN'), { code: 'EAGAIN' }) } : spawnSync(f, a, o))\n`)
+  try {
+    assert.equal(run(`test('nothing', () => {})`, scratch, undefined, { NODE_OPTIONS: `--require ${stub}` }).status, 0)
+    if (process.platform !== 'win32') assert.ok(fs.existsSync(path.join(scratch, live.dir)), 'nothing is known, so nothing is removed')
+  } finally { await live.go() }
+})
+
 test('leak-guard: a run directory with no runner recorded is removed once a day old and kept while fresh; one whose pid now runs another process is removed', () => {
   const scratch = tmpDir('trocar-guardtest-')
   const mk = (name, owner) => { const d = path.join(scratch, name); fs.mkdirSync(d); if (owner) fs.writeFileSync(path.join(d, '.runner'), JSON.stringify(owner)); return d }

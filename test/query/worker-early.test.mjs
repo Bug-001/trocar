@@ -19,6 +19,7 @@ import { workerFork, workerForkIn } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const DEPS = fileURLToPath(new URL('./worker-early-deps.mjs', import.meta.url))
 const SLOW_MS = 1000 // each older segment's raw open: eleven of them make a pass of 11 s and more, beside a newest segment read in milliseconds
@@ -94,7 +95,7 @@ function service(home, slow) {
   const watched = (h) => { const c = slow ? fork(h, DEPS) : fork(h); c.on('message', (m) => said.push(m)); return c }
   return { said, svc: createQueryService({ home, fork: watched }) }
 }
-const folded = (home, id) => { const h = readHead(home, id); return !!h && h.tier === 1 && h.pending == null && !pendingOf(h).length }
+const folded = (home, id) => { const h = readHead(home, id); return !!h && h.tier === 1 && h.pending == null && listed(h) }
 /** Asks for the session until its head says it is folded to its end. */
 async function settle(svc, home, id) {
   for (let i = 0; i < 300 && !folded(home, id); i++) { await ask(svc, 'session', { id }); await new Promise((r) => setTimeout(r, 100)) }
