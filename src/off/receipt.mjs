@@ -183,7 +183,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     lines.push(past ? 'Found by trocar\'s own marks and not undone yet:' : 'Will be undone by trocar\'s own marks:')
     for (const p of r.pending) lines.push(...fit(`  ${p.harness ? `${p.harness}  ` : ''}${t(p.path)}`))
   }
-  for (const l of r.left || []) lines.push(...fit(`Not undone: ${t(l.path)} (${l.reason || l.result})`))
+  for (const l of r.left || []) lines.push(...fit(tildeWords(`Not undone: ${t(l.path)} (${l.reason || l.result})`, home))) // HOME as ~ in the reason too (1.6 §1.1⑤)
   for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(n)))
   for (const n of r.notes || []) lines.push(...textLines(n, home)) // HOME as ~ (1.6 §1.1⑤), a note's command on its own line
   lines.push(...extra, footer || (past ? 'Certificates stay installed. To remove them: trocar uninstall' : 'Nothing was changed. Run it without --dry-run to do it.'))
@@ -237,8 +237,7 @@ export function formatOffText(r, { home = null, tense = r.dry_run ? 'future' : '
     const reason = String(l.reason || l.result || ''), why = l.restore && reason.includes('; by hand: ') ? reason.slice(0, reason.indexOf('; by hand: ')) : reason
     const said = why.startsWith(l.path || '\u0000') ? `${t(l.path)}${why.slice(l.path.length)}` : `${t(l.path)}: ${why}`
     lines.push(...textLines(`Not undone: ${said}${l.restore ? '. To put the whole file back as it was before trocar, losing every change made to it since, run:' : ''}`, home))
-    if (l.restore) lines.push(`${COMMAND_INDENT}${l.restore}`)
-    if (l.command) lines.push(`${COMMAND_INDENT}${l.command}`)
+    for (const c of [l.restore, l.command].filter(Boolean)) lines.push(...textLines(`${COMMAND_INDENT}${c}`, home)) // HOME as ~ where the shell expands it (1.6 §1.1⑤)
   }
   for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(tildeWords(n, home))))
   for (const n of unread) lines.push(...textLines(n, home)) // D38: a fact not read is never left to --details
