@@ -46,7 +46,7 @@ test('status: the summary says no unsaid word for any reason, and --details name
       plain(lines, `status (${JSON.stringify(daemon)})`)
       assert.ok(lines[0].includes("trocar's service"), `the head says the service: ${lines[0]}`)
       // rule 2: the result is the head line, whole; the step to take (a command) is on a line of its own, never folded into it
-      const top = lines.slice(0, lines.indexOf('')), cmd = (l) => /\btrocar (?:install|on)\b/.test(l)
+      const top = lines.slice(0, lines.indexOf('')), cmd = (l) => /:\s*trocar \S+/.test(l)
       assert.ok(top.filter((l) => !cmd(l)).at(-1).endsWith('.') && top.filter(cmd).every((l) => !l.includes("trocar's service")), `the head is the result alone:\n${lines.join('\n')}`)
     }
   }

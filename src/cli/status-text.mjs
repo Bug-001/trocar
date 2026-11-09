@@ -113,8 +113,8 @@ function summaryShort(doc, { now = Date.now(), colors: c = noColor(), home = nul
   if (!shown.length) return [c.bold('No agent is set up for capture yet.'), ...outOfScopeLines(doc), '', ...readErrorLines(doc), ...((doc.out_of_scope || []).length ? [] : ['Next: trocar install'])]
   const captured = shown.filter((h) => doc.harnesses[h].captured === true).length, open = shown.filter((h) => doc.harnesses[h].captured === null).length
   const restart = needsRestart(restartNames(doc))
-  const head = [`Capturing ${captured} of ${shown.length} agent${shown.length === 1 ? '' : 's'}${open ? `; ${open} not known yet` : ''}.`, restart && `${restart}.`, ...serviceClause(doc.daemon || {}).slice(0, 1)].filter(Boolean).join(' ')
-  const step = serviceClause(doc.daemon || {})[1] // rule 2: the result on its line, the step to take on the next
+  const [svc, step] = serviceClause(doc.daemon || {}) // rule 2: the result on its line, the step to take on the next
+  const head = [`Capturing ${captured} of ${shown.length} agent${shown.length === 1 ? '' : 's'}${open ? `; ${open} not known yet` : ''}.`, restart && `${restart}.`, svc].filter(Boolean).join(' ')
   const lines = [...wrap(head, WIDTH).map((l) => c.bold(l)), ...(step ? [step] : []), '']
   const rows = [['AGENT', 'CAPTURED', 'NOTE']]
   for (const h of shown) { const x = doc.harnesses[h]; rows.push([h, CAPTURED(x), noteOf(x, h, (x.processes || []).find((p) => p.captured === false) || null, true)]) }
