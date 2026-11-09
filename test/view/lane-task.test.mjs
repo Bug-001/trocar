@@ -9,7 +9,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, firstAskOf, firstPromptOf, rng } from '../query/big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { SEGMENT, homeWith, query, sessionDoc } from '../helpers/session-doc.mjs'
-import { askOf, taskOf, TASK_HEAD, TASK_MAX } from '../../src/view/blockmeta.mjs'
+import { askOf, taskOf, TASK_HEAD, TASK_MAX, sharedLines, SHARED_LANES } from '../../src/view/blockmeta.mjs'
 
 // Every sub-agent's first prompt opens with these lines, more of them than the lanes' own: only the lanes' own lines say a task.
 const PREAMBLE = Array.from({ length: 40 }, (_, i) => `[workflow] shared instruction ${i}: work only in the given worktree and report back.`).join('\n')
@@ -230,5 +230,20 @@ test('a task is cut at TASK_MAX code points and says so with …; never inside a
     assert.ok(cps.length <= TASK_MAX, `${at}: ${cps.length} code points`)
     if (whole.length <= TASK_MAX) assert.equal(t, text, `${at}: fits, kept whole`)
     else { assert.ok(t.endsWith('…'), `${at}: a cut says so`); assert.ok(text.startsWith(t.slice(0, -1)), `${at}: the cut is a prefix`) }
+  }
+})
+
+test('sharedLines: a line is shared from the SHARED_LANES-th lane holding it on; add names the lanes that held it before, once', () => {
+  const next = rng(5)
+  for (let round = 0; round < 50; round++) {
+    const s = sharedLines(), held = new Map(), lanes = Array.from({ length: 8 }, (_, i) => ({ i }))
+    for (const lane of lanes) {
+      const mine = [...new Set(Array.from({ length: 6 }, () => `line ${Math.floor(next() * 10)}`))]
+      const moved = s.add(mine.join('\n'), lane), want = []
+      for (const l of mine) { const h = held.get(l) || held.set(l, []).get(l); if (h.length + 1 === SHARED_LANES) want.push(...h); h.push(lane) }
+      assert.deepEqual(new Set(moved), new Set(want))
+      assert.equal(moved.length, want.length)
+    }
+    for (const [l, h] of held) assert.equal(s.words(l), h.length >= SHARED_LANES ? null : l, l)
   }
 })
