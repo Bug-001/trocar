@@ -124,7 +124,7 @@ test('4.3 §4 盘满 (D38): what could not be saved says where and why in one li
     const line = unsaved(home, err(code), platform)
     assert.match(line, /^[^\n]+$/, 'one line')
     assert.ok(line.includes(path.join(home, 'index')), 'it names where')
-    assert.equal(line.includes(' Next: '), ['ENOSPC', 'EDQUOT', 'EACCES', 'EPERM'].includes(code), `${code}: a step only for a cause it fixes`)
+    assert.equal(line.includes(' Next: '), ['ENOSPC', 'EDQUOT', 'EACCES'].includes(code), `${code}: a step only for a cause it fixes`)
     if (platform === 'win32') assert.ok(!/\b(sudo|chmod|chown)\b/.test(line), 'no POSIX command on Windows')
   }
 })

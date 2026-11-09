@@ -198,7 +198,7 @@ export function unsaved(home, e, platform = process.platform) {
   const dir = indexDir(home), code = e && e.code, said = String((e && e.message) || e).split('\n')[0];
   const owned = platform === 'win32' ? `give your user full control of "${dir}"` : `sudo chown -R "$(id -un)" "${dir}" && chmod -R u+rwX "${dir}"`;
   const fix = { ENOSPC: ['the disk is full', `free space on the disk that holds "${dir}"`], EDQUOT: ['your disk quota is used up', `free space within your quota on the disk that holds "${dir}"`],
-    EACCES: ['your user may not write there', owned], EPERM: ['your user may not write there', owned] }[code];
+    EACCES: ['your user may not write there', owned] }[code]; // EPERM has no one fix: a file another program holds (Windows), a privacy block or a locked flag (macOS)
   return fix ? `trocar's files in ${dir} could not be saved: ${fix[0]}. Next: ${fix[1]}.` : `trocar's files in ${dir} could not be saved: ${said}`;
 }
 /** openProjection({home, fs, key, write, errors}) → the session's store (see the head of this file). `errors`: where notes go
