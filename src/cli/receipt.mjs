@@ -411,7 +411,7 @@ export function formatOnText(r, { tense = 'past', home = null, colors: c = noCol
   const named = andList(r.harnesses || []) || 'no agent'
   const lines = [r.ok === false && past && !onlyRefused(r) ? `${c.red('x')} trocar on did not finish. What stopped it is below.`
     : idle ? "The settings are in place, but trocar's service is not running: nothing is captured until it is. Start it:"
-      : past ? `${c.green('Capturing')} ${named}.` : `trocar will start capturing ${named}.`]
+      : past ? `${c.green('Capturing')} ${named}.` : `After trocar on, ${named} would be captured. Nothing was written.`] // a dry run: some may be captured already, so it says what is true after it
   if (idle) lines.push(commandLine('trocar daemon'))
   lines.push(...restartLine(r), ...(r.refused || []).flatMap((x) => refusedLines(x, { past, plain: true })))
   if (lingerText(r)) lines.push(lingerText(r))

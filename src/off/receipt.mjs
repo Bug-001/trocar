@@ -217,7 +217,7 @@ export function formatOffText(r, { home = null, tense = r.dry_run ? 'future' : '
       : r.all || !ids.length ? "Capture is off. trocar is no longer on your agents' path." : `Capture is off for ${ids.join(', ')}. trocar is no longer on ${one ? 'its' : 'their'} path.`)
   if (!past) { // the plan names every file of yours it undoes (§1.4)
     const own = (p) => !!home && p.startsWith(home) && /^[\\/]\.trocar([\\/]|$)/.test(p.slice(home.length)) // trocar's own files (its switch files) are --details facts
-    for (const p of [...new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || []).map((x) => (typeof x === 'string' ? x : x.path))])].filter((p) => !own(p))) lines.push(...fit(`  ${t(p)}`))
+    for (const p of [...new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || []).map((x) => (typeof x === 'string' ? x : x.path))])].filter((p) => !own(p))) lines.push(`  ${t(p)}`) // a path is one value: whole on its own line, never folded at a space in it (§1.1⑥)
   }
   if (past && r.routing && !r.routing.confirmed) lines.push(...fit(`trocar could not confirm it is off their path (${r.routing.state || 'reason unknown'}). Run it again:`), `${COMMAND_INDENT}trocar off`)
   if (r.relayed === 'unknown' && r.relayed_reason) lines.push(...fit(`Connections still going through trocar: unknown (${r.relayed_reason}).`))

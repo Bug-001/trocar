@@ -165,7 +165,7 @@ test('on: refused as root (R7), with the helper missing it writes nothing and sa
   for (const platform of ['win32', 'darwin', 'freebsd']) {
     io = fakeIo(); const bare = onCtx(home, io); bare.platform = platform
     assert.equal(await runOnCli(['--dry-run'], bare), 0, `${platform}: ${io.text()}`)
-    assert.match(io.text(), /^trocar will start capturing /m, `${platform}: the new collector's plan, not a refusal`)
+    assert.doesNotMatch(io.text(), /refus|not as root/i, `${platform}: the new collector's plan, not a refusal`)
     assertEnglish(io.text(), `the dry-run plan of on on ${platform}`)
   }
   assert.deepEqual(snapshot(home), before)

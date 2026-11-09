@@ -42,7 +42,7 @@ function shortReceipt(r, exit, home) {
     const said = w.steps.filter((t) => !t.startsWith('run: ')), runs = w.steps.filter((t) => t.startsWith('run: ')).map((t) => t.slice(5))
     return [`${x.harness}${at ? ` (${at})` : ''} was not turned on: ${routeReason({ code: 'not-routed', ...x })}. ${[...said, ...(runs.length ? ['run:'] : [])].join(', then ')}${runs.length ? '' : '.'}`, ...runs.map(commandLine)] // the reason in on's own words (the doctor's say entry)
   })
-  return [r.dry_run ? `trocar on would start capturing ${andList(r.harnesses) || 'no agent'}. Nothing was written.`
+  return [r.dry_run ? `After trocar on, ${andList(r.harnesses) || 'no agent'} would be captured. Nothing was written.`
     : exit === 0 && !r.harnesses.length ? 'Nothing to capture: no agent trocar covers is set up on this machine.'
       : exit === 0 ? `Capturing ${andList(r.harnesses)}.`
         : `trocar on did not finish${unfinished(r).length ? ` for ${andList(unfinished(r))}` : ''}. What stopped it is below.`,
@@ -160,7 +160,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     return [...(pm.forms || []).filter((f) => f.hostTree && forms.has(f.id)).map((f) => [f.id, `${d.name}: ${hostTreeNote(f.id)}.`]), ...(pm.effects || []).map((e) => [e.id, `${d.name}: ${e.short || e.when}.`])]
   })).values()]
   if (plan.on.length && !details && (flags.has('--dry-run') || (fresh.length && !flags.has('--yes')))) {
-    say(fit(['trocar on will point these agents at trocar:', ...pairs(plan.planned.flatMap((p) => (p.paths.length ? p.paths.map((x) => [p.harness, `${tilde(x, home)}${seen.size && fresh.includes(x) ? '  new' : ''}`]) : [[p.harness, 'no file of yours']])), { home }), ...effects], { home }).join('\n'))
+    say(fit(['trocar on will point these agents at trocar:', ...pairs(plan.planned.flatMap((p) => (p.paths.length ? p.paths.map((x) => [p.harness, `${tilde(x, home)}${seen.size && fresh.includes(x) ? '  new' : ''}`]) : plan.planned.some((q) => q.harness === p.harness && q.paths.length) ? [] : [[p.harness, 'no file of yours']])), { home }), ...effects], { home }).join('\n'))
   } else if (plan.on.length && details) say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
     ...pairs([...plan.planned.map((p) => { const [h, v] = planLine(p, home); return [h, isNew(p) ? `${v} (new since you last said yes)` : v] }), [own.what, own.detail]], { home })], { home }).join('\n'))
   else if (plan.on.length && effects.length) say(fit(effects, { home }).join('\n'))
