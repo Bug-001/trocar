@@ -44,8 +44,8 @@ test('procIdentity reads /proc/<pid>/stat field 22 and the boot id; nothing read
   try {
     fs.mkdirSync(path.join(root, '77')); fs.writeFileSync(path.join(root, '77', 'stat'), `77 (a b) c) S 1 ${'0 '.repeat(17)}31337 0 0\n`)
     fs.mkdirSync(path.join(root, 'sys', 'kernel', 'random'), { recursive: true }); fs.writeFileSync(path.join(root, 'sys', 'kernel', 'random', 'boot_id'), 'abc-def\n')
-    assert.deepEqual(procIdentity(77, { root }), { start_time: '31337', boot_id: 'abc-def' })
-    assert.deepEqual(procIdentity(78, { root }), { start_time: null, boot_id: 'abc-def' })
+    assert.deepEqual(procIdentity(77, { root, platform: 'linux' }), { start_time: '31337', boot_id: 'abc-def' })
+    assert.deepEqual(procIdentity(78, { root, platform: 'linux' }), { start_time: null, boot_id: 'abc-def' })
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
