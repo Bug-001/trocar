@@ -112,12 +112,14 @@ export function panSpan(prev, c, g, K) {
   return { lo, hi: lo + w }
 }
 // the span in the anchor lane's local indexes; `none` while a step of it is not held or the rows are not contiguous there. `cutBefore` /
-// `cutAfter`: steps lie before / after the span, so a call the held rows cannot place there is not in it (windowCalls, 1.3 §叠加轨)
+// `cutAfter`: steps of the lane lie before / after the span, so a call the held rows cannot place is not in it (windowCalls, 2.1 ③);
+// `cutTs`: the time of the step right after the span when the desk knows it (a chapter starting there), where the span's last column ends
 export function anchorSpan(s, { lo, hi }) {
   const a = s.anchor, none = { lo: 0, hi: 0, none: true }
   if (!a || hi <= lo) return none
   const first = a.ridLocal.get(ridAt(s.desk, a.id, lo))
   if (first == null) return none
   for (let g = lo + 1; g < hi; g++) if (a.ridLocal.get(ridAt(s.desk, a.id, g)) !== first + g - lo) return none
-  return { lo: first, hi: first + hi - lo, cutBefore: lo > 0, cutAfter: hi < stepCount(s) }
+  const h = s.desk.head, next = h && a.id === h.axis && (h.chapters || []).find((c) => c.s0 === hi && c.ts0), cutTs = next ? Date.parse(next.ts0) : NaN
+  return { lo: first, hi: first + hi - lo, cutBefore: lo > 0, cutAfter: hi < Math.max(a.count || 0, a.calls.length), ...(Number.isNaN(cutTs) ? null : { cutTs }) }
 }
