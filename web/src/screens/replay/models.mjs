@@ -71,7 +71,7 @@ function compShares(comp) {
 
 // ── the session head (1.2 §会话头 · §会话保真行 · §信息弹出层) ─────────────────────────────────────────────────────────
 /**
- * @typedef {{kind: 'truncated'|'unknown'|'logged'|'files'|'gap', text: string, href?: string}} Fact
+ * @typedef {{kind: 'truncated'|'unknown'|'logged'|'reindexing'|'files'|'gap', text: string, href?: string}} Fact
  * @typedef {{key: string, text: string, approx?: boolean}} InfoRow
  * @typedef {{back: {href: string, text: string}, title: {text: string|null, fallback: string|null, sourceTip: string, id: string},
  *   chip: object, entry: {text: string, tip: string}|null, project: {name: string, path: string, word: string}|null,
@@ -135,7 +135,9 @@ function factsOf(desk, gap, harness) {
     if (u.endpoints && u.endpoints.length) tech.push(['endpoints', u.endpoints.join(', ')])
   }
   if (logged > 0) items.push({ kind: 'logged', text: W.loggedFact(logged), href: `#/settings/storage${h}` })
-  const lost = errs.filter((e) => e.level !== 'note').length // a note (a slow index-cold read) is no loss
+  // an entry with a level is no loss: a note (a slow index-cold read), a state (capture files still re-indexed, said on its own)
+  const lost = errs.filter((e) => !e.level).length
+  if (errs.some((e) => e.code === 'index-pending')) items.push({ kind: 'reindexing', text: W.REINDEXING_FACT })
   if (lost) items.push({ kind: 'files', text: W.filesFact(lost), href: '#/settings/storage' })
   for (const e of errs) tech.push([String(e.where ?? '') + (e.code ? ' · ' + e.code : ''), String(e.reason ?? '')])
   if (gap) items.push({ kind: 'gap', text: W.GAP_FACT, href: `#/capture/log${h}` })
