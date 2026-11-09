@@ -24,6 +24,9 @@ const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again w
 
 // §1.4「计划写全」: every planned route by the full path (and key) it will write; a route that writes no file of yours says why instead
 const planLine = (p, home) => [p.harness, p.paths.length ? `${p.paths.map((x) => tilde(x, home)).join(', ')}: ${routeWords(p)}${(p.keys || []).length ? ` (${p.keys.join(', ')})` : ''}` : `no file of yours: trocar hands ${p.harness} the setting as it starts`] // 1.6 §3.3: path: what changes there
+// §1.1 ④ rule 4: a fact not read gives the default text a step to take, by its code; --details and --json keep the fact (`text`)
+const NOTE_STEPS = { 'restart-unread': () => 'Restart any agent that was already open; trocar could not list them.', 'start-time-unknown': (n) => `Restart ${n.harness} if it was already open; trocar could not tell when it started.` }
+const shortNoteLine = (n) => (NOTE_STEPS[n.code] ? NOTE_STEPS[n.code](n) : noteLine(n))
 const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
 // 1.6 §1.1: the headline of a run that did not finish names the harnesses that did not: refused, or a route of theirs not written
 const unfinished = (r) => [...new Set([...r.refused.map((x) => x.harness), ...(r.routes || []).filter((x) => !x.ok).map((x) => x.harness)])]
@@ -42,7 +45,7 @@ function shortReceipt(r, exit, home) {
     : exit === 0 && !r.harnesses.length ? 'Nothing to capture: no agent trocar covers is set up on this machine.'
       : exit === 0 ? `Capturing ${andList(r.harnesses)}.`
         : `trocar on did not finish${unfinished(r).length ? ` for ${andList(unfinished(r))}` : ''}. What stopped it is below.`,
-  ...restartLine(r), ...r.refused.flatMap(refusedLines), ...failed.flat(), ...r.notes.filter((n) => saysNow(n) || !r.harnesses.length).map(noteLine), ...r.problems.map((p) => `Problem: ${p}`)]
+  ...restartLine(r), ...r.refused.flatMap(refusedLines), ...failed.flat(), ...r.notes.filter((n) => saysNow(n) || !r.harnesses.length).map(shortNoteLine), ...r.problems.map((p) => `Problem: ${p}`)]
 }
 /** The full text of a macOS / Windows `on` (`--details`): every route, note and problem. */
 export function formatModelOnReceipt(receipt, exit, home) {
@@ -69,7 +72,7 @@ export const formatModelOnText = (r, exit, home) => fit(shortReceipt(r, exit, ho
  *  is a process whose start time is not known: it is never guessed to be one started before. On Windows the table is read again from the running
  *  daemon's helper (no process started), so a process started while the daemon came up is in it. */
 export async function restartOf({ dir, fs, ids, os, exec, env, procs, reader }) {
-  const unread = (e) => ({ restart: [], notes: [{ harness: null, text: `which running agents need a restart could not be read (${errText(e)})` }] })
+  const unread = (e) => ({ restart: [], notes: [{ harness: null, text: `which running agents need a restart could not be read (${errText(e)})`, code: 'restart-unread' }] })
   let live, list
   try {
     const m = readManifest(dir, fs)
@@ -80,7 +83,7 @@ export async function restartOf({ dir, fs, ids, os, exec, env, procs, reader }) 
   } catch (e) { return unread(e) }
   const notes = [], restart = live.flatMap(([h, l]) => {
     const mine = list.filter((p) => harnessesOf({ [h]: l }, p).includes(h)), unknown = mine.filter((p) => p.startedAt == null).length
-    if (unknown) notes.push({ harness: h, text: `the start time of ${unknown} ${h} process${unknown === 1 ? '' : 'es'} could not be read, so whether ${unknown === 1 ? 'it needs' : 'they need'} a restart to be captured is not known` })
+    if (unknown) notes.push({ harness: h, text: `the start time of ${unknown} ${h} process${unknown === 1 ? '' : 'es'} could not be read, so whether ${unknown === 1 ? 'it needs' : 'they need'} a restart to be captured is not known`, code: 'start-time-unknown' })
     return mine.filter((p) => p.startedAt != null && p.startedAt < Date.parse(l.on_at)).map((p) => ({ harness: h, pid: p.pid }))
   })
   return { restart, notes }

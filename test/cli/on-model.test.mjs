@@ -542,7 +542,9 @@ test('1.6 §3.3 · D38 (win32): a daemon that answers the ps read late or never 
       if (table === local) assert.deepEqual(rs.restart, [{ harness: 'codex', pid: 5530 }], `the local table's process (${what})`)
       else {
         assert.deepEqual(rs.restart, [], what)
-        assert.match(text, /could not be read/, `the default text says the restart list could not be read (${what}):\n${text}`)
+        const note = rs.notes.find((n) => /could not be read/.test(n.text))
+        assert.ok(note && /^Restart\b/m.test(text), `the default text gives a step to take, a restart (rule 4), not only what went wrong (${what}):\n${text}`)
+        assert.ok(!text.includes(note.text), `the fact itself is --details' (${what})`)
       }
     } finally { timers.forEach(clearTimeout); conns.forEach((c) => c.destroy()); await new Promise((r) => server.close(r)) }
   }
