@@ -227,3 +227,20 @@ test('4.11 present: uninstall records no PATH of the user; its --dry-run leaves 
   await s.run(['uninstall', '--dry-run'], { env: { ...s.ctx().env, PATH: '/a/path/this/run/has' } })
   assert.deepEqual(snapshot(s.home), before, 'the dry run wrote nothing, user-path.json included')
 })
+
+// 1.6 §1.4: a dry run writes nothing — the PATH record main.mjs makes around a command included; a real `on` still records it.
+// The one exception: Node's compile cache under ~/.trocar/compile-cache (D62) is not state; every command of an installed trocar writes it.
+test('1.6 §1.4: on --dry-run and off --dry-run leave ~/.trocar byte for byte and mtime for mtime; a plain on records the PATH', async () => {
+  const s = sandbox()
+  assert.equal((await s.run(['install', '--yes'])).exit, 0)
+  const trocar = path.join(s.home, '.trocar'), recorded = path.join(s.dir, 'user-path.json')
+  const stamp = () => Object.fromEntries(Object.entries(snapshot(trocar)).filter(([p]) => p.split(/[\\/]/)[0] !== 'compile-cache').map(([p, h]) => [p, h === 'dir' ? h : `${h}:${fs.statSync(path.join(trocar, p)).mtimeMs}`]))
+  const env = { ...s.ctx().env, PATH: '/a/path/this/run/has' }
+  for (const argv of [['on', '--dry-run'], ['off', '--dry-run']]) {
+    const before = stamp()
+    await s.run(argv, { env })
+    assert.deepEqual(stamp(), before, `${argv.join(' ')} wrote nothing`)
+  }
+  assert.equal((await s.run(['on', '--yes'], { env })).exit, 0)
+  assert.match(fs.readFileSync(recorded, 'utf8'), /\/a\/path\/this\/run\/has/, 'a real on records the PATH it ran with')
+})
