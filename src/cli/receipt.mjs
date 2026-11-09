@@ -342,6 +342,13 @@ export function formatUninstallText(r, { home = null, platform = process.platfor
   const keyId = (p) => /^[A-Za-z]{2,}:/.test(p) && p !== TASK_NAME && !(store && key(p) === key(store)) // a root key by its custody id (keychain:…, cng:…)
   // §1.4: trocar's own things are what is under ~/.trocar, the trust store's root and the root key; every other path is a file of yours
   const ours = (p) => typeof p !== 'string' || under(p, own) || keyId(p) || (store && key(p) === key(store))
+  // a refusal (§3.6 前提) changed nothing: one short line for why, then its steps in order. The JSON `message` keeps the full sentence; the steps
+  // are the problem's own lines after its first (its commands, each in the command column)
+  if (r.error && r.error.code === 'collectors-online') {
+    const steps = String((r.problems || [])[0] || '').split('\n').slice(1)
+    const why = (r.daemon || {}).state === 'left-running' ? "trocar's service is running but does not answer, so capture is not known to be off" : 'capture is still on'
+    return fit([`trocar uninstall: ${why}. Nothing was changed.`, ...steps], { home }).join('\n')
+  }
   const lines = [uninstallHeadline({ platform, past, ok: r.ok })]
   if (r.nothing_installed) lines.push('Nothing of trocar is installed for your user, so there was nothing to take out.')
   if (!past) {
