@@ -153,7 +153,8 @@ function holds(w, at, it) {
   return false;
 }
 // the reply as the product reads it (the board's text), whatever the wire
-const replyOf = (rec) => { const d = boardDissectorFor(rec), r = d ? d.normResp(rec) : anthropicResp(rec); return itemOf((r && r.text) || ''); };
+// a wire's own reply reader where its board dissector has one (the flat OpenAI wires); the Anthropic reply reader for the rest (the tree-folded Anthropic wire has none)
+const replyOf = (rec) => { const d = boardDissectorFor(rec), r = d && d.normResp ? d.normResp(rec) : anthropicResp(rec); return itemOf((r && r.text) || ''); };
 
 // ── chains (3.4 合成键) ───────────────────────────────────────────────────────────────────────────────────────────────────────
 // A call's history as cumulative hashes: c_1 = h(item_1), c_i = h(c_{i-1} + '\n' + item_i), h = the first 16 hex of SHA-256, each item
