@@ -14,7 +14,7 @@ import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath, standaloneFiles, launcherPath, standaloneCommand, homeMismatch, accountHomeOf, collectorDir, backupDir } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
-import { fit, tilde, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, markedRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
+import { fit, tilde, restartLine, planItems, formWords, carrierWords, planWords, commandLine, formatRefusal, markedRefusal, UNDO_WORDS, asDir } from './receipt.mjs'
 import { pairs, wrap, andList } from './text.mjs'
 import { plainSentence } from './words.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -119,14 +119,6 @@ function yourFiles({ paths, unknown = [], home, platform, root, own, stale, kept
     ...(also.length ? [`It will also ${andList(also)}.`] : []),
     ...(stale ? ["trocar's service runs other code, so it is restarted on this copy."] : []),
     ...(kept ? [`${kept} file${kept === 1 ? '' : 's'} of yours ${kept === 1 ? 'is' : 'are'} left as ${kept === 1 ? 'it is' : 'they are'}; trocar install --dry-run --details lists ${kept === 1 ? 'it' : 'them'}.`] : [])]
-}
-
-/** 1.6 §3.3「之后的效果」· §1.1 ④: the agents running before capture is on are captured from their next start — the step and its one way out, the
- *  pids in the command to copy (rule 3), as `on`'s plan says it (formatPlan's Restart line under --details). */
-const restartStep = (restart = []) => {
-  const hs = [...new Set(restart.map((x) => x.harness))], one = hs.length === 1 && restart.length === 1
-  return hs.length ? [`Restart ${andList(hs)} to capture ${hs.length === 1 ? 'it' : 'them'}: ${one ? 'it was' : 'they were'} started before capture was on. End ${one ? 'it' : 'them'} with this line, then start ${one ? 'it' : 'them'} again:`,
-    commandLine(`kill ${restart.map((x) => x.pid).join(' ')}`)] : []
 }
 
 // 1.6 §3.2 default receipt: the rows above are --details'; what the user does about them is a line — a terminal opened before the PATH item does not have it
@@ -364,7 +356,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const why = (plan._ && plan._.drift) || [] // a bundle written again says why in the plan too (D38), not only in the receipt
   const place = pathItem && (await import('../off/path-item.mjs')).pathItemTarget({ platform, env, home })
   say([...(details ? [formatPlan({ ...plan, standalone: due }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail]), { home })]
-    : fit([...yourFiles({ paths: planned.map((i) => i.path), place, home, platform, root: false, own: true, stale, unknown: (plan.skipped || []).map((x) => `${tilde(x.what, home)}: skipped (${x.reason})`) }), ...restartStep(plan.restart)], { home })),
+    : fit([...yourFiles({ paths: planned.map((i) => i.path), place, home, platform, root: false, own: true, stale, unknown: (plan.skipped || []).map((x) => `${tilde(x.what, home)}: skipped (${x.reason})`) }), ...restartLine(plan)], { home })), // 1.6 §3.3: on's line; each process and its pid are --details'
   ...fit(why.map((n) => `Note: ${n}`), { home }), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
   if (flags.has('--dry-run')) { if (json) printJson(io, { ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...due, ...plan.created], skipped: plan.skipped || [], ...(why.length ? { notes: why } : {}) }); return EXIT.ok }
   if ((plan.writing || stdNew || stale || pathItem) && !flags.has('--yes')) {
