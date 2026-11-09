@@ -248,7 +248,7 @@ async function update({ io, env, home, platform, deps, flags }) {
       if (channel === 'script' && installed === undefined && fs.existsSync(manifestPath(dir))) return (deps.install || runInstallCli)([...flags], { io, env, home, platform, deps })
       if (channel === 'script') return scripted()
       return no('npm-package', `this trocar was installed with npm. Get the newest with npm i -g ${packageName(root, { fs })}@latest, then run trocar update to restart the collector on it.`, EXIT.usage, null,
-        [`trocar update: this trocar was installed with npm. Get the newest with npm i -g ${packageName(root, { fs })}@latest, then run trocar update to restart trocar's service on it.`])
+        ['trocar update: this trocar was installed with npm, so npm updates it. Run:', `${INDENT}npm i -g ${packageName(root, { fs })}@latest`, `${INDENT}trocar update`])
     }
     const from = daemonOther ? running : installed
     const why = daemonOther ? `the collector runs ${running}, so it is replaced by ${to}, install runs again` : `install last ran on ${installed || 'code it does not name'}, so it runs again on ${to}`

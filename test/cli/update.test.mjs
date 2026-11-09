@@ -604,6 +604,20 @@ test('§5.5: a hung service that cannot be stopped: the stop by hand for this pl
   }
 })
 
+// §1.1⑥: a command to copy is a line of its own, never broken by the fold — an npm copy's way out with a long scoped name included
+test('§5.5: an npm copy with nothing to finish says npm i -g <name>@latest and trocar update, each whole on a line of its own', async () => {
+  const s = sandbox()
+  const name = '@a-rather-long-scope-of-its-own/trocar-with-a-long-package-name'
+  const npmRoot = path.join(s.base, 'lib', 'node_modules', ...name.split('/'))
+  fs.mkdirSync(npmRoot, { recursive: true })
+  fs.writeFileSync(path.join(npmRoot, 'package.json'), JSON.stringify({ name, version: '0.2.0' }) + '\n')
+  const t = ctx(s, { deps: { root: npmRoot }, daemonCode: () => codeId(npmRoot) })
+  assert.equal(await runUpdateCli([], t.c), EXIT.usage, t.io.text())
+  const lines = t.io.text().split('\n').map((l) => l.trim())
+  for (const c of [`npm i -g ${name}@latest`, 'trocar update']) assert.ok(lines.includes(c), `${c} whole on a line:\n${t.io.text()}`)
+  assert.ok(lines.indexOf(`npm i -g ${name}@latest`) < lines.indexOf('trocar update'), 'npm first')
+})
+
 // ── V124 · the login entry is written before the collector is replaced ─────────────────────────────────────────────────────────────
 /** The world of a finish whose daemon may run another code, on a REAL entry file: `disk` is what the file holds now (default: this copy's
  *  program line under the older text), the entry this code renders has one line more, and `install` writes that text when it runs. The login
