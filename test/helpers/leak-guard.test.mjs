@@ -180,6 +180,17 @@ test('leak-guard: a runner in another time zone is still running: its run direct
   assert.equal(live.runner.exitCode, 0, 'it finished its run')
 })
 
+test('leak-guard: a live runner recorded by a guard from before `utc` keeps its directory when a run under TZ=UTC sweeps', async () => {
+  const scratch = tmpDir('trocar-guardtest-'), live = await waitingRunner(scratch)
+  try {
+    // what a guard from before `utc` left: the start alone, in the system's zone
+    const rec = path.join(scratch, live.dir, '.runner'), { pid, start } = JSON.parse(fs.readFileSync(rec, 'utf8'))
+    fs.writeFileSync(rec, JSON.stringify({ pid, start }))
+    assert.equal(run(`test('nothing', () => {})`, scratch, undefined, { TZ: 'UTC' }).status, 0)
+    assert.ok(fs.existsSync(path.join(scratch, live.dir)), 'the running runner\'s directory is kept')
+  } finally { await live.go() }
+})
+
 test('leak-guard: when ps says nothing in UTC, a live runner\'s directory is kept', async () => {
   const scratch = tmpDir('trocar-guardtest-'), live = await waitingRunner(scratch)
   // loaded before the guard: the ps it runs with TZ=UTC fails, as a spawn can under load (EAGAIN); the one in the local zone answers
