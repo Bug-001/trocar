@@ -16,6 +16,7 @@ import { X509Certificate } from 'node:crypto'
 import zcode from '../../src/collector/harness/z-code.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
+import { unsaidIn } from '../../src/cli/words.mjs'
 
 const fps = (text) => (String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((p) => new X509Certificate(p).fingerprint256)
 const certBytes = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([k]) => k.startsWith('.trocar/collector/ca/') || k === '.claude/settings.json'))
@@ -436,4 +437,22 @@ test('Linux codex: a second install keeps the CA of the .env line the first one 
   const corpFile = path.join(home, 'certs', 'corp-ca.pem'); fs.writeFileSync(corpFile, corp)
   assert.equal(await runInstallCli(['--yes'], ctx(fakeIo(), { SSL_CERT_FILE: corpFile })), 0)
   assert.deepEqual([holds(relay), holds(corp)], [true, true], 'the added CA joins the one already carried')
+})
+
+// 1.6 §1.1 ④ · §1.4 · §3.2: the default plan and receipt say no unsaid word; the plan names each file of yours by full path, and --details its keys and trocar's own files
+test('§1.1 ④: Linux install\'s default plan and receipt say no unsaid word; the plan names each file of yours and --details the rest', async () => {
+  const home = tmpDir('trocar-install-linux-voice-')
+  seedClaude(home)
+  const run = async (argv) => { const io = fakeIo(); await runInstallCli(argv, { ...onCtx(home, io), platform: 'linux' }); return io }
+  const json = (await run(['--dry-run', '--json'])).json()
+  const plan = (await run(['--dry-run'])).text(), details = (await run(['--dry-run', '--details'])).text()
+  const ours = (p) => p.startsWith(path.join(home, '.trocar'))
+  for (const i of json.planned.filter((x) => x.path)) {
+    const shown = i.path.replace(home, '~')
+    assert.ok(details.includes(shown), `--details names ${shown}`)
+    if (!ours(i.path)) assert.ok(plan.includes(shown), `the plan names the file of yours ${shown}:\n${plan}`)
+  }
+  assert.deepEqual(unsaidIn(plan), [], plan)
+  const done = (await run(['--yes'])).text()
+  assert.deepEqual(unsaidIn(done), [], done)
 })
