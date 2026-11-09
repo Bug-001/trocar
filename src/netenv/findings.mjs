@@ -20,6 +20,8 @@ const trocar = (ctx, run) => ({ run, shell: ctx.sh })
 /** 4.11 P4b: a `setup.missing[].what` → the finding that says it, one mapping for both readers (proxy mode's form certificate, driver mode's setup). */
 export const SETUP_FINDING = Object.freeze({ 'carrier-absent': 'entry-missing', 'carrier-overwritten': 'entry-changed', 'bundle-lacks-ca': 'bundle-lacks-ca', 'marked-without-record': 'marked-without-record' })
 /** An install item of the form that drifted (proxy mode: the carrier, a wrapper or a plugin; 1.6 §9.3 row 31): the command its `certificate` names, `trocar install`. */
+/** The steps that set up what a `setup.missing[].what` names: its finding's commands when it is one (`marked-without-record`), else `trocar install`. */
+export const setupSteps = (what) => (Object.hasOwn(FINDINGS, what) ? findingFor(what).commands.map((c) => c.run) : ['trocar install'])
 const installFix = (c) => (c.fm && c.fm.certificate && c.fm.certificate.command ? [trocar(c, c.fm.certificate.command)] : null)
 const os = (ctx, byPlatform) => ({ run: byPlatform[ctx.platform] || byPlatform.linux, shell: ctx.platform === 'win32' ? 'powershell' : 'sh' })
 const gui = (run) => ({ run, shell: 'gui' })
@@ -323,8 +325,14 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     const listPath = F.agentList ? F.agentList.path : null
     for (const u of (F.identity && F.identity[h] && F.identity[h].unknown) || []) found.set(`process-unknown\u0000${u.name}`, make('process-unknown', { ...base, u, listPath }))
     if (named && F.desired[h] === 'on' && hf.installed !== false && ![...found.values()].some((f) => f.class !== 'note')) add('cause-unknown') // a failure or an expected finding already says why; only hints (about the data) leave it open
-    // and any other fix of this harness that runs `trocar on`, which refuses until then, starts with what lets it run (one way out that works, 1.6 §1.1)
-    if (setupNeeded) for (const [k, f] of found) if (f.commands.some((c) => /^trocar on\b/.test(c.run)) && f.commands[0].run !== 'trocar install') found.set(k, { ...f, commands: [trocar(base, 'trocar install'), ...f.commands] })
+    // and any other fix of this harness that runs `trocar on`, which refuses until then, has the setup's steps just before it (one way out that works, 1.6 §1.1)
+    if (setupNeeded) {
+      const steps = hf.setup.missing.filter((x) => SETUP_FINDING[x.what]).map((x) => setupSteps(x.what)).reduce((a, c) => (c.length > a.length ? c : a), []) // the longest: install is every list's last step
+      for (const [k, f] of found) {
+        const at = f.commands.findIndex((c) => c.shell !== 'gui' && /^trocar on\b/.test(c.run))
+        if (at >= 0 && f.commands.slice(Math.max(0, at - steps.length), at).map((c) => c.run).join('\n') !== steps.join('\n')) found.set(k, { ...f, commands: [...f.commands.slice(0, at), ...steps.map((r) => trocar(base, r)), ...f.commands.slice(at)] })
+      }
+    }
     out.push(...[...found.values()].sort((a, b) => BY_CLASS[a.class] - BY_CLASS[b.class]))
   }
   if (!named) {
