@@ -697,17 +697,18 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 
 ## Commands
 
-`trocar help` prints the same, in three sections; `trocar help <command>` says one command, and
+`install`, `on`, `off`, `status`, `uninstall`, `doctor` and `update` take `--details`: every fact their short text
+leaves out (each file, key, process and note). `--json` is the same document either way. `trocar help` prints the same, in three sections; `trocar help <command>` says one command, and
 `trocar query <name> --help` one query. `trocar help --json` gives all of it as one document.
 
 ```sh
 # common
-trocar install [--yes] [--dry-run] [--json]   # once: the certificates (D55); prints the plan and asks first
-trocar on [<harness>...] [--yes] [--dry-run] [--json]
-trocar off [<harness>...] [--now] [--yes] [--dry-run] [--json]
-trocar status [<harness>...] [--failures] [--json]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
-trocar uninstall [--purge-data] [--yes] [--dry-run] [--json]
-trocar doctor [<harness>...] [--json]
+trocar install [--yes] [--dry-run] [--details] [--json]   # once: the certificates (D55); prints the plan and asks first
+trocar on [<harness>...] [--yes] [--dry-run] [--details] [--json]
+trocar off [<harness>...] [--now] [--yes] [--dry-run] [--details] [--json]
+trocar status [<harness>...] [--failures] [--details] [--json]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
+trocar uninstall [--purge-data] [--yes] [--dry-run] [--details] [--json]
+trocar doctor [<harness>...] [--details] [--json]
 
 # data
 trocar query <name> [--<param> <value>...] [--json]   # the one way to read the records; the board is its HTTP shell (D59)
@@ -719,7 +720,7 @@ trocar classes reset
 trocar board [--json]         # prints the board's address with your key and opens it; exit 1 when the board is not there
 
 # maintenance
-trocar update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)
+trocar update [--yes] [--dry-run] [--details] [--json]   # the newest code, and the machine as it was (D67)
 trocar raw <segment>[:<from>[-<to>]]
 sudo trocar setup-helper [--remove] [--binary <path>]   # Linux, once per machine
 trocar daemon [--supervise]   # the daemon in the foreground; the autostart unit runs it (Windows's task with --supervise)
