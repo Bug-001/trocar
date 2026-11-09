@@ -14,6 +14,7 @@ import { fakeIo, recordingExec } from './fixtures/on-ctx.mjs'
 import { reply, asDaemon, SOCK } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
+import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 
 /** A copy of trocar's shape: package.json with `version`, and `files` under it. */
 function tree(files, version = '1.2.3') {
@@ -94,4 +95,21 @@ test('doctor: a collector on other code is a problem, daemon-other-code, fixed b
   assert.ok(f && f.class === 'problem', JSON.stringify(f))
   assert.ok(f.commands.some((c) => c.run === 'trocar install'))
   assert.equal((await run(codeId())).some((x) => x.code === 'daemon-other-code'), false)
+})
+
+// §3.5 · §3.7: after a git pull by hand the last install ran other code, and `trocar update` is the one way out (install cannot redo on's entries);
+// a service another copy started, with this code installed, stays `trocar install`'s
+test('a service on other code after a pull by hand: status and doctor say trocar update; with this code installed, trocar install', async () => {
+  const s = await installedHome()
+  const dir = path.join(s.home, '.trocar', 'collector')
+  const doctorFix = async () => {
+    const io = fakeIo()
+    await runDoctor(['--json'], { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { spawn: absentSpawn, has: () => true, request: asDaemon(reply({ code: '9.9.9+fffffff' })), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice', exec: recordingExec().run } })
+    return ((JSON.parse(io.stdoutText()).findings || []).find((x) => x.code === 'daemon-other-code') || { commands: [] }).commands.map((c) => c.run)
+  }
+  const said = async () => [await statusOf(s, '9.9.9+fffffff', []), await statusOf(s, '9.9.9+fffffff', ['--details'])]
+  assert.deepEqual(await doctorFix(), ['trocar install'], 'this code installed: another copy started the service')
+  const m = readManifest(dir); m.install = { ...m.install, code: '0.0.1+0000000' }; saveManifest(dir, m)
+  assert.deepEqual(await doctorFix(), ['trocar update'], 'install ran older code: update is the way out')
+  for (const text of await said()) { assert.match(text, /trocar update/, text); assert.doesNotMatch(text, /Put it on this code: trocar install/, text) }
 })

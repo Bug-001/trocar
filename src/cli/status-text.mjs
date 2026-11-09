@@ -20,11 +20,11 @@ const openText = (x, h, said = (t) => t, plain = false) => { const mine = (x.pro
 const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinite(t)) return null; const s = Math.max(0, Math.round((now - t) / 1000)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m` }
 
 /** The daemon in one clause, from the daemon's own answer — never a stale pid as the present state (§1.1). */
-function daemonClause(d, now) {
+function daemonClause(d, now, refresh = 'trocar install') { // `refresh`: refreshCommand's answer (§3.5), the one way out of other code
   if (d.running === true) {
     const up = d.since ? upFor(d.since, now) : null, base = `Daemon running (pid ${d.pid ?? 'unknown'}${up ? `, up ${up}` : ''})`
     // §3.5: the collector on other code than this trocar (its files replaced, the collector not restarted): what this version changed in it is not in effect
-    return d.runs_this_code === false ? `${base} on other code, ${d.code}; this trocar is ${codeId()}. Put it on this code: trocar install` : `${base}.`
+    return d.runs_this_code === false ? `${base} on other code, ${d.code}; this trocar is ${codeId()}. Put it on this code: ${refresh}` : `${base}.`
   }
   if (d.running === false) return `Daemon not running${d.error ? ` (${d.error})` : ''}; nothing is captured. Start it: trocar on`
   if (d.responding === false) return `Daemon does not answer${d.error ? ` (${d.error})` : ''}; new connections are not captured.`
@@ -48,7 +48,7 @@ const outOfScopeLines = (doc, h = null) => (doc.out_of_scope || []).filter((o) =
 /** The one-screen summary of `trocar status` (§3.5): by default the short one (§1.1 ④), with `details` the full one. `doc` is the 附录 C.3 document. */
 export function statusSummary(doc, opts = {}) { return opts.details ? summaryDetails(doc, opts) : summaryShort(doc, opts) }
 
-function summaryDetails(doc, { now = Date.now(), colors: c = noColor(), home = null } = {}) {
+function summaryDetails(doc, { now = Date.now(), colors: c = noColor(), home = null, refresh = 'trocar install' } = {}) {
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
   const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(doc.harnesses[h]))
@@ -58,7 +58,7 @@ function summaryDetails(doc, { now = Date.now(), colors: c = noColor(), home = n
   if (!shown.length) return [c.bold('No harness is set up for capture yet.'), ...outOfScopeLines(doc), '', ...readErrorLines(doc), ...((doc.out_of_scope || []).length ? [] : ['Next: trocar install'])]
   const unknown = shown.filter((h) => doc.harnesses[h].captured === null).length // never counted as not capturing (1.6 §2)
   const head = `Capturing ${captured.length} of ${shown.length} installed harness${shown.length === 1 ? '' : 'es'}${unknown ? `; ${unknown} not known yet` : ''}.`
-  const daemon = daemonClause(doc.daemon, now)
+  const daemon = daemonClause(doc.daemon, now, refresh)
   const lines = head.length + 1 + daemon.length <= WIDTH ? [c.bold(`${head} ${daemon}`), ''] : [c.bold(head), ...wrap(daemon, WIDTH), '']
   if (shown.length) {
     const rows = [['HARNESS', 'CAPTURED', 'NOTE']]
@@ -99,21 +99,21 @@ export function problemsWords(fl, now, noun = '') {
 }
 
 /** The daemon in the default text: said only when it is not running this code as it should (§3.5 默认摘要). */
-function serviceClause(d) {
-  if (d.running === true) return d.runs_this_code === false ? "trocar's service runs other code than this trocar. Put it on this code: trocar install" : ''
+function serviceClause(d, refresh = 'trocar install') {
+  if (d.running === true) return d.runs_this_code === false ? `trocar's service runs other code than this trocar. Put it on this code: ${refresh}` : ''
   if (d.running === false) return "trocar's service is not running, so nothing is captured. Start it: trocar on"
   if (d.responding === false) return "trocar's service does not answer, so new connections are not captured."
   return plainSentence(`trocar's service: ${unknown(d.error || 'its state could not be read')}.`)
 }
 
-function summaryShort(doc, { now = Date.now(), colors: c = noColor(), home = null } = {}) {
+function summaryShort(doc, { now = Date.now(), colors: c = noColor(), home = null, refresh = 'trocar install' } = {}) {
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
   const shown = names.filter((h) => installed.length === 0 || installed.includes(h) || needsSetup(doc.harnesses[h]))
   if (!shown.length) return [c.bold('No agent is set up for capture yet.'), ...outOfScopeLines(doc), '', ...readErrorLines(doc), ...((doc.out_of_scope || []).length ? [] : ['Next: trocar install'])]
   const captured = shown.filter((h) => doc.harnesses[h].captured === true).length, open = shown.filter((h) => doc.harnesses[h].captured === null).length
   const restart = needsRestart(restartNames(doc))
-  const head = [`Capturing ${captured} of ${shown.length} agent${shown.length === 1 ? '' : 's'}${open ? `; ${open} not known yet` : ''}.`, restart && `${restart}.`, serviceClause(doc.daemon || {})].filter(Boolean).join(' ')
+  const head = [`Capturing ${captured} of ${shown.length} agent${shown.length === 1 ? '' : 's'}${open ? `; ${open} not known yet` : ''}.`, restart && `${restart}.`, serviceClause(doc.daemon || {}, refresh)].filter(Boolean).join(' ')
   const lines = [...wrap(head, WIDTH).map((l) => c.bold(l)), '']
   const rows = [['AGENT', 'CAPTURED', 'NOTE']]
   for (const h of shown) { const x = doc.harnesses[h]; rows.push([h, CAPTURED(x), noteOf(x, h, (x.processes || []).find((p) => p.captured === false) || null, true)]) }
