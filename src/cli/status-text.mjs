@@ -98,12 +98,12 @@ export function problemsWords(fl, now, noun = '') {
   return `${n}${noun ? ` ${noun}${n === 1 ? '' : 's'}` : ''} ${windowWords(fl, now)}${share}`
 }
 
-/** The daemon in the default text: said only when it is not running this code as it should (§3.5 默认摘要). */
+/** The daemon in the default text: said only when it is not running this code as it should (§3.5 默认摘要), as [what is so, the step to take]. */
 function serviceClause(d) {
-  if (d.running === true) return d.runs_this_code === false ? "trocar's service runs other code than this trocar. Put it on this code: trocar install" : ''
-  if (d.running === false) return "trocar's service is not running, so nothing is captured. Start it: trocar on"
-  if (d.responding === false) return "trocar's service does not answer, so new connections are not captured."
-  return plainSentence(`trocar's service: ${unknown(d.error || 'its state could not be read')}.`)
+  if (d.running === true) return d.runs_this_code === false ? ["trocar's service runs other code than this trocar.", 'Put it on this code: trocar install'] : []
+  if (d.running === false) return ["trocar's service is not running, so nothing is captured.", 'Start it: trocar on']
+  if (d.responding === false) return ["trocar's service does not answer, so new connections are not captured."]
+  return [plainSentence(`trocar's service: ${unknown(d.error || 'its state could not be read')}.`)]
 }
 
 function summaryShort(doc, { now = Date.now(), colors: c = noColor(), home = null } = {}) {
@@ -113,8 +113,9 @@ function summaryShort(doc, { now = Date.now(), colors: c = noColor(), home = nul
   if (!shown.length) return [c.bold('No agent is set up for capture yet.'), ...outOfScopeLines(doc), '', ...readErrorLines(doc), ...((doc.out_of_scope || []).length ? [] : ['Next: trocar install'])]
   const captured = shown.filter((h) => doc.harnesses[h].captured === true).length, open = shown.filter((h) => doc.harnesses[h].captured === null).length
   const restart = needsRestart(restartNames(doc))
-  const head = [`Capturing ${captured} of ${shown.length} agent${shown.length === 1 ? '' : 's'}${open ? `; ${open} not known yet` : ''}.`, restart && `${restart}.`, serviceClause(doc.daemon || {})].filter(Boolean).join(' ')
-  const lines = [...wrap(head, WIDTH).map((l) => c.bold(l)), '']
+  const [svc, step] = serviceClause(doc.daemon || {}) // rule 2: the result on its line, the step to take on the next
+  const head = [`Capturing ${captured} of ${shown.length} agent${shown.length === 1 ? '' : 's'}${open ? `; ${open} not known yet` : ''}.`, restart && `${restart}.`, svc].filter(Boolean).join(' ')
+  const lines = [...wrap(head, WIDTH).map((l) => c.bold(l)), ...(step ? [step] : []), '']
   const rows = [['AGENT', 'CAPTURED', 'NOTE']]
   for (const h of shown) { const x = doc.harnesses[h]; rows.push([h, CAPTURED(x), noteOf(x, h, (x.processes || []).find((p) => p.captured === false) || null, true)]) }
   lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))

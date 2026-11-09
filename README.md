@@ -167,8 +167,8 @@ trocar update            # the newest code, and the machine as it was
 
 One command takes this checkout to the newest code and leaves the machine the way it was: it refuses to touch a checkout with changes of your own, fast-forwards (never merges), runs
 `npm install --omit=dev` (no development tools) when what trocar needs changed, replaces the collector, runs `install`, and switches
-capture on again for the agents that had it on. It prints the plan — which commit to which commit,
-and which agents go off and on again — and asks first; `--yes` answers, `--dry-run` only prints.
+capture on again for the agents that had it on. It prints the plan — which version to which, and which agents are
+not captured while it runs — and asks first; `--yes` answers, `--dry-run` only prints, `--details` adds the commits.
 While it runs those agents are not captured (their connections still work), and the collector is
 replaced the way `uninstall` stops it: a response still on its way gets up to 30 s to finish (the update goes on as soon
 as it has), then the old collector cuts the rest (a call left open, such as a WebSocket) and stops itself cleanly, so the
@@ -176,7 +176,8 @@ new one does not report that the previous one ended without a clean stop. The ro
 say that `update` (or `uninstall`) stopped it. An agent that is on while the collector is replaced (an update with only the
 collector to replace, or `trocar install` from another copy) stays captured: its new connections during those 30 s are
 decrypted and recorded as usual, and a response on one of them is waited for like any other. An update that stops half way leaves a note
-behind: run `trocar update` again and it goes on from where it stopped.
+behind and says one thing to run: `trocar update`, which goes on from where it stopped. In a checkout it first pulls newer code if
+there is any, so a fix that landed since is what finishes it; what cannot be pulled is said, and the code there finishes.
 
 A copy installed with the script updates with the same `trocar update`, or by running the install line again: it
 downloads and checks the new version into its own folder before any agent goes off, then switches to it and finishes
@@ -214,7 +215,7 @@ Node), the `trocar` launcher and the PATH item. On Windows the folder goes as so
 helper is one per machine and other accounts may use it, so while it is installed `uninstall` removes everything else
 of yours as usual and keeps only the code, the launcher and the PATH item, which removing the helper needs. It exits 0
 and prints the `sudo ... setup-helper --remove` line with full paths. If no other account uses trocar, run that line,
-then `trocar uninstall` once more: the second run removes the code, the launcher and the PATH item. `--remove` checks
+then `trocar uninstall` once more: the second run removes the code, the launcher and the PATH item (after `--purge-data`, nothing of trocar's is left). `--remove` checks
 every other account's home for a trocar install and removes nothing while it finds one or cannot read a home, naming
 them. Once trocar itself is gone, the receipt names the kept folders to delete by hand.
 
