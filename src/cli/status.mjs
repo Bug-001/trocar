@@ -454,7 +454,7 @@ function failuresOf(f) {
   const groups = [...(c.failures || []).map(problem(null)), ...((h.raw && h.raw.failures) || []).map(problem('raw'))]
   const expected = Object.values(c.expected || {}).reduce((n, x) => n + (Number(x) || 0), 0)
   let latest = null
-  for (const g of groups) if (String(g.last_ts || '') >= String(latest || '')) latest = g.last_ts || null
+  for (const g of groups) if (g.level === 'problem' && String(g.last_ts || '') >= String(latest || '')) latest = g.last_ts || null // the newest of what `problem` counts
   const parts = [
     ...groups,
     ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ level: 'expected', where: ROW, code, ...g, reason: null })),
