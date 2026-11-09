@@ -57,8 +57,14 @@ test('uninstall: the default plan and receipt say no unsaid word, and --details 
 test('uninstall (§1.4): the default plan names every file of yours outside ~/.trocar, and never says nothing was changed before the question', () => {
   const home = HOMES.darwin
   const plan = formatUninstallText(receipt({ dry_run: true }), { home, platform: 'darwin', tense: 'future', asking: true })
-  for (const p of ['.claude/settings.json', '.config/opencode/plugins/trocar.js']) assert.ok(plan.includes(`~/${p}`), p)
-  assert.ok(plan.includes('~/.config/app/lib') && !plan.includes('a.json'), 'two files of one directory are one line with their count')
+  // the plan is the consent screen: every planned path outside ~/.trocar is there, as itself or as its directory with the count of its files
+  const r = receipt({ dry_run: true }), dot = path.join(home, '.trocar')
+  const yours = [...r.changed.map((c) => c.path), ...r.removed].filter((p) => p.startsWith(`${home}/`) && !p.startsWith(`${dot}/`))
+  for (const p of yours) {
+    const dir = path.dirname(p), n = yours.filter((q) => path.dirname(q) === dir).length
+    assert.ok(n > 1 ? plan.includes(`~${dir.slice(home.length)} (${n} files)`) : plan.includes(`~${p.slice(home.length)}`), `${p} is in the plan:\n${plan}`)
+  }
+  assert.ok(yours.length >= 4 && !plan.includes('a.json'), 'the fixture has a shared directory, and its files are one line')
   assert.ok(!plan.includes('state.json') && !plan.includes('trocar-off'), "trocar's own files under ~/.trocar are one sentence")
   assert.doesNotMatch(plan, /Nothing was changed/)
   assert.match(formatUninstallText(receipt({ dry_run: true }), { home, platform: 'darwin', tense: 'future' }), /Nothing was changed/, '--dry-run still says it')
