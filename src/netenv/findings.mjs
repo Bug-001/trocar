@@ -9,7 +9,7 @@ import { trustReasonText } from '../collector/core/codes.mjs'
 import { TRUST_REASONS, ROUTE_TRUST_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { FINDINGS_WIN32 } from './findings-win32.mjs'
 import { ago } from '../cli/text.mjs'
-import { statusReason } from '../cli/words.mjs'
+import { statusReason, plainSentence } from '../cli/words.mjs'
 import { setupHelperCommand } from '../version.mjs'
 
 const BY_CLASS = { problem: 0, expected: 1, note: 2 }
@@ -197,10 +197,10 @@ export const FINDINGS = {
     commands: (c) => [gui(c.u.name == null ? unknownValue('name', 'the name of that process could not be read') : c.u.wide ? `An interpreter name needs its script name, which trocar does not keep: add ${c.u.name} with an "args" pattern to the agents list in ${c.listPath}`
       : c.u.named ? `A line without "args" would claim every process named ${c.u.name}: add this one with its own "args" pattern to the agents list in ${c.listPath}`
       : `Add ${JSON.stringify({ harness: c.h, name: c.u.name })} to the agents list in ${c.listPath} (create it as {"version":1,"agents":[...]} if it is not there); no restart needed`)], verify: (c) => `trocar status ${c.h}` },
-  'agent-list-invalid': { cls: 'problem', trocarFirst: false, what: (c) => `${c.file.path} has ${c.file.problems.length} bad item${c.file.problems.length === 1 ? '' : 's'}; the rest is still used.`, why: (c) => (c.file.state === 'ok' ? 'A bad item does not apply; the others do.' : 'The whole file does not apply, so only the built-in names are used.'),
+  'agent-list-invalid': { cls: 'problem', trocarFirst: false, what: (c) => `${c.file.path} has ${c.file.problems.length} bad entr${c.file.problems.length === 1 ? 'y' : 'ies'}; the rest is still used.`, why: (c) => (c.file.state === 'ok' ? 'A bad entry does not apply; the others do.' : 'The whole file does not apply, so only the built-in names are used.'),
     commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `Fix ${c.file.path}` : `Fix or remove entry ${p.index + 1} of ${c.file.path}`}: ${p.detail}`)), verify: () => 'trocar status' },
   // D61: the login entry is install's; without it nothing of trocar starts after the next login (status's read of registered(), the question on asks)
-  'autostart-missing': { cls: 'problem', trocarFirst: true, what: (c) => (c.F.autostart.state === 'unknown' ? 'Whether trocar\'s login item is registered could not be read, so trocar may not start after the next login.' : 'trocar\'s login item is not registered or is switched off, so trocar does not start after the next login.'),
+  'autostart-missing': { cls: 'problem', trocarFirst: true, what: (c) => (c.F.autostart.state === 'unknown' ? 'Whether trocar\'s login entry is registered could not be read, so trocar may not start after the next login.' : 'trocar\'s login entry is not registered or is switched off, so trocar does not start after the next login.'),
     why: (c) => `${c.F.autostart.reason.replace(/^./, (m) => m.toUpperCase())}; without it the agents trocar points at cannot connect after a restart.`, commands: (c) => [trocar(c, 'trocar install')], verify: () => 'trocar status' },
   'cert-key-missing': { cls: 'problem', trocarFirst: true, what: () => 'The key for trocar\'s root is gone, so trocar only forwards.', why: () => 'It was removed from your keychain or key store.', commands: (c) => [trocar(c, 'trocar install')], verify: () => 'trocar status' },
   'cert-intermediate-unavailable': { cls: 'problem', trocarFirst: false, what: () => 'trocar cannot sign certificates right now, so it only forwards.', why: () => 'There is no desktop login session, or your keychain is locked.',
@@ -357,16 +357,19 @@ export function renderFindings(findings, { width = 80, short = false } = {}) {
     const head = f.class === 'note' ? 'Note: ' : `${(n += 1)}. `
     const pad = ' '.repeat(head.length)
     if (short && lines.length) lines.push('') // the default text: a blank line between findings (§3.7's sample)
-    lines.push(...wrap(short ? noPid(f.what) : `${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
+    lines.push(...wrap(short ? plainSentence(noPid(f.what)) : `${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
     if (f.why && !short) lines.push(...wrap(f.why, width - head.length).map((l) => pad + l))
     if (f.see) { lines.push(`${pad}See    ${f.see}`); continue }
-    f.commands.filter((c) => !short || !PID_COMMAND.test(c.run)).forEach((c, i) => {
+    const dropped = short && f.commands.some((c) => PID_COMMAND.test(c.run))
+    // the step a pid fills in, said in words in its place (rule 4: the way out is whole), the command in --details
+    const cmds = short ? [...f.commands.filter((c) => !PID_COMMAND.test(c.run)), ...(dropped ? [gui('If it still runs after that, end it: its process number is in trocar doctor --details')] : [])] : f.commands
+    cmds.forEach((c, i) => {
       // a note is not a problem, so what it offers is not a `Fix` (a macOS test machine 2026-10-18: a Fix sat under the headline "no problems")
       const label = i === 0 ? `${pad}${f.class === 'note' ? 'Option' : 'Fix   '} ` : `${pad}       `
       // a command to copy is never folded (§1.1⑥): a paste of half of `sudo <node> <trocar.mjs> setup-helper` runs node alone; a step in an
       // application is prose, so it folds inside the width, two deeper than its first line (§1.1⑥, an indented line's fold)
       if (c.shell !== 'gui') lines.push(label + c.run)
-      else lines.push(...wrap(c.run, width - label.length - 2).map((l, k) => (k ? ' '.repeat(label.length + 2) : label) + l))
+      else lines.push(...wrap(short ? plainSentence(c.run) : c.run, width - label.length - 2).map((l, k) => (k ? ' '.repeat(label.length + 2) : label) + l))
     })
     if (f.verify) lines.push(`${pad}Check  ${f.verify}`)
   }

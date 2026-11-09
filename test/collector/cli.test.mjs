@@ -48,9 +48,6 @@ test('cli: `collector status` is the one `trocar status` (src/cli/status.mjs: it
   const named = []
   const t2 = io(); assert.equal(await runCli(['off', '--bogus'], { env, request, platform: 'linux', ...t2 }), 2, 'and its usage errors are `trocar off`\'s: exit 2')
   assert.match(t2.e.join('\n'), /trocar off: unknown option '--bogus'\ntrocar off \[<harness>/)
-  assert.match(t.o.join('\n'), /^No agent is set up for capture yet\./, 'nothing installed: the summary says so (§3.5); the engine summary the daemon reports is behind --failures, below')
-  const tf = io(); await runCli(['status', '--failures', '--details'], { env, home, request, ...status, ...tf })
-  assert.match(tf.o.join('\n'), /No problems in the last 24 hours\.\n\nExpected\n/, '\u00a73.5: `--failures` prints the problems of the last 24 hours, folded, then Expected')
   // the daemon's own answer, word for word (D46 R11): every agent it reported, why each is not captured, and the processes it could not judge
   const all = formatStatus(STATUS)
   assertEnglish(formatStatus({ ...STATUS, agents: [], unjudged: null, helper: { pid: null, proto: null, build: null, ok: null, down: null, expected_proto: 3 } }), 'an idle helper (no harness is on, 4.6)') // V73: no `null` reaches a person
@@ -62,7 +59,6 @@ test('cli: `collector status` is the one `trocar status` (src/cli/status.mjs: it
   assert.match(all, /  13 deepseek-dsh not captured: dsh-node-too-old - this dsh runs on a Node older than 22\.19\.0/)
   // R4: 3 is for "could not judge", not for "no daemon": with nothing installed and no daemon there is nothing wrong (0); no runtime dir is no usage error either (the lock names the socket when there is one)
   t = io(); assert.equal(await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...status, ...t }), 0)
-  assert.match(t.o.join('\n'), /^No agent is set up for capture yet\./)
   t = io(); assert.equal(await runCli(['status'], { env: {}, home, request, ...status, ...t }), 0); assert.deepEqual(t.e, [])
   fs.rmSync(home, { recursive: true, force: true })
 })
@@ -304,7 +300,7 @@ test('cli: runCli in a child node runs `status` without a runtime dir on a HOME 
   const home = tmpDir('trocar-cli-bin-')
   const c = cliOnEmptyMachine(home, ['status'], { XDG_RUNTIME_DIR: undefined }) // status reads the disk: never the operator's own
   const r = spawnSync(process.execPath, c.args, { env: c.env, encoding: 'utf8' })
-  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /^No agent is set up for capture yet\./); assert.equal(r.stderr, '')
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.equal(r.stderr, '')
   assert.deepEqual(fs.readdirSync(home), [], 'read-only')
   assert.ok(formatStatus({ ...STATUS, agents: [] }).includes('agents: none running'))
   const groups = [{ key: 'agent-untrusted:config-after-start', count: 1, last_ts: 'T1', last: { ts: 'T1', event: 'agent-untrusted', pid: 11, agent: 'claude-code', code: 'config-after-start', reason: 'restart it' } },

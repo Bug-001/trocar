@@ -618,6 +618,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
       for (const l of statusDetail(shown, h, { finding, now, colors: c, home })) io.out(l)
     })
   } else if (details || !failures) for (const l of statusSummary(tildeAll(doc), { now, colors: c, home, details })) io.out(l) // §3.5: --failures alone is its own screen
-  if (failures) { if (detail.length || details) io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now, details, restart: restartNames(doc) })) io.out(l) }
+  if (failures) { if (detail.length || details) io.out(''); const restart = restartNames(doc), alone = !detail.length && !details
+    for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now, details, restart, more: alone && exit !== EXIT.ok && !restart.length })) io.out(l) }
   return { exit, f }
 }

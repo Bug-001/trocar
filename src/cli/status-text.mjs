@@ -4,7 +4,7 @@
 import { columns, pairs, wrap, unknown, ago, noColor, tilde, andList, WIDTH } from './text.mjs'
 import { codeId } from '../version.mjs'
 import { renderRoutes, routeNotes } from '../netenv/topology-text.mjs'
-import { failureBrief, failureWord, squashed, statusNote, plainNote, plainFailure } from './words.mjs'
+import { failureBrief, failureWord, squashed, statusNote, plainNote, plainFailure, plainSentence } from './words.mjs'
 import { RESTART_REASONS } from '../health/codes.mjs'
 import { carrierWords } from './receipt.mjs'
 import { setupSteps } from '../collector/core/proxymode/status-facts.mjs'
@@ -15,7 +15,7 @@ export const noteText = (code, opts = {}) => (code ? (opts.plain ? plainNote : s
 /** A captured harness whose other processes the door has not seen yet (1.6 §2 判词): the count of its rows not known, from the rows ('' when none). */
 const notSeenYet = (x) => { const n = (x.processes || []).filter((p) => p.captured === null).length; return n ? `${n} not seen yet` : '' }
 /** A harness not known: what could not be read, else its rows' own reason (only `not-seen` processes; `said` wraps it where no column says unknown), else that it could not be read. */
-const openText = (x, h, said = (t) => t, plain = false) => { const mine = (x.processes || []).filter((p) => p.reason === x.reason); return (x.why || []).length ? unknown(x.why.join('; ')) : x.reason ? said(noteText(x.reason, { harness: h, pid: !plain && mine.length === 1 ? mine[0].pid ?? null : null, plain })) : unknown('it could not be read') } // a pid only when it is the one row with that reason, and only in --details
+const openText = (x, h, said = (t) => t, plain = false) => { const mine = (x.processes || []).filter((p) => p.reason === x.reason); return (x.why || []).length ? (plain ? plainSentence : String)(unknown(x.why.join('; '))) : x.reason ? said(noteText(x.reason, { harness: h, pid: !plain && mine.length === 1 ? mine[0].pid ?? null : null, plain })) : unknown('it could not be read') } // a pid only when it is the one row with that reason, and only in --details
 
 const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinite(t)) return null; const s = Math.max(0, Math.round((now - t) / 1000)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m` }
 
@@ -103,7 +103,7 @@ function serviceClause(d) {
   if (d.running === true) return d.runs_this_code === false ? "trocar's service runs other code than this trocar. Put it on this code: trocar install" : ''
   if (d.running === false) return "trocar's service is not running, so nothing is captured. Start it: trocar on"
   if (d.responding === false) return "trocar's service does not answer, so new connections are not captured."
-  return `trocar's service: ${unknown(d.error || 'its state could not be read')}.`
+  return plainSentence(`trocar's service: ${unknown(d.error || 'its state could not be read')}.`)
 }
 
 function summaryShort(doc, { now = Date.now(), colors: c = noColor(), home = null } = {}) {
@@ -142,14 +142,14 @@ function shortPairs(doc, now) {
   const crit = doc.critical || []
   if (crit.length) {
     const who = [...new Set(crit.map((x) => x.agent || x.harness).filter(Boolean))]
-    rows.push(['Not captured', `${who.length ? andList(who) : 'a program'} refused trocar's certificate; restart it. Which hosts: trocar status --failures`])
+    rows.push(['Not captured', `${who.length ? andList(who) : 'a program'} refused trocar's certificate; restart it. Which hosts: trocar status --failures --details`])
   }
   const fl = doc.failures
   rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? `none ${windowWords(fl, now)}` : problemsWords(fl, now)])
   const b = doc.board
-  if (b) rows.push(['Board', b.state === 'serving' ? b.url : b.state === 'unknown' ? unknown(b.reason) : `not running: ${b.reason}`])
+  if (b) rows.push(['Board', b.state === 'serving' ? b.url : plainSentence(b.state === 'unknown' ? unknown(b.reason) : `not running: ${b.reason}`)])
   const login = loginRow(doc.autostart)
-  if (login) rows.push(login)
+  if (login) rows.push([login[0], plainSentence(login[1])])
   if (doc.linger === false) rows.push(['Logging out', `capture stops when you log out; run: loginctl enable-linger ${doc.user || '<your user name>'}`])
   else if (doc.linger === 'unknown') rows.push(['Logging out', unknown(doc.linger_reason || 'the linger state could not be read')])
   return rows
@@ -274,20 +274,22 @@ export function failuresBlock(failures, health, opts = {}) {
 
 /** `--failures` by default (§3.5, §1.1 ④): the count and whose, then one row per thing that happened — the groups that say the same for the same
  *  agent are one row, their counts added — newest first. The codes, programs, hosts and the Expected section are `--details`'. */
-function failuresShort(failures, { now = Date.now(), restart = [] } = {}) {
+const at = (ts) => Date.parse(ts) || -Infinity // a group with no time sorts last and never wins a merge
+function failuresShort(failures, { now = Date.now(), restart = [], more = false } = {}) {
   const groups = failures.groups.filter((g) => g.level === 'problem')
   const tail = needsRestart(restart)
-  if (!groups.length) return [[`No problems ${windowWords(failures, now)}.`, tail && `${tail}.`].filter(Boolean).join(' ')]
+  const why = more ? ['Not everything is captured: trocar status'] : [] // D38: a non-zero exit this screen does not explain points at the one that does
+  if (!groups.length) return [[`No problems ${windowWords(failures, now)}.`, tail && `${tail}.`].filter(Boolean).join(' '), ...why]
   const by = new Map()
   for (const g of groups) {
     const { text, todo } = plainFailure(g), key = `${g.harness || ''}\u0000${text}\u0000${todo}`, was = by.get(key)
-    by.set(key, was ? { ...was, count: was.count + g.count, last: Date.parse(g.last_ts) > Date.parse(was.last) ? g.last_ts : was.last } : { harness: g.harness || '-', text, todo, count: g.count, last: g.last_ts })
+    by.set(key, was ? { ...was, count: was.count + g.count, last: at(g.last_ts) > at(was.last) ? g.last_ts : was.last } : { harness: g.harness || '-', text, todo, count: g.count, last: g.last_ts })
   }
-  const rows = [...by.values()].sort((a, b) => Date.parse(b.last) - Date.parse(a.last))
+  const rows = [...by.values()].sort((a, b) => at(b.last) - at(a.last))
   const total = Number.isInteger(failures.problem) ? failures.problem : groups.reduce((n, g) => n + g.count, 0)
   const head = [`${problemsWords({ ...failures, problem: total }, now, 'problem')}.`, tail && `${tail}.`].filter(Boolean).join(' ')
   const cells = columns([['WHEN', 'COUNT', 'AGENT', ''], ...rows.map((r) => [ago(r.last, now), String(r.count), r.harness, ''])]).map((h) => `  ${h}`), col = Math.max(...cells.map((h) => h.length)) + 2
-  const lines = [...wrap(head, WIDTH), '', cells[0].padEnd(col) + 'WHAT HAPPENED']
+  const lines = [...wrap(head, WIDTH), ...why, '', cells[0].padEnd(col) + 'WHAT HAPPENED']
   rows.forEach((r, i) => lines.push(...wrap(`${r.text}.${r.todo ? ` ${r.todo}` : ''}`, WIDTH - col).map((t, j) => (j ? ' '.repeat(col) : cells[i + 1].padEnd(col)) + t)))
   return [...lines, '', 'Codes, programs and hosts: trocar status --failures --details']
 }

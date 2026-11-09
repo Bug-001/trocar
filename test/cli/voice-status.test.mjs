@@ -32,8 +32,14 @@ test('status: the summary says no unsaid word for any reason, and --details name
     for (const fact of ['4012', '3 open']) assert.ok(full.includes(fact), `${reason}: --details says ${fact}`)
     if ((statusNote(reason, { harness: 'a-long-agent-name', pid: 5530 }) || '').includes('5530')) assert.ok(full.includes('5530'), `${reason}: --details names the pid its reason names`)
   }
-  for (const daemon of [{ running: false }, { running: null, responding: false }, { running: null, error: 'the lock could not be read' }, { running: true, runs_this_code: false, code: '9.9.9' }]) {
-    plain(statusSummary({ ...doc({ pi: harness() }), daemon }, { now: NOW }), `status (${JSON.stringify(daemon)})`)
+  // a service not running this code is named in the head line; the board and login rows it brings carry reasons that name the daemon
+  const boards = [{ state: 'not-running', reason: 'the daemon is not running; trocar board starts it' }, { state: 'unknown', reason: 'the daemon did not answer (ETIMEDOUT)' }]
+  for (const daemon of [{ running: false }, { running: null, responding: false }, { running: null, error: 'the daemon lock could not be read' }, { running: true, runs_this_code: false, code: '9.9.9' }]) {
+    for (const board of boards) {
+      const lines = statusSummary({ ...doc({ pi: harness() }), daemon, board, autostart: { state: 'absent', reason: 'the daemon login entry is not registered', command: 'trocar install' } }, { now: NOW })
+      plain(lines, `status (${JSON.stringify(daemon)})`)
+      assert.ok(lines[0].includes("trocar's service"), `the head says the service: ${lines[0]}`)
+    }
   }
 })
 
@@ -57,12 +63,13 @@ test('doctor: no unsaid word and no pid for any finding; --details keeps every f
     t: { nodes: [], edges: [], branches: [] }, F: { routing: 'proxy', harnesses: {}, desired: {}, at: ago(0), autostart: { state: 'absent', reason: 'the login item is not registered' } }, user: 'alice', setting: { scheme: 'socks5', host: '127.0.0.1', port: 1080 },
     dead: { addr: '127.0.0.1', port: 7890 }, u: { name: 'node', pid: 42 }, listPath: '/home/alice/.trocar/agents.json', file: { path: '/home/alice/.trocar/agents.json', state: 'ok', problems: [{ index: 1, detail: 'a bad item' }] },
     pid: 5530, pids: [5532], port: 17992, upPort: 7890, online: 'codex', holders: [{ harness: 'codex', pid: 5533 }] }
-  for (const code of FINDING_CODES) {
-    const f = findingFor(code, ctx)
+  for (const [platform, code] of ['linux', 'win32'].flatMap((p) => FINDING_CODES.map((c) => [p, c]))) {
+    const f = findingFor(code, { ...ctx, platform })
     const d = { findings: [f], summary: { problem: +(f.class === 'problem'), expected: +(f.class === 'expected'), note: +(f.class === 'note') }, undetermined: [], status: { failures: null }, install_notes: [] }
     const short = doctorShort(d, { now: NOW })
-    plain(short.filter((l) => !/^ {3}(Fix|Check| {4})/.test(l)), `doctor (${code})`) // a command is the user's to copy, whatever its words
-    assert.doesNotMatch(short.join('\n'), /\bpid\b|\b55\d\d\b|\b66\d\d\b/, `doctor (${code}): a pid only in --details:\n${short.join('\n')}`)
+    const copy = f.commands.filter((c) => c.shell !== 'gui').map((c) => c.run).concat(f.verify || [])
+    plain(short.filter((l) => !copy.some((c) => l.trimEnd().endsWith(c))), `doctor (${platform} ${code})`) // a command is the user's to copy, whatever its words
+    assert.doesNotMatch(short.join('\n'), /\bpid\b|\b55\d\d\b|\b66\d\d\b/, `doctor (${platform} ${code}): a pid only in --details:\n${short.join('\n')}`)
     const full = doctorDetails(d).join('\n').replace(/\s+/g, ' ')
     for (const fact of [f.what, ...f.commands.map((c) => c.run)]) assert.ok(full.includes(fact.replace(/\s+/g, ' ')), `${code}: --details keeps ${fact}`)
   }

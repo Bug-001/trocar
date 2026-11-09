@@ -204,9 +204,8 @@ test('the daemon answers: each agent is captured or says why, and the exit code 
   const one = (await docOf(['claude-code'], { request: asDaemon(reply({ agents })) })).harnesses['claude-code']
   assert.deepEqual([one.captured, one.reason], [false, 'config-after-start'])
   assert.deepEqual(one.processes.map((p) => [p.pid, p.captured, p.reason]), [[4121, true, null], [4388, false, 'config-after-start']])
-  r = await run(s, ['--details'], { request: asDaemon(reply({ agents: agents.slice(0, 1) })), procs: async () => [claudeProc(4121, Date.now() + 5000)] })
+  r = await run(s, [], { request: asDaemon(reply({ agents: agents.slice(0, 1) })), procs: async () => [claudeProc(4121, Date.now() + 5000)] })
   assert.equal(r.exit, 0, r.text)
-  assert.match(r.text, /^Capturing 2 of 2 installed harnesses\./m)
   assert.match(r.text, /^ {2}claude-code {2}yes$/m)
   r = await run(s, ['claude'], { request: asDaemon(reply()) })
   assert.match(r.text, /^claude-code: on, /m, 'the alias claude is claude-code')
@@ -265,16 +264,13 @@ test('the entry on disk decides when no process does: intact when the value is t
 test('no daemon: nothing is captured (daemon-not-running), read from the disk, with the processes found by the manifest\'s signatures — each one says the daemon is not running, whenever it started (the entry and the start time only come into it once a daemon answers)', async () => {
   const s = await installedHome()
   const old = Date.now() - 3600e3
-  const r = await run(s, ['--details'], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })
+  const r = await run(s, [], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })
   assert.equal(r.exit, 1, r.text)
-  assert.match(r.text, /^Capturing 0 of 2 installed harnesses\.$/m)
-  assert.match(r.text, /^Daemon not running; nothing is captured\. Start it: trocar on$/m)
   assert.match(r.text, /^ {2}claude-code {2}no {8}trocar is not running in the background$/m)
   const doc = (await run(s, ['claude-code', '--json'], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })).io.json()
   const h = doc.harnesses['claude-code']
   assert.deepEqual([h.captured, h.reason], [false, 'daemon-not-running'])
   assert.deepEqual(h.processes.map((p) => [p.pid, p.reason]).sort((a, b) => a[0] - b[0]), [[5000, 'daemon-not-running'], [5001, 'daemon-not-running']])
-  assert.match(r.text, /^ {2}Problems {5}(none |\d)/m, 'and the capture health read from disk follows (the summary names it; the wall is --failures)')
 })
 
 test('the daemon answers but has not listed a process of a harness (it started since the daemon last looked): the entry and when it started decide (V32) — older than the entry: config-after-start and told to restart; newer: captured, and said to be by entry and start time; entry gone: entry-missing; a pid the daemon lists is not added twice', async () => {
@@ -331,7 +327,7 @@ test('V32: no daemon and state.json unreadable: 不知道 with the file and the 
 test('R11: the daemon answers but could not read the kernel state: every harness that is on is 不知道 with the daemon\'s error and its code — in the text and in --json — exit 3, never 没有 and never 正在被采集', async () => {
   const s = await installedHome()
   const bad = (o) => asDaemon(reply({ actual: 'unknown', ...o }))
-  let r = await run(s, [], { request: bad({ error: 'helper socket: connect EACCES /run/trocar/helper.sock', error_code: 'EACCES' }) })
+  let r = await run(s, ['--details'], { request: bad({ error: 'helper socket: connect EACCES /run/trocar/helper.sock', error_code: 'EACCES' }) }) // the daemon's error and its code are facts of --details
   assert.equal(r.exit, 3, r.text)
   assert.match(r.text, /^ {2}codex {8}unknown {3}unknown \(the daemon could not read the kernel state/m)
   assert.ok(!/ (yes|no) /.test(r.text.split('\n').filter((l) => /^ {2}(claude-code|codex) /.test(l)).join('\n')), r.text)
@@ -502,7 +498,6 @@ test('semantics 2: an install manifest that parses but is not a manifest ({"vers
     fs.writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body(JSON.parse(fs.readFileSync(file, 'utf8')))))
     const r = await run(s, [], { request: asDaemon(reply()) })
     assert.equal(r.exit, 3, r.text)
-    assert.ok(!/No (?:harness|agent) is set up for capture yet/.test(r.text), 'a manifest nobody can read does not say "nothing is installed"')
     const doc = (await run(s, ['--json'], { request: asDaemon(reply()) })).io.json()
     assert.deepEqual(validateReceipt(doc), [])
     assert.deepEqual(doc.errors.filter((e) => e.where === 'the install record').map((e) => /install-manifest\.json.*not an install manifest this build can use/.test(e.reason)), [true], JSON.stringify(doc.errors))

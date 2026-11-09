@@ -393,6 +393,7 @@ export const plainReason = (code, opts) => { const r = statusReason(code, opts);
 /** statusNote in the default text's words. */
 export const plainNote = (code, opts) => { const r = plainReason(code, opts); return r && [r.text, r.fix, r.command && `run: ${r.command}`].filter(Boolean).join('; ') }
 const STATUS_CODE = /^[a-z][a-z0-9-]*$/
+const PASSED_ON = new Set(['untrusted', 'untracked'])
 const REFUSED = new Set(['client-rejected-leaf', 'trust-rejected']) // a program refused trocar's certificate: `status <agent>` names the hosts and the fix
 const upper = (s) => s.replace(/^./, (m) => m.toUpperCase())
 /** One failure group (C.3 `failures.groups[]`) as `status --failures` says it by default: `{ text, todo }`, what happened and what to do ('' when
@@ -400,7 +401,8 @@ const upper = (s) => s.replace(/^./, (m) => m.toUpperCase())
  *  two groups of one cause read as one; the code, the raw reason and the program stay in `--details`. A code no table knows says so, never its name. */
 export function plainFailure(g) {
   const h = (g && g.harness) || ''
-  const byReason = g && typeof g.reason === 'string' && STATUS_CODE.test(g.reason) ? plainReason(g.reason, { harness: h }) : null
+  // only a connection passed on unread carries its cause as its reason, and only an agent's: any other group's reason is its own words
+  const byReason = h && PASSED_ON.has(g.code) && typeof g.reason === 'string' && STATUS_CODE.test(g.reason) ? plainReason(g.reason, { harness: h }) : null
   const byCode = plainReason(g && g.code, { harness: h })
   const shared = failureWord(g && g.where, g && g.code, h, g && g.cause)
   const text = (byReason && byReason.text) || (Object.hasOwn(PLAIN_FAILURE, g && g.code) ? PLAIN_FAILURE[g.code] : null)
@@ -409,3 +411,8 @@ export function plainFailure(g) {
   const todo = r && r.fix ? `${upper(r.fix)}.` : r && r.command ? `Run: ${r.command}` : h && REFUSED.has(g.code) ? `See: trocar status ${h}` : ''
   return text ? { text, todo } : { text: 'a problem trocar has no sentence for yet', todo: 'See: trocar status --failures --details' }
 }
+/** A sentence another module wrote and --json keeps (a finding's, a board or login reason, a reason a read failed) in the default text's words:
+ *  its few words of UNSAID said the user's way, its error code left out. */
+export const plainSentence = (s) => String(s).replace(/\bbad entry\b/g, 'bad item').replace(/\bbad entries\b/g, 'bad items').replace(/\blogin entry\b/g, 'login item')
+  .replace(/\bentry (\d+)\b/g, 'item $1').replace(/\b(?:the |a )?daemon\b/gi, "trocar's service")
+  .replace(/:? ?\(?\b(?:E[A-Z][A-Z0-9_]{2,}|ERR_[A-Z0-9_]+)\b\)?/g, '') // an error code is --details' (§1.1 ④ rule 3): the sentence around it says what happened

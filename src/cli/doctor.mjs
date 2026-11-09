@@ -13,7 +13,8 @@ import { codeId } from '../version.mjs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { EXIT, newReceipt } from '../off/schema.mjs' // as in status.mjs: the keys and the exit codes, not ./schema.mjs's checker (D62)
-import { unknown, andList, shellArg as shq } from './text.mjs' // shq: a path with a space or a quote stays one argument of the chmod line
+import { unknown, andList, shellArg as shq } from './text.mjs'
+import { plainSentence } from './words.mjs' // shq: a path with a space or a quote stays one argument of the chmod line
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { statusFacts, statusDocOf } from './status.mjs'
 import { diagnose, renderFindings, needsYou } from '../netenv/findings.mjs'
@@ -214,10 +215,10 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
  *  see them. */
 export function doctorShort(doc, { now = Date.now() } = {}) {
   const s = doc.summary
-  if (s === null) return [`trocar doctor: findings are ${unknown(doc.findings_error)}.`, ...judged(doc)]
+  if (s === null) return [plainSentence(`trocar doctor: findings are ${unknown(doc.findings_error)}.`), ...judged(doc).map(plainSentence)]
   const fl = doc.status && doc.status.failures
   const shown = (f) => f.class === 'problem' || needsYou(f)
-  const told = (doc.findings || []).filter(shown).map((f) => (f.code === 'capture-failures' && fl ? { ...f, what: `${problemsWords(fl, now, 'capture failure')}.`, see: 'trocar status --failures' } : f))
+  const told = (doc.findings || []).filter(shown).map((f) => (f.code === 'capture-failures' ? { ...f, ...(fl ? { what: `${problemsWords(fl, now, 'capture failure')}.` } : {}), see: 'trocar status --failures' } : f))
   const rest = (doc.findings || []).filter((f) => !shown(f))
   const restart = [...new Set(told.filter((f) => f.class === 'expected' && RESTART_REASONS.includes(f.code)).map((f) => f.harness).filter(Boolean))]
   const other = [...new Set(told.filter((f) => f.class === 'expected' && !RESTART_REASONS.includes(f.code)).map((f) => f.harness || 'trocar'))]
@@ -226,8 +227,9 @@ export function doctorShort(doc, { now = Date.now() } = {}) {
   const head = n ? `trocar doctor: ${n} problem${n === 1 ? '' : 's'}${todo ? `, and ${todo}` : ''}.` : todo ? `trocar doctor: no problems, but ${todo}.` : 'trocar doctor: no problems.'
   const lines = [head]
   if (told.length) lines.push('', ...renderFindings(told, { short: true }))
-  lines.push(...judged(doc))
-  const hidden = renderFindings(rest).filter((l) => /^(?:\d+\.|Note:) /.test(l)).length // what --details prints of them, one per finding said
+  lines.push(...judged(doc).map(plainSentence))
+  const hidden = renderFindings(rest).filter((l) => /^(?:\d+\.|Note:) /.test(l)).length // what --details prints of them, one per finding said,
+    + (doc.install_notes || []).filter((l) => !/^Notes of/.test(l)).length + doc.undetermined.filter((x) => x.reason === 'no captured data yet').length // and the notes only it prints
   if (hidden) lines.push('', `${hidden} note${hidden === 1 ? '' : 's'}: trocar doctor --details`)
   return lines
 }

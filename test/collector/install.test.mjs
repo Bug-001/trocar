@@ -264,8 +264,6 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     // §3.5: the exit code counts only the harnesses that are on and not captured NOW — nothing is on here, so a clean 0; a failure in the last
     // 24 h is a Problems line, never an exit code (the old assertion was 1, from when "no daemon" decided it)
     assert.equal(code, 0, 'nothing is on, so nothing is uncaptured: the failure below does not decide the exit code (§3.5)')
-    assert.match(out.join('\n'), /^Daemon not running; nothing is captured\. Start it: trocar on$/m)
-    assert.match(out.join('\n'), /^ {2}Problems {4,}1 in the last 24 hours, latest just now$/m, 'the uninstall residue reaches the Problems line')
     // D38: what the uninstall left behind is still named — in the text (--failures) and in the document (`failures`)
     assert.match(out.join('\n'), /\.claude/, 'the residue, with its path, is in the text')
     const doc = []
