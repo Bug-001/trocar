@@ -182,7 +182,7 @@ export function overviewStats(doc, pricingDoc) {
   return {
     sessions: doc && doc.sessions ? doc.sessions.total : null, calls: doc && doc.calls ? doc.calls.llm : null,
     ...priced(rows), partial, coverage: cov, hit: hit.hit, hitUncertain: hit.uncertain, main: hit.main,
-    unpriced: unpricedModels(rows, table).length, byAgent,
+    unpriced: unpricedModels(rows, table)?.length ?? null, byAgent,
   }
 }
 
@@ -318,7 +318,7 @@ export function statsCard(s, now) {
   return {
     ...card,
     sessions: { text: W.SESSIONS_N(m.sessions ?? 0), href: `#/sessions?window=${s.w}` }, calls: W.CALLS_N(m.calls ?? 0),
-    cost: costOfModel(m, priceFail), unpriced: s.pricing && s.pricing.ok !== false && s.pricing.data && m.unpriced > 0 ? // no table yet: nothing is "unpriced"
+    cost: costOfModel(m, priceFail), unpriced: s.pricing && s.pricing.ok !== false && m.unpriced > 0 ? // a failed read says so on the cost line instead
       { text: W.UNPRICED(m.unpriced), href: '#/settings/prices' } : null,
     hit: hitOf({ hit: m.hit, uncertain: m.hitUncertain, main: m.main }), agents,
   }
