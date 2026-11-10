@@ -45,8 +45,8 @@ function PriceTable({ rows }: { rows: PriceRow[] }) {
   )
 }
 
-function Unpriced({ overview, rows, source }: { overview: Overview, rows: PriceRow[] | null, source: string | undefined }) {
-  const table = rows && Object.fromEntries(rows.map((r) => [r.id, [r.input, r.output, r.write, r.read]]))
+function Unpriced({ overview, rows, source }: { overview: Overview, rows: PriceRow[], source: string | undefined }) {
+  const table = Object.fromEntries(rows.map((r) => [r.id, [r.input, r.output, r.write, r.read]]))
   const un = unpricedModels(overview.usage!.rows as unknown[], table)
   return (
     <div className="scard"><h2>{W.CARD_UNPRICED}</h2>
@@ -94,8 +94,9 @@ export default function PricesScreen(_props: ScreenProps) {
           </> : p ? (rows ? <PriceTable rows={rows} /> : <p className="err">{W.PRICE_BAD_SHAPE}</p>) : null}
           <TechDetails pairs={techOf(TECH)} copy={flatText(TECH)} />
         </div>
-        {overview && overview.usage && Array.isArray(overview.usage.rows)
-          ? <Unpriced overview={overview} rows={rows} source={pricing ? pricing.source : undefined} /> : null}
+        {/* which models lack a price is known only against a price table that was read (invariant 4) */}
+        {rows && overview && overview.usage && Array.isArray(overview.usage.rows)
+          ? <Unpriced overview={overview} rows={rows} source={pricing!.source} /> : null}
       </div>
     </div>
   )
