@@ -457,7 +457,7 @@ test('D38: every line off writes to flows/ is in the closed sets, every run of o
   assert.ok(un.some((e) => e.code === 'reverted-not-identical') && un.some((e) => e.code === 'still-trusting'), JSON.stringify(un.map((e) => [e.where, e.kind, e.code])))
 })
 
-test('V24: with the install manifest gone and no terminal, off takes the routing off, stops the daemon and leaves the files alone, lists what it found by trocar\'s marks, exits 1 with outcome partial; with --yes it undoes them by those marks (undone-by-marker), and what install wrote stays (D55①): the commented user line and the certificate key are uninstall\'s', async () => {
+test('V24: with the install manifest gone and no terminal, off takes the routing off, stops the daemon and leaves the files alone, lists what it found by trocar\'s marks, exits 1 with outcome partial; with --yes it undoes them by those marks (undone-by-marker), and what install wrote stays (D55①): the commented user line and the certificate key are uninstall\'s', { skip: POSIX_WORLD }, async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   let rcOriginal
   const s = await installedHome({ names: ['claude-code', 'codex', 'kimi-code'], seed: (home, sh) => {
