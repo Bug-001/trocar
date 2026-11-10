@@ -39,8 +39,11 @@ function fit(text) {
 
 // a text of several lines (refuseOldManifest's refusal) keeps its lines, with HOME as `~` (§1.1⑤): a line at COMMAND_INDENT is a command to copy,
 // printed whole on its own line (§1.1⑥; `~` only for a POSIX HOME, where the shell expands it), every other line folded by fit
-const tildeWords = (s, home) => s.split(' ').map((w) => (w.startsWith('(') ? `(${offTilde(w.slice(1), home)}` : offTilde(w, home))).join(' ') // a path in parentheses too
-export const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeWords(l, home))))
+const tildeWords = (s, home) => s.split(' ').map((w) => (w.startsWith('(') ? `(${offTilde(w.slice(1), home)}` : offTilde(w, home))).join(' ') // a line to copy: an unquoted word, a path in parentheses too
+// words: HOME wherever a path starts with it, a HOME with a space in it too (an account name may have one); never inside a longer name, and never
+// in quotes (a command quoted in a sentence: the shell expands no ~ there)
+const tildeText = (s, home) => (home ? s.replace(new RegExp(`(^|[\\s(\\[=:])${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[\\\\/]|$|[\\s"'),;\\]])`, 'g'), '$1~') : s)
+export const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeText(l, home))))
 /** Rows of [label, value] as a labelled list (§1.1②, cli/text.mjs pairs' layout, written here for the same reason as fit): each label at column 2, padded so every
  *  value starts in one column; a value folds at its own column (never COMMAND_INDENT: that column is at least 2 + 1 + 2), a word longer than the room keeps
  *  its line whole; HOME as ~. */
@@ -49,7 +52,7 @@ export const labelLines = (rows, home) => {
   return rows.flatMap(([l, v]) => {
     const out = []
     let line = `  ${String(l).padEnd(label)}  `, empty = true
-    for (const word of tildeWords(String(v ?? ''), home).split(/\s+/).filter(Boolean)) {
+    for (const word of tildeText(String(v ?? ''), home).split(/\s+/).filter(Boolean)) {
       if (!empty && line.length + 1 + word.length > WIDTH) { out.push(line); line = ' '.repeat(col) + word } else { line += (empty ? '' : ' ') + word; empty = false }
     }
     return [...out, line.trimEnd()]
@@ -183,8 +186,8 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     lines.push(past ? 'Found by trocar\'s own marks and not undone yet:' : 'Will be undone by trocar\'s own marks:')
     for (const p of r.pending) lines.push(...fit(`  ${p.harness ? `${p.harness}  ` : ''}${t(p.path)}`))
   }
-  for (const l of r.left || []) lines.push(...fit(tildeWords(`Not undone: ${t(l.path)} (${l.reason || l.result})`, home))) // HOME as ~ in the reason too (1.6 §1.1⑤)
-  for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(n)))
+  for (const l of r.left || []) lines.push(...fit(tildeText(`Not undone: ${t(l.path)} (${l.reason || l.result})`, home))) // HOME as ~ in the reason too (1.6 §1.1⑤)
+  for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(tildeText(n, home))))
   for (const n of r.notes || []) lines.push(...textLines(n, home)) // HOME as ~ (1.6 §1.1⑤), a note's command on its own line
   lines.push(...extra, footer || (past ? 'Certificates stay installed. To remove them: trocar uninstall' : 'Nothing was changed. Run it without --dry-run to do it.'))
   return lines.join('\n')
@@ -239,7 +242,7 @@ export function formatOffText(r, { home = null, tense = r.dry_run ? 'future' : '
     lines.push(...textLines(`Not undone: ${said}${l.restore ? '. To put the whole file back as it was before trocar, losing every change made to it since, run:' : ''}`, home))
     for (const c of [l.restore, l.command].filter(Boolean)) lines.push(...textLines(`${COMMAND_INDENT}${c}`, home)) // HOME as ~ where the shell expands it (1.6 §1.1⑤)
   }
-  for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(tildeWords(n, home))))
+  for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(tildeText(n, home))))
   for (const n of unread) lines.push(...textLines(n, home)) // D38: a fact not read is never left to --details
   if (!past) lines.push('Nothing was changed. Run it without --dry-run to do it.')
   return lines.join('\n')

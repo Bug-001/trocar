@@ -12,7 +12,7 @@ import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { undoSide, offWorld, runOff } from '../../src/off/orchestrate.mjs'
-import { formatOffReceipt, formatOffText } from '../../src/off/receipt.mjs'
+import { formatOffReceipt, formatOffText, isCommandLine } from '../../src/off/receipt.mjs'
 import { applyJsonKey } from '../../src/collector/core/trust/journal.mjs'
 import { certBlocks, SYSTEM_BUNDLES } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
@@ -964,6 +964,23 @@ test('a file off leaves: its backup and the line that puts it back show HOME as 
     const out = f(r.receipt, { home: s.home })
     assert.ok(!out.includes(s.home), `${name}:\n${out}`)
     assert.ok(out.replace(/\s+/g, ' ').includes(`cp ~${left.backup.slice(s.home.length)} ~${file.slice(s.home.length)}`), `${name}: the line that puts it back, with ~:\n${out}`)
+  }
+})
+
+// 1.6 §1.1⑤: HOME as ~ in the words of every row, also a HOME with a space in it (macOS and Windows account names may have one); a quoted path
+// keeps HOME as it is (the shell expands no ~ in quotes)
+test('a HOME with a space is ~ in the words of off\'s text and --details', () => {
+  for (const [home, sep] of [['/Users/Ann Lee', '/'], ['C:\\Users\\Ann Lee', '\\']]) {
+    const file = [home, '.claude', 'settings.json'].join(sep), backup = [home, '.trocar', 'backup', 'ab12-20261109T000000Z'].join(sep)
+    const q = (p) => (sep === '/' ? `'${p}'` : `"${p}"`)
+    const receipt = { command: 'off', ok: false, outcome: 'left', all: true, harnesses: [], routing: { confirmed: true }, changed: [], removed: [],
+      left: [{ path: file, harness: 'claude-code', result: 'left-unparsable', reason: `${file}: trocar cannot read it. The file as it was before trocar is kept at ${backup}; by hand: cp ${q(backup)} ${q(file)} (puts the whole file back)`, backup, restore: `cp ${q(backup)} ${q(file)}` }],
+      problems: [`${file} could not be read (${backup} is kept)`] }
+    for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+      const words = f(receipt, { home }).split('\n').filter((l) => !isCommandLine(l))
+      const unquoted = words.join(' ').replace(/'[^']*'|"[^"]*"/g, '') // a quoted path is a command's, kept as the shell needs it
+      assert.ok(!unquoted.includes(home), `${name}, ${home}: no words hold the HOME:\n${words.join('\n')}`)
+    }
   }
 })
 
