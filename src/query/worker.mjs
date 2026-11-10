@@ -113,7 +113,7 @@ async function serve(line) {
     // there is no room)
     if (!control && (name === 'lane' || (name === 'session' && !headAsked(params || {}))) && held(String(params?.id))) {
       const id = String(params.id)
-      if (noRoom.delete(id)) { waitRoom.set(id, null); roomLater() }
+      if (noRoom.delete(id) || waitRoom.get(id)) { waitRoom.set(id, null); roomLater() } // an upgrade entry asked for waits as a user's
       await write(102, Buffer.alloc(0), '-', 0, '-'); return null
     }
     if (control) { // one JSON line, the bytes `trocar <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
@@ -216,7 +216,9 @@ const noRoom = new Set() // the sessions a background slice stopped on heap-no-r
 // heap has room, back to the head of the upgrade queue or to `follow`; when nothing else can give way (no reader, no fill, the warm
 // entries let go: heapHasRoom), it does not fit: its heap-no-room stop, and `noRoom`
 const waitRoom = new Map()
-const held = (id) => waitRoom.has(id) || noRoom.has(id) // no try for it until the heap has room
+// sessions this process found no room for: a stop an earlier worker wrote (the upgrade scan's) is this heap's to try once
+const roomless = new Set()
+const held = (id) => waitRoom.has(id) || (noRoom.has(id) && roomless.has(id)) // no try for it until the heap has room
 /** Session work pending: a request read or in flight, or a session read for a user (a request's, a follow's, a kick's). The usage fill waits
  *  for none (3.5 后台抽取与归约); a session fully read is no longer `target` nor followed, so it holds nothing. */
 const sessionWork = () => busy > 0 || (target != null && user) || follow.size > 0
@@ -239,7 +241,7 @@ const roomLater = () => {
     waitRoom.clear()
     for (const [id, u] of ids) {
       if (room) { if (u) upgrade?.unshift(u); else follow.add(id) }
-      else { noRoom.add(id); try { await noRoomStop({ home, fs: nodeFs, writer: writes, persist, once, progress }, id) } catch (e) { say(e) } }
+      else { noRoom.add(id); roomless.add(id); try { await noRoomStop({ home, fs: nodeFs, writer: writes, persist, once, progress }, id) } catch (e) { say(e) } }
     }
     kick()
   }, ROOM_MS)
@@ -306,9 +308,9 @@ async function background() {
     try { more = await extendSession(ctx, id, SLICE_MS) } catch (e) {
       // heap-busy is no failure: a user's or an upgrade's session waits for room; the newest scan's is dropped (the next request scans again)
       if (e?.code === 'heap-busy') { if (mine !== undefined) { waitRoom.set(id, mine); roomLater() } } else say(e)
-      if (e?.code === 'heap-no-room') noRoom.add(id)
+      if (e?.code === 'heap-no-room') { noRoom.add(id); roomless.add(id) }
     }
-    if (more === null) noRoom.add(id) // its state went in the slice: the heap again, not the session
+    if (more === null) { noRoom.add(id); roomless.add(id) } // its state went in the slice: the heap again, not the session
     if (!more && !noRoom.has(id) && !waitRoom.has(id) && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
       try { writeSkip(home, target, up[1]) } catch { /* the next worker tries again */ }
     }
