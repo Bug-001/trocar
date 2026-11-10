@@ -16,7 +16,8 @@ import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
 import { FLAG, opensPart } from './head-cols.mjs';
 import { compactionVerdict, compactionBaseline } from '../identity/session-identity.mjs';
-import { boardDissectorOf as dOf, unsupportedOf } from '../dissect/registry.mjs';
+import { boardDissectorOf as dOf } from '../dissect/registry.mjs';
+import { unsupportedOf } from '../dissect/endpoints.mjs';
 import { askOf, COMP_KEYS, sharedLines, taskOf, HEAD, TASK_HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { materializeAttrs } from './extract.mjs';
@@ -39,11 +40,11 @@ function realGroundTruth(prefixByteIdentical, read, create) {
 // records ARE rendered (a mixed session); otherwise the whole session is unrecognized.
 export function unknownSummary(recs, partial) {
   const uniq = (xs) => [...new Set(xs.filter(Boolean))];
-  const models = uniq(recs.map((r) => r.model)), wires = uniq(recs.map(unsupportedOf));
+  const models = uniq(recs.map((r) => r.model)), wires = uniq(recs.map((r) => unsupportedOf(r.endpoint)));
   return {
     partial,
     // every one a call on a wire this version records and does not read (D37 ⑥): that wire is named
-    reason: recs.length && recs.every(unsupportedOf) ? `${partial ? 'Some records in this session are' : 'These records are'} calls on a wire this version `
+    reason: recs.length && recs.every((r) => unsupportedOf(r.endpoint)) ? `${partial ? 'Some records in this session are' : 'These records are'} calls on a wire this version `
       + `records and does not read (${wires.join(', ')}): they are kept byte for byte and NOT rendered.`
       : partial
       ? 'Some records in this session are read as a call by no registered dissector (src/dissect/registry.mjs): '

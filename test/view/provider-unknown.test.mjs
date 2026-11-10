@@ -54,6 +54,21 @@ test('unknown records that are all of a wire this version does not read say whic
   assert.ok(!mixed.unknown.reason.includes('bedrock'), 'a record of no known wire among them: no wire is claimed for it')
 });
 
+// Vertex AI's Gemini models end in :generateContent too, the Gemini API's suffix: a wire this version does not read gives no provider
+const vertex = (id, ts) => ({
+  id, ts_request: ts, host: 'us-central1-aiplatform.googleapis.com', proc: OC, endpoint: '/v1/projects/p/locations/us/publishers/google/models/x:streamGenerateContent',
+  req_headers: { 'x-session-id': 'sess-vx', 'user-agent': 'some-sdk/1.0' },
+  req_body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'hi' }] }] }),
+  resp: { kind: 'json', status: 200, body: {} },
+});
+test('a Vertex Gemini session has no provider and its calls are unknown, named as vertex', async () => {
+  const { meta, doc } = await read([vertex('v1', '2026-07-19T00:00:00Z'), vertex('v2', '2026-07-19T00:00:01Z')], 'sess-vx');
+  assert.equal(meta.provider, null);
+  assert.equal(doc.unknown.records, 2);
+  assert.ok(doc.unknown.reason.includes('vertex'), doc.unknown.reason);
+  assert.deepEqual(doc.calls, []);
+});
+
 test('a real Claude Code call on the same harness is still read as Anthropic (no regression)', async () => {
   const { meta, doc } = await read([cc], 's1');
   assert.equal(meta.provider, 'anthropic');

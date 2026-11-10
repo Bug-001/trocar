@@ -11,24 +11,11 @@ import { RESPONSES_WS } from './openai-ws.mjs';
 import { ANTHROPIC } from './anthropic-board.mjs';
 import { GEMINI } from './gemini.mjs';
 import { CC_THREADS, isContinuation } from './cc-threads.mjs';
-import { endpointOf, pathOf, failedOf } from './endpoints.mjs';
+import { endpointOf, failedOf, unsupportedOf } from './endpoints.mjs';
 import { respOf } from './record-fields.mjs';
 import { sharesBody } from './request-body.mjs';
 
 export { isWsHandshake };
-
-// D37 ⑥: no dissector in v1 — stored as captured, read as 「未识别」 and labelled. Vertex first: its
-// Gemini models also end in :generateContent, which the endpoint table names the Gemini API wire.
-const UNSUPPORTED = [
-  ['vertex', /\/projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/models\/[^/:]+:[A-Za-z]+$/],
-  ['bedrock', /\/model\/[^/]+\/(invoke|invoke-with-response-stream|converse|converse-stream)$/],
-];
-/** unsupportedOf(rec) → the name of the inference wire this version records and does not read that `rec` is on (D37 ⑥), else null. */
-export function unsupportedOf(rec) {
-  const ep = pathOf(rec && rec.endpoint);
-  for (const [name, re] of UNSUPPORTED) if (re.test(ep)) return name;
-  return endpointOf(ep)?.unsupported ?? null;
-}
 
 // → 'anthropic' | 'gemini' | 'openai-responses' | 'openai-chat' | 'openai-responses-ws' | 'ws-handshake' | null.
 // null = no registered wire claims these bytes (they are counted and labelled, never guessed at).
@@ -38,7 +25,7 @@ export function wireFormatOf(rec) {
   const row = endpointOf(rec.endpoint), wire = row && row.wire;
   if (rec.transport === 'ws') return wire === 'openai-responses' ? 'openai-responses-ws' : null;
   if (isWsHandshake(rec)) return 'ws-handshake';
-  if (unsupportedOf(rec) || (row && row.class === 'token-count')) return null;
+  if (unsupportedOf(rec.endpoint) || (row && row.class === 'token-count')) return null;
   if (wire === 'anthropic' || wire === 'gemini') return wire;
   // The OpenAI dissector reads its endpoints AND refuses Anthropic bytes on them ("bytes beat path": a
   // gateway that posts an Anthropic body to /chat/completions is still the Anthropic wire). With no

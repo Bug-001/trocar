@@ -7,7 +7,7 @@
 //   • never splits or joins a session by pid or connection (3.4 关键区分): proc.pid / flow_id / dst unread.
 //   • proc.agent spellings: a row's `agents` = its registry row's read id, then its code id (the descriptor name), deduped (gate G2).
 // Leaf module (0.1 §2): imports only its siblings and the harness registry (which imports nothing).
-import { endpointOf } from './endpoints.mjs';
+import { endpointOf, unsupportedOf } from './endpoints.mjs';
 import { storedRequestBody } from './request-body.mjs';
 import { HARNESS_REGISTRY, readIdOf } from '../off/harness-names.mjs';
 
@@ -158,7 +158,7 @@ const BY_AGENT = new Map(HARNESSES.flatMap((h) => h.agents.map((a) => [a, h])));
 export const LEGACY_PROVIDER = Object.freeze({ cc: 'anthropic', codex: 'openai', 'deepseek-cli': 'deepseek' });
 export function wireProviderOfEndpoint(endpoint) {
   const row = endpointOf(endpoint); // the endpoint table (./endpoints.mjs); D3: a bare /messages (a gateway's own route) is no wire
-  const wire = (row && row.wire) || '';
+  const wire = (!unsupportedOf(endpoint) && row && row.wire) || ''; // a wire this version does not read gives no provider (D37 ⑥)
   return wire.startsWith('openai-') ? 'openai' : wire || null;
 }
 

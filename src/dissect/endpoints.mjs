@@ -7,7 +7,6 @@
 // relay prefixes count too (RFC 4.6 §记录: `/anthropic/v1/messages` is still an inference request). Order matters: the first
 // matching row wins, so the token-count row comes first (`/v1/messages/count_tokens` is a ruler, not inference, 3.2).
 // `wire` is the wire format the path names on its own, or null when the path names none.
-// `unsupported` names an inference wire with no dissector in v1 (D37 ⑥), which the registry labels.
 const ENDPOINTS = Object.freeze([
   { path: '.*count_tokens.*', class: 'token-count', wire: null },
   { path: '.*/v1/messages$', class: 'llm', wire: 'anthropic' },            // Anthropic Messages (incl. relay prefixes)
@@ -17,6 +16,19 @@ const ENDPOINTS = Object.freeze([
   { path: '.*:generateContent.*', class: 'llm', wire: 'gemini' },
 ].map((r) => Object.freeze(r)))
 const MATCHERS = ENDPOINTS.map((r) => [new RegExp(`^(?:${r.path})`), r])
+
+// D37 ⑥: inference wires this version records and does not read, which the registry labels and no reader gives a provider. Vertex
+// first: its Gemini models also end in :generateContent, which the table above names the Gemini API wire.
+const UNSUPPORTED = [
+  ['vertex', /\/projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/models\/[^/:]+:[A-Za-z]+$/],
+  ['bedrock', /\/model\/[^/]+\/(invoke|invoke-with-response-stream|converse|converse-stream)$/],
+]
+/** The name of the inference wire this version records and does not read that `endpoint` is on, else null. */
+export function unsupportedOf(endpoint) {
+  const p = pathOf(endpoint)
+  for (const [name, re] of UNSUPPORTED) if (re.test(p)) return name
+  return null
+}
 
 /** The path an endpoint names: its querystring removed. */
 export const pathOf = (endpoint) => String(endpoint || '').split('?')[0]
