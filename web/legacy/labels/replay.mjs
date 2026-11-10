@@ -232,6 +232,7 @@ export const FILES_READING = 'Still reading this session · files so far'
 // FOLD_STOPS with a line of its own (the board does not import it), else `other`; the code and the reason are in the technical details
 export const FOLD_STOPPED = Object.freeze({
   'heap-no-room': 'Reading this session stopped: it does not fit in the memory the reader has',
+  'projection-write-failed': 'Reading this session stopped: trocar could not save its index files (the disk may be full, or the folder not writable)',
   other: 'Reading this session stopped on an error',
 })
 // 1.5 K-32: the head drawn is older than what the capture has indexed
