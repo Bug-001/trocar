@@ -2,66 +2,22 @@
 
 **See the exact bytes your agent sends the LLM — without changing its code or wrapping its SDK.**
 
-Other LLM-observability tools ask you to wrap your client or import an SDK, and then show you what
-*your code* thinks it sent. trocar sits on the wire instead: it captures the real HTTPS traffic,
-stores the raw bytes verbatim, and replays them step by step. Nothing to integrate, no drift between
-"what I logged" and "what actually shipped."
+trocar captures the HTTPS traffic between your coding agent and its model provider, keeps every byte on your
+machine exactly as it was sent, and replays each session step by step: the full context of every call, what was
+cached, what it cost, and why the cache broke. It works with the agents as they are: nothing to integrate, no SDK
+to wrap, and no drift between what you logged and what was actually sent.
 
-Observe-only today: it never originates a request and never uses your app's token on its own, and it binds loopback only. A request is only ever changed or re-sent by you, on purpose (D30; none of that is built yet).
+![A session replayed on the board: the context of each step by content type, the cache trace, and step 8's blocks](docs/images/board-replay.png)
 
-The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**, **DeepSeek `dsh`**, **Hermes**,
-**Z-Code** and **pi**. Whether one of them has been shown to capture verbatim end to end on an OS:
+## How it works
 
-| harness | macOS | Windows | Linux |
-|---|---|---|---|
-| Claude Code | yes | yes | yes |
-| Codex | yes | yes | yes |
-| OpenCode | yes | yes | yes |
-| Kimi Code | yes | yes | yes |
-| DeepSeek `dsh` | yes | yes | yes |
-| Hermes | yes | yes | yes |
-| Z-Code | yes | yes | yes |
-| pi | not yet | not yet | not yet |
-
-`yes` = at least one of that harness's main forms (CLI, VS Code extension, desktop app) was driven end to end on that
-OS and its calls came out verbatim; `not yet` = that has not been shown there. What is not shown is not claimed.
-
-## What a capture looks like
-
-```sh
-git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
-```
-
-A small **synthetic** sample session ships in `samples/demo-session.ndjson` (fabricated, no real
-prompts or credentials) so you can read what the tool records before pointing it at anything of your
-own. The file is one record per line, readable with any JSON tool. Everything below is about capturing your own traffic.
-
-## Questions it answers that your logs cannot
-
-**"Why did my prompt cache break?"** trocar finds the first block where this call's context diverged
-from the previous one, classifies *why* — tools array reordered · JSON keys reordered · compaction
-rewrote history · a shared-prefix block changed in place — and attributes it: **yours**, **the
-harness**, or **provider-excluded**. Each cause carries a fix hint and the character offset inside the
-diverging block's rebuilt text. The cause is a structural estimate from comparing the two calls' blocks, not the
-provider's real boundary — `usage` stays the numeric truth: a call whose prefix changed but still read at least 30% of its
-input from the cache is shown as changed, not as a cache break. "Emit the tools array in a stable order" is a one-line
-fix you cannot find without seeing the wire.
-
-**"My prefix looked identical — why was I billed a miss?"** trocar checks the reusable prefix block by block
-against the call it is compared with: each block's own slice of the request bytes, with only its `cache_control`
-marker cut out, must have the same SHA-256 on both sides. A marker that moved still counts as identical; a tools
-schema that differs only in whitespace or number spelling does not, and neither does a block with no slice of its
-own in the request (it is never called identical). The board then cross-checks that against what the provider's
-`usage` actually credited.
-`read=0, write>0` is labelled a TTL rebuild, not a bug; `read=0, write=0` on a byte-identical prefix is
-flagged as a provider contradiction. The structural guess and the numeric truth are shown separately
-and never conflated.
-
-**"What did the model actually see at step 40?"** Scrub to call 40 and read the exact context —
-system, tools, every message block, in order, as bytes. Not a log line about it.
-
-**"What is eating my context?"** A per-call breakdown by section (tools / system / user / assistant /
-thinking / tool_use / tool_result), so you see *which* part grew and when.
+- `trocar install` makes a root certificate on this machine, its key never leaving it, and has your agents trust it.
+- `trocar on` points your agents at a local collector through their own settings (on Linux, a small helper
+  steers only their processes). trocar is not a system proxy; nothing else on the machine goes through it.
+- The collector decrypts only those agents' TLS, passes every request on to the real provider, and
+  appends the request and response bytes to files under `~/.trocar/raw`.
+- The board and `trocar query` read those files directly; the index that makes them fast can always be rebuilt.
+- `trocar off` takes the routing out again; `trocar uninstall` removes the certificate and everything else it set up.
 
 ## Install
 
@@ -86,11 +42,27 @@ npm i -g trocar-cli
 On Linux the capture also needs a small helper built once per machine; other ways to install (wget, a mirror, from
 source, from a Release), updating and removing trocar are in [docs/install.md](docs/install.md).
 
+## First steps
+
+```sh
+trocar install     # once (the install script has run it already): prints its plan and asks first
+trocar on          # capture every agent it knows, or name some: trocar on claude-code codex
+trocar board       # open the board in your browser
+```
+
+From then on the agents' new connections are captured; `trocar status` says which ones are. `trocar off` stops
+capture, and `trocar uninstall` removes trocar's changes from the machine (your records stay unless you add
+`--purge-data`).
+
 ## The board
 
 `trocar board` opens the board in your browser: every captured session of every agent side by side, each one
 replayed step by step with its exact context, cache and cost. What each screen shows is in
 [docs/board.md](docs/board.md).
+
+![The overview: sessions, model calls, estimated cost and main-thread cache hit per agent](docs/images/board-overview.png)
+
+![A step's context breakdown: which part of the request grew, and by how much](docs/images/board-breakdown.png)
 
 ## What it captures
 
@@ -99,6 +71,19 @@ OpenCode `opencode`, DeepSeek `dsh` `deepseek-dsh`, Kimi Code `kimi-code`, Herme
 `pi`. Only those agents' connections reach trocar; the rest of the machine's traffic never goes through it. What each command
 changes on your machine, which processes count as an agent, and what lands on disk are in
 [docs/capture.md](docs/capture.md).
+
+- **Verbatim.** Requests and responses are stored as the bytes that crossed the wire, credentials included, in
+  your own home folder. Nothing is summarized away; where the board shows something rebuilt, it says so.
+- **Local.** The records, the index and the board stay on this machine; the board listens on 127.0.0.1 only, and
+  trocar sends none of it anywhere.
+- **Hands off.** trocar never changes or sends a request on its own; the one line it adds, a `Connection: close` after
+  `off`, is labelled on the call. It reads your system proxy only to keep your own proxy chain working, and never
+  changes it or any VPN.
+
+## Learn more
+
+[Installing, updating and removing](docs/install.md) · [The board](docs/board.md) ·
+[What trocar captures and touches](docs/capture.md) · [Changelog](CHANGELOG.md) · [Design](spec/01-trocar-rfc/0.0-overview.md)
 
 ## Commands
 

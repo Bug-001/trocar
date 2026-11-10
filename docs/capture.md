@@ -52,7 +52,7 @@ captured; `status --json` has them under `forms`. trocar only reads your proxy s
 
 The collector has descriptors for eight harnesses (D37) — `claude-code`, `codex` (its WebSocket transport is recorded
 call by call), `opencode`, `deepseek-dsh`, `kimi-code`, `hermes`, `z-code` and `pi` — on all three platforms. Which form of
-which one has been shown to capture verbatim on which platform is the table at the top of this README.
+which one has been shown to capture verbatim on which platform is the table under [Which agents, on which OS](#which-agents-on-which-os).
 
 **Linux** is driver mode (RFC 4.6, D31): an eBPF helper steers only the connections of agent processes you run to a
 loopback engine, which decrypts only for agents that trust the collector CA. Everything else, including other users,
@@ -292,3 +292,22 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 - **Personal research instrument.** Single-user, loopback-only. Your traffic goes on as it was: the one
   byte of its own trocar adds is the `Connection: close` line after `off` (labelled on the call), and a
   request is only ever changed or re-sent by you, on purpose (D30; not built yet). No cloud, no alerting.
+
+## Which agents, on which OS
+
+The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**, **DeepSeek `dsh`**, **Hermes**,
+**Z-Code** and **pi**. Whether one of them has been shown to capture verbatim end to end on an OS:
+
+| harness | macOS | Windows | Linux |
+|---|---|---|---|
+| Claude Code | yes | yes | yes |
+| Codex | yes | yes | yes |
+| OpenCode | yes | yes | yes |
+| Kimi Code | yes | yes | yes |
+| DeepSeek `dsh` | yes | yes | yes |
+| Hermes | yes | yes | yes |
+| Z-Code | yes | yes | yes |
+| pi | not yet | not yet | not yet |
+
+`yes` = at least one of that harness's main forms (CLI, VS Code extension, desktop app) was driven end to end on that
+OS and its calls came out verbatim; `not yet` = that has not been shown there. What is not shown is not claimed.

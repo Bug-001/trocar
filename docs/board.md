@@ -1,5 +1,42 @@
 # The board
 
+## What a capture looks like
+
+```sh
+git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
+```
+
+A small **synthetic** sample session ships in `samples/demo-session.ndjson` (fabricated, no real
+prompts or credentials) so you can read what the tool records before pointing it at anything of your
+own. The file is one record per line, readable with any JSON tool. Everything below is about capturing your own traffic.
+
+## Questions it answers that your logs cannot
+
+**"Why did my prompt cache break?"** trocar finds the first block where this call's context diverged
+from the previous one, classifies *why* — tools array reordered · JSON keys reordered · compaction
+rewrote history · a shared-prefix block changed in place — and attributes it: **yours**, **the
+harness**, or **provider-excluded**. Each cause carries a fix hint and the character offset inside the
+diverging block's rebuilt text. The cause is a structural estimate from comparing the two calls' blocks, not the
+provider's real boundary — `usage` stays the numeric truth: a call whose prefix changed but still read at least 30% of its
+input from the cache is shown as changed, not as a cache break. "Emit the tools array in a stable order" is a one-line
+fix you cannot find without seeing the wire.
+
+**"My prefix looked identical — why was I billed a miss?"** trocar checks the reusable prefix block by block
+against the call it is compared with: each block's own slice of the request bytes, with only its `cache_control`
+marker cut out, must have the same SHA-256 on both sides. A marker that moved still counts as identical; a tools
+schema that differs only in whitespace or number spelling does not, and neither does a block with no slice of its
+own in the request (it is never called identical). The board then cross-checks that against what the provider's
+`usage` actually credited.
+`read=0, write>0` is labelled a TTL rebuild, not a bug; `read=0, write=0` on a byte-identical prefix is
+flagged as a provider contradiction. The structural guess and the numeric truth are shown separately
+and never conflated.
+
+**"What did the model actually see at step 40?"** Scrub to call 40 and read the exact context —
+system, tools, every message block, in order, as bytes. Not a log line about it.
+
+**"What is eating my context?"** A per-call breakdown by section (tools / system / user / assistant /
+thinking / tool_use / tool_result), so you see *which* part grew and when.
+
 ## What you see
 
 No ETL, no database, no build step — the board reads the raw segments directly. The collector daemon
