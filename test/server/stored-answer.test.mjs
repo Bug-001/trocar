@@ -113,8 +113,11 @@ test('3.5 #38: the last release\'s stored list, its rows short of keys added sin
   const b = await serveBoard({ userHome, home })
   try {
     assert.equal(b.workers().length, 0, 'cold: no worker yet')
-    // the request is the board's own (loadSessions over the real http client), so a change to it that misses this file is red
+    // the request is the board's own (loadSessions over the real http client, as useSessions calls it), so a change to it that misses
+    // this file is red. shortcut: the board's readers (useSessions, freshSessions) pass loadSessions no limit; a reader given its own
+    // would miss this file unseen here, so give this test the same call then
     const asked = [], real = globalThis.fetch
+    await real('data:,') // the http client loaded before the clock starts
     globalThis.fetch = (url, init) => { asked.push(String(url)); return real(`http://127.0.0.1:${b.port}${url}`, init) }
     configure({ token: TOKEN })
     const t0 = performance.now()
@@ -123,6 +126,7 @@ test('3.5 #38: the last release\'s stored list, its rows short of keys added sin
     const ms = performance.now() - t0
     t.diagnostic(`stored answer in ${Math.round(ms)} ms (${asked.length} request)`)
     assert.equal(got.ok, true)
+    assert.equal(asked.length, 1, 'one request')
     assert.equal(got.data.stored, '2020-01-01T00:00:00.000Z', 'the stored answer, not one built since')
     assert.deepEqual(got.data.sessions, [row], 'the file\'s rows, as stored')
     assert.ok(ms < 500, `answered in ${Math.round(ms)} ms, over the 0.5 s line`)
