@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url'
 import { createQueryService } from '../../src/query/service.mjs'
 import { indexDir, segmentFiles } from '../../src/query/index-build.mjs'
 import { indexRows, provisionalRows, sessionGroups } from '../../src/query/rows.mjs'
-import { readHead, PACK_MEMBERS, docErrors } from '../../src/query/ctx-files.mjs'
+import { readHead, PACK_MEMBERS, docErrors, CTX_V } from '../../src/query/ctx-files.mjs'
+import { gzipSync } from 'node:zlib'
 import { sessionDir } from '../../src/query/projection.mjs'
 import { markOn, sinceAt } from '../../src/query/named/session.mjs'
 import { validateQueryDoc } from '../../src/cli/schema.mjs'
@@ -225,6 +226,27 @@ test('3.5 §行表先读: a session with a whole head on disk is answered from i
     await settle(svc, home, B)
     const after = snapshot(home, B)
     assert.deepEqual(Object.fromEntries(Object.entries(after).map(([f, [b]]) => [f, b])), Object.fromEntries(Object.entries(before).map(([f, [b]]) => [f, b])), 'after the pass the files are the same bytes')
+  } finally { svc.stop() }
+})
+test('3.5 §行表先读: a whole head of another version does not stand: the early answer writes this version\'s', async () => {
+  const home = path.join(tmpDir('trocar-early-oldv-'), '.trocar'), B = 'early-oldv-4a1b-9c2d-000000000006'
+  fs.mkdirSync(path.join(home, 'collector'), { recursive: true, mode: 0o700 })
+  const old = bigSession({ home, id: L, segment: S0 })
+  old.append(3); await old.seal()
+  for (let i = 0; i < 3; i++) { const o = bigSession({ home, id: `early-f${String(i).padStart(3, '0')}-4a1b-9c2d-000000000003`, segment: `20261020T1647${String(2 + i).padStart(2, '0')}Z` }); o.append(3); await o.seal() }
+  while (!old.file.includes(NEWEST)) await old.seal()
+  bigSession({ home, id: B, segment: NEWEST, growth: 60 }).append(20)
+  const first = service(home, false)
+  try { await settle(first.svc, home, B) } finally { first.svc.stop() }
+  const file = path.join(sessionDir(home, B), 'head.json.gz')
+  fs.writeFileSync(file, gzipSync(JSON.stringify({ ...readHead(home, B), v: CTX_V - 1 })))
+  for (const f of fs.readdirSync(indexDir(home))) if (f !== 'ctx') fs.rmSync(path.join(indexDir(home), f), { recursive: true, force: true })
+  const { said, svc, release } = service(home, true)
+  try {
+    await ask(svc, 'session', { id: B, head: true })
+    assert.equal(rowsSaid(said), false, 'answered while the pass still reads')
+    assert.equal(readHead(home, B).v, CTX_V, 'this version\'s head written over the other\'s')
+    release()
   } finally { svc.stop() }
 })
 

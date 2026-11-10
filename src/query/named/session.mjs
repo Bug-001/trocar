@@ -739,7 +739,7 @@ const behind = (ctx, id, read, log, members) => read < reachOf(ctx, id, log, mem
 function early(ctx, s) {
   if (!s.indexErrors.some((e) => e.code === 'index-pending')) return false;
   const h = readHead(ctx.home ?? trocarHome(), s.id, ctx.fs || nodeFs);
-  return h?.tier === 1 && h.pending == null;
+  return h?.v === CTX_V && h.tier === 1 && h.pending == null; // another version's head is no answer of this one
 }
 /** stands(ctx, s) → whether the answer on disk stands, whatever the state `s`: while the session is re-read, while its fold is behind the
  *  files, and while an early answer would stand over a whole head. */
