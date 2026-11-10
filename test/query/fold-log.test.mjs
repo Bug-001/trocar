@@ -180,6 +180,7 @@ test('4.3 #7 fold log: a disk that refuses writes answers the same, with one pro
   assert.deepEqual(got.map((e) => e.off), want.map((e) => e.off))
   assert.deepEqual(view(log, got), model(want))
   assert.deepEqual(errors.map((e) => [e.code, e.level]), [['projection-write-failed', 'note'], ['projection-write-failed', 'note']])
+  for (const e of errors) assert.match(e.reason, /^[^\n]+ Next: [^\n]+$/, 'one line: the cause, then the one step that fixes it (D38)')
   assert.ok(PROJECTION_NOTES.includes('projection-write-failed'))
   full = false
   const all = [...got, ...write(log, steps(15, 1, 6))]

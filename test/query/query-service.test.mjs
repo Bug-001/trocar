@@ -10,7 +10,7 @@ import { once, EventEmitter } from 'node:events'
 import { createQueryService, CRASH_COOLDOWN_MS, FAILURE_BACKOFF_MAX_MS } from '../../src/query/service.mjs'
 import { createServer } from '../../src/server.mjs'
 import { TOKEN, withToken } from '../server/face.mjs'
-import { isCode, isWhere } from '../../src/health/codes.mjs'
+import { isCode, isWhere, FOLD_STOPS } from '../../src/health/codes.mjs'
 import { rawHome } from './raw-home.mjs'
 import { handWorld, recorder } from './hand-world.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
@@ -24,6 +24,7 @@ import { bigSession } from './big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
+import { sessionDir } from '../../src/query/projection.mjs'
 import { HEAD_FILES } from '../../src/query/ctx-key.mjs'
 import { lineFile, loadSidecar } from '../../src/query/line-file.mjs'
 import { REDUCE_V } from '../../src/view/reduce.mjs'
@@ -519,6 +520,49 @@ test('a projection the worker cannot write: both answers whole, one persisted pr
     assert.equal(got.length, 1, 'one record for the episode')
     assert.ok(isWhere(got[0].where) && isCode(got[0].code))
   } finally { svc.stop(); fs.chmodSync(ctxDir, 0o700) }
+})
+
+test('a session whose answer files cannot be saved: its head says why the read stopped and the step that fixes it, as the one record does; files that can be written again clear it (4.3 §4 盘满, 3.5 #37, D38)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-qsvc-unsaved-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home })
+  s.append(40)
+  const ctxDir = path.join(home, 'index', 'ctx')
+  fs.mkdirSync(ctxDir, { recursive: true, mode: 0o700 })
+  fs.chmodSync(ctxDir, 0o500)
+  const said = []
+  let lock = null
+  const svc = createQueryService({ home, failure: (where, e) => said.push({ where, code: e.code, reason: e.message }), fork: workerFork })
+  const head = async () => {
+    const res = recorder()
+    await within(svc.relay({ name: 'session', params: { id: s.id, head: true }, res }), 60_000, 'the head is answered')
+    assert.equal(res.status, 200)
+    return JSON.parse(res.text())
+  }
+  try {
+    let h = null
+    for (let i = 0; i < 300 && !(h = await head()).pending?.stopped; i++) await new Promise((r) => setTimeout(r, 100)) // its first answer may come before a write is tried
+    const stop = h.pending?.stopped
+    assert.ok(stop && FOLD_STOPS.includes(stop.code), 'the head says the read stopped, with a FOLD_STOPS code')
+    assert.match(stop.reason, /^[^\n]+ Next: [^\n]+$/, 'one line: the cause, then the one step that fixes it')
+    assert.ok(stop.reason.includes(path.join(home, 'index')), 'it names where trocar could not save')
+    // a record comes on the worker's IPC channel, an answer on its stdout: either may come first
+    const records = async (n) => { for (let i = 0; i < 50 && said.filter((x) => x.code === 'projection-write-failed').length < n; i++) await new Promise((r) => setTimeout(r, 100)); return said.filter((x) => x.code === 'projection-write-failed') }
+    const got = await records(1)
+    assert.equal(got.length, 1, 'one record for the episode')
+    assert.equal(got[0].reason, stop.reason, 'the record says what the head says')
+    fs.chmodSync(ctxDir, 0o700)
+    for (let i = 0; i < 300 && (h = await head()).pending?.stopped; i++) await new Promise((r) => setTimeout(r, 100))
+    assert.equal(h.pending?.stopped, undefined, 'saved again: no stop')
+    assert.equal(h.tier, 1, 'the fold\'s head')
+    // that write ended the episode: the next refusal is a record of its own and a stop again
+    lock = (d, f) => { const dir = sessionDir(home, s.id); fs.chmodSync(dir, 0o700); for (const n of fs.readdirSync(dir)) try { fs.chmodSync(path.join(dir, n), f) } catch (e) { if (e.code !== 'ENOENT') throw e } fs.chmodSync(dir, d) } // a temp file renamed meanwhile
+    lock(0o500, 0o400)
+    s.append(4)
+    for (let i = 0; i < 300 && !(h = await head()).pending?.stopped; i++) await new Promise((r) => setTimeout(r, 100))
+    assert.ok(h.pending?.stopped, 'stopped again')
+    assert.equal((await records(2)).length, 2, 'a record for each episode')
+  } finally { svc.stop(); fs.chmodSync(ctxDir, 0o700); lock?.(0o700, 0o600) }
 })
 
 // 3.5 #27 服务队列: one request in flight; the rest are served block, status, sessions, lane, session, then the others, first come
