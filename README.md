@@ -11,13 +11,15 @@ to wrap, and no drift between what you logged and what was actually sent.
 
 ## How it works
 
-- `trocar install` makes a root certificate on this machine, its key never leaving it, and has your agents trust it.
+- `trocar install` makes a root certificate on this machine, its key never leaving it, and has the agents it captures
+  trust it.
 - `trocar on` points your agents at a local collector through their own settings (on Linux, a small helper
-  steers only their processes). trocar is not a system proxy; nothing else on the machine goes through it.
-- The collector decrypts only those agents' TLS, passes every request on to the real provider, and
-  appends the request and response bytes to files under `~/.trocar/raw`.
+  steers only their processes). trocar is not a system proxy.
+- The collector decrypts only those agents' TLS (anything else that reaches it is passed on unread), sends every
+  request on to the real provider, and appends the request and response bytes to files under `~/.trocar/raw`.
 - The board and `trocar query` read those files directly; the index that makes them fast can always be rebuilt.
-- `trocar off` takes the routing out again; `trocar uninstall` removes the certificate and everything else it set up.
+- `trocar off` takes the routing out again; `trocar uninstall` removes the certificate and the rest of trocar's changes
+  (on Linux the helper is one more `sudo` step).
 
 ## Install
 
@@ -46,7 +48,7 @@ source, from a Release), updating and removing trocar are in [docs/install.md](d
 
 ```sh
 trocar install     # once (the install script has run it already): prints its plan and asks first
-trocar on          # capture every agent it knows, or name some: trocar on claude-code codex
+trocar on          # capture the agents installed here, or name some: trocar on claude-code codex
 trocar board       # open the board in your browser
 ```
 
@@ -68,7 +70,7 @@ replayed step by step with its exact context, cache and cost. What each screen s
 
 The agents it knows, by the name `trocar on` and `trocar off` take: Claude Code `claude-code`, Codex `codex`,
 OpenCode `opencode`, DeepSeek `dsh` `deepseek-dsh`, Kimi Code `kimi-code`, Hermes `hermes`, Z-Code `z-code` and pi
-`pi`. Only those agents' connections reach trocar; the rest of the machine's traffic never goes through it. What each command
+`pi`. Only those agents' TLS is decrypted and recorded; anything else that reaches trocar is passed on unread. What each command
 changes on your machine, which processes count as an agent, and what lands on disk are in
 [docs/capture.md](docs/capture.md).
 
@@ -123,7 +125,7 @@ Exit codes: 0 done · 1 not done, or a problem was found · 2 a usage error (not
 `doctor` could not judge · 70 the daemon crashed. `--version` prints the version.
 
 Design authority: [`spec/01-trocar-rfc/`](spec/01-trocar-rfc/) (entry `0.0-overview.md`). This README is
-the operator's quickstart, not the spec. `npm test` runs the test suite.
+the product page and quickstart, not the spec. `npm test` runs the test suite.
 
 ## License
 

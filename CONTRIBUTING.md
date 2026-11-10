@@ -63,7 +63,7 @@ A harness is data, not code. Add a descriptor in [`src/collector/harness/`](src/
 
 - Each commit is at most 400 lines, can be verified on its own, and has a body that says why and what the evidence is.
 - Related commits go in one pull request. Fill in the pull request template: what and why, how you verified it (fresh-HOME counts and skips), which spec section it touches.
-- A change to user-visible behaviour also updates `README.md` and adds or extends a note in `docs/release-notes/`.
+- A change to user-visible behaviour also updates `README.md` or the `docs/` page that covers it, and adds or extends a note in `docs/release-notes/`.
 - The gate for a pull request is the local fresh-HOME run reported in its description, not GitHub Actions.
 
 ## Licensing
