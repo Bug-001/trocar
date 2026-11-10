@@ -17,7 +17,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
 const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
 // the README is the product page; what it leaves to docs/ is held to the same bar (4.5 #5)
-const PAGES = ['README.md', 'docs/install.md', 'docs/board.md', 'docs/capture.md'];
+const PAGES = ['README.md', 'docs/install.md', 'docs/board.md', 'docs/capture.md', 'docs/commands.md', 'docs/license.md'];
 const pages = PAGES.map((p) => ({ p, text: readFileSync(path.join(ROOT, p), 'utf8') }));
 const all = pages.map((x) => x.text).join('\n');
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -42,11 +42,12 @@ test('every `trocar <verb>` the README tells you to run actually exists', () => 
     + `the table of src/cli/commands.mjs has: ${[...implementedVerbs].sort().join(', ')}`);
 });
 
-test('the README\'s Commands section lists every command of the table, in code the reader can copy (1.6 §8, R10)', () => {
-  const section = readme.slice(readme.indexOf('\n## Commands'), readme.indexOf('Design authority:'));
-  assert.ok(section.length > 100, 'sanity: found the Commands section');
-  const listed = new Set([...section.matchAll(/\btrocar[ \t]+([a-z-]+)/g)].map((m) => m[1]));
-  assert.deepEqual(COMMANDS.filter((c) => !c.hidden).map((c) => c.name).filter((n) => !listed.has(n)), [], 'a command of the table the README does not list');
+// the command table lives in docs/commands.md, one row per public command of src/cli/commands.mjs (4.5 #5); `trocar help` prints
+// the usage lines from the same table, so the page does not copy them
+test('docs/commands.md has one row per public command, and no other', () => {
+  const page = pages.find((x) => x.p === 'docs/commands.md').text;
+  const rows = [...page.matchAll(/^\| `trocar ([a-z-]+)` \|/gm)].map((m) => m[1]);
+  assert.deepEqual([...rows].sort(), COMMANDS.filter((c) => !c.hidden).map((c) => c.name).sort());
 });
 
 test('the README teaches no command that is gone (`collector …`, `etl`, `shard`, `keep`, `verify`), and not `trocar test`', () => {
@@ -117,11 +118,14 @@ test('the README names every harness the collector has a descriptor for, by its 
   assert.deepEqual(missing, [], 'a harness the collector has that the README does not name as `<id>`');
 });
 
-test('the README\'s Commands block is the usage lines of src/cli/commands.mjs, flags included, one for one', () => {
-  const section = readme.slice(readme.indexOf('\n## Commands'), readme.indexOf('Design authority:'));
-  const block = /```sh\n([\s\S]*?)```/.exec(section);
-  assert.ok(block, 'sanity: the Commands section holds a ```sh block');
-  const shown = block[1].split('\n').map((l) => l.replace(/\s+#\s.*$/, '').trim()).filter((l) => l && !l.startsWith('#'));
-  const table = COMMANDS.filter((c) => !c.hidden).flatMap((c) => [c.usage, ...(c.also || []).map((a) => a.usage)]).flatMap((u) => u.split('\n'));
-  assert.deepEqual([...shown].sort(), [...table].sort(), 'each usage line of the table, exactly once, and nothing else');
+// a line pasted from a shell block runs as typed: macOS's default zsh, interactive, does not take `#` as a comment, so a
+// trailing `# macOS, Linux` becomes arguments (`sh '#' 'macOS,' 'Linux'`). What a line is for is said above its block (4.5 #5)
+test('no shell block of the README or the docs pages carries a # comment', () => {
+  const found = [];
+  for (const { p, text } of pages) {
+    for (const m of text.matchAll(/```(sh|shell|bash|console|zsh)\n([\s\S]*?)```/g)) {
+      for (const line of m[2].split('\n')) if (/(^|\s)#/.test(line)) found.push(`${p}: ${line.trim()}`);
+    }
+  }
+  assert.deepEqual(found, []);
 });

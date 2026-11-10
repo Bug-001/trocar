@@ -27,9 +27,13 @@ One line, nothing needed first: no npm, no Node. The script fetches trocar and i
 checks both against their published hashes, needs no root, and then runs `trocar install`, which prints its plan
 and asks before it changes anything.
 
+On macOS and Linux:
+
 ```sh
-curl -fsSL https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh     # macOS, Linux
+curl -fsSL https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh
 ```
+
+On Windows:
 
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://github.com/Bug-001/trocar/releases/latest/download/install.ps1 | iex"
@@ -47,10 +51,14 @@ source, from a Release), updating and removing trocar are in [docs/install.md](d
 ## First steps
 
 ```sh
-trocar install     # once (the install script has run it already): prints its plan and asks first
-trocar on          # capture the agents installed here, or name some: trocar on claude-code codex
-trocar board       # open the board in your browser
+trocar install
+trocar on
+trocar board
 ```
+
+`trocar install` sets up the certificate once (the install script has run it already); it prints its plan and asks
+first. `trocar on` captures the agents installed here, or the ones you name (`trocar on claude-code codex`).
+`trocar board` opens the board in your browser.
 
 From then on the agents' new connections are captured; `trocar status` says which ones are. `trocar off` stops
 capture, and `trocar uninstall` removes trocar's changes from the machine (your records stay unless you add
@@ -85,63 +93,15 @@ changes on your machine, which processes count as an agent, and what lands on di
 ## Learn more
 
 [Installing, updating and removing](docs/install.md) · [The board](docs/board.md) ·
-[What trocar captures and touches](docs/capture.md) · [Changelog](CHANGELOG.md) · [Design](spec/01-trocar-rfc/0.0-overview.md)
+[What trocar captures and touches](docs/capture.md) · [Changelog](CHANGELOG.md) · [Design](spec/01-trocar-rfc/0.0-overview.md) ·
+[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 ## Commands
 
-`install`, `on`, `off`, `status`, `uninstall`, `doctor` and `update` take `--details`: every fact their short text
-leaves out (each file, key, process and note). `--json` is the same document either way. `trocar help` prints the same, in three sections; `trocar help <command>` says one command, and
-`trocar query <name> --help` one query. `trocar help --json` gives all of it as one document.
-
-```sh
-# common
-trocar install [--yes] [--dry-run] [--details] [--json]   # once: the certificates (D55); prints the plan and asks first
-trocar on [<harness>...] [--yes] [--dry-run] [--details] [--json]
-trocar off [<harness>...] [--now] [--yes] [--dry-run] [--details] [--json]
-trocar status [<harness>...] [--failures] [--details] [--json]   # --failures: what failed, one row per kind; --details: every pid, code and host
-trocar uninstall [--purge-data] [--yes] [--dry-run] [--details] [--json]
-trocar doctor [<harness>...] [--details] [--json]
-
-# data
-trocar query <name> [--<param> <value>...] [--json]   # the one way to read the records; the board is its HTTP shell (D59)
-trocar classes [<class>] [--json]
-trocar classes set <class> full|log
-trocar classes add <class> <host-regex> [<path-regex>] [--harness <harness>]
-trocar classes rm <class> [<rule>]
-trocar classes reset
-trocar board [--json]         # prints the board's address with your key and opens it; exit 1 when the board is not there
-
-# maintenance
-trocar update [--yes] [--dry-run] [--details] [--json]   # the newest code, and the machine as it was (D67)
-trocar raw <segment>[:<from>[-<to>]]
-sudo trocar setup-helper [--remove] [--binary <path>]   # Linux, once per machine
-trocar daemon [--supervise]   # the daemon in the foreground; the autostart unit runs it (Windows's task with --supervise)
-                              # another daemon already answering: exits 0, nothing to do. The control endpoint held by
-                              # something silent: records `control-endpoint-held` and exits 1.
-trocar help [<command>] [--json]   # also --help · -h · --version
-```
-
-Exit codes: 0 done · 1 not done, or a problem was found · 2 a usage error (nothing was touched) · 3 `status` /
-`doctor` could not judge · 70 the daemon crashed. `--version` prints the version.
-
-Design authority: [`spec/01-trocar-rfc/`](spec/01-trocar-rfc/) (entry `0.0-overview.md`). This README is
-the product page and quickstart, not the spec. `npm test` runs the test suite.
+Every command: `trocar help`, or [docs/commands.md](docs/commands.md).
 
 ## License
 
-trocar is licensed under the [Functional Source License, version 1.1, with Apache-2.0 as the future license](LICENSE)
-(FSL-1.1-ALv2). It is source-available: you may use, copy, modify and redistribute it for any purpose except making
-it available to others in a commercial product or service that competes with it. Each released version becomes
-Apache-2.0 two years after its release. One part is licensed differently: the kernel-side eBPF program in
-`src/collector/arch/linux/bpf/` is GPL-2.0-only OR MIT, as its license string declares, because the Linux kernel lets
-only a program under a GPL-compatible license use the kernel helpers it needs. The rest of trocar's own code is
-FSL-1.1-ALv2.
-
-This license does not cover what trocar does not own. The agents' names and icons in `src/off/harness-icons/` and
-`src/web/board/assets/harness/` belong to their owners and only identify those agents (see
-[SOURCES.md](src/off/harness-icons/SOURCES.md)); trocar is not affiliated with or endorsed by any of them. The packages
-bundled into `src/web/board/assets/` keep their own licenses, listed in
-[licenses.md](src/web/board/assets/licenses.md).
-
-Report a vulnerability privately as [SECURITY.md](SECURITY.md) says. How to contribute is in
-[CONTRIBUTING.md](CONTRIBUTING.md); what changed in each release is in [CHANGELOG.md](CHANGELOG.md).
+trocar is under the [FSL-1.1-ALv2](LICENSE): source-available, for any use except a competing commercial product or
+service, and Apache-2.0 two years after each release. The kernel-side eBPF program is GPL-2.0-only OR MIT. Details,
+and what the license does not cover: [docs/license.md](docs/license.md).

@@ -124,14 +124,27 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | the standalone undo | `~/.trocar/bin/trocar-off`, written by `install`; `trocar doctor` checks it is current | `trocar uninstall` |
 | captures | `~/.trocar/raw/<segment>.ndjson` and its `<segment>.sealed` (0600); `~/.trocar/index/` is a deletable accelerator; `flows/` holds connection metadata and failure records | kept unless `trocar uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
+On Linux, once per machine, build the helper and install it:
+
 ```sh
-make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux" && sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # Linux, once per machine: build the helper, then install it
-trocar install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
-trocar on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
-trocar status                 # each agent and why it is (not) captured, and what to do; status <agent> has its proxy chain
-trocar off                    # stops routing and capture (off claude-code: only that one)
-trocar board                  # opens the board in your browser; the captures appear there
+make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux" && sudo "$(command -v node)" "$(command -v trocar)" setup-helper
 ```
+
+Then, on every OS:
+
+```sh
+trocar install
+trocar on
+trocar status
+trocar off
+trocar board
+```
+
+- `trocar install`: once, per user: the certificates; lists every file it will change and asks (not in a terminal: add `--yes`).
+- `trocar on`: refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents.
+- `trocar status`: each agent and why it is (not) captured, and what to do; `status <agent>` has its proxy chain.
+- `trocar off`: stops routing and capture (`off claude-code`: only that one).
+- `trocar board`: opens the board in your browser; the captures appear there.
 
 #### Which processes are captured: the name list (D51)
 
@@ -228,8 +241,10 @@ log for it; before this build it was 972 MB, 2.0×. The derived files alone (the
 files) are 0.26× of that log, above the 0.1× target. The directories together are capped at 512 MiB: past that, the sessions
 used longest ago lose theirs, never one that is open or followed, and it is rebuilt from the records the next time.
 
+To print records byte for byte, sealed or not:
+
 ```sh
-trocar raw <segment>[:<from>[-<to>]]   # print records byte for byte, sealed or not
+trocar raw <segment>[:<from>[-<to>]]
 ```
 
 What earlier builds left (the home under the old name, the v0 `~/.atrace`) is neither read nor moved nor

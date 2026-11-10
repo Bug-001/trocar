@@ -7,10 +7,19 @@ checks both against the hashes the npm registry and the package record, and puts
 no root and writes nothing outside `~/.trocar`. Then it runs `trocar install`, which prints its plan and asks
 before it changes anything.
 
+On macOS and Linux:
+
 ```sh
-curl -fsSL https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh     # macOS, Linux
-wget -qO- https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh      # a Linux with wget and no curl
+curl -fsSL https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh
 ```
+
+On a Linux with wget and no curl:
+
+```sh
+wget -qO- https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh
+```
+
+On Windows:
 
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://github.com/Bug-001/trocar/releases/latest/download/install.ps1 | iex"
@@ -34,32 +43,37 @@ curl -fsSLo install.sh https://github.com/Bug-001/trocar/releases/latest/downloa
 `trocar install` adds `~/.trocar/bin` at the end of your PATH (one marked line in your shell's start file; on
 Windows one element of your user `Path`), so `trocar` works in a new terminal. A shell that is not interactive may not
 read that file (Ubuntu's `~/.bashrc` stops early for one, so `ssh host trocar` does not find it): use `~/.trocar/bin/trocar`
-there. Then:
+there. Then start capture:
 
 ```sh
-trocar on                       # start capture
+trocar on
 ```
 
 For developers, from npm (Node ≥ 22). The package is `trocar-cli`; the command it installs is `trocar`.
 
 ```sh
 npm i -g trocar-cli
-trocar install                  # once: the certificates
-trocar on                       # then start capture
+trocar install
+trocar on
 ```
+
+`trocar install` sets up the certificates, once; `trocar on` then starts capture.
 
 `npx trocar-cli <command>` runs one command without installing, but run `trocar install` from a global install:
 it registers a login item that runs that copy, and npm may clear the `npx` cache.
 
 On Linux, build the capability helper and install it once per machine, before `trocar install`. The package carries
 its source, not a build: the build needs clang, make, bpftool, the libbpf, libelf and zlib headers, and a kernel
-with BTF. Build as yourself; only the `sudo` lines need root:
+with BTF. Build as yourself; only the `sudo` lines need root. On Ubuntu (on Debian, install `bpftool` instead of
+`linux-tools-generic`):
 
 ```sh
-sudo apt-get install build-essential clang libbpf-dev libelf-dev zlib1g-dev linux-tools-generic  # Ubuntu; Debian: bpftool, not linux-tools-generic
+sudo apt-get install build-essential clang libbpf-dev libelf-dev zlib1g-dev linux-tools-generic
 make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux"
-sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # root's PATH may lack node or trocar (an nvm node), so both go by their paths
+sudo "$(command -v node)" "$(command -v trocar)" setup-helper
 ```
+
+The last line names `node` and `trocar` by their full paths because root's PATH may lack them (an nvm node, say).
 
 Installed with the script, the helper cannot come first: its source arrives with the script. `trocar install` finishes
 without it; the collector then runs and captures nothing, `trocar status` says the helper is missing, and the receipt's
@@ -80,16 +94,28 @@ From source (Node ≥ 22): there is no global `trocar` on your PATH, so run it t
 
 ```sh
 git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
-make -C src/collector/arch/linux && sudo "$(command -v node)" bin/trocar.mjs setup-helper   # Linux only, once per machine
-node bin/trocar.mjs install     # once: the certificates
-node bin/trocar.mjs on          # then start capture
+```
+
+On Linux only, once per machine, build and install the helper:
+
+```sh
+make -C src/collector/arch/linux && sudo "$(command -v node)" bin/trocar.mjs setup-helper
+```
+
+Then set up the certificates once, and start capture:
+
+```sh
+node bin/trocar.mjs install
+node bin/trocar.mjs on
 ```
 
 From a GitHub Release: each Release carries the same tarball as npm and its `SHA256SUMS`. Download both into one
 folder, check the sum there, then `npm i -g` the `.tgz` file; it installs like the registry copy.
 
+On macOS (on Linux, `sha256sum -c SHA256SUMS`); each prints OK:
+
 ```sh
-shasum -a 256 -c SHA256SUMS     # macOS; on Linux: sha256sum -c SHA256SUMS; each prints OK
+shasum -a 256 -c SHA256SUMS
 npm i -g ./trocar-cli-<version>.tgz
 ```
 
@@ -98,8 +124,10 @@ prints `True` when the sum matches.
 
 ## Staying up to date
 
+To take trocar to the newest code and leave the machine as it was:
+
 ```sh
-trocar update            # the newest code, and the machine as it was
+trocar update
 ```
 
 One command takes this checkout to the newest code and leaves the machine the way it was: it refuses to touch a checkout with changes of your own, fast-forwards (never merges), runs
@@ -132,9 +160,16 @@ install trocar as described under [Install](#install). Nothing the old name left
 ## Uninstall
 
 ```sh
-trocar off                     # first on macOS and Windows: uninstall refuses while capture is on
-trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw, ~/.trocar/collector/flows), the last ones sealed first
-trocar uninstall --purge-data  # also deletes the records and their index (asks first)
+trocar off
+trocar uninstall
+```
+
+`trocar off` comes first on macOS and Windows: `uninstall` refuses while capture is on. `uninstall` removes all of
+trocar's changes and keeps your records (`~/.trocar/raw`, `~/.trocar/collector/flows`), the last ones sealed first. To
+delete the records and their index too (it asks first):
+
+```sh
+trocar uninstall --purge-data
 ```
 
 On macOS and Windows, `uninstall` takes every trocar root out of your user trust store, also one an earlier install left
