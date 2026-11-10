@@ -47,6 +47,7 @@ export const FAILURE_WORDS = Object.freeze({
   'loop-late': 'the background process was held up for a moment',
   'query-failed': 'a query worker failed; the query was answered another way',
   'projection-write-failed': 'a session could not be saved to disk for faster reading; its answers are unchanged',
+  'fold-failed': "a session's answer could not be built; it is tried again at the next read",
   'root-refused': 'refused: it was run as root',
   'node-too-old': 'refused: the Node it runs on is too old',
   'root-token': 'refused: it was run as root',

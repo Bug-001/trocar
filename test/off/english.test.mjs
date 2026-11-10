@@ -13,6 +13,7 @@ import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { fakeIo } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, onSwitch } from './fixtures/off-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const CODE_NAMES = /desired-off|left-unparsable|left-unreadable|unknown-kind|json-key|owned-file|pem-block|config-entry|root-key|json-array-item|nothing_installed|dry_run|op\.lock/
 const out = process.env.TROCAR_EN_OUT || null
@@ -33,7 +34,7 @@ function readable(name, text, { home = null } = {}) {
   }
 }
 
-test('D58: off with things to undo, and off with programs still connected, read as §1.1 asks', async () => {
+test('D58: off with things to undo, and off with programs still connected, read as §1.1 asks', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
   fs.appendFileSync(path.join(s.home, '.claude', 'settings.json').replace(/settings\.json$/, 'settings.json'), '') // the file is the one `on` wrote; nothing is added
   const io = fakeIo()

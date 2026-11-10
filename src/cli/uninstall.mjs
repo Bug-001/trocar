@@ -18,7 +18,7 @@ import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath, AGENT_LABEL } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
-import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES, compileCacheDir, homeMismatch, accountHomeOf } from '../off/paths.mjs'
+import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES, compileCacheDir, homeMismatch, accountHomeOf, switchDirIn } from '../off/paths.mjs'
 import { rawHome, indexHome, classesLog, collectorHome } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
 import { backupsOf, dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -432,7 +432,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
           receipt.removed.push(manifestPath(w.dir))
           removeEmptyDirs(m.dirs, fs)
         }
-        removeEmptyDirs([trocarHome(home), w.dir, path.dirname(classesLog(trocarHome(home)))], fs) // `on` made them before the manifest listed any directory; gone only when empty (the captures keep them)
+        removeEmptyDirs([trocarHome(home), w.dir, switchDirIn(w.dir), path.dirname(classesLog(trocarHome(home)))], fs) // `on` made them before the manifest listed any directory, or no record names them any more (switch/); gone only when empty (the captures keep them)
       }
     }
     let list = []

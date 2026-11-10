@@ -69,7 +69,8 @@ test('no board label table keys a code the CLI\'s catalog words', async () => {
   const keys = new Set(Object.keys(FAILURE_WORDS)), hits = [] // a sentence twin: a string under a key of the catalog
   for (const f of fs.readdirSync(LABELS).filter((n) => n.endsWith('.mjs'))) {
     const mod = await import(pathToFileURL(path.join(LABELS, f)).href)
-    for (const [name, v] of Object.entries(mod)) if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) if (typeof x === 'string' && keys.has(k)) hits.push(`${f}:${name}.${k}`)
+    // FOLD_STOPPED: a stopped read's head line (1.5 K-31) is not the log record's sentence, so it is no second copy of the catalog
+    for (const [name, v] of Object.entries(mod)) if (v && typeof v === 'object' && name !== 'FOLD_STOPPED') for (const [k, x] of Object.entries(v)) if (typeof x === 'string' && keys.has(k)) hits.push(`${f}:${name}.${k}`)
   }
   assert.deepEqual(hits, [])
 })

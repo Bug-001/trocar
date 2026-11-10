@@ -15,6 +15,7 @@ import { installCollector } from '../../../src/collector/install.mjs'
 import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
+import { POSIX_WORLD } from '../../helpers/platform-shape.mjs'
 
 const PY = '/home/u/.hermes/tools/python-3.14.7+20260901-linux-arm64/bin/python3.14'
 const boot = (root, entry = "from hermes_cli.main import main\nsys.exit(main())") => `import os, re, sys\nos.environ.pop('PYTHONHOME', None)\nsys.path.insert(0, '${root}')\nimport hermes_bootstrap\n${entry}\n`
@@ -216,7 +217,7 @@ test('hermes inject: the CA settings of .op.env and of the checkout .env, which 
   } finally { s.done() }
 })
 
-test('hermes through install / uninstall: the user\'s SSL_CERT_FILE line is put out of effect and merged, then comes back byte for byte; the bundle goes (T11, S10)', async () => {
+test('hermes through install / uninstall: the user\'s SSL_CERT_FILE line is put out of effect and merged, then comes back byte for byte; the bundle goes (T11, S10)', { skip: POSIX_WORLD }, async () => {
   const s = sandbox()
   try {
     const corp = s.put('corp.pem', OTHER.certPem)

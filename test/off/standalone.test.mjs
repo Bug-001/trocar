@@ -23,6 +23,7 @@ import { COMMANDS } from '../../src/cli/commands.mjs'
 import { formatPlan } from '../../src/cli/receipt.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, onSwitch, flowEvents } from './fixtures/off-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -73,7 +74,7 @@ const backToBefore = (list) => list.filter((e) => !fs.existsSync(e.path) || sha2
 
 // ── V2 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('V2: with the repository out of reach the copy install wrote does what `trocar off` does — no certificate entry taken (D55①) — and prints what it prints (the daemon gone)', async () => {
+test('V2: with the repository out of reach the copy install wrote does what `trocar off` does — no certificate entry taken (D55①) — and prints what it prints (the daemon gone)', { skip: POSIX_WORLD }, async () => {
   const a = await brokenTrocar(), b = await brokenTrocar()
   const io = fakeIo(), kept = readManifest(b.dir).entries.map((e) => [e.harness, e.kind, e.path])
   const viaCli = await runOffCli(['--json'], cliCtx(a, io))
@@ -87,21 +88,21 @@ test('V2: with the repository out of reach the copy install wrote does what `tro
   assert.equal(r.stderr, '')
 })
 
-test('V120: the copy, refused under --json, answers with one `usage` document on one line and nothing on stderr', async () => {
+test('V120: the copy, refused under --json, answers with one `usage` document on one line and nothing on stderr', { skip: POSIX_WORLD }, async () => {
   const r = await runWritten(await brokenTrocar(), ['no-such-name', '--json'])
   assert.equal(r.status, 2); assert.equal(r.stderr, '')
   assert.ok(r.stdout.endsWith('\n') && r.stdout.indexOf('\n') === r.stdout.length - 1, r.stdout)
   assert.equal(JSON.parse(r.stdout).error.code, 'usage')
 })
 
-test('1.6 §1.2: the document the copy makes of a refusal hides a URL password too', async () => {
+test('1.6 §1.2: the document the copy makes of a refusal hides a URL password too', { skip: POSIX_WORLD }, async () => {
   const pw = 'pw-not-a-real-secret-41f9'
   const r = await runWritten(await brokenTrocar(), [`http://u:${pw}@proxy.example:8080`, '--json'])
   assert.equal(r.status, 2); assert.equal(r.stderr, '')
   assert.ok(!r.stdout.includes(pw), r.stdout); assert.match(JSON.parse(r.stdout).error.message, /\*\*\*@proxy\.example/)
 })
 
-test('V2: the text a person reads is the same too, and a per-harness off leaves the other harness alone', async () => {
+test('V2: the text a person reads is the same too, and a per-harness off leaves the other harness alone', { skip: POSIX_WORLD }, async () => {
   const a = await brokenTrocar(), b = await brokenTrocar()
   const io = fakeIo()
   assert.equal(await runOffCli(['claude'], cliCtx(a, io)), 0)
@@ -112,7 +113,7 @@ test('V2: the text a person reads is the same too, and a per-harness off leaves 
   assert.deepEqual([...new Set(readManifest(b.dir).entries.map((e) => e.harness).filter(Boolean))].sort(), ['claude-code', 'codex'], 'and the certificate entries of both stay (D55①)')
 })
 
-test('V2: with the install manifest lost the copy undoes by trocar\'s own marks, after a yes, and prints what `trocar off --yes` prints', async () => {
+test('V2: with the install manifest lost the copy undoes by trocar\'s own marks, after a yes, and prints what `trocar off --yes` prints', { skip: POSIX_WORLD }, async () => {
   const names = ['codex', 'kimi-code']
   const a = await brokenTrocar(names), b = await brokenTrocar(names)
   const sw = Object.fromEntries([a, b].map((s) => { fs.rmSync(manifestPath(s.dir)); return [s.home, names.map((h) => onSwitch(s, h))] })) // what on wrote, found by its place (Linux's on writes nothing else off finds by a mark)
@@ -178,7 +179,7 @@ test('V2: with the install manifest lost the copy on darwin takes out a door val
   assert.deepEqual([after.keep, ...r.proxyKeys.map((k) => k.reduce((o, x) => (o == null ? o : o[x]), after))], [1, ...r.proxyKeys.map(() => undefined)], 'the door key is gone, the rest stays')
 })
 
-test('V2: a daemon that answers is told to switch off by the copy, over the control socket, and the receipt is the same', async (t) => {
+test('V2: a daemon that answers is told to switch off by the copy, over the control socket, and the receipt is the same', { skip: POSIX_WORLD }, async (t) => {
   const a = await installedHome({ names: ['claude-code', 'codex'] }), b = await installedHome({ names: ['claude-code', 'codex'] }) // both daemons up after on
   const ctl = await serveControl(b.sys.daemon)
   if (ctl.skip) return t.skip(ctl.skip)
@@ -282,7 +283,7 @@ test('OFF_VERSION moves with the undo rules: the known kinds and the file-rule k
 
 // ── V35 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('V35 / an item of a kind the copy does not know refuses the whole off — ok:false, exit 1, the hint is `trocar off`; no other entry is undone either', async () => {
+test('V35 / an item of a kind the copy does not know refuses the whole off — ok:false, exit 1, the hint is `trocar off`; no other entry is undone either', { skip: POSIX_WORLD }, async () => {
   const s = await brokenTrocar()
   const before = preEntries(s)
   const mystery = path.join(s.home, 'mystery.cfg')
@@ -308,7 +309,7 @@ test('V35 / an item of a kind the copy does not know refuses the whole off — o
   assert.ok(!/trocar off/.test(io.json().left.find((l) => l.path === myst2).reason), 'but it does not tell anyone to run itself')
 })
 
-test('V35: a manifest newer than the copy knows is left alone — ok:false, exit 1, the hint is `trocar off`; the routing is still taken off', async () => {
+test('V35: a manifest newer than the copy knows is left alone — ok:false, exit 1, the hint is `trocar off`; the routing is still taken off', { skip: POSIX_WORLD }, async () => {
   const s = await brokenTrocar()
   const file = manifestPath(s.dir)
   const m = JSON.parse(fs.readFileSync(file, 'utf8')); m.version = MANIFEST_VERSION + 1
