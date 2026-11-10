@@ -25,6 +25,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { seedFootprint } from '../helpers/footprint.mjs'
 import { darwinTools } from './fixtures/darwin-tools.mjs'
 import { fakeSystem, recordingExec } from '../cli/fixtures/on-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const ROOT = createCa({ commonName: 'liveness-identity root' })
 const roots = { node: [ROOT.certPem], osText: '' }
@@ -66,7 +67,7 @@ async function codexBox(asked = 'darwin') {
   return { home, dir, arch, install, on, manifestFile, agents, bundle: path.join(dir, 'ca', 'combined-codex.pem'), caFp: () => certBlocks(fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'), 'utf8'))[0].fp }
 }
 
-test('D54: a second `trocar on` with the same inputs leaves the manifest byte for byte (same sha256) and does not write it', async () => {
+test('D54: a second `trocar on` with the same inputs leaves the manifest byte for byte (same sha256) and does not write it', { skip: POSIX_WORLD }, async () => {
   const s = await codexBox()
   await s.on()
   const sha = () => crypto.createHash('sha256').update(fs.readFileSync(s.manifestFile)).digest('hex')
@@ -78,7 +79,7 @@ test('D54: a second `trocar on` with the same inputs leaves the manifest byte fo
   assert.ok(readManifest(s.dir).liveness.codex.identity.match.length > 0)
 })
 
-test('union: a name already in the recorded identity that the list no longer holds stays after the next on; the older `signature` key is gone; a new name is added', async () => {
+test('union: a name already in the recorded identity that the list no longer holds stays after the next on; the older `signature` key is gone; a new name is added', { skip: POSIX_WORLD }, async () => {
   const s = await codexBox()
   s.agents([{ harness: 'codex', name: 'codex-old' }])
   await s.on()
@@ -96,7 +97,7 @@ test('union: a name already in the recorded identity that the list no longer hol
   assert.equal(matchHarness({ codex: l }, { exe: '/x/codex', argv: ['codex', '--codex-run-as-apply-patch'] }), null, 'exclude is the new one, and holds')
 })
 
-test('an old trocar-off (OFF_VERSION 9) reads only `signature`: after on rewrites a record it has `identity` and no `signature`, so that copy judges "not known" (D50②: kept, exit 1) — the safe direction', async () => {
+test('an old trocar-off (OFF_VERSION 9) reads only `signature`: after on rewrites a record it has `identity` and no `signature`, so that copy judges "not known" (D50②: kept, exit 1) — the safe direction', { skip: POSIX_WORLD }, async () => {
   const s = await codexBox()
   await s.on()
   const m = readManifest(s.dir)
@@ -147,7 +148,7 @@ const OS = {
 }
 const offWith = (s, osName, exe) => undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: ['codex'], roots, procs: () => listProcs({ uid: 501, platform: osName, exec: exe }) })
 
-test('off counts a name put on agents.json after on: that live process holds the bundle — kept without the trocar CA, its pid in the receipt; an unreadable list adds nothing and says so', async () => {
+test('off counts a name put on agents.json after on: that live process holds the bundle — kept without the trocar CA, its pid in the receipt; an unreadable list adds nothing and says so', { skip: POSIX_WORLD }, async () => {
   const s = await codexBox('darwin')
   await s.install()
   s.agents([{ harness: 'codex', name: 'codex-fork' }]) // added after on: the snapshot does not hold it
@@ -169,8 +170,10 @@ test('off counts a name put on agents.json after on: that live process holds the
   assert.ok(u.notes.some((n) => n.includes('agents.json') && /not counted/.test(n)), `the receipt says the list was not used: ${u.notes.join(' | ')}`)
 })
 
+// every cell, win32's too, starts from a Linux-shaped install (codexBox → installCollector), which Windows never has (it installs through the model):
+// on a Windows host those cells skip, and the win32 reader is injected, so a Windows host would add no coverage
 for (const osName of Object.keys(OS)) {
-  test(`${osName}: off keeps combined-codex.pem for a codex that started after on — without the trocar CA, its pid named — and removes it once that codex is gone`, async () => {
+  test(`${osName}: off keeps combined-codex.pem for a codex that started after on — without the trocar CA, its pid named — and removes it once that codex is gone`, { skip: POSIX_WORLD }, async () => {
     const s = await codexBox(osName)
     await s.install()
     assert.ok(readManifest(s.dir).liveness.codex.identity, 'on wrote the identity: the name list, compiled')
@@ -185,7 +188,7 @@ for (const osName of Object.keys(OS)) {
     assert.deepEqual([fs.existsSync(s.bundle), again.kept_bundles, again.left], [false, [], []], 'the codex is gone: the next off removes the bundle')
   })
 
-  test(`${osName}: a record with no identity (an older trocar's on) is not known — the bundle kept without the CA, an item left, step 5 says it cannot tell — and the next on fills it in`, async () => {
+  test(`${osName}: a record with no identity (an older trocar's on) is not known — the bundle kept without the CA, an item left, step 5 says it cannot tell — and the next on fills it in`, { skip: POSIX_WORLD }, async () => {
     const s = await codexBox(osName)
     const sys = fakeSystem()
     await s.install()
@@ -234,7 +237,7 @@ for (const osName of Object.keys(CLAUDE)) {
 
 // ── a name two harnesses claim, and an ignored preset name: both still holders (D50: one more holder, never one less) ─────────────────────
 const OPENCODE = HARNESSES.find((d) => d.name === 'opencode')
-test('a codex that two harnesses claim (agents.json put "codex" under opencode after on, or the union kept a name moved between harnesses) still holds combined-codex.pem: kept without the CA, its pid named', async () => {
+test('a codex that two harnesses claim (agents.json put "codex" under opencode after on, or the union kept a name moved between harnesses) still holds combined-codex.pem: kept without the CA, its pid named', { skip: POSIX_WORLD }, async () => {
   for (const how of ['agents.json after on', 'the union kept a moved name']) {
     const s = await codexBox('darwin')
     await s.install()
@@ -250,7 +253,7 @@ test('a codex that two harnesses claim (agents.json put "codex" under opencode a
   }
 })
 
-test('ignoring codex\'s only preset name before on stops capture, not trust: the identity still names codex, so off keeps the bundle a running codex holds; an empty `match` is "not known"', async () => {
+test('ignoring codex\'s only preset name before on stops capture, not trust: the identity still names codex, so off keeps the bundle a running codex holds; an empty `match` is "not known"', { skip: POSIX_WORLD }, async () => {
   const s = await codexBox('darwin')
   s.agents([{ harness: 'codex', name: 'codex', ignore: true }])
   await s.install()

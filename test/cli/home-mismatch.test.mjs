@@ -13,6 +13,7 @@ import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { onCtx } from './fixtures/on-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const fakeIo = () => {
   const out = [], err = []
@@ -60,7 +61,7 @@ test('V126: the account\'s home equal to this run\'s installs as before', async 
   assert.ok(fs.existsSync(path.join(w.home, '.trocar', 'collector', 'install-manifest.json')))
 })
 
-test('V126: uninstall with a HOME that is not the account\'s home is refused before anything is touched', async () => {
+test('V126: uninstall with a HOME that is not the account\'s home is refused before anything is touched', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['codex'] })
   await s.off()
   const account = tmpDir('trocar-account-')

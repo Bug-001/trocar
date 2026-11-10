@@ -13,8 +13,8 @@ import { recordsAt } from '../../src/query/records.mjs'
 import { extractMembers, blockAt } from '../../src/view/extract.mjs'
 import { reduce, listOf } from '../../src/view/reduce.mjs'
 import { parseTextRef } from '../../src/raw/refs.mjs'
-import { PROJECTION_NOTES } from '../../src/health/codes.mjs'
-import { PROJ_V, projectionFile, openProjection, posCmp, gcProjections } from '../../src/query/projection.mjs'
+import { PROJECTION_NOTES, FOLD_STOPS, isCode } from '../../src/health/codes.mjs'
+import { PROJ_V, projectionFile, openProjection, posCmp, gcProjections, unsaved } from '../../src/query/projection.mjs'
 
 const KEY = 'session-a'
 const defs = [{ bid: 'b1', text: 'alpha' }, { bid: 'b2', text: 'β\nwith a newline', n: [1, 2] }]
@@ -108,12 +108,37 @@ test('(d) a disk that refuses writes keeps the items in memory and says so once 
   const notes = () => errors.filter((e) => e.code === 'projection-write-failed')
   assert.equal(notes().length, 1)
   assert.equal(notes()[0].level, 'note')
+  assert.match(notes()[0].reason, /^[^\n]+ Next: [^\n]+$/, 'one line: the cause, then the one step that fixes it (D38)')
+  assert.ok(notes()[0].reason.includes(path.join(home, 'index')), 'it names where trocar could not save')
   assert.ok(PROJECTION_NOTES.includes('projection-write-failed'))
   full = false
   s.append({ rows: [{ rid: '20261021T054349Z:9' }] })
   full = true
   s.append({ rows: [{ rid: '20261021T054349Z:10' }] })
   assert.equal(notes().length, 2) // the successful write ended the first episode
+})
+
+test('4.3 §4 盘满 (D38): what could not be saved says where and why in one line, and the step only for a cause that step fixes', () => {
+  const home = tmpDir('trocar-proj-'), err = (code) => Object.assign(new Error(`${code}: refused, open 'x'`), { code })
+  for (const platform of ['darwin', 'linux', 'win32']) for (const code of ['ENOSPC', 'EDQUOT', 'EACCES', 'EPERM', 'EIO', 'EMFILE']) {
+    const line = unsaved(home, err(code), platform)
+    assert.match(line, /^[^\n]+$/, 'one line')
+    assert.ok(line.includes(path.join(home, 'index')), 'it names where')
+    assert.equal(line.includes(' Next: '), ['ENOSPC', 'EDQUOT', 'EACCES'].includes(code), `${code}: a step only for a cause it fixes`)
+    if (platform === 'win32') assert.ok(!/\b(sudo|chmod|chown)\b/.test(line), 'no POSIX command on Windows')
+  }
+})
+
+test('4.3 §4 盘满 (D38): a write of the answer files that failed is one record whose code names the cause, a known code and FOLD_STOPS\' (the head\'s stop)', async () => {
+  const { writeFailure } = await import('../../src/query/named/session.mjs')
+  const home = tmpDir('trocar-proj-')
+  for (const [e, code] of [[Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }), 'projection-write-failed'],
+    [new TypeError("Cannot read properties of undefined (reading 'lane')"), 'fold-failed']]) {
+    const r = writeFailure(home, 'sid-1', e)
+    assert.equal(r.code, code, `${e.message}: ${code}`)
+    assert.ok(isCode(r.code) && FOLD_STOPS.includes(r.code), 'a record code, and the stop\'s')
+    assert.match(r.reason, /^[^\n]+$/)
+  }
 })
 
 test('(d) a store kept open across requests puts a write failure in the errors of the request whose write failed', async () => {

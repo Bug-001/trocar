@@ -191,6 +191,17 @@ test('1.5 K-31: a stopped fold\'s line is the stopped one; its code is in the te
   }
 })
 
+// 1.5 K-31: each way a read can stop draws a line of its own, so the reader sees which one stopped it
+test('1.5 K-31: every FOLD_STOPS code draws a stopped line of its own', () => {
+  const lines = new Map<string, string>()
+  for (const code of FOLD_STOPS) {
+    const { el } = head({ desk: { pending: { done: 2, total: 9, stopped: { code, reason: 'why-q' } }, firstPending: true } })
+    lines.set(code, el.querySelector('.readstate')!.textContent!)
+    cleanup()
+  }
+  expect(new Set(lines.values()).size, JSON.stringify([...lines])).toBe(FOLD_STOPS.length)
+})
+
 const STALE = (r: object) => ({ r, since: new Date(Date.now() - 5000).toISOString() })
 test('1.5 K-29: a stale desk draws a Retry outside the head row that reads again; no stale state, no line', () => {
   const poll = vi.fn()

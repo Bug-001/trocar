@@ -17,11 +17,12 @@ import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo, onCtx, seedClaude, fakeSystem, installFirst } from './fixtures/on-ctx.mjs'
 import { runStatus, reply, asDaemon } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const HEALTH_OK = { summary: { state: 'ok', since: '2026-10-12T00:00:00.000Z' }, collector: { installed: true, daemon: { state: 'running' }, conditions: [], failures: [], expected: {} }, raw: { problems: [] }, read: { errors: [], truncated: false } }
 
 // (c)+(d) colour (D58): TTY-only, NO_COLOR honoured — and zero ANSI bytes anywhere else
-test('D58: a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan, receipt); a TTY run colours the verdict lines', async () => {
+test('D58: a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan, receipt); a TTY run colours the verdict lines', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   for (const tty of [false, true]) { // a pipe, and a TTY under NO_COLOR
     process.env.NO_COLOR = '1'

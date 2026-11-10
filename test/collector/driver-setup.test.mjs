@@ -14,6 +14,7 @@ import { collectorDir, USER_PATH_FILE } from '../../src/off/paths.mjs'
 import { recordUserPath, presentEnvNames } from '../../src/off/user-path.mjs'
 import { resolveLoc } from '../../src/off/loc.mjs'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const OS = 'linux'
 const collectorOf = (home) => collectorHome(path.join(home, '.trocar'))
@@ -73,7 +74,7 @@ test('V91-L2 · D38: an install record or a carrier file that cannot be read giv
 
 const denyAll = (paths) => ({ ...fs, readFileSync: (f, ...a) => { if (paths.includes(String(f))) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } })
 
-test('V91-L3 · 4.6: real descriptors × footprint present/absent × carrier none / installed / gone / unreadable', async () => {
+test('V91-L3 · 4.6: real descriptors × footprint present/absent × carrier none / installed / gone / unreadable', { skip: POSIX_WORLD }, async () => {
   const all = await loadHarnesses()
   const s = await installedHome({ names: all.map((d) => d.name) })
   const manifest = s.manifest()

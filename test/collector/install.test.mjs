@@ -33,6 +33,7 @@ import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
 import { envelopesOf } from '../helpers/record-store.mjs'
 import { appendEvent } from '../../src/collector/core/events.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 function box() {
   const home = tmpDir('trocar-inst-')
@@ -462,7 +463,7 @@ const repHarness = (dir, extra = {}) => ({
   }),
 })
 
-test('uninstall step 2: a combined bundle a live process may have loaded is kept without the trocar CA and reported; the next uninstall removes it (S10 b, T11)', async () => {
+test('uninstall step 2: a combined bundle a live process may have loaded is kept without the trocar CA and reported; the next uninstall removes it (S10 b, T11)', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     const corp = createCa({ commonName: 'corp relay CA' }); const root = createCa({ commonName: 'a root' })
@@ -501,7 +502,7 @@ test('uninstall step 2: a combined bundle a live process may have loaded is kept
 // claim was false and uninstall said "uninstalled" over a live process's trust root. It is an item that could not be undone:
 // the pid that may hold it, a failure event with the errno, an outcome of 'left', the manifest kept, and the next uninstall
 // (once the user fixed the file) finishes. A bundle nobody holds is removed whatever its state.
-test('uninstall step 2: a bundle a live process may hold that cannot be read is an item left (failure, outcome left, manifest kept), not "kept without the trocar CA"; one nobody holds is removed', async () => {
+test('uninstall step 2: a bundle a live process may hold that cannot be read is an item left (failure, outcome left, manifest kept), not "kept without the trocar CA"; one nobody holds is removed', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     const corp = createCa({ commonName: 'corp relay CA' }); const root = createCa({ commonName: 'a root' })
@@ -546,7 +547,7 @@ test('uninstall step 2: a bundle a live process may hold that cannot be read is 
   } finally { c.done() }
 })
 
-test('uninstall step 2: a harness that re-reads its entry while running keeps the bundle for any live process of it; step 5 says until when each still trusts', async () => {
+test('uninstall step 2: a harness that re-reads its entry while running keeps the bundle for any live process of it; step 5 says until when each still trusts', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
@@ -561,7 +562,7 @@ test('uninstall step 2: a harness that re-reads its entry while running keeps th
 
 // 4.6 安装 / 卸载不静默: an entry that could not be undone keeps the bundle it names (the agent's next start reads it), and a second uninstall
 // with the same process alive still finds a kept bundle as the first left it — the first one removed the CA certificate it was judged by
-test('uninstall: a replace-semantics entry that cannot be undone keeps its bundle without the trocar CA and says so; the second uninstall with the holder alive says the same, not "still holds the CA" (4.6 撤销顺序 第 2 步)', async () => {
+test('uninstall: a replace-semantics entry that cannot be undone keeps its bundle without the trocar CA and says so; the second uninstall with the holder alive says the same, not "still holds the CA" (4.6 撤销顺序 第 2 步)', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp relay CA' }).certPem)
@@ -773,7 +774,7 @@ test('daemonEnv: the install shell\'s NODE_EXTRA_CA_CERTS goes to the unit when 
   } finally { b.done() }
 })
 
-test('uninstall step 5: only a process that may have read the entry is reported — started after its harness was installed (an owned plugin file counts), or of a harness that re-reads it; the descriptor says, as data in the manifest snapshot, that only a process whose environ names a file of trocar ever read it; each is kept as an uninstall-note (review 3 #6)', async () => {
+test('uninstall step 5: only a process that may have read the entry is reported — started after its harness was installed (an owned plugin file counts), or of a harness that re-reads it; the descriptor says, as data in the manifest snapshot, that only a process whose environ names a file of trocar ever read it; each is kept as an uninstall-note (review 3 #6)', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     // plugin-only harness: its install time is its owned file's; a harness whose afterUninstall is a function of the process
@@ -1022,7 +1023,7 @@ test('a manifest of a version this build does not read stops install before anyt
 })
 
 // ---- D39 / 4.6 撤销顺序: the liveness snapshot — what `off` needs to judge, with no descriptor in sight, which live process may hold what ----
-test('install records liveness per harness it changed anything for: its signature as JSON, whether it re-reads its entry, until when a running one still trusts', async () => {
+test('install records liveness per harness it changed anything for: its signature as JSON, whether it re-reads its entry, until when a running one still trusts', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     const { reviveSignature } = await import('../../src/off/signature.mjs')
@@ -1161,7 +1162,7 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
 })
 
 // ---- D39 / 1.6 §1.1, V13: the order of `trocar uninstall` ----
-test('V13: uninstall writes desired off, asks the daemon to switch off and exit, stops it through systemd, and only then undoes the first entry; the CA, the unit, the run directory, the backups, trocar-off and the manifest come after the last entry, the manifest last; the captures stay; nothing restarts', async () => {
+test('V13: uninstall writes desired off, asks the daemon to switch off and exit, stops it through systemd, and only then undoes the first entry; the CA, the unit, the run directory, the backups, trocar-off and the manifest come after the last entry, the manifest last; the captures stay; nothing restarts', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const entryPaths = new Set(s.manifest().entries.flatMap((e) => [e.path, e.real_path].filter(Boolean)))
   const unitFile = path.join(s.home, '.config', 'systemd', 'user', 'trocar-collector.service')
@@ -1227,7 +1228,7 @@ for (const [name, reply, turned] of [['POST /on throws', null, false], ['the dae
 // read, is left byte for byte and unrecorded; the receipt's `skipped` names it, that harness gets nothing more, the others are installed. A file
 // inside trocar's own tree (a combined bundle) is trocar's by its place: written and recorded.
 for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earlier plugin\n'], ['foreign', '// the user\'s own plugin\n'], ['unreadable', 'x\n']]) {
-  test(`install (Linux) · 4.11 P4: an owned plugin, ${at} at its path; a combined bundle with someone else's text at its path`, async () => {
+  test(`install (Linux) · 4.11 P4: an owned plugin, ${at} at its path; a combined bundle with someone else's text at its path`, { skip: POSIX_WORLD }, async () => {
     const b = box()
     try {
       const file = path.join(b.home, '.plug', 'plugins', 'trocar-ca.js')

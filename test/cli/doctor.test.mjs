@@ -17,6 +17,7 @@ import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { closure } from '../helpers/imports.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 import { COMMANDS } from '../../src/cli/commands.mjs'
 
 // a record the four questions are content with: an LLM call with its verbatim request and a reconstructed response
@@ -135,7 +136,7 @@ for (const platform of ['darwin', 'win32']) {
   })
 }
 
-test('what doctor runs: no VPN query at all (D49), only the read of the network facts and nothing else — no `which`, no systemctl / launchctl / loginctl, nothing that starts, stops or changes a thing (the trust-store check and the process table are the other two queries; both are replaced here)', async () => {
+test('what doctor runs: no VPN query at all (D49), only the read of the network facts and nothing else — no `which`, no systemctl / launchctl / loginctl, nothing that starts, stops or changes a thing (the trust-store check and the process table are the other two queries; both are replaced here)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   const before = s.sys.exec.calls.length
@@ -158,7 +159,7 @@ test('dependencies are looked up in the files, never with `which` (§3.7 prints 
   assert.deepEqual(s.sys.exec.calls.filter((c) => /which|where/.test(c)), [], 'nothing was started to find them')
 })
 
-test('doctor explains the same harnesses `status` judges (the daemon\'s answer, every agent captured or why not), and its exit is the capture\'s alone (B-7)', async () => {
+test('doctor explains the same harnesses `status` judges (the daemon\'s answer, every agent captured or why not), and its exit is the capture\'s alone (B-7)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: "trocar's settings for this agent were written after this process started; restart it once" }]
@@ -175,7 +176,7 @@ test('doctor explains the same harnesses `status` judges (the daemon\'s answer, 
   assert.deepEqual([...new Set((doc.findings || []).filter((x) => x.harness).map((x) => x.harness))], ['claude-code'], JSON.stringify(doc.findings))
 })
 
-test('a stale standalone copy is a problem with its reason (exit 1); where nothing was installed there is nothing to check (exit 0)', async () => {
+test('a stale standalone copy is a problem with its reason (exit 1); where nothing was installed there is nothing to check (exit 0)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   fs.appendFileSync(path.join(s.home, '.trocar', 'bin', 'trocar-off'), '\n// edited\n')
@@ -194,7 +195,7 @@ test('a stale standalone copy is a problem with its reason (exit 1); where nothi
   assert.equal(r.exit, 0, r.out)
 })
 
-test('§3.7 (Windows test machine run 2 Q3): the headline says what the list numbers — problems and expected findings, never fewer', async () => {
+test('§3.7 (Windows test machine run 2 Q3): the headline says what the list numbers — problems and expected findings, never fewer', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   fs.appendFileSync(path.join(s.home, '.trocar', 'bin', 'trocar-off'), '\n// edited\n')
@@ -206,7 +207,7 @@ test('§3.7 (Windows test machine run 2 Q3): the headline says what the list num
   assert.equal(said, numbered, `the headline counts ${said}, the list numbers ${numbered}:\n${r.out}`)
 })
 
-test('backups no manifest names are a note with their paths; the ones the manifest names are not; with no manifest all of them are', async () => {
+test('backups no manifest names are a note with their paths; the ones the manifest names are not; with no manifest all of them are', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ seed: (home) => { fs.mkdirSync(path.join(home, '.claude'), { recursive: true }); fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{"model":"x"}\n') } })
   const src = path.join(s.home, 'src'); capture(src)
   const named = new Set((s.manifest().entries || []).map((e) => e.backup).filter(Boolean))
@@ -230,7 +231,7 @@ test('backups no manifest names are a note with their paths; the ones the manife
   assert.ok(r.out.includes(path.join(n.home, '.trocar', 'collector', 'install-manifest.json')), `with the file:\n${r.out}`)
 })
 
-test('doctor writes nothing in the HOME (§3.7); usage errors (unknown option, unknown harness) exit 2 and touch nothing', async () => {
+test('doctor writes nothing in the HOME (§3.7); usage errors (unknown option, unknown harness) exit 2 and touch nothing', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   const before = snapshot(s.home)
@@ -295,11 +296,13 @@ function unknownOnDisk(home) { // what the door wrote on the macOS and Windows t
 }
 
 test('V66 wired: a process-unknown in ~/.trocar\'s flows/ reaches `doctor claude-code` — the filled-in agents.json line in the text and in --json findings, daemon or not, on every platform\'s doctor', async () => {
-  const s = await installedHome()
-  unknownOnDisk(s.home)
+  // a Linux install for the POSIX doctors (on a Windows host its paths cannot be POSIX, so those cells skip); win32's doctor reads a home with no
+  // Linux install in it, the one shape a Windows machine has, so its cell runs on every host
   const line = JSON.stringify(NIGHTLY)
-  const daemon = asDaemon(reply({ health: captureHealth({ harnesses: HARNESS_IDS, home: path.join(s.home, '.trocar') }) })) // what the daemon serves: the same fold of the same flows/
-  for (const platform of ['linux', 'darwin', 'win32']) {
+  const worldOf = async (platform) => { const s = platform === 'win32' ? plain() : await installedHome(); unknownOnDisk(s.home); return s }
+  for (const platform of POSIX_WORLD ? ['win32'] : ['linux', 'darwin', 'win32']) {
+    const s = await worldOf(platform)
+    const daemon = asDaemon(reply({ health: captureHealth({ harnesses: HARNESS_IDS, home: path.join(s.home, '.trocar') }) })) // what the daemon serves: the same fold of the same flows/
     for (const [label, request] of [['no daemon', down()], ['daemon', daemon]]) {
       const what = `${platform}, ${label}`
       const text = await doctor(s, ['claude-code', '--details'], { platform, deps: { request } }) // a note is --details'

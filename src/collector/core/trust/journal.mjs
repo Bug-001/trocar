@@ -192,10 +192,10 @@ export function retireEntry({ dir, manifest, entry, now = new Date(), fs = nodeF
   saveManifest(dir, manifest, fs)
   return entry
 }
-/** A file trocar created (and the directories it made for it) that is gone and placed again: the new entry still owns those directories, so
- *  uninstall takes them away as it would have (invariant 5: nothing left behind). Only when the new write created the file too. */
+/** The directories a retired entry made pass to the entry placed again, whether the file is still there (rewritten by the agent) or gone: the
+ *  record that goes last takes them when they are empty (off's hand-over; invariant 5: nothing left behind). A directory holding the user's file stays. */
 export function inheritDirs({ dir, manifest, entry, from, fs = nodeFs }) {
-  if (entry.existed_before || from.existed_before !== false || !(from.created_dirs || []).length) return
+  if (!(from.created_dirs || []).length) return
   entry.created_dirs = [...new Set([...from.created_dirs, ...entry.created_dirs])]
   entry.undo_by_hand = undoByHand(entry)
   saveManifest(dir, manifest, fs)

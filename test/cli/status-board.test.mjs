@@ -12,8 +12,9 @@ import { fakeIo } from './fixtures/on-ctx.mjs'
 import { ensureBoardPort } from '../../src/collector/core/ingress-config.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
-test('V90: board.state follows the daemon\'s own reply, url is ingress.json\'s boardPort, the token is in neither output, and the board never moves the exit code', async () => {
+test('V90: board.state follows the daemon\'s own reply, url is ingress.json\'s boardPort, the token is in neither output, and the board never moves the exit code', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const { port } = await ensureBoardPort({ dir: s.dir, isFree: async () => true })
   const token = crypto.randomBytes(32).toString('base64url')
