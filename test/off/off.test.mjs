@@ -12,7 +12,7 @@ import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { undoSide, offWorld, runOff } from '../../src/off/orchestrate.mjs'
-import { formatOffReceipt, formatOffText } from '../../src/off/receipt.mjs'
+import { formatOffReceipt, formatOffText, isCommandLine, COMMAND_INDENT } from '../../src/off/receipt.mjs'
 import { applyJsonKey } from '../../src/collector/core/trust/journal.mjs'
 import { certBlocks, SYSTEM_BUNDLES } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
@@ -964,6 +964,59 @@ test('a file off leaves: its backup and the line that puts it back show HOME as 
     const out = f(r.receipt, { home: s.home })
     assert.ok(!out.includes(s.home), `${name}:\n${out}`)
     assert.ok(out.replace(/\s+/g, ' ').includes(`cp ~${left.backup.slice(s.home.length)} ~${file.slice(s.home.length)}`), `${name}: the line that puts it back, with ~:\n${out}`)
+  }
+})
+
+// 1.6 §1.1⑤: HOME as ~ in the words of every row, also a HOME with a space in it (macOS and Windows account names may have one); a quoted path
+// keeps HOME as it is (the shell expands no ~ in quotes)
+test('a HOME with a space, or in another case where file names are case-blind, is ~ in the words of off\'s text and --details', async () => {
+  const { pathKey } = await import('../../src/off/fsutil.mjs')
+  const FOLDS = pathKey('/a', { realpath: null }) === pathKey('/A', { realpath: null }) // as off compares paths on this host
+  for (const [home, sep] of [['/Users/Ann Lee', '/'], ['C:\\Users\\Ann Lee', '\\']]) {
+    const file = [home, '.claude', 'settings.json'].join(sep), backup = [home, '.trocar', 'backup', 'ab12-20261109T000000Z'].join(sep)
+    const q = (p) => (sep === '/' ? `'${p}'` : `"${p}"`)
+    const receipt = { command: 'off', ok: false, outcome: 'left', all: true, harnesses: [], routing: { confirmed: true }, changed: [], removed: [],
+      left: [{ path: file, harness: 'claude-code', result: 'left-unparsable', reason: `${file}: trocar cannot read it. The file as it was before trocar is kept at ${backup}; by hand: cp ${q(backup)} ${q(file)} (puts the whole file back)`, backup, restore: `cp ${q(backup)} ${q(file)}` }],
+      problems: [`${file} could not be read (${backup} is kept)`],
+      relayed: 'unknown', relayed_reason: `${backup} could not be read`, // a reason in another row
+      still_trusting: [{ what: 'root', reason: `the store at ${[home, 'Library'].join(sep)} could not be opened.`, command: 'true' }] }
+    if (FOLDS) receipt.problems.push(`${[home.toLowerCase(), 'x'].join(sep)} is named in another case`) // matched as off compares paths: case-blind there
+    for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+      const words = f(receipt, { home }).split('\n').filter((l) => !isCommandLine(l))
+      const unquoted = words.join(' ').replace(/(^|\s)('[^']*'|"[^"]*")/g, '$1') // a quoted path (a quote that opens a word, not trocar's) is a command's, kept as the shell needs it
+      assert.ok(!unquoted.includes(home) && !(FOLDS && unquoted.toLowerCase().includes(home.toLowerCase())), `${name}, ${home}: no words hold the HOME:\n${words.join('\n')}`)
+    }
+  }
+})
+
+// §1.1⑤ in a line to copy: the command that takes trocar's root out names HOME as ~ where the shell expands it, in the text and --details
+test('the line that takes trocar\'s root out names an unquoted HOME as ~', () => {
+  const home = '/Users/al'
+  const receipt = { command: 'off', ok: true, outcome: 'done', all: true, harnesses: [], routing: { confirmed: true }, changed: [], removed: [],
+    still_trusting: [{ what: 'root', reason: 'it could not be removed', command: `security remove-trusted-cert ${home}/.trocar/collector/ca/ca.pem` }] }
+  for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+    const out = f(receipt, { home }).split('\n')
+    assert.ok(out.includes(`${COMMAND_INDENT}security remove-trusted-cert ~/.trocar/collector/ca/ca.pem`), `${name}:\n${out.join('\n')}`)
+  }
+})
+
+// §1.1⑤ never a wrong line to copy: HOME in another case is HOME only where its volume is case-blind (pathKey asks the volume; the test answers for it)
+test('HOME in another case is ~ only on a case-blind volume: on a case-sensitive one the line to copy and the words keep the path', async () => {
+  const { pathKey } = await import('../../src/off/fsutil.mjs')
+  const home = '/Users/al', there = ['/', '/Users', '/Users/al']
+  const enoent = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
+  const caseSensitive = (d) => (there.includes(d) ? d : enoent())
+  const caseBlind = (d) => there.find((e) => e.toLowerCase() === d.toLowerCase()) || enoent()
+  const cmd = 'security remove-trusted-cert /users/AL/.trocar/ca.pem'
+  const receipt = { command: 'off', ok: true, outcome: 'done', all: true, harnesses: [], routing: { confirmed: true }, changed: [], removed: [],
+    still_trusting: [{ what: 'root', reason: 'it could not be removed', command: cmd }], problems: ['/users/AL/x could not be read'] }
+  const platformFolds = pathKey('/a', { realpath: null }) === pathKey('/A', { realpath: null })
+  for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+    const kept = f(receipt, { home, realpath: caseSensitive }).split('\n')
+    assert.ok(kept.includes(`${COMMAND_INDENT}${cmd}`) && kept.some((l) => l.includes('/users/AL/x')), `${name}, case-sensitive volume: another case is another directory:\n${kept.join('\n')}`)
+    if (!platformFolds) continue // file names keep case on this platform whatever the volume
+    const blind = f(receipt, { home, realpath: caseBlind }).split('\n')
+    assert.ok(blind.includes(`${COMMAND_INDENT}security remove-trusted-cert ~/.trocar/ca.pem`) && blind.some((l) => l.includes('~/x')), `${name}, case-blind volume:\n${blind.join('\n')}`)
   }
 })
 
