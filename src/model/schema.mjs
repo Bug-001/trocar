@@ -5,14 +5,15 @@ const num = (x) => (x == null ? 0 : Number(x));
 
 // Canonical usage mapping (RFC 3.2 "provider -> canonical" table), keyed by the WIRE FORMAT the usage
 // object arrived in (D37 ①: the names are the wire's, whichever vendor answered): 'anthropic',
-// 'openai-responses' / 'openai-responses-ws', 'openai-chat'. Anything else fails loud.
+// 'openai-responses' / 'openai-responses-ws', 'openai-chat', 'gemini'. Anything else fails loud.
 // opts.vendor (vendors.mjs::vendorOf, the upstream host's vendor, null = unknown): whether an ABSENT cache-write
 // counter is NULL is decided per vendor (3.2 D37 note, 3.3:89) — see the Anthropic branch.
 export function mapUsage(provider, raw = {}, opts = {}) {
   if (provider === 'openai-responses' || provider === 'openai-responses-ws') return mapResponses(raw || {});
   if (provider === 'openai-chat') return mapChat(raw || {});
+  if (provider === 'gemini') return mapGemini(raw || {});
   if (provider !== 'anthropic') {
-    throw new Error(`mapUsage: no canonical mapping for provider '${provider}' (anthropic | openai-responses[-ws] | openai-chat)`);
+    throw new Error(`mapUsage: no canonical mapping for provider '${provider}' (anthropic | openai-responses[-ws] | openai-chat | gemini)`);
   }
   const input_uncached = num(raw.input_tokens);
   const cache_read = num(raw.cache_read_input_tokens);
@@ -77,4 +78,12 @@ function mapChat(raw) {
   const uncached = miss != null ? num(miss) : Math.max(0, num(raw.prompt_tokens) - read);
   return { input_uncached: uncached, cache_read: read, cache_write: null, output: num(raw.completion_tokens),
     reasoning: raw.completion_tokens_details?.reasoning_tokens ?? null, total_input: read + uncached };
+}
+// Gemini usageMetadata: promptTokenCount is the prompt's total (cached included); toolUsePromptTokenCount, the tool-use prompt, is
+// counted apart from it (totalTokenCount sums both) and is input too. cachedContentTokenCount is the cache-read part. The wire reports
+// no cache write → NULL, never 0 (3.2). candidatesTokenCount leaves out the thoughts, which are billed as output: output counts both.
+function mapGemini(raw) {
+  const total = num(raw.promptTokenCount) + num(raw.toolUsePromptTokenCount), read = num(raw.cachedContentTokenCount);
+  return { input_uncached: Math.max(0, total - read), cache_read: read, cache_write: null, output: num(raw.candidatesTokenCount) + num(raw.thoughtsTokenCount),
+    reasoning: raw.thoughtsTokenCount ?? null, total_input: total };
 }
