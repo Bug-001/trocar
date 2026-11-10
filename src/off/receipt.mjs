@@ -6,6 +6,7 @@
 // it tells the user to delete, src/off/text-edit.mjs.
 import path from 'node:path'
 import { OFF_PREFIX } from './text-edit.mjs'
+import { pathKey } from './fsutil.mjs'
 
 /** 1.6 §1.1⑥: the column of a command to copy — deeper than a sentence (column 0) and a label's item (column 2), so a path printed as an item and
  *  the same path printed as a command never look alike. Every receipt and refusal prints its commands here, and a line of a several-line text
@@ -18,13 +19,16 @@ export const foldHang = (lead) => (lead ? ' '.repeat(Math.max(lead.length, COMMA
 export const isCommandLine = (l) => String(l).startsWith(COMMAND_INDENT) && /\S/.test(String(l).charAt(COMMAND_INDENT.length))
 
 const WIDTH = 80
-const offTilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
+// HOME is matched as off compares paths (pathKey): case-blind where the file names are (Windows, macOS), so C:\\Users\\ann is that HOME
+const FOLDS = pathKey('/a', { realpath: null }) === pathKey('/A', { realpath: null })
+const fold = (s) => (FOLDS ? s.toLowerCase() : s)
+const offTilde = (p, home) => (home && typeof p === 'string' && (fold(p) === fold(home) || fold(p).startsWith(fold(home) + path.sep)) ? `~${p.slice(home.length)}` : p)
 const UNTIL_WORDS = { restart: 'until it restarts', 'next-connection': 'until its next new connection', 'next-handshake': 'until its next handshake', 'session-end': 'until its current session ends' }
 
 /** One line of at most 80 columns, or the line split at spaces (§1.1 版式 6): a text at column 0 folds at column 0, an indented one hangs at
  *  foldHang. A single word longer than the width (a path, a command) is never broken:
  *  it keeps its own line. */
-function fit(text) {
+function fitLines(text) {
   const s = String(text)
   const lead = s.slice(0, s.length - s.trimStart().length), hang = foldHang(lead)
   const out = []
@@ -42,8 +46,8 @@ function fit(text) {
 const tildeWords = (s, home) => s.split(' ').map((w) => (w.startsWith('(') ? `(${offTilde(w.slice(1), home)}` : offTilde(w, home))).join(' ') // a line to copy: an unquoted word, a path in parentheses too
 // words: HOME wherever a path starts with it, a HOME with a space in it too (an account name may have one); never inside a longer name, and never
 // in quotes (a command quoted in a sentence: the shell expands no ~ there)
-const tildeText = (s, home) => (home ? s.replace(new RegExp(`(^|[\\s(\\[=:])${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[\\\\/]|$|[\\s"'),;\\]])`, 'g'), '$1~') : s)
-export const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeText(l, home))))
+const tildeText = (s, home) => (home ? s.replace(new RegExp(`(^|[\\s(\\[=:])${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[\\\\/]|$|[\\s"'),;\\]]|\\.(?=\\s|$))`, FOLDS ? 'gi' : 'g'), '$1~') : s)
+export const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fitLines(tildeText(l, home))))
 /** Rows of [label, value] as a labelled list (§1.1②, cli/text.mjs pairs' layout, written here for the same reason as fit): each label at column 2, padded so every
  *  value starts in one column; a value folds at its own column (never COMMAND_INDENT: that column is at least 2 + 1 + 2), a word longer than the room keeps
  *  its line whole; HOME as ~. */
@@ -61,7 +65,7 @@ export const labelLines = (rows, home) => {
 
 // a key the user set to a value of their own while capture was on (D48②, removeTrocarText `prior_left`): their value wins, the old line trocar put out
 // of effect stays so — where it is, and how to have the old value back
-const priorLeftLines = (c) => (c.prior_left || []).flatMap((p) => fit(`    ${p.key} now holds the value you set while capture was on; the old line (line ${p.line}) is still commented out: to put it back, delete the leading ${OFF_PREFIX} on it.`))
+const priorLeftLines = (c) => (c.prior_left || []).flatMap((p) => fitLines(`    ${p.key} now holds the value you set while capture was on; the old line (line ${p.line}) is still commented out: to put it back, delete the leading ${OFF_PREFIX} on it.`))
 
 // the status of one changed file
 function rowStatus(c, t) {
@@ -79,15 +83,16 @@ function rowLines(group, t, past, width) {
   const status = past ? [...new Set(group.map((c) => rowStatus({ ...c, backup_dropped: dropped }, t)))].join('; ') : backup ? `will be undone. A copy of the file as it is: ${t(backup)}` : 'will be undone'
   const head = `  ${labelOf(group).padEnd(width)}  ${t(group[0].path)}`
   const one = `${head}${/ /.test(status) ? ': ' : ' '}${status}`
-  return [...(one.length <= WIDTH ? [one] : [head, ...fit(`    ${status}`)]), ...group.flatMap(priorLeftLines)]
+  return [...(one.length <= WIDTH ? [one] : [head, ...fitLines(`    ${status}`)]), ...group.flatMap(priorLeftLines)]
 }
 
 // a program still connected through trocar when the doors closed: the door it uses stays open, passing its traffic on and recording nothing (P12)
 const heldOpen = (r) => (r.holders || []).length > 0
 
 // the daemon and the connections still going through trocar (§3.4's sample: 「The daemon (pid 4012) keeps running.」)
-function daemonLines(r, past, cutNote) {
+function daemonLines(r, past, cutNote, home = null) {
   const lines = []
+  const fit = (x) => fitLines(tildeText(x, home)) // a path in the words: HOME as ~ (1.6 §1.1⑤)
   const d = r.daemon || {}
   const rel = r.relayed && r.relayed !== 'unknown' ? r.relayed : null
   const pid = d.pid == null ? '' : ` (pid ${d.pid})`
@@ -115,6 +120,7 @@ function daemonLines(r, past, cutNote) {
  *  and `footer` let `trocar uninstall` reuse the body: its own first line, lines of its own before the last one, and its own last line; `cutNote` is what
  *  follows the number of connections cut (`off --now` says so, `uninstall` cuts them as a matter of course). */
 export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' : 'past', header = null, extra = [], footer = null, cutNote = ' (--now)' } = {}) {
+  const fit = (x) => fitLines(tildeText(x, home)) // a path in the words: HOME as ~ (1.6 §1.1⑤)
   const past = tense !== 'future'
   const t = (x) => offTilde(x, home)
   if (r.error && r.error.code === 'older-install') return textLines(`trocar off: ${r.error.message}`, home).join('\n') // a refusal before anything was read: no off-state lines
@@ -148,7 +154,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   for (const s of (r.skipped || []).filter((x) => !listed.has(x.what))) lines.push(...fit(`  ${t(s.what)}: ${s.reason}`))
   if (changed.length) lines.push('')
   if (past && r.routing && !r.routing.confirmed) lines.push(...fit(`trocar could not confirm it is off their path (${r.routing.state || 'reason unknown'}).`))
-  lines.push(...daemonLines(r, past, cutNote))
+  lines.push(...daemonLines(r, past, cutNote, home))
   if (r.holders === null) lines.push(...fit('Whether a program is still connected through trocar: unknown (the process table could not be read).'))
   else if ((r.holders || []).length) {
     const who = [...new Map(r.holders.map((x) => [x.pid, x])).values()]
@@ -208,6 +214,7 @@ const counted = (items, keyOf) => {
 // D38: a note that says a fact was not read; such notes are plain strings in the receipt (--json `notes`), so they are known by their words
 const UNREAD = /(cannot|could not) (be read|tell)|is not known|counted as still connected/
 export function formatOffText(r, { home = null, tense = r.dry_run ? 'future' : 'past' } = {}) {
+  const fit = (x) => fitLines(tildeText(x, home)) // a path in the words: HOME as ~ (1.6 §1.1⑤)
   if ((r.error && r.error.code === 'older-install') || r.nothing_installed) return formatOffReceipt(r, { home, tense }) // already only the conclusion and the way out
   const past = tense !== 'future'
   const t = (x) => offTilde(x, home)

@@ -969,17 +969,22 @@ test('a file off leaves: its backup and the line that puts it back show HOME as 
 
 // 1.6 §1.1⑤: HOME as ~ in the words of every row, also a HOME with a space in it (macOS and Windows account names may have one); a quoted path
 // keeps HOME as it is (the shell expands no ~ in quotes)
-test('a HOME with a space is ~ in the words of off\'s text and --details', () => {
+test('a HOME with a space, or in another case where file names are case-blind, is ~ in the words of off\'s text and --details', async () => {
+  const { pathKey } = await import('../../src/off/fsutil.mjs')
+  const FOLDS = pathKey('/a', { realpath: null }) === pathKey('/A', { realpath: null }) // as off compares paths on this host
   for (const [home, sep] of [['/Users/Ann Lee', '/'], ['C:\\Users\\Ann Lee', '\\']]) {
     const file = [home, '.claude', 'settings.json'].join(sep), backup = [home, '.trocar', 'backup', 'ab12-20261109T000000Z'].join(sep)
     const q = (p) => (sep === '/' ? `'${p}'` : `"${p}"`)
     const receipt = { command: 'off', ok: false, outcome: 'left', all: true, harnesses: [], routing: { confirmed: true }, changed: [], removed: [],
       left: [{ path: file, harness: 'claude-code', result: 'left-unparsable', reason: `${file}: trocar cannot read it. The file as it was before trocar is kept at ${backup}; by hand: cp ${q(backup)} ${q(file)} (puts the whole file back)`, backup, restore: `cp ${q(backup)} ${q(file)}` }],
-      problems: [`${file} could not be read (${backup} is kept)`] }
+      problems: [`${file} could not be read (${backup} is kept)`],
+      relayed: 'unknown', relayed_reason: `${backup} could not be read`, // a reason in another row
+      still_trusting: [{ what: 'root', reason: `the store at ${[home, 'Library'].join(sep)} could not be opened.`, command: 'true' }] }
+    if (FOLDS) receipt.problems.push(`${[home.toLowerCase(), 'x'].join(sep)} is named in another case`) // matched as off compares paths: case-blind there
     for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
       const words = f(receipt, { home }).split('\n').filter((l) => !isCommandLine(l))
-      const unquoted = words.join(' ').replace(/'[^']*'|"[^"]*"/g, '') // a quoted path is a command's, kept as the shell needs it
-      assert.ok(!unquoted.includes(home), `${name}, ${home}: no words hold the HOME:\n${words.join('\n')}`)
+      const unquoted = words.join(' ').replace(/(^|\s)('[^']*'|"[^"]*")/g, '$1') // a quoted path (a quote that opens a word, not trocar's) is a command's, kept as the shell needs it
+      assert.ok(!unquoted.includes(home) && !(FOLDS && unquoted.toLowerCase().includes(home.toLowerCase())), `${name}, ${home}: no words hold the HOME:\n${words.join('\n')}`)
     }
   }
 })
