@@ -81,9 +81,9 @@ function mapChat(raw) {
 }
 // Gemini usageMetadata: promptTokenCount is the prompt's total (cached included); toolUsePromptTokenCount, the tool-use prompt, is
 // counted apart from it (totalTokenCount sums both) and is input too. cachedContentTokenCount is the cache-read part. The wire reports
-// no cache write → NULL, never 0 (3.2).
+// no cache write → NULL, never 0 (3.2). candidatesTokenCount leaves out the thoughts, which are billed as output: output counts both.
 function mapGemini(raw) {
   const total = num(raw.promptTokenCount) + num(raw.toolUsePromptTokenCount), read = num(raw.cachedContentTokenCount);
-  return { input_uncached: Math.max(0, total - read), cache_read: read, cache_write: null, output: num(raw.candidatesTokenCount),
+  return { input_uncached: Math.max(0, total - read), cache_read: read, cache_write: null, output: num(raw.candidatesTokenCount) + num(raw.thoughtsTokenCount),
     reasoning: raw.thoughtsTokenCount ?? null, total_input: total };
 }
