@@ -69,6 +69,7 @@ function proxyModeProblems(pm) {
     if (has[0] === 'env' && !nonEmpty(s.env)) say('shape', `${at}.env is not a variable name`)
     if (has[0] === 'policy' && !(obj(s.policy) && Object.keys(s.policy).every((os) => PM.os.includes(os)))) say('kind', `${at}.policy is not { darwin?, win32? }`)
     if (has[0] === 'file') { loc(s.file, `${at}.file`, false); oneOf(s.format, PM.format, `${at}.format`); if (!Array.isArray(s.keys) || !s.keys.length) say('shape', `${at}.keys is empty`) }
+    if (obj(s) && s.expand !== undefined && !(has[0] === 'file' && s.expand === 'env')) say('shape', `${at}.expand is not 'env' on a { file } source`)
   }
   const cond = (c, at) => { if (c === undefined) return; if (!obj(c) || !('src' in c)) return say('shape', `${at} is not { src, equals? }`); src(c.src, `${at}.src`) }
   const spellings = (list, at) => {
@@ -132,6 +133,8 @@ function proxyModeProblems(pm) {
     if (f.hostTree !== undefined && f.hostTree !== true) say('shape', `${at}.hostTree is not true`)
     if (f.hostTree && !(obj(f.hosts) && Array.isArray(f.hosts.processes) && f.hosts.processes.length && f.hosts.processes.every(nonEmpty))) say('shape', `${at} is a hostTree form without hosts.processes: the door could not tell its host program (4.8 §3)`)
     else if (f.hostTree) for (const n of f.hosts.processes) if (normalizeName(n) !== n) say('shape', `${at}.hosts.processes names ${JSON.stringify(n)}, not the normalized program name ${JSON.stringify(normalizeName(n))}: the door reads a process by that one name (D51)`)
+    if (f.exe !== undefined && !(obj(f.exe) && Object.entries(f.exe).every(([o, l]) => f.os.includes(o) && Array.isArray(l) && l.length && l.every((n) => nonEmpty(n) && normalizeName(n) === n)))) say('shape', `${at}.exe is not { <os of the form>: [normalized program names] }: the door tells the form's processes by that name (4.11 P11)`)
+    if (f.argv !== undefined && !(obj(f.argv) && Object.keys(f.argv).length && Object.entries(f.argv).every(([o, l]) => f.os.includes(o) && Array.isArray(l) && l.length && l.every(nonEmpty)))) say('shape', `${at}.argv is not { <os of the form>: [argument words] }: the door tells the form's processes by one of those words in their command line (4.11 P11)`)
     if (f.forwardOnlyHosts !== undefined && !(Array.isArray(f.forwardOnlyHosts) && f.forwardOnlyHosts.every(nonEmpty))) say('shape', `${at}.forwardOnlyHosts is not a list of hosts`)
     if (f.systemProxy !== undefined && !(obj(f.systemProxy) && ['http', 'ws'].every((k) => [true, false, 'unknown'].includes(f.systemProxy[k])))) say('shape', `${at}.systemProxy is not { http, ws } of true, false or 'unknown'`)
   }
@@ -140,7 +143,7 @@ function proxyModeProblems(pm) {
     const hooked = forms.some((f) => f && f.route === id && certs[f.cert] && ['wrapper', 'plugin'].includes(certs[f.cert].kind))
     if (!hooked) say('switch-hook', `routes.${id} is a switch-file, but no form on it carries a wrapper or plugin cert (the hook that reads the switch)`)
   }
-  ;(Array.isArray(pm.userCertFiles) ? pm.userCertFiles : (say('shape', 'userCertFiles is not a list'), [])).forEach((s, i) => src(s, `userCertFiles[${i}]`))
+  ;(Array.isArray(pm.userCertFiles) ? pm.userCertFiles : (say('shape', 'userCertFiles is not a list'), [])).forEach((s, i) => { src(s, `userCertFiles[${i}]`); if (obj(s) && s.semantics !== undefined && s.semantics !== 'replace') say('shape', `userCertFiles[${i}].semantics is not 'replace'`) })
   ;(Array.isArray(pm.blockers) ? pm.blockers : (say('shape', 'blockers is not a list'), [])).forEach((b, i) => {
     if (!obj(b)) return say('shape', `blockers[${i}] is not { at, when?, forms? }`)
     src(b.at, `blockers[${i}].at`)
@@ -157,6 +160,20 @@ function proxyModeProblems(pm) {
   return bad
 }
 
+/** A descriptor with `inject` (driver mode) names its Linux footprint: a non-empty top-level `present` of `<loc>` (no perOs: one OS) or `{ command }` (spec 4.11 校验, 4.6),
+ *  and the forms it cannot capture, `uncaptured: [{ form, present, why }]`, their `present` of the same shape (4.6 「不采的形态」). */
+function presentProblems(d) {
+  const places = (list, at) => list.flatMap((p, k) => (obj(p) && 'command' in p ? (nonEmpty(p.command) ? [] : [`shape: ${at}[${k}].command is empty`])
+    : obj(p) && PM.base.includes(p.base) && !('perOs' in p) ? [] : [`shape: ${at}[${k}] is not a <loc> without perOs or { command }`]))
+  const uncaptured = d.uncaptured === undefined ? [] : Array.isArray(d.uncaptured) ? d.uncaptured : null
+  const bad = uncaptured ? uncaptured.flatMap((u, k) => (obj(u) && nonEmpty(u.form) && nonEmpty(u.why) && Array.isArray(u.os) && u.os.length && u.os.every((o) => ['linux', 'darwin', 'win32'].includes(o)) && Array.isArray(u.present) && u.present.length
+    ? places(u.present, `uncaptured[${k}].present`) : [`shape: uncaptured[${k}] is not { form, os, present, why }`]))
+    : ['shape: uncaptured is not a list']
+  if (typeof d.inject !== 'function') return bad
+  if (!Array.isArray(d.present) || !d.present.length) return ['present: no top-level present list: trocar could not tell whether the harness is installed on Linux', ...bad]
+  return [...places(d.present, 'present'), ...bad]
+}
+
 export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
   const dir = fileURLToPath(dirUrl)
   const names = fs.readdirSync(dir).filter((n) => n.endsWith('.mjs') && n !== 'index.mjs' && !n.startsWith('_')).sort()
@@ -166,6 +183,7 @@ export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
     const bad = proxyProblems(d && d.proxy)
     if (bad.length) throw new Error(`harness ${n}: its proxy export is wrong (RFC 4.11 §2.3, the proxy block): ${bad.join('; ')}`)
     const pmBad = d.proxyMode === undefined ? ['shape: no proxyMode (every harness says how proxy mode reaches it, spec 4.11 §2.4)'] : proxyModeProblems(d.proxyMode)
+    pmBad.push(...presentProblems(d))
     if (pmBad.length) throw new Error(`harness ${d.name || n} (${n}): its proxyMode is wrong (spec 4.11 §2.3): ${pmBad.join('; ')}`)
     out.push(d)
   }

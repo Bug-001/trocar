@@ -8,7 +8,6 @@ import { isFailure, UNFOLDED_CODES } from '../../health/codes.mjs'
 import { readFlows } from '../../health/flows.mjs'
 
 // The closed sets and the failure / expected split live in src/health/codes.mjs (D38: writers and readers share them).
-export { isFailure }
 
 // The line writer is src/off/events.mjs (`trocar off` writes the same lines without this directory, 1.6 R3). `day` (YYYY-MM-DD): the file to write,
 // when the caller keeps a day that never goes back (the daemon's recorder)
@@ -31,7 +30,7 @@ const errText = (e) => String((e && e.message) || e)
 // When a line cannot be written (D-1): stderr gets it, health() counts it for status, and the next line that can be
 // written is preceded by one `log-gap` {from, to, lost, error}, so the gap itself is on disk.
 export function createFailureRecorder(dir, { log = () => {}, windowMs = 10_000, setTimer = setTimeout, clearTimer = clearTimeout, append = appendEvent, now = () => new Date() } = {}) {
-  const open = new Map() // where + code → { suppressed, last, timer }
+  const open = new Map() // where + code + harness → { suppressed, last, timer }
   let gap = null // { from, lost, error } while lines are being lost
   let lostTotal = 0
   let lastDay = null // the day file never goes back when the clock does (4.6 §记录)
@@ -66,7 +65,7 @@ export function createFailureRecorder(dir, { log = () => {}, windowMs = 10_000, 
     // a critical failure (D51④) is also one stderr line — launchd / the scheduled task / systemd keep it — with its code, harness, pid and host
     if (rec.level === 'critical') log('critical', new Error(`${rec.code} harness=${rec.harness ?? '-'} pid=${rec.pid ?? '-'} host=${rec.host ?? '-'}: ${rec.reason ?? ''}`))
     if (unfolded.has(rec.code)) { write(rec); return }
-    const key = `${rec.where}\u0000${rec.code || ''}`
+    const key = `${rec.where}\u0000${rec.code || ''}\u0000${rec.agent ?? rec.harness ?? ''}`
     const w = open.get(key)
     if (w) { w.suppressed++; w.last = rec; return }
     write(rec)

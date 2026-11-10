@@ -53,7 +53,7 @@ export function lockState({ file, now = Date.now(), alive = pidAlive, identity =
 const errText = (e) => String((e && e.message) || e)
 const DAEMON = { none: 'not-running', stale: 'not-running', unresponsive: 'not-responding', running: 'running', unknown: 'unknown' }
 // how bad each state is (1.5: `?` unreadable > ✗ > ⚠ > `?` unknown > ○ > ✓ > –); the top bar shows the worst part
-export const RANK = { unreadable: 8, 'not-running': 7, 'not-responding': 7, failing: 6, unknown: 5, off: 4, ok: 3, residue: 2, 'not-installed': 1 }
+const RANK = { unreadable: 8, 'not-running': 7, 'not-responding': 7, failing: 6, unknown: 5, off: 4, ok: 3, residue: 2, 'not-installed': 1 }
 const latest = (...ts) => ts.filter(Boolean).sort().at(-1) || null
 
 function readJson(file, fs) {
@@ -77,10 +77,10 @@ function tailLines(file, max, fs) {
     return { recs, truncated: size > len, unparsable }
   } catch (e) { return { error: `${file}: ${errText(e)}` } } finally { fs.closeSync(fd) }
 }
-const groupsOf = (recs, now, key = groupKey) => {
+const groupsOf = (recs, cutoff, key = groupKey) => {
   const m = new Map()
   for (const r of recs) {
-    if (!(Date.parse(r.ts) >= now - WINDOW_MS)) continue
+    if (!(Date.parse(r.ts) >= cutoff)) continue
     const k = key(r)
     const g = m.get(k) || { key: k, count: 0, first_ts: null, last_ts: null, last: null }
     g.count += 1 + (typeof r.suppressed === 'number' ? r.suppressed : 0); widen(g, new Date(r.ts).toISOString()); g.last = pick(r)
@@ -146,7 +146,12 @@ function collectorHealth({ dir, harnesses, now, fs, alive, identity, maxBytes, r
   try { flows = readFlows({ dir, now, fs, maxBytes }) } catch (e) { e.collector = { present: true, installed, residue, daemon }; throw e }
   read.files.push(...flows.files); read.errors.push(...flows.errors); read.unparsable += flows.unparsable
   if (flows.truncated) read.truncated = true
-  const fold = foldFlows(flows.records, { now })
+  // 1.6 C.3 failures.since: health judges what this install can act on — an install begun inside the 24 h starts the window (a previous install's
+  // failures stay in flows/, read by query and the board; they are not this one's)
+  const began = m && m.install ? Date.parse(m.created_at) : NaN // an install begun, finished or not
+  const windowMs = began > now - WINDOW_MS && began <= now ? now - began : WINDOW_MS
+  Object.assign(read, { since: new Date(now - windowMs).toISOString(), window_hours: windowMs / 3600e3 })
+  const fold = foldFlows(flows.records, { now, windowMs })
   Object.assign(daemon, { last_record_at: fold.last_ts, last_start: fold.last_start, last_stop: fold.last_stop })
   const stateFile = path.join(dir, 'state.json')
   const st = readJson(stateFile, fs)
@@ -193,7 +198,7 @@ function rawHealth({ home, now, fs, read }) {
   if (t.error) { read.errors.push({ file, error: t.error }); return { problems: [], failures: [], error: t.error } }
   read.files.push(file); read.unparsable += t.unparsable
   const bad = t.recs.filter((r) => r.outcome != null && r.outcome !== 'ok')
-  return { problems: bad.slice(-20).map(pick), ...(bad.length > 20 || t.truncated ? { truncated: true } : {}), failures: groupsOf(bad, now, (r) => `raw:${r.op}/${r.outcome}`) }
+  return { problems: bad.slice(-20).map(pick), ...(bad.length > 20 || t.truncated ? { truncated: true } : {}), failures: groupsOf(bad, Date.parse(read.since), (r) => `raw:${r.op}/${r.outcome}`) }
 }
 
 // trocar's own netenv.json: the adopted records and the topology `on` and `status` last wrote (RFC 1.6 §6, D49 「看板」): ~/.trocar/netenv.json, written by src/netenv/index.mjs (not imported here: 0.1 §2).

@@ -11,7 +11,7 @@
 // that differs between the two is a run that lost some: `read` each run's output, then `compare` the runs of each OS.
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isMain } from './is-main.mjs'
 
 const KEYS = ['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo']
 
@@ -68,4 +68,4 @@ function main(argv) {
   return 2
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) process.exitCode = main(process.argv.slice(2))
+if (isMain(import.meta.url)) process.exitCode = main(process.argv.slice(2))

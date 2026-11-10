@@ -14,6 +14,7 @@ import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 
 // adding a root needs tls.setDefaultCACertificates (Node >= 22.19) and tls.getCACertificates; an older Node skips the import tests
 const NODE_TLS_ROOTS = typeof tls.setDefaultCACertificates === 'function' && typeof tls.getCACertificates === 'function'
+const NO_TLS_ROOTS = !NODE_TLS_ROOTS && 'needs Node >= 22.19 (tls.setDefaultCACertificates)'
 const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']
 const NO_PROXY_ENV = ['NO_PROXY', 'no_proxy']
 const WATCHED = [...PROXY_ENV, ...NO_PROXY_ENV, 'TROCAR_PRIOR_PROXY', 'TROCAR_HOOK_PID', 'NODE_OPTIONS']
@@ -74,7 +75,7 @@ test('CM36 (a) pi-extension is an install-phase template that adds the root and 
   assert.ok(fs.existsSync(templateUrl('pi-extension')))
 })
 
-test('CM36 (b) switch absent: the root is added once and the proxy, bypass and prior names are untouched', { skip: !NODE_TLS_ROOTS }, async () => {
+test('CM36 (b) switch absent: the root is added once and the proxy, bypass and prior names are untouched', { skip: NO_TLS_ROOTS }, async () => {
   for (const env of [{}, { HTTPS_PROXY: U, NO_PROXY: 'corp.example' }, { http_proxy: U, no_proxy: 'a.example', TROCAR_PRIOR_PROXY: U }]) {
     const w = await world({ env })
     try {
@@ -86,7 +87,7 @@ test('CM36 (b) switch absent: the root is added once and the proxy, bypass and p
   }
 })
 
-test('CM36 (c) switch present: every proxy name is the door, the prior proxy is recorded, the bypass list is loopback ∪ the user list', { skip: !NODE_TLS_ROOTS }, async () => {
+test('CM36 (c) switch present: every proxy name is the door, the prior proxy is recorded, the bypass list is loopback ∪ the user list', { skip: NO_TLS_ROOTS }, async () => {
   const priors = [[{}, 'none'], [{ HTTPS_PROXY: U }, U], [{ http_proxy: U }, U], [{ HTTPS_PROXY: DOOR }, 'none']]
   const bypass = [{}, { NO_PROXY: 'corp.example,LOCALHOST' }, { no_proxy: 'a.example, 127.0.0.1', NO_PROXY: 'A.example' }]
   for (const [penv, prior] of priors) {
@@ -104,7 +105,7 @@ test('CM36 (c) switch present: every proxy name is the door, the prior proxy is 
   }
 })
 
-test('CM36 (d) a root that cannot be added: the environment stays as it was even with the switch present, and nothing throws', { skip: !NODE_TLS_ROOTS }, async () => {
+test('CM36 (d) a root that cannot be added: the environment stays as it was even with the switch present, and nothing throws', { skip: NO_TLS_ROOTS }, async () => {
   for (const [label, caFile, env] of [['CA file missing', 'missing', {}], ['not PEM', 'not-pem', {}], ['--use-openssl-ca', 'ok', { NODE_OPTIONS: '--use-openssl-ca' }]]) {
     const w = await world({ env: { ...env, HTTPS_PROXY: U, NO_PROXY: 'corp.example' }, door: DOOR })
     try {
@@ -116,7 +117,7 @@ test('CM36 (d) a root that cannot be added: the environment stays as it was even
   }
 })
 
-test('CM36 (e) two copies imported: the prior proxy is kept, no bypass entry is doubled, the root is present once', { skip: !NODE_TLS_ROOTS }, async () => {
+test('CM36 (e) two copies imported: the prior proxy is kept, no bypass entry is doubled, the root is present once', { skip: NO_TLS_ROOTS }, async () => {
   const w = await world({ env: { HTTPS_PROXY: U, NO_PROXY: 'corp.example' }, door: DOOR })
   try {
     await w.importOne()
@@ -130,7 +131,7 @@ test('CM36 (e) two copies imported: the prior proxy is kept, no bypass entry is 
   } finally { w.restore() }
 })
 
-test('CM36 (f) the factory touches nothing of its host: called with an object that throws on any access, it returns without throwing', { skip: !NODE_TLS_ROOTS }, async () => {
+test('CM36 (f) the factory touches nothing of its host: called with an object that throws on any access, it returns without throwing', { skip: NO_TLS_ROOTS }, async () => {
   const w = await world()
   try {
     const mod = await w.importOne()
@@ -139,7 +140,7 @@ test('CM36 (f) the factory touches nothing of its host: called with an object th
   } finally { w.restore() }
 })
 
-test('CM36 (g) a re-import in the same process (pi /reload) keeps the start decision: the root is still added, the environment is not touched again', { skip: !NODE_TLS_ROOTS }, async () => {
+test('CM36 (g) a re-import in the same process (pi /reload) keeps the start decision: the root is still added, the environment is not touched again', { skip: NO_TLS_ROOTS }, async () => {
   // absent at start, then present: the process stays unrouted
   let w = await world({ env: { HTTPS_PROXY: U, NO_PROXY: 'corp.example' } })
   try {

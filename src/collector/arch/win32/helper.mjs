@@ -228,6 +228,8 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
       if (!child || down) { fail('closed'); return resolve() }
       let gone = false
       child.once('close', () => { gone = true; resolve() })
+      // 'close' waits for the pipes too, and a grandchild can hold them after the helper is gone (Add-Type's csc.exe right after a start): the stop must not wait on that
+      child.once('exit', () => { const g = setTimeout(() => { gone = true; resolve() }, 250); g.unref?.() })
       try { child.stdin.end() } catch { /* already closed */ }
       const t = setTimeout(() => { if (!gone) { try { child.kill() } catch { /* gone */ } } }, 1000)
       t.unref?.()

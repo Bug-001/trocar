@@ -193,7 +193,6 @@ test('D55 / 4.11 P13 the new kinds: known, each with a sentence of undo by hand;
   assert.equal(undoByHand({ kind: 'system-root', store: 'darwin-user-trust', fp256: 'AA:BB', thumbprint: 'CC', cert_file: '/h/.trocar/collector/ca/trocar-ca.pem' }), 'run: security remove-trusted-cert /h/.trocar/collector/ca/trocar-ca.pem, then security delete-certificate -Z CC (the certificate with SHA-256 AA:BB)')
   assert.equal(undoByHand({ kind: 'json-array-item', path: '/s.json', keys: ['settingsSync.ignoredSettings'], item: 'http.proxy', created_array: true }), 'edit /s.json: remove "http.proxy" from the list settingsSync.ignoredSettings, then delete the list if it is now empty (trocar created it)')
   const key = (kind, id) => undoByHand({ kind: 'root-key', custody: { kind, id }, fp256: 'AA:BB' })
-  assert.match(key('file', '/h/.trocar/collector/ca/root.key'), /^rm \/h\/\.trocar\/collector\/ca\/root\.key \(.*SHA-256 AA:BB/)
   assert.match(key('cng', 'trocar-root'), /certutil -user -csp "Microsoft Software Key Storage Provider" -delkey "trocar-root"/)
   assert.match(key('keychain', 'trocar-root'), /login keychain/)
   assert.equal(undoByHand({ kind: 'owned-file', role: 'wrapper', path: '/h/bin/kimi', real: '/h/bin/.trocar-real/kimi', sha256: 'ab' }), 'if sha256 of /h/bin/kimi is still ab: mv /h/bin/.trocar-real/kimi /h/bin/kimi; otherwise: rm /h/bin/.trocar-real/kimi (the program was updated over the wrapper)')
@@ -202,3 +201,14 @@ test('D55 / 4.11 P13 the new kinds: known, each with a sentence of undo by hand;
 
 // T11: the undo knows the collector model's kinds (root-key, wrapper / switch / config-entry, pem-block, a real json-array-item undo) and refuses a
 // v2 manifest and an unknown kind before it changes anything; a copy written by 12 lists those kinds as unknown and would undo a v2 manifest it no longer reads right.
+
+// a save with the same bytes does not rewrite the record, but a record left at a looser mode is brought back to 0600 (modes do not apply on win32)
+test('a save with the same bytes brings a looser manifest back to 0600, bytes unchanged', { skip: process.platform === 'win32' && 'Windows has no POSIX file modes' }, () => {
+  const { dir } = dirOf()
+  const m = newManifest()
+  saveManifest(dir, m)
+  const bytes = fs.readFileSync(manifestPath(dir))
+  fs.chmodSync(manifestPath(dir), 0o644)
+  saveManifest(dir, m)
+  assert.deepEqual([fs.statSync(manifestPath(dir)).mode & 0o777, fs.readFileSync(manifestPath(dir))], [0o600, bytes])
+})

@@ -10,7 +10,6 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 
 // Every file `on` will write or change, printed before it writes any (4.6): src/cli/receipt.mjs holds the words, this is where the
 // collector's callers have always found it.
-export { formatPlan } from '../cli/receipt.mjs'
 
 const loadDaemon = () => import('./daemon.mjs')
 /** The staged copies an interrupted setup-helper left and this run removed, either way: a label sentence in 80 columns, then each path alone on its line, two in
@@ -22,6 +21,10 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
     const A = arch || (await (await loadDaemon()).loadArch())
     if (argv.includes('--remove')) {
       const r = A.install.uninstallHelper()
+      if (r.others && r.others.length) { // 1.6 §5.3: another account may use the helper; nothing was removed
+        err([`trocar setup-helper: not removed. ${r.others.length} other account(s) here may use trocar:`, ...r.others.map((o) => `  ${o.home}${o.readable ? '' : ` (could not be read: ${o.code})`}`)].join('\n'))
+        return 1
+      }
       out([...wrap(`Removed the capability helper ${A.install.DEFAULTS.helperBin}.`), ...sweptLines(r.swept), ...(r.warnings || []).flatMap((w) => wrap(`Warning: ${w}`))].join('\n'))
       return 0
     }

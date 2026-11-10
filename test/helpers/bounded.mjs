@@ -39,6 +39,16 @@ export function closeWithin(closable, ms = 5000, what = 'engine.close() (a flow 
   return within(Promise.resolve().then(() => closable.close()), ms, what)
 }
 
+/** A loop of slices that never leaves the process gives no timer a turn, so `within` cannot end it: a `while (await extendSession(…))`
+ *  whose slices said more for ever ran 3 h 53 m at 97% CPU, its runner long dead. It counts instead, which no machine load moves. */
+export const SLICES = 100_000
+
+/** drain(step, what?, limit = SLICES) → the calls of `step()` it took until one answered falsy; rejects after `limit` calls with none. */
+export async function drain(step, what = 'extendSession', limit = SLICES) {
+  for (let n = 1; n <= limit; n++) if (!(await step())) return n
+  throw new Error(`${what}: still says more after ${limit} calls`)
+}
+
 /** A wait on the real query worker has no fixed window: it runs niced behind everything else (src/query/worker.mjs lowerPriority), so
  *  a window measures the machine's load and not the worker. It lasts while the worker reports (3.5:42) and fails after STALL ms with none. */
 export const STALL = 30_000

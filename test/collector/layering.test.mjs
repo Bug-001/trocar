@@ -65,6 +65,20 @@ function checkLayering(root) {
   return bad.sort()
 }
 
+// D62①: a cold `on` loads none of the daemon, and no ES import of node:http: that one builds the module's ES view, which loads undici
+test('what `trocar on` can load leaves the daemon out, and node:http comes by name', () => {
+  const seen = new Set()
+  const visit = (rel) => {
+    if (seen.has(rel)) return
+    seen.add(rel)
+    for (const target of importsOf(fs.readFileSync(path.join(REPO, rel), 'utf8'), path.join(REPO, rel), REPO)) if (target.startsWith('src/')) visit(target)
+  }
+  visit('src/cli/on.mjs')
+  assert.ok(seen.has('src/collector/model-on.mjs') && seen.has('src/collector/install.mjs') && seen.has('src/collector/net-deps.mjs'), 'the walk follows the dynamic imports')
+  assert.deepEqual([...seen].filter((f) => /^src\/(query|view|raw)\/|^src\/collector\/(daemon\.mjs|core\/engine\/|core\/control\.mjs)/.test(f)), [])
+  assert.deepEqual([...seen].filter((f) => specsOf(fs.readFileSync(path.join(REPO, f), 'utf8')).includes('node:http')), [])
+})
+
 test('layering: the real tree has no violations, and the walk sees src/netenv (W39: not a tree the scan misses)', () => {
   assert.deepEqual(checkLayering(REPO), [])
   const netenv = walk(path.join(REPO, 'src', 'netenv')).filter((f) => /\.(m|c)?js$/.test(f)).map((f) => path.relative(REPO, f))

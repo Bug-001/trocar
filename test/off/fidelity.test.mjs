@@ -14,6 +14,7 @@ import { planByMarker, undoByMarker } from '../../src/off/marker.mjs'
 import { lineComment, OFF_PREFIX } from '../../src/off/text-edit.mjs'
 import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { installedHome } from './fixtures/off-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const FORMATS = { dotenv: '.codex/.env', 'yaml-list': '.dsh/cordis.patch.yml', rc: '.zshrc' }
 const editFor = (format, home) => format === 'dotenv' ? { format: 'dotenv-block', vars: { SSL_CERT_FILE: `${home}/.trocar/collector/ca/combined-codex.pem` }, quote: true }
@@ -119,13 +120,15 @@ test('fidelity marker: with no manifest, a marked file whose bytes prove no enco
   on(c, b)
   const resaved = RESAVED['nul-in-text'](textOf(fs.readFileSync(b.file)))
   fs.writeFileSync(b.file, resaved)
-  const plan = planByMarker({ home: b.root, ids: ['codex'] })
+  // uninstall's view (both phases): Codex's .env block is on's route on macOS / Windows and install's certificate block on Linux (marker.mjs MARKER_PATHS)
+  const PH = ['on', 'install']
+  const plan = planByMarker({ home: b.root, ids: ['codex'], phases: PH })
   assert.equal(plan.length, 1, 'the mark is found in the bytes even though they are not text trocar may write')
   const [r] = undoByMarker(plan, { home: b.root })
   assert.equal(r.result, 'left-unreadable')
   assert.ok(fs.readFileSync(b.file).equals(resaved))
   fs.writeFileSync(b.file, Buffer.from([0xd6, 0x41, 0x0a]))
-  assert.deepEqual(planByMarker({ home: b.root, ids: ['codex'] }), [], 'no mark in it: nothing to undo')
+  assert.deepEqual(planByMarker({ home: b.root, ids: ['codex'], phases: PH }), [], 'no mark in it: nothing to undo')
 })
 // ---- JSON (4.6「标记与安装」: JSON 按 JSONC 读写): Claude Code's two keys in its settings.json, the gate address and the CA ---------------------
 const GATE = 'http://127.0.0.1:9'
@@ -227,7 +230,7 @@ function onDotenv(bytes, { home } = {}) {
   return { b, es, ours: { SSL_CERT_FILE: caFor(home ?? b.root), HTTPS_PROXY: PROXY_GATE } }
 }
 
-test('fidelity X8 (seed): CRLF and LF Codex .env, the user sets HTTPS_PROXY to their own value inside trocar\'s block while on → off: the new value is in effect, the old line stays out of effect and is reported by line, reverted-not-identical', async () => {
+test('fidelity X8 (seed): CRLF and LF Codex .env, the user sets HTTPS_PROXY to their own value inside trocar\'s block while on → off: the new value is in effect, the old line stays out of effect and is reported by line, reverted-not-identical', { skip: POSIX_WORLD }, async () => {
   const s = seeds.find((x) => x.id === 'seed-X8')
   for (const eol of ['\r\n', '\n']) {
     const text = s.text.replace(/\r\n/g, eol)
@@ -291,7 +294,7 @@ test('fidelity dotenv I5: along the user-edit axis (proxy / CA key in the block 
   assert.ok(n > 300 && bytewise > 100 && kept > 10, `edits applied ${n}, compared byte for byte ${bytewise}, keys the user set over an old line ${kept}`)
 })
 
-test('fidelity X8 through trocar uninstall: the receipt names the line left out of effect and how to have the old value back; --json carries it', async () => {
+test('fidelity X8 through trocar uninstall: the receipt names the line left out of effect and how to have the old value back; --json carries it', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['codex'], seed: (home) => { fs.mkdirSync(path.join(home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\r\nSSL_CERT_FILE=/corp/ca.pem\r\n') } })
   const file = s.manifest().entries.find((e) => e.kind === 'text').path
   const on = fs.readFileSync(file, 'utf8')

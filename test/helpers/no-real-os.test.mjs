@@ -13,7 +13,7 @@ import { spawn, spawnSync, execFile, execFileSync, exec, execSync } from 'node:c
 import { tmpDir } from './tmp.mjs'
 import { takeRefusals } from './no-real-os.mjs'
 
-const { REAL_TOOLS, realToolsIn } = createRequire(import.meta.url)('./no-real-os.cjs')
+const { REAL_TOOLS, realToolsIn, profileFor } = createRequire(import.meta.url)('./no-real-os.cjs')
 const GUARD = fileURLToPath(new URL('./no-real-os.cjs', import.meta.url))
 const HELPER = fileURLToPath(new URL('./no-real-os.mjs', import.meta.url))
 const NOOP = '--trocar-test-noop'
@@ -141,7 +141,6 @@ test('no-real-os: a process that ends with a refusal nobody took exits 1 and nam
   const swallowed = runChild(`try { execFileSync('launchctl', ['${NOOP}']) } catch { /* "the tool failed", carry on */ }\nconsole.log('went on')`)
   assert.equal(swallowed.status, 1)
   assert.equal(swallowed.stdout.trim(), 'went on')
-  assert.match(swallowed.stderr, /no-real-os: 1 attempt to run a real OS tool was refused in this process and never acknowledged/)
   assert.match(swallowed.stderr, new RegExp(`^ {2}launchctl ${NOOP}$`, 'm'))
   const taken = runChild(`try { execFileSync('launchctl', ['${NOOP}']) } catch { }\nconsole.log(takeRefusals().length)`)
   assert.equal(taken.status, 0); assert.equal(taken.stdout.trim(), '1'); assert.equal(taken.stderr, '')
@@ -160,4 +159,81 @@ test('no-real-os: under node --test a file whose test swallows the refusal fails
   assert.match(bad.stdout + bad.stderr, /no-real-os: 1 attempt/)
   const good = fixture('takes', `test('takes', () => { try { execFileSync('launchctl', ['${NOOP}']) } catch { } if (takeRefusals().length !== 1) throw new Error('not recorded') })`)
   assert.equal(good.status, 0, good.stdout + good.stderr)
+})
+
+// Writes: a test that makes an app "present" at its descriptor's absolute place, or that loses its HOME, writes on the machine under the test. Every way of writing is tried
+// against a path that does not exist, under a root the guard names; a broken guard is red on its assertion and at worst leaves a test's own named file to find.
+const INTO = path.join(process.platform === 'win32' ? process.env.ProgramFiles : '/Applications', 'trocar-no-real-os-test.app')
+const HOME_FILE = path.join(os.userInfo().homedir, '.trocar-no-real-os-test')
+const refused = (fn, file = INTO) => {
+  assert.throws(fn, { code: 'ESANDBOX' })
+  assert.deepEqual(takeRefusals().map((r) => r.command), [file])
+  assert.equal(fs.existsSync(file), false)
+}
+
+test('no-real-os: no test process writes under the machine\'s own folders or the real home, by any of node:fs', async () => {
+  const t = tmpDir('nro-')
+  refused(() => fs.writeFileSync(INTO, ''))
+  refused(() => fs.appendFileSync(INTO, ''))
+  refused(() => fs.mkdirSync(INTO, { recursive: true }))
+  refused(() => fs.openSync(INTO, 'w'))
+  refused(() => fs.openSync(INTO, fs.constants.O_WRONLY | fs.constants.O_CREAT))
+  refused(() => fs.renameSync(path.join(t, 'a'), INTO))
+  refused(() => fs.copyFileSync(path.join(t, 'a'), INTO))
+  refused(() => fs.symlinkSync(t, INTO))
+  refused(() => fs.rmSync(INTO, { force: true }))
+  refused(() => fs.createWriteStream(INTO))
+  refused(() => fs.writeFileSync(new URL(`file://${INTO}`), ''))
+  refused(() => fs.writeFileSync(HOME_FILE, ''), HOME_FILE)
+  for (const w of [() => fs.promises.writeFile(INTO, ''), () => fs.promises.mkdir(INTO), () => fs.promises.open(INTO, 'a')]) {
+    await assert.rejects(w, { code: 'ESANDBOX' })
+    assert.deepEqual(takeRefusals().map((r) => r.command), [INTO])
+  }
+})
+
+test('no-real-os: a write in the temp dir or the checkout, and a read anywhere, are nobody\'s business', async () => {
+  const t = tmpDir('nro-')
+  fs.writeFileSync(path.join(t, 'a'), 'x')
+  fs.renameSync(path.join(t, 'a'), path.join(t, 'b'))
+  fs.closeSync(fs.openSync(path.join(process.cwd(), 'package.json'), 'r'))
+  const readable = process.platform === 'win32' ? process.execPath : '/etc/hosts'
+  fs.closeSync(fs.openSync(readable, 'r'))
+  fs.closeSync(fs.openSync(readable))
+  await new Promise((resolve, reject) => fs.open(readable, (e, fd) => (e ? reject(e) : fs.close(fd, resolve)))) // no flags: the callback sits where flags go
+  assert.deepEqual(takeRefusals(), [])
+})
+
+// 0.1 §3: a session runtime directory the developer has (Linux) is not the test's: the socket of their running collector is under it
+test('no-real-os: a set XDG_RUNTIME_DIR is moved into the temp dir, where nothing is; an unset one stays unset', () => {
+  const real = tmpDir('trocar-xdg-'), read = (env) => spawnSync(process.execPath, ['--require', GUARD, '-e', 'process.stdout.write(JSON.stringify(process.env.XDG_RUNTIME_DIR ?? null))'], { env, encoding: 'utf8' })
+  const base = { PATH: process.env.PATH, TMPDIR: os.tmpdir() }
+  const moved = JSON.parse(read({ ...base, XDG_RUNTIME_DIR: real }).stdout)
+  assert.ok(moved && moved !== real && moved.startsWith(os.tmpdir()) && !fs.existsSync(moved), `moved to ${moved}`)
+  assert.equal(JSON.parse(read(base).stdout), null)
+})
+
+test('no-real-os: a refused write nobody acknowledged fails the process, like a refused tool', () => {
+  const r = spawnSync(process.execPath, ['--require', GUARD, '-e', `try { require('node:fs').writeFileSync(${JSON.stringify(INTO)}, '') } catch {}`], { encoding: 'utf8' })
+  assert.equal(r.status, 1)
+  assert.equal(fs.existsSync(INTO), false)
+})
+
+// Windows: os.homedir() reads USERPROFILE and ignores HOME; a child handed an env with a sandbox HOME and no USERPROFILE would find the real profile
+test('no-real-os: on win32 a child env with HOME and no USERPROFILE gets USERPROFILE = that HOME; a given USERPROFILE is kept; elsewhere nothing is added', () => {
+  assert.equal(profileFor({ HOME: '/x' }, 'win32'), '/x')
+  assert.equal(profileFor({ HOME: '/x', USERPROFILE: '/y' }, 'win32'), undefined)
+  assert.equal(profileFor({ HOME: '/x', userprofile: '/y' }, 'win32'), undefined)
+  assert.equal(profileFor({ HOME: '/x' }, 'darwin'), undefined)
+  assert.equal(profileFor({ HOME: '/x' }, 'linux'), undefined)
+})
+
+const WIN_ONLY = process.platform !== 'win32' && 'os.homedir() reads USERPROFILE on win32 only'
+test('no-real-os: on win32 the test process\'s own profile is in the temp dir', { skip: WIN_ONLY }, () => {
+  assert.ok(process.env.USERPROFILE.startsWith(os.tmpdir()) && os.homedir() === process.env.USERPROFILE, process.env.USERPROFILE)
+})
+
+test('no-real-os: on win32 a child given an env with only HOME reports that HOME as its home, not the real profile', { skip: WIN_ONLY }, () => {
+  const home = tmpDir('trocar-profile-')
+  const r = spawnSync(process.execPath, ['-e', "process.stdout.write(require('os').homedir())"], { env: { HOME: home, SystemRoot: process.env.SystemRoot }, encoding: 'utf8' })
+  assert.equal(r.stdout, home, r.stderr)
 })

@@ -155,3 +155,32 @@ test('V32 order: no form here comes after the daemon\'s own verdict on a process
   }
   assert.equal(judgeHarness({ ...ready, desired: 'off', entryIntact: true, formsHere: false }).rows[0].reason, 'desired-off')
 })
+
+test('4.11 CM43: status names an out-of-scope app it is told of, and only once trocar is installed', async () => {
+  const named = [{ harness: 'kimi-code', form: 'kimi-code.desktop', what: 'the app' }]
+  const w = await world('darwin', 'kimi-code')
+  const on = (await status(w, 'darwin', 'kimi-code', [], runStatusCli, { outOfScopeForms: async () => named })).j
+  assert.deepEqual(on.out_of_scope, named)
+  fs.rmSync(path.join(w.dir, 'install-manifest.json'))
+  const off = (await status(w, 'darwin', 'kimi-code', [], runStatusCli, { outOfScopeForms: async () => named })).j
+  assert.equal(off.out_of_scope, undefined)
+})
+
+test('4.11 P5 · CM44: a form not measured on this system, alone here beside measured siblings, is not-routed, and the finding says it is not measured, not that nothing is installed', async () => {
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const os = 'darwin', all = await loadHarnesses()
+  let n = 0
+  // generated: each harness with two forms measured here, one of them marked not measured and the only one present
+  for (const d of all.filter((x) => x.proxyMode && x.proxyMode.forms.filter((f) => f.os.includes(os) && f.verified && f.verified[os] === true).length > 1)) {
+    const f = d.proxyMode.forms.find((x) => x.os.includes(os) && x.verified[os] === true)
+    const marked = all.map((x) => (x !== d ? x : { ...d, proxyMode: { ...d.proxyMode, forms: d.proxyMode.forms.map((y) => (y === f ? { ...y, verified: { ...y.verified, [os]: { reason: 'not-measured' } } } : y)) } }))
+    const w = await world(os, d.name)
+    const more = (present) => ({ harnesses: marked, netFactsDeps: async () => ({ harnesses: marked, archFacts: darwinNetFacts }), presentForms: async () => ({ [d.name]: present }) })
+    assert.equal((await status(w, os, d.name, [], runStatusCli, more([f.id]))).j.harnesses[d.name].reason, 'not-routed', d.name)
+    const finding = async (present) => ((await status(w, os, d.name, [], runDoctor, more(present))).j.findings || []).find((y) => y.code === 'not-routed' && y.harness === d.name)
+    const [x, none] = [await finding([f.id]), await finding([])]
+    assert.ok(x && none && x.why !== none.why, `${d.name}: an unmeasured form here is told apart from none here: ${JSON.stringify([x, none])}`)
+    n++
+  }
+  assert.ok(n > 0)
+})

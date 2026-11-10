@@ -25,6 +25,7 @@ import(${JSON.stringify(CERT)}).then(({ rootCertDer, intermediateCertDer }) => {
   const sign = (k) => (tbs) => crypto.sign('sha256', tbs, k)
   const DAY = 86400e3, now = Date.now()
   if (a[0] === 'exists') out({ exists: fs.existsSync(keyFile) })
+  if (a[0] === 'session') out({ graphic: mode !== 'no-graphic' })
   if (a[0] === 'remove') { const had = fs.existsSync(keyFile); fs.rmSync(keyFile, { force: true }); out({ removed: had }) }
   if (a[0] === 'create') {
     const k = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
@@ -81,6 +82,13 @@ test('CM3: the helper\'s unavailable exit is the value \'unavailable\' on every 
   assert.throws(() => c.exists(), (e) => e.code === 'helper-failed' && /boom/.test(e.message))
 })
 
+test('canCreate: asks the helper\'s session; no graphic access (or the unavailable exit) throws code unavailable, the keychain untouched', () => {
+  const h = stubHelper(), c = keychainCustody({ helperPath: h.helperPath })
+  c.canCreate()
+  for (const m of ['no-graphic', 'unavailable']) { h.mode(m); assert.throws(() => c.canCreate(), { code: 'unavailable' }) }
+  assert.deepEqual(h.argv().map((a) => a[0]), ['session', 'session', 'session'])
+})
+
 test('CM3: an injected runner sees the same argv (the runner seam the daemon uses)', () => {
   const seen = []
   const run = (file, args) => { seen.push([file, ...args]); return { status: 0, stdout: JSON.stringify({ exists: true }), stderr: '' } }
@@ -105,7 +113,8 @@ test('installHelper: fresh → written via <dest>.new-* and renamed; same hash �
   keychainCustody({ helperPath: dest }).create({ subject: 'trocar root (test)' })
   const r = installHelper({ dest, interactive: false, fs: fsSpy })
   assert.equal(r.replaced, false)
-  assert.match(r.why, /differs/)
+  assert.match(r.why, /trocar install/, 'the way out')
+  assert.equal(r.kept, true, 'it still signs: the caller says it as a note')
   assert.equal(fs.readFileSync(dest, 'utf8'), STUB, 'non-interactive: the installed copy stays')
 
   const issued = []
@@ -123,3 +132,19 @@ test('installHelper: a packaged binary that is not the pinned one is refused bef
   assert.throws(() => installHelper({ dest, interactive: true, src }), /is not the pinned trocar-sign-helper/)
   assert.equal(fs.existsSync(dest), false)
 })
+
+// an interactive replace whose one foreground issue does not sign (the keychain box denied, timed out, or no GUI session: exit 3) leaves the OLD
+// helper in place, byte for byte, and says what to do: the new one has no access to the key, so the daemon would stop signing with it
+for (const [what, answer] of [['denied (the helper fails)', { status: 1, stdout: JSON.stringify({ error: 'failed', status: -128 }), stderr: '' }], ['unavailable (exit 3)', { status: 3, stdout: JSON.stringify({ error: 'unavailable' }), stderr: '' }], ['unavailable at exists (exit 3)', { status: 3, stdout: JSON.stringify({ error: 'unavailable' }), stderr: '' }], ['timed out', { status: null, stdout: '', stderr: '', error: Object.assign(new Error('spawnSync ETIMEDOUT'), { code: 'ETIMEDOUT' }) }]]) {
+  test(`installHelper: the replace's foreground issue ${what} → the old helper stays, and why says what to do`, () => {
+    const dest = path.join(tmpDir('trocar-bin-'), 'bin', NATIVE.signHelper)
+    fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.writeFileSync(dest, STUB, { mode: 0o755 })
+    const run = (file, args) => (args[0] === 'exists' && what !== 'unavailable at exists (exit 3)' ? { status: 0, stdout: JSON.stringify({ exists: true }), stderr: '' } : answer)
+    const r = installHelper({ dest, interactive: true, run })
+    assert.equal(r.replaced, false, JSON.stringify(r))
+    assert.match(r.why, /trocar install/)
+    assert.equal(fs.readFileSync(dest, 'utf8'), STUB, 'the old helper is back, byte for byte')
+    assert.equal(fs.statSync(dest).mode & 0o777, 0o755)
+    assert.deepEqual(fs.readdirSync(path.dirname(dest)).filter((n) => n !== NATIVE.signHelper), [], 'no temp left')
+  })
+}

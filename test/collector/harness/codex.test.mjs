@@ -15,6 +15,7 @@ import { installCollector } from '../../../src/collector/install.mjs'
 import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
+import { POSIX_WORLD } from '../../helpers/platform-shape.mjs'
 
 const DAEMON = '/home/u/.codex/packages/app-server-daemon/releases/0.160.0/bin/codex'
 const fps = (text) => (String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((p) => new X509Certificate(p).fingerprint256)
@@ -105,7 +106,7 @@ test('codex inject: a block with SSL_CERT_FILE=combined-codex.pem atop the .env 
   } finally { s.done() }
 })
 
-test('codex through install / uninstall: the user\'s SSL_CERT_FILE line is put out of effect and merged, then comes back byte for byte; the bundle is kept for a live codex, then goes (T11, S10)', async () => {
+test('codex through install / uninstall: the user\'s SSL_CERT_FILE line is put out of effect and merged, then comes back byte for byte; the bundle is kept for a live codex, then goes (T11, S10)', { skip: POSIX_WORLD }, async () => {
   const s = sandbox()
   try {
     const corp = s.put('corp.pem', OTHER.certPem)
@@ -142,7 +143,7 @@ test('codex: a provider in an inline table and a [profiles.<name>] table name re
   } finally { s.done() }
 })
 
-test('codex: a same-name SSL_CERT_FILE line the user adds below trocar\'s block wins (last wins, as the resolver reads it): that codex is untrusted (T12, review 4 #5)', async () => {
+test('codex: a same-name SSL_CERT_FILE line the user adds below trocar\'s block wins (last wins, as the resolver reads it): that codex is untrusted (T12, review 4 #5)', { skip: POSIX_WORLD }, async () => {
   const s = sandbox()
   try {
     const corp = s.put('corp.pem', OTHER.certPem)

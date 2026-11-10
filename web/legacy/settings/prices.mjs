@@ -13,7 +13,9 @@ export function priceRows(doc) {
 
 // the models `overview` usage.rows saw metered usage of that priceMatch() cannot price; `sessions` = the most sessions any one row
 // of that model names — a floor, since one session can sit in several rows (lanes, harnesses). The same filter as O8 (1.7).
+// null when no price table was read (pending, failed, wrong shape): no model is known to lack a price then (invariant 4)
 export function unpricedModels(rows, table) {
+  if (!table) return null
   const out = new Map()
   for (const r of rows || []) {
     if (!r || (r.calls || 0) - (r.failed || 0) - (r.no_usage || 0) <= 0) continue

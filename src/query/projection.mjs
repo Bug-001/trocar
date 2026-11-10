@@ -32,7 +32,7 @@ import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
 
-export const PROJ_V = 12;
+export const PROJ_V = 21; // 21: Gemini API calls are read (a dissector, 3.1); 20: the desk line's 14 (Readable reads the parsed block) joined; 19: the desk line's projection (its 13: the background kinds and shell reads) joined; 18: the reads line's projection (its 14) joined with the batch's (its 17); 17: Codex's additional_tools input item is tool definitions; 16: a security review's flagged is what the reply says; 15: a reply the agent closed after its own success terminal is read as that reply (3.5 §访问模式 ②)
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by what they weigh in the heap (a row grows with its context: a count let a long
@@ -59,10 +59,10 @@ export const sessionDir = (home, sessionKey) => path.join(ctxDir(home), hashOf(s
 export const projectionFile = (home, sessionKey) => path.join(sessionDir(home, sessionKey), 'extract.0.ndjson');
 
 /** migrateFlat({home, fs, key}): the flat layout's files of the session (`ctx/<k>.ndjson`, `<k>.idx`, `<k>.fold.ndjson`,
- *  `<k>.fold.idx`) renamed into `ctx/<k>/` (4.3 §4 迁移): rename only, never a copy (D27③); offsets do not change, so the sidecars
+ *  `<k>.fold.idx`) renamed into `ctx/<k>/` (4.3 §4 迁移): rename only, never a copy; offsets do not change, so the sidecars
  *  still hold. The directory may be there already with answer files only (the start-up sweep's tier-0 head comes before any read);
  *  one that holds a projection or fold log of its own makes the flat files an older copy, and they are deleted (derived, D69②). */
-export function migrateFlat({ home = trocarHome(), fs = nodeFs, key }) {
+function migrateFlat({ home = trocarHome(), fs = nodeFs, key }) {
   const flat = path.join(ctxDir(home), hashOf(key)), dir = sessionDir(home, key);
   if (!fs.existsSync(`${flat}.ndjson`)) return;
   const own = fs.existsSync(dir) && fs.readdirSync(dir).some((n) => /^(?:extract|fold)\./.test(n));
@@ -191,13 +191,22 @@ export function lru(max) {
   };
 }
 
+/** unsaved(home, e) → the one line said when a session read's files could not be saved under index/ (4.3 §4 盘满; D38): what went
+ *  wrong and, for a cause with one, the step that fixes it (`Next:`); any other error is said as the system or the code gave it.
+ *  The same line is the episode's record and the head's stop. */
+export function unsaved(home, e, platform = process.platform) {
+  const dir = indexDir(home), code = e && e.code, said = String((e && e.message) || e).split('\n')[0];
+  const owned = platform === 'win32' ? `give your user full control of "${dir}"` : `sudo chown -R "$(id -un)" "${dir}" && chmod -R u+rwX "${dir}"`;
+  const fix = { ENOSPC: ['the disk is full', `free space on the disk that holds "${dir}"`], EDQUOT: ['your disk quota is used up', `free space within your quota on the disk that holds "${dir}"`],
+    EACCES: ['your user may not write there', owned] }[code]; // EPERM has no one fix: a file another program holds (Windows), a privacy block or a locked flag (macOS)
+  return fix ? `trocar's files in ${dir} could not be saved: ${fix[0]}. Next: ${fix[1]}.` : `trocar's files in ${dir} could not be saved: ${said}`;
+}
 /** openProjection({home, fs, key, write, errors}) → the session's store (see the head of this file). `errors`: where notes go
  *  when an append names no other sink (an append of a later request passes that request's `errors`). */
 export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = true, errors = [] } = {}) {
   if (write) try { migrateFlat({ home, fs, key }); } catch { /* the flat files stay where they are; the store is extracted again */ }
   let sink = errors; // the errors of the request whose append is running
-  const lines = lineFile({ fs, base: path.join(sessionDir(home, key), 'extract'), write, onFail: (e) => sink.push({ where: 'projection', code: 'projection-write-failed', level: 'note',
-    reason: `The context projection could not be written (${e.code || e.message}); this session is kept in memory and extracted again next time.` }) });
+  const lines = lineFile({ fs, base: path.join(sessionDir(home, key), 'extract'), write, onFail: (e) => sink.push({ where: 'projection', code: 'projection-write-failed', level: 'note', reason: unsaved(home, e) }) });
   const at = lineIndex(); // bid → its line
   const rowAt = lineIndex(); // rid → its line
   const rowCache = lru(2 * ROW_HEAP); // rid → row, weighed in heap
@@ -410,12 +419,33 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     },
     /** Whether its sidecar covers every line it holds (saveIndex wrote it, or nothing grew since): none while it holds `t` rows. */
     get indexed() { return lines.settled && !heldRows && lines.bytes > 0 && lines.bytes === savedAt; },
+    /** Whether it holds `t` rows, which the next open cuts off. */
+    get held() { return heldRows; },
     /** What the sidecar this open loaded carried besides the indexes ({name: array}), or null (saveIndex). */
     get saved() { return saved; },
     /** The header's id (taken now when the file is made or rebuilt); `bytes`: the length of the whole lines it holds. */
     get id() { return id; },
     get bytes() { return lines.bytes; },
   };
+}
+
+/** staleHeader({home, fs, key, name, v}) → whether the session's line file `name` holds a first line that is not of version `v` (one
+ *  that does not parse, or a file that is not one line file, is not): the first line alone, the file not opened as a store. No file:
+ *  false. projectionStale({home, fs, key}): the projection's (3.5 §访问模式「版本变更的重读」). */
+export function staleHeader({ home = trocarHome(), fs = nodeFs, key, name, v }) {
+  const lf = lineFile({ fs, base: path.join(sessionDir(home, key), name), write: false });
+  try {
+    for (const l of lf.scan(0)) { const o = parse(l.text); return !o || o.v !== v; }
+    return lf.unreadable != null;
+  } finally { lf.close(); }
+}
+export const projectionStale = (o) => staleHeader({ ...o, name: 'extract', v: PROJ_V });
+/** dirUse(dir, fs) → {size, t}: the sum of a session directory's file sizes and the newest of their mtimes (opening touches the
+ *  projection: 4.3 §4 回收, the re-read queue's order too). */
+export function dirUse(dir, fs = nodeFs) {
+  const u = { size: 0, t: 0 };
+  try { for (const f of fs.readdirSync(dir)) { const st = fs.statSync(path.join(dir, f)); u.size += st.size; u.t = Math.max(u.t, st.mtimeMs); } } catch { /* gone meanwhile */ }
+  return u;
 }
 
 /** gcProjections({home, fs, liveKeys, keepKeys, capBytes, capOnly}) → {deleted: [path]}: by session directory (4.3 §4 回收; its size = the
@@ -437,8 +467,7 @@ export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keep
     if (!h || keep.has(h)) continue;
     if (m) { if (!live.has(h) && !capOnly) drop(p); continue; }
     if (!live.has(h) && !capOnly) { drop(p, { recursive: true }); continue; }
-    const u = { p, size: 0, t: 0 };
-    try { for (const f of fs.readdirSync(p)) { const st = fs.statSync(path.join(p, f)); u.size += st.size; u.t = Math.max(u.t, st.mtimeMs); } } catch { /* gone meanwhile */ }
+    const u = { p, ...dirUse(p, fs) };
     total += u.size; kept.push(u);
   }
   for (const u of kept.sort((a, b) => a.t - b.t)) {

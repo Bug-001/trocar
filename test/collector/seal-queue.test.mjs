@@ -192,3 +192,21 @@ test('4: a segment the running daemon rotates away from is sealed in the same ru
   assert.deepEqual(fs.readdirSync(b.raw).filter((n) => n.startsWith(seg)), [`${seg}.sealed`], 'sealed, and its plaintext is gone')
   s.close()
 })
+
+// 4.2 §自动封存: an uninstall stop waits for what the queue already holds, hearing the running worker's progress (it is not silence), and then
+// drops the temps an interrupted seal left, as the start scan does.
+test('a stopped queue still finishes what it holds; the wait hears the running worker\'s progress, and dropTemps clears interrupted seals', async () => {
+  const b = box()
+  const temp = path.join(b.raw, `.${SEGMENTS[0]}.4242-deadbeef.tmp`)
+  const q = createSealQueue({ raw: b.raw, lockFile: b.lock, journal: b.journal,
+    fork: (f, o) => { o.onProgress({ step: 'encode', done: 1, total: 2 }); return inProcess(b)(f, o) } })
+  q.scan({ current: null })
+  fs.writeFileSync(temp, 'half an encode', { mode: 0o600 })
+  q.stop()
+  const heard = []
+  await q.idle({ onProgress: (file, p) => heard.push([path.basename(file), p.step]) })
+  assert.deepEqual(heard.map((h) => h[0]), [`${SEGMENTS[1]}.ndjson`], 'the worker that runs while the stop waits is heard')
+  assert.deepEqual(fs.readdirSync(b.raw).filter((n) => n.endsWith('.ndjson')), [], 'every queued segment is sealed')
+  q.dropTemps()
+  assert.equal(fs.existsSync(temp), false)
+})

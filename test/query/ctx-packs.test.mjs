@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { createQueryService } from '../../src/query/service.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
-import { sessionDir } from '../../src/query/projection.mjs'
+import { sessionDir, PROJ_V } from '../../src/query/projection.mjs'
 import { lineFile } from '../../src/query/line-file.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { PACK_MEMBERS, CTX_V } from '../../src/query/ctx-files.mjs'
@@ -19,6 +19,7 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, rng } from './big-session.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
@@ -27,7 +28,7 @@ const CALLS = 1_700
 // 3.5 §会话读: the lines' closed sets
 const HEAD = ['schema', 'command', 'ok', 'errors', 'v', 'id']
 const STEP = ['rid', 'lane', 'i', 'parent', 'ops', 'reply', 'attrs', 'detail', 'events']
-const DEF = ['bid', 'fh', 'ref', 'sec', 'role', 'kind', 'label', 'name', 'mcp', 'cc', 'ff', 'head', 'preview', 'chars', 'bytes', 'resKey', 'r', 'unaddressable', 'inline']
+const DEF = ['bid', 'fh', 'ref', 'sec', 'role', 'kind', 'label', 'name', 'mcp', 'cc', 'ff', 'head', 'preview', 'chars', 'bytes', 'resKey', 'resKeys', 'r', 'unaddressable', 'inline']
 const REC = ['id', 'ts_request', 'is_llm_call', 'response']
 const ERR = ['where', 'code', 'reason']
 
@@ -37,17 +38,20 @@ const ERR = ['where', 'code', 'reason']
 const DRIVER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const { rng } = await import(${at('./big-session.mjs')})
 const [home, id, ms, kill, seed, rounds] = [process.argv[1], process.argv[2], Number(process.argv[3]), Number(process.argv[4]), Number(process.argv[5]), Number(process.argv[6])]
 const r = rng(seed)
 let k = 0
 for (let round = 0; round < rounds; round++) {
   if (round) { process.stdout.write('folded\\n'); await new Promise((ok) => process.stdin.once('data', ok)) }
-  while (await extendSession({ home, writer: true }, id, ms ? 1 + r() * ms : 1e9)) {
+  await drain(async () => {
+    if (!(await extendSession({ home, writer: true }, id, ms ? 1 + r() * ms : 1e9))) return false
     if (r() < 0.2) saveIndexes()
     if (++k === kill) process.kill(process.pid, 'SIGKILL')
     await new Promise((ok) => setImmediate(ok))
-  }
+    return true
+  })
   saveIndexes()
 }
 process.exit(0)`
@@ -184,6 +188,25 @@ test('3.5 #35, damaged files: a missing head, a truncated pack, a pack of anothe
   for (const f of hit) assert.ok(fs.readFileSync(file(f)).equals(fs.readFileSync(path.join(dirOf(x), f))), `${f}: rewritten to the untouched home's bytes`)
 })
 
+test('3.5 #35 neighbour: answer files of the same `v` with stale content are written anew when the projection under them is of another version', { timeout: 600_000 }, async () => {
+  const shape = { ...SHAPE, wire: 'http', compactAt: 8_000 }, calls = PACK_MEMBERS + 40
+  const homes = [homeOf(), homeOf()].map((home) => { const s = bigSession({ home, ...shape }); s.append(calls); return { home, id: s.id } })
+  for (const h of homes) await drive(h.home, h.id)
+  const [x, z] = homes, file = (f) => path.join(dirOf(z), f)
+  // the last digit of a file's text moved: a line that still parses, the `v` of its head as it was
+  const stale = (text) => { const i = text.search(/\d\D*$/); return text.slice(0, i) + (text[i] === '7' ? '8' : '7') + text.slice(i + 1) }
+  const hit = ['head.json.gz', 'p0.main.ndjson.gz', 'open.main.ndjson']
+  for (const f of hit) {
+    const text = stale(fileText(z, f))
+    assert.equal(JSON.parse(text.split('\n')[0]).v, CTX_V)
+    fs.writeFileSync(file(f), f.endsWith('.gz') ? gzipSync(Buffer.from(text)) : text)
+  }
+  const proj = fs.readFileSync(file('extract.0.ndjson'), 'utf8'), nl = proj.indexOf('\n')
+  fs.writeFileSync(file('extract.0.ndjson'), JSON.stringify({ ...JSON.parse(proj.slice(0, nl)), v: PROJ_V + 1 }) + proj.slice(nl))
+  await drive(z.home, z.id)
+  for (const f of hit) assert.equal(fileText(z, f), fileText(x, f), `${f}: the bytes of the untouched fold`)
+})
+
 // the layout the fold log is in when the worker starts: the session's directory, or the flat layout (4.3 §4 迁移), which the start-up
 // sweep's tier-0 head finds with a directory holding that head only
 const FLAT = { 'extract.0.ndjson': '.ndjson', 'extract.idx': '.idx', 'fold.0.ndjson': '.fold.ndjson', 'fold.idx': '.fold.idx' }
@@ -205,7 +228,7 @@ test('3.5 #35, files missing: a session folded before the answer files (fold log
     }
     const w = workerFork(m.home)
     try {
-      await until(() => { const h = tryHead(m); return h && h.tier === 1 && h.pending == null && fs.existsSync(path.join(dirOf(m), 'open.rest.ndjson')) }, 120_000, `${layout}: the upgrade wrote a tier-1 head and the tails`)
+      await until(() => { const h = tryHead(m); return h && h.tier === 1 && h.pending == null && listed(h) && fs.existsSync(path.join(dirOf(m), 'open.rest.ndjson')) }, 120_000, `${layout}: the upgrade wrote a tier-1 head and the tails`)
     } finally { w.kill() }
     assert.equal(fileText(m, 'head.json.gz'), fileText(x, 'head.json.gz'), layout)
     assert.deepEqual(packNames(m), packNames(x), layout)
@@ -252,6 +275,7 @@ test('3.5 §会话读 contract: every line kind and key is in the closed sets; r
 const FOLLOWER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const { rng } = await import(${at('./big-session.mjs')})
 const home = process.argv[1], id = process.argv[2]
 let buf = ''
@@ -261,7 +285,12 @@ process.stdin.on('data', async (b) => {
     const [ms, seed, kill] = buf.slice(0, i).split(' ').map(Number), r = rng(seed)
     buf = buf.slice(i + 1)
     let k = 0
-    while (await extendSession({ home, writer: true }, id, 1 + r() * ms)) { if (r() < 0.1) saveIndexes(); if (++k === kill) process.kill(process.pid, 'SIGKILL') }
+    await drain(async () => {
+      if (!(await extendSession({ home, writer: true }, id, 1 + r() * ms))) return false
+      if (r() < 0.1) saveIndexes()
+      if (++k === kill) process.kill(process.pid, 'SIGKILL')
+      return true
+    })
     saveIndexes() // the round over: the worker's idle period (its save writes a head a slice left behind)
     process.stdout.write('done\\n')
   }

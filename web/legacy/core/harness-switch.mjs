@@ -28,7 +28,7 @@ export function controlFor({ control, status }, id) {
 export function dialogFor({ kind, on, name, plan, stale }) {
   const lines = (Array.isArray(plan) ? plan : []).map((p) => {
     const paths = [].concat((p && (p.path ?? p.paths)) ?? []).join(', ')
-    const how = p && (p.how ?? p.kind ?? p.change ?? p.detail)
+    const how = p && (p.change ?? p.how ?? p.kind ?? p.detail) // the sentence where a row has one: `how` of an off row is a code
     return [paths, how].filter((x) => x != null && x !== '').join(' · ')
   }).filter(Boolean)
   const q = kind === 'setup' ? CTL.askSetup(name) : on ? CTL.askOn(name) : CTL.askOff(name)

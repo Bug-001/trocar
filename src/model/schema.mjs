@@ -5,14 +5,15 @@ const num = (x) => (x == null ? 0 : Number(x));
 
 // Canonical usage mapping (RFC 3.2 "provider -> canonical" table), keyed by the WIRE FORMAT the usage
 // object arrived in (D37 ①: the names are the wire's, whichever vendor answered): 'anthropic',
-// 'openai-responses' / 'openai-responses-ws', 'openai-chat'. Anything else fails loud.
+// 'openai-responses' / 'openai-responses-ws', 'openai-chat', 'gemini'. Anything else fails loud.
 // opts.vendor (vendors.mjs::vendorOf, the upstream host's vendor, null = unknown): whether an ABSENT cache-write
 // counter is NULL is decided per vendor (3.2 D37 note, 3.3:89) — see the Anthropic branch.
 export function mapUsage(provider, raw = {}, opts = {}) {
   if (provider === 'openai-responses' || provider === 'openai-responses-ws') return mapResponses(raw || {});
   if (provider === 'openai-chat') return mapChat(raw || {});
+  if (provider === 'gemini') return mapGemini(raw || {});
   if (provider !== 'anthropic') {
-    throw new Error(`mapUsage: no canonical mapping for provider '${provider}' (anthropic | openai-responses[-ws] | openai-chat)`);
+    throw new Error(`mapUsage: no canonical mapping for provider '${provider}' (anthropic | openai-responses[-ws] | openai-chat | gemini)`);
   }
   const input_uncached = num(raw.input_tokens);
   const cache_read = num(raw.cache_read_input_tokens);
@@ -27,10 +28,32 @@ export function mapUsage(provider, raw = {}, opts = {}) {
   return { input_uncached, cache_read, cache_write, output, reasoning, total_input };
 }
 
+// The leaf keys of a reply's usage this step's mapping does not read, as [dotted key, value] (3.1 未映射字段 MUST 可见, 2.6 §A).
+// A key is read when changing its value moves mapUsage's output, so no second list of key names is kept here; a wire with no
+// mapping reads none of them.
+export function unmappedUsage(provider, raw, opts = {}, map = mapUsage) {
+  if (raw == null) return [];
+  if (typeof raw !== 'object' || Array.isArray(raw)) return [['usage', JSON.stringify(raw)]];
+  const leaves = [];
+  const nested = (v) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length;
+  const walk = (o, at) => { for (const [k, v] of Object.entries(o)) nested(v) ? walk(v, [...at, k]) : leaves.push([...at, k]); };
+  walk(raw, []);
+  let base;
+  try { base = JSON.stringify(map(provider, raw, opts)); } catch { base = null; }
+  const valueAt = (o, at) => at.reduce((x, k) => x[k], o);
+  const read = (at) => {
+    if (base == null) return false;
+    const copy = structuredClone(raw), v = valueAt(copy, at.slice(0, -1)), k = at.at(-1);
+    v[k] = (Number(v[k]) || 0) + 1; // a value num() reads (a number, "1", true) always moves
+    try { return JSON.stringify(map(provider, copy, opts)) !== base; } catch { return true; } // the mapping depends on that value
+  };
+  return leaves.filter((at) => !read(at)).map((at) => { const v = valueAt(raw, at); return [at.join('.'), typeof v === 'string' ? v : JSON.stringify(v)]; });
+}
+
 // The board's usage {read, create, fresh, out}: a projection of mapUsage's output, never a second mapping (3.2).
-// An unreported write shows as 0 on the board; the canonical NULL stays in mapUsage's output.
+// An unreported write is NULL here too, never a 0 a reader would take as reported (3.2).
 export function boardUsage(c) {
-  return { read: c.cache_read, create: c.cache_write ?? 0, fresh: c.input_uncached, out: c.output };
+  return { read: c.cache_read, create: c.cache_write, fresh: c.input_uncached, out: c.output };
 }
 
 // OpenAI Responses: input_tokens is the TOTAL input (cached included); input_tokens_details.cached_tokens
@@ -55,4 +78,12 @@ function mapChat(raw) {
   const uncached = miss != null ? num(miss) : Math.max(0, num(raw.prompt_tokens) - read);
   return { input_uncached: uncached, cache_read: read, cache_write: null, output: num(raw.completion_tokens),
     reasoning: raw.completion_tokens_details?.reasoning_tokens ?? null, total_input: read + uncached };
+}
+// Gemini usageMetadata: promptTokenCount is the prompt's total (cached included); toolUsePromptTokenCount, the tool-use prompt, is
+// counted apart from it (totalTokenCount sums both) and is input too. cachedContentTokenCount is the cache-read part. The wire reports
+// no cache write → NULL, never 0 (3.2). candidatesTokenCount leaves out the thoughts, which are billed as output: output counts both.
+function mapGemini(raw) {
+  const total = num(raw.promptTokenCount) + num(raw.toolUsePromptTokenCount), read = num(raw.cachedContentTokenCount);
+  return { input_uncached: Math.max(0, total - read), cache_read: read, cache_write: null, output: num(raw.candidatesTokenCount) + num(raw.thoughtsTokenCount),
+    reasoning: raw.thoughtsTokenCount ?? null, total_input: total };
 }

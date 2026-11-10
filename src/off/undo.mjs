@@ -26,10 +26,10 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { undoEntry, removeOwnedFile, undoWrapper, describeEntry } from './journal.mjs'
 import { saveManifest, KNOWN_KINDS, FILE_ENTRY_KINDS, PHASES, undoByHand, restoreByHand } from './manifest.mjs'
-import { undoRunKey, undoScheduledTask } from './win32.mjs'
+import { undoRunKey, undoScheduledTask, TASK_FILE } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, trocarHome } from './paths.mjs'
-import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
+import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside, pathKey } from './fsutil.mjs'
 import { harnessesOf, hasIdentity, withAgentList, mayHaveRead, trustRereads } from './signature.mjs'
 import { readAgentList } from './identity.mjs'
 import { holdersOf } from './holders.mjs'
@@ -49,9 +49,12 @@ const KEPT_BECAUSE = {
 const UNTIL_VALUES = ['restart', 'next-connection', 'next-handshake', 'session-end']
 
 const known = (item) => KNOWN_KINDS.includes(item.kind)
-// step 4's owned files: trocar-only content goes whatever it holds now (a changed one is said); a config-library entry the agent writes the user's
-// settings into goes only while unchanged (4.11 P5 / CM18, D48②); a wrapper is put back by its own rule
-const OWNED_UNDO = { plugin: removeOwnedFile, shim: removeOwnedFile, switch: removeOwnedFile, 'config-entry': (f, fs) => removeOwnedFile(f, fs, { unlessChanged: true }), wrapper: undoWrapper }
+// step 4's owned files go only while their bytes are the ones the manifest recorded (4.11 §4): a damaged manifest never costs the user a file. A changed
+// one is left and said (D38); a config-library entry the agent writes the user's settings into is the user's then and leaves the manifest (4.11 P5 / CM18,
+// D48②); a wrapper is put back by its own rule
+const unlessChanged = (f, fs) => removeOwnedFile(f, fs, { unlessChanged: true })
+const OWNED_UNDO = { plugin: unlessChanged, shim: unlessChanged, switch: unlessChanged, 'config-entry': unlessChanged, wrapper: undoWrapper }
+export const OWNED_ROLES = Object.freeze(Object.keys(OWNED_UNDO)) // what a run deletes or takes back by its role; a dry run says the same
 // what `install` wrote (D55①: phase 'install' — the root's key, its CA file, the certificate carriers: config keys, bundles, pem-blocks, wrappers, plugins and
 // their loader lines): `off` lists them and leaves them (1.6 §1.1 「证书一项不碰」), `uninstall` undoes them (the key last: undoRootKeys, after the trust
 // store's root). The phase, never a list of kinds: a carrier of a new kind is spared by the same rule.
@@ -60,7 +63,21 @@ const keyWhere = (k) => k.path ?? `${(k.custody && k.custody.kind) || 'custody'}
 const isMap = (v) => v instanceof Map
 const processEnv = (p) => { try { const e = typeof p.env === 'function' ? p.env() : p.env; return isMap(e) ? e : null } catch { return null } } // gone, or not ours to read
 const errText = (e) => String((e && e.code) || (e && e.message) || e)
-const without = (list, item) => { const i = list.indexOf(item); if (i >= 0) list.splice(i, 1) }
+// A record leaves the manifest. A directory it made that another record's file still sits in passes to that record, so whichever of them goes last
+// takes it (spec 4.6 #16: after off as after install; a record names only the directories its own write made). One no record is in goes now if it is
+// empty, whatever the record's own undo did (a CA file is removed without its directory); one holding the user's files stays (rmdir only takes an empty one).
+const without = (list, item, manifest, fs) => {
+  const i = list.indexOf(item); if (i < 0) return
+  list.splice(i, 1)
+  const orphans = []
+  for (const d of item.created_dirs || []) {
+    const key = (p) => pathKey(p, { realpath: null }) // as off compares paths: case-blind where file names are
+    const heir = [...(manifest.files || []), ...(manifest.entries || [])].find((r) => typeof r.path === 'string' && key(r.path).startsWith(`${key(d)}/`))
+    if (heir) heir.created_dirs = [...new Set([...(heir.created_dirs || []), d])].sort((a, b) => a.length - b.length) // parents first: removeEmptyDirs goes deepest first
+    else orphans.push(d)
+  }
+  removeEmptyDirs(orphans, fs)
+}
 
 // A harness whose snapshot has no signature (no record: an older trocar; null: none for its OS) cannot tell its processes from the others, so any live
 // process that may have read its entry may be one of them (a record that is missing says nothing of re-reading either: alive is enough). → their pids;
@@ -76,7 +93,7 @@ const unsignedWhy = (liveness, h) => (liveness[h]
  *  part-way (the last write of the manifest: ENOSPC, EACCES, a failed rename) is thrown with `partial` on it: the same object, as far as it got — the files that were
  *  changed or removed by then are in it, because a receipt that said "nothing was changed" over a settings.json that was put back would be untrue (1.6 R1, V3). */
 export async function undoHarnesses(args) {
-  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], holders: [], trust_unknown: [], left: [], residue: [], changed: [], notes: [], procs_error: null, manifest: args.manifest }
+  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], holders: [], trust_unknown: [], left: [], residue: [], changed: [], restored: [], notes: [], procs_error: null, manifest: args.manifest }
   try { return await undoInto(args, out) } catch (e) {
     if (e && typeof e === 'object') e.partial = out
     throw e
@@ -142,11 +159,13 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     if (FILE_ENTRY_KINDS.includes(e.kind)) return undoEntry(e, { fs })
     if (e.kind === 'run-key') {
       const r = undoRunKey({ prior: e.prior ?? null, run: exec, env })
-      return { path: `${e.hive ?? 'HKCU'}\\${e.key ?? ''}\\${e.name ?? ''}`, harness: e.harness, result: r.ok ? (r.result === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.result === 'left' ? { result: 'left-user-value' } : {}), ...(r.ok ? {} : { reason: r.reason }) }
+      // what the receipt row says it lost: a registry value is no file of lines (a Windows test machine: "trocar's lines removed" over a value set back)
+      const change = r.result === 'restored' ? 'set back to the value that was there before' : 'removed'
+      return { path: `${e.hive ?? 'HKCU'}\\${e.key ?? ''}\\${e.name ?? ''}`, harness: e.harness, change, gone: r.result === 'removed', result: r.ok ? (r.result === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.result === 'left' ? { result: 'left-user-value' } : {}), ...(r.ok ? {} : { reason: r.reason }) }
     }
     if (e.kind === 'scheduled-task') {
-      const r = undoScheduledTask({ uninstall: dropCa, prior: e.prior ?? null, run: exec, env })
-      return { path: e.path ?? '\\trocar\\collector', harness: e.harness, result: r.ok ? (r.task === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
+      const r = undoScheduledTask({ uninstall: dropCa, prior: e.prior ?? null, run: exec, env, file: path.join(dir, TASK_FILE), fs })
+      return { path: e.path ?? '\\trocar\\collector', harness: e.harness, change: r.task === 'deleted' ? 'the task deleted' : 'the task switched off', gone: r.task === 'deleted', ...(r.why ? { why: r.why } : {}), result: r.ok ? (r.task === 'absent' ? 'already-restored' : r.task === 'not-trocars' ? 'left-user-value' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
     }
     if (e.kind === 'forwarder-binary') { // uninstall only (the entries filter keeps it out of an `off`)
       const file = e.path || e.real_path
@@ -166,7 +185,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       if (e.backup) row.backup_kept = e.backup
       return
     }
-    without(manifest.entries, e)
+    without(manifest.entries, e, manifest, fs)
     if (!e.backup) return
     const keep = (reason) => { manifest.kept_backups.push({ path: e.path, backup: e.backup, reason, at: now.toISOString() }); row.backup_kept = e.backup }
     if (!UNDO_AT_PRE.has(r.result)) return keep((KEPT_BECAUSE[r.result] || (() => `${e.path}: ${r.result}`))(e))
@@ -177,7 +196,8 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const kept = [...manifest.entries, ...manifest.files].filter((x) => spared(x) && (x.harness == null ? ids == null : inScope(x.harness))).map(keyWhere)
   out.install_items = [...new Set(kept)] // what install wrote, for `--json` (附录 C.2): §3.4's sample receipt names no count of it, so the human text says nothing here
 
-  const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && !spared(e) && (FILE_ENTRY_KINDS.includes(e.kind) || e.kind === 'run-key' || e.kind === 'scheduled-task' || (e.kind === 'forwarder-binary' && dropCa)))
+  // install's Run-value fallback (4.8 §7) belongs to no harness: a whole-machine run takes it
+  const entries = [...manifest.entries].reverse().filter((e) => (inScope(e.harness) || (e.harness == null && ids == null && e.kind === 'run-key')) && !spared(e) && (FILE_ENTRY_KINDS.includes(e.kind) || e.kind === 'run-key' || e.kind === 'scheduled-task' || (e.kind === 'forwarder-binary' && dropCa)))
   const config = (e) => !((e.kind === 'text' || e.kind === 'trust-entry') && e.format !== 'dotenv-block') // step 1; the rest are step 4's (json-key and proxy-entry are config, a text/trust block is config only as dotenv)
   const originals = entries.filter(config) // step 1's, as they are now: undoing takes them out of the manifest, and a bundle is judged after that
   for (const e of entries) if (config(e)) undoOne(e)
@@ -291,7 +311,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       // it now: removing it leaves an agent with no network (4.6 安装 / 卸载不静默); an extra file is only warned about by Node when it is gone
       const entry = byHarness ? naming(f) : []
       if (h.pids && !h.pids.length && !entry.length) { // nobody holds it: removed whatever its state (a directory too)
-        try { rm(f.path); without(manifest.files, f) } catch (e) {
+        try { rm(f.path); without(manifest.files, f, manifest, fs) } catch (e) {
           out.kept_bundles.push({ path: f.path, harness: f.harness, pids: [], holds_ca: true, error: errText(e) })
           fail(f, `${f.path} is held by no running process but could not be removed (${errText(e)}); it still holds the trocar CA — fix the file, then run it again`)
         }
@@ -308,14 +328,14 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
         const why = s.holds || s.gone
         out.kept_bundles.push({ ...keep, holds_ca: true, error: why })
         fail(f, `${f.path} still holds the trocar CA: it could not be rewritten without it (${why}), and ${used}; it is kept as it is — fix the file, then run it again`)
-      } else if (!byHarness) without(manifest.files, f) // an extra file that is gone only warns where it is named: nothing to keep
+      } else if (!byHarness) without(manifest.files, f, manifest, fs) // an extra file that is gone only warns where it is named: nothing to keep
       else if (h.pids || entry.length) await rebuild(f, keep)
       else { out.kept_bundles.push(keep); fail(f, `${f.path} is gone, and whether a running process uses it is not known (${h.why}), so it was not rebuilt`) }
     }
     for (const f of bundles) await one(f, true)
     for (const f of extras) await one(f, false)
   }
-  if (dropCa) for (const f of manifest.files.filter((x) => x.role === 'ca-cert' && known(x))) { const away = outside(f); if (away) { fail(f, away); continue }; try { rm(f.path); without(manifest.files, f) } catch (e) { fail(f, `${f.path} could not be removed (${errText(e)})`) } } // uninstall only (4.6 第 3 步)
+  if (dropCa) for (const f of manifest.files.filter((x) => x.role === 'ca-cert' && known(x))) { const away = outside(f); if (away) { fail(f, away); continue }; try { rm(f.path); without(manifest.files, f, manifest, fs) } catch (e) { fail(f, `${f.path} could not be removed (${errText(e)})`) } } // uninstall only (4.6 第 3 步)
 
   // ── 4: rc lines and patch rows, then plugins and the shim ─────────────────────────────────────────────────────────────────────────
   for (const e of entries) if (!config(e)) undoOne(e)
@@ -324,10 +344,12 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     try {
       const r = OWNED_UNDO[f.role](f, fs)
       if (r.result === 'error') { fail(f, r.reason); continue }
+      if (r.result === 'kept-changed' && f.role !== 'config-entry') { fail(f, `${f.path}, trocar's ${f.role}, is not what trocar wrote (its bytes differ from the install manifest's record${f.sha256 ? '' : ', which holds none'}), so it was left as it is; delete it by hand if it is not yours, then run it again`); continue }
       if (r.result === 'kept-changed') out.notes.push(`${f.path}, the ${f.role} trocar created, was changed while trocar was on: it holds the user's settings now, so it is kept (trocar's own key in it was undone by its entry)`)
       if (r.result === 'removed') out.removed.push(r.path)
+      if (r.result === 'restored') out.restored.push({ harness: f.harness, path: r.path, role: f.role }) // put back as it was before install
       if (r.changed) out.changed.push({ harness: f.harness, path: f.path, role: f.role }) // not what trocar wrote: removed all the same, and said
-      without(manifest.files, f)
+      without(manifest.files, f, manifest, fs)
     } catch (err) { fail(f, `${f.path}, trocar's ${f.role}, could not be removed: ${String((err && err.message) || err)}`) }
   }
   for (const w of manifest.watched || []) { // what an agent wrote because of trocar's file: reported, never deleted
@@ -358,7 +380,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   if (windowed.length) {
     const t = await table()
     const ds = readDoorSeen({ dir, fs }) // the door's durable rows (P12); unreadable = door evidence not known: the judge keeps the safe direction
-    if (ds.rows == null) out.notes.push(`${ds.error}, so every running program of a harness that was on is counted as still connected`)
+    if (ds.rows == null) out.notes.push(`${ds.error}, so every running program of an agent that was on is counted as still connected`)
     out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, doorSeen: ds.rows, agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))
     if (t.error) out.notes.push(`the process table could not be read (${t.error}), so which programs may still be connected through trocar is not known`)
   }
@@ -386,7 +408,7 @@ export async function undoRootKeys({ dir, manifest, custody = null, fs = nodeFs 
       // a removal; anything else keeps the record and says so — never a key left behind with no record and no line (invariant 5, D38)
       const r = await custody.remove(k.custody)
       if (!r || typeof r !== 'object' || typeof r.removed !== 'boolean') throw new Error(r === 'unavailable' ? 'the key custody is not reachable now (macOS: no graphical login session, or the keychain is locked); run trocar uninstall again in a terminal of that session' : `the key custody answered ${JSON.stringify(r)}`)
-      without(manifest.entries, k); out.removed.push(where)
+      without(manifest.entries, k, manifest, fs); out.removed.push(where)
     } catch (e) { out.left.push({ path: where, harness: null, result: 'error', reason: `${where}, the trocar root's private key, could not be removed (${errText(e)}); by hand: ${undoByHand(k)}` }) }
   }
   if (out.removed.length) saveManifest(dir, manifest, fs)

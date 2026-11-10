@@ -105,7 +105,7 @@ test('D62: with the daemon dead, the same `off codex` asks the OS instead — ON
   assert.deepEqual(cold.envAfter, cold.pre, 'codex\'s own file is byte for byte back, whichever side answered')
   const why = cold.receipt.notes.filter((n) => /could not answer a read question/.test(n))
   assert.equal(why.length, 1, 'the fallback is never silent (D38)')
-  assert.match(why[0], /ECONNREFUSED/, 'and the reason says which reader could not answer, and why')
+  assert.ok(why[0].includes(DEAD), 'and the reason says which reader could not answer, and why')
   const same = (r, home) => JSON.parse(JSON.stringify({ ...r, notes: r.notes.filter((n) => !/could not answer a read question/.test(n)), log: null, at: null }).split(JSON.stringify(home).slice(1, -1)).join('<home>'))
   assert.deepEqual(same(cold.receipt, cold.home), same(hot.receipt, hot.home), 'the receipt is otherwise the same document')
 })
@@ -120,10 +120,10 @@ test('D62: `on` on Windows asks the daemon for the table once and starts no powe
   const w = await modelWorld({ os: 'win32', commands: ['codex'] })
   const box = await liveUnit({ w, platform: 'win32' })
   const t = tools()
-  const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: box.unit }
+  const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: box.unit }
   await withScratchCwd('win32', async () => { // install already starts the daemon (enable --now), so it runs in the scratch cwd too
     try {
-      assert.equal(await runInstallCli(['--yes'], { io: fakeIo(), env: w.env, home: w.home, platform: 'win32', deps }), 0)
+      assert.equal(await runInstallCli(['--yes'], { io: fakeIo(), env: w.env, home: w.home, platform: 'win32', deps: { ...deps, exec: tools().run } }), 0)
       const io = fakeIo()
       const exit = await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform: 'win32', deps: { ...deps, parts: box.parts, exec: t.run, daemonReader: warmReader(), sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 25))) } })
       assert.equal(exit, 0, io.text())

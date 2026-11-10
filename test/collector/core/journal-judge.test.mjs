@@ -35,7 +35,7 @@ test('judgeEntry: not listed → write; intact → skip-intact and applying it a
     fs.writeFileSync(file, JSON.stringify({ env: { CA_FILE: '/the/users/own.pem' } }))
     const j = judgeEntry({ manifest: m, planned: planned(file) })
     assert.equal(j.action, 'skip-user-changed'); assert.match(j.why, /no longer holds what trocar wrote/)
-    assert.throws(() => applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), /trocar off.*trocar on/)
+    assert.throws(() => applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), /trocar install/, 'an install item: install is the way back (D55: off and on never write it)')
     assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).env.CA_FILE, '/the/users/own.pem', 'the user\'s value is left')
   } finally { b.done() }
 })
@@ -57,6 +57,8 @@ test('judgeEntry: an intent a crash left (no post_sha256) is resume when the fil
     assert.deepEqual([m.entries.length, fs.readFileSync(file).equals(written)], [1, true], 'resumed: written once, one entry')
     m.entries[0].post_sha256 = null; fs.writeFileSync(file, '{"something":"else"}')
     assert.equal(judgeEntry({ manifest: m, planned: planned(file) }).action, 'skip-user-changed')
+    // install cannot place this one again by itself (its undo is the only record of that write): the way out puts the file right first, then install
+    assert.throws(() => applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), (e) => /take trocar's text out of .*, then run "trocar install"/.test(e.message), 'the file first, then install')
   } finally { b.done() }
 })
 
@@ -107,4 +109,17 @@ test('X18: the trust block is written to Home/Codex/.env; the proxy block joins 
   const probe = fs.realpathSync(tmpDir('trocar-jj18-'))
   if (foldsCase(probe)) run('another case', (root) => path.join(root, 'home', 'codex', '.env'))
   run('a linked directory', (root) => path.join(root, 'link', '.env'))
+})
+
+// An earlier version's `on` wrote a proxy block with fewer names than this one plans: no entry of the record matches the planned block, so the write is
+// refused for trocar's marked text — and the refusal names the way out that works: off takes out what that on wrote (by its record), then on again
+test('a block an earlier version\'s on wrote with other names is refused, naming trocar off as the way out', () => {
+  const b = box()
+  try {
+    const file = path.join(b.root, '.codex', '.env'); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'A=1\n')
+    const m = newManifest()
+    applyTextEntry({ phase: 'on', dir: b.dir, home: b.root, manifest: m, harness: 'codex', file, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:1' } } })
+    assert.throws(() => applyTextEntry({ phase: 'on', dir: b.dir, home: b.root, manifest: m, harness: 'codex', file, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:1', ALL_PROXY: 'http://127.0.0.1:1' } } }),
+      (e) => e.code === 'marked-without-record' && /trocar off/.test(e.message), 'the way out is off, then the command again')
+  } finally { b.done() }
 })

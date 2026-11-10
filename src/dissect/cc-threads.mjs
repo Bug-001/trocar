@@ -20,14 +20,15 @@
 // reply, so it says where it came from instead of a byte span. Leaf module.
 import { createHash } from 'node:crypto';
 import { parsedRequestBody } from './request-body.mjs';
-import { isVolatile, serverEdited } from './cc.mjs';
+import { isVolatile, serverEdited, replyEnd } from './cc.mjs';
+import { failedOf } from './endpoints.mjs';
 import { contextStateOfRequest, respIncompleteOf } from './capture-labels.mjs';
 import { extendChain, linked, segmentsIn, sourceOf, createLinks, withUnread } from './chain.mjs';
 
 const bodyOf = (rec) => { const b = parsedRequestBody(rec); return b && typeof b === 'object' ? b : null; };
 
 // → null (no thread) | { kind: 'create' | 'continue' | <other>, prevId }
-export function threadOf(body) {
+function threadOf(body) {
   const t = body && body.thread;
   if (!t || typeof t !== 'object') return null;
   const prevId = typeof t.previous_message_id === 'string' && t.previous_message_id ? t.previous_message_id : null;
@@ -55,7 +56,7 @@ const replyItem = (r) => ({ role: 'assistant', content: replyContent(r) });
 function replySegs(rec) {
   if (!replyContent(rec)) return [];
   return [{ src: sourceOf(rec), field: null, path: null, node: null, of: replyItem,
-    why: `the assistant reply of record ${rec.id ?? '(no id)'}, rebuilt from its streamed response (resp.raw), not one byte span` }];
+    why: `the assistant reply of record ${rec.id ?? '(no id)'}, rebuilt from its streamed response, not one byte span` }];
 }
 
 // A call's own system, tools and messages, located in its req_body. System and tools keep their items (a continuation inherits
@@ -95,7 +96,8 @@ const volatile = (s) => isVolatile('system', s.item);
 function replyGap(pred) {
   const id = `record ${pred.id ?? '(no id)'}`;
   const r = (pred.resp || pred.response) || {};
-  if (r.kind === 'error') return `the reply of ${id} ended in an error: only what arrived before it is known`;
+  // a reply the agent closed after its own success terminal arrived whole (3.5 §访问模式 ②): it hands on a whole context
+  if (r.kind === 'error' && failedOf({ status: r.status, error: true, ended: replyEnd(r.partial), cut: true })) return `the reply of ${id} ended in an error: only what arrived before it is known`;
   const inc = respIncompleteOf(pred);
   if (inc) return `the reply of ${id} is incomplete (${inc.text})`;
   if (!replyContent(pred)) return `the reply of ${id} has no content blocks, so what the model answered is not known`;
@@ -150,7 +152,7 @@ function build(rec, body, thread, hp, share) {
 // get(rec) → the call's Plan, or null for a call without `thread`; context(rec) → the request the model was given (the call's own
 // body with system / tools / messages as stitched) with each block located, or null. A record read back later (by id) gets the
 // plan it was given. `read` as chain.mjs createLinks.
-export function threadPlanner(read = null) {
+function threadPlanner(read = null) {
   const byReply = new Map(); // reply id → the plan of the thread call that replied with it
   const plans = new Map(); // record id (the record itself when it has none) → plan | null
   const links = createLinks(read);

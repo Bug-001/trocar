@@ -13,12 +13,14 @@
 // seal(), or, failing that, when the line file is collected.
 //   A SIDECAR (4.3 §4 旁索引) beside it, `<name>.idx`, holds what a scan of the first `bytes` would have put in the heap: the
 // header line `{v: SIDECAR_V, …head, bytes, parts: [[name, type, byteLength]]}`, then each part's bytes. Never a second source: a
-// sidecar that does not load is a scan. The lines created anew or cut drop their sidecar before the next write.
+// sidecar that does not load is a scan. The lines created anew or cut drop their sidecar before the next write; a writer drops the one
+// whose index named no whole line at once (fault), or the next open would load it and read the same line; a reader writes nothing, so
+// only its own process leaves that sidecar unread from then on.
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
-export const SIDECAR_V = 1;
+const SIDECAR_V = 1;
 const TYPES = { f64: Float64Array, u32: Uint32Array, i32: Int32Array, u8: Uint8Array };
 /** A line file's sidecar: `<name>.idx` beside its plain files `<name>.<T>.ndjson`. */
 export const sidecarOf = (file) => file.replace(/(\.\d+)?\.ndjson$/, '') + '.idx';
@@ -94,7 +96,7 @@ const held = new FinalizationRegistry(({ fs, fd }) => { try { fs.closeSync(fd); 
 
 
 /** Plain bytes a sealed part holds at least (4.3 §4 分片, about 8 MiB, SHOULD): seal() cuts at the first line end at or past it. */
-export const PART_BYTES = 8 << 20;
+const PART_BYTES = 8 << 20;
 // brotli q9 with the smallest window that covers the frame (10..24 bits): a decoder sizes its ring buffer by the stream's window, so a
 // 256 KiB frame written with a 16 MiB window would take that much memory at each decode for no smaller output (4.3 §4 分片)
 const Z = zlib.constants, brotliOf = (n) => ({ [Z.BROTLI_PARAM_QUALITY]: 9, [Z.BROTLI_PARAM_LGWIN]: Math.min(24, Math.max(10, Math.ceil(Math.log2(n + 16)))), [Z.BROTLI_PARAM_SIZE_HINT]: n });
@@ -114,7 +116,7 @@ const undecodable = new Set();
 export function releaseParts() { decoded.clear(); decodedBytes = 0; }
 /** Plain bytes a frame of a sealed part holds at least (4.3 §4 分片): seal() cuts a part into independently decodable frames, each at
  *  the first line end at or past it, so a line lies in one frame and reading it decodes that frame only. */
-export const FRAME_BYTES = 256 << 10;
+const FRAME_BYTES = 256 << 10;
 const MAGIC = 0x31465254; // "TRF1"
 // A sealed part's bytes are the brotli of each frame of its plain bytes `raw` (a frame cut at the first line end at or past frameBytes
 // from its start), then the frame table (per frame: compressed length, plain length; u32 LE), the frame count, MAGIC.
@@ -173,6 +175,7 @@ function readAt(fs, fd, pos, n) {
 }
 
 const told = new Set(); // the files whose index named no whole line, said once (fault)
+const unindexed = new Set(); // the files whose index named no whole line to a reader that may not remove it (fault): this process scans them
 /** lineFile({fs, base, write, onFail}) → {append(text) → the offset of its first byte, read(off, len) → Buffer, json(off, len) → the whole line there parsed (else
  *  throws fault(off, len): ELINEPART), scan(from), bytes,
  *  settled, unreadable, cut(len), remove(), seal({partBytes}), touch(), loadSidecar(), saveSidecar({head, parts}), close()}.
@@ -313,6 +316,8 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     throw fault(off, len);
   }
   function fault(off, len) {
+    if (!write) unindexed.add(base);
+    else { covers = Infinity; try { fs.rmSync(sidecarOf(side), { force: true }); } catch { /* the next open reads it, and this says it again */ } }
     return said(Object.assign(new Error(`${name}: no whole line at byte ${off} (${len} B): the file is not the generation its index was built from`), { code: 'ELINEPART' }));
   }
   // an ELINEPART (a part that does not decode, a line that is not there, a tail that is not this handle's), said on stderr the first
@@ -411,7 +416,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   const self = {
     append, read, json, fault, scan, cut, remove, seal, close,
     touch() { if (write && end) try { const t = new Date(); fs.utimesSync(tailOf(T), t, t); } catch { /* the GC order only */ } },
-    loadSidecar() { const r = loadSidecar({ fs, file: side, endsLine: (n) => n <= end && read(n - 1, 1)[0] === 10 }); covers = r ? r.head.bytes : Infinity; return r; },
+    loadSidecar() { const r = unindexed.has(base) ? null : loadSidecar({ fs, file: side, endsLine: (n) => n <= end && read(n - 1, 1)[0] === 10 }); covers = r ? r.head.bytes : Infinity; return r; },
     saveSidecar({ head, parts: ps2 }) { mine(); covers = Infinity; saveSidecar({ fs, file: side, head, parts: ps2 }); covers = head.bytes; },
     get bytes() { return end + arena; }, get settled() { return write && !arena && !trunc; }, get unreadable() { return unreadable; },
   };

@@ -4,9 +4,9 @@
 // Shots: the library and its empty variant at 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot } from './harness.mjs'
+import { probe, withBoard, shoot, settle } from './harness.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
-import { UNTITLED, TITLE_PENDING } from '../../../web/legacy/labels/common.mjs'
+import { UNTITLED } from '../../../web/legacy/labels/common.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -19,32 +19,16 @@ const go = async (page, hash, sel) => {
 }
 // a fresh mount of the library (via another screen), so a routed /api/sessions answer is what it starts from
 const remount = async (page, sel) => { await go(page, '#/settings/appearance', '[data-theme-choice]'); await go(page, '#/sessions', sel) }
-// a session's title comes from the usage sidecar, which the query worker fills after the first `sessions` answer (3.5 §谁执行它
-// `later`): the first answer of a fresh home has every title pending (title_source 'pending', 4.4 §人类标题的来源) and the library
-// polls again only after INTERVAL.sessions. The rows are checked and shot once the face has no pending title (≤ 10 s), then remounted.
-async function settledTitles(b) {
-  const pending = async () => ((await b.get('sessions', {})).doc?.sessions || []).some((x) => x.title_source === 'pending')
-  for (const t0 = Date.now(); (await pending()) && Date.now() - t0 < 10000;) await new Promise((r) => setTimeout(r, 250))
-  await remount(b.page, '.lrow'); await b.page.waitForLoadState('networkidle')
-}
-
-// 1.8 §标题规则 / acceptance 2: a title not known yet (the sidecar not filled) is said as pending and drawn as such, never as untitled
-test("1.8 §标题规则 the library's first answer draws its pending titles as not read yet, never untitled; the filled answer has every title", { skip }, async () => {
+// 1.8 §标题规则 / acceptance 2: every session of this home has a prompt, so the library's first answer already has every title
+test("1.8 §标题规则 the library's first answer has every title and draws none as untitled", { skip }, async () => {
   const b = await withBoard({ bytes: BYTES, width: 1280, chromium: gate.chromium })
   try {
     const first = b.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/sessions', { timeout: 15000 })
     await go(b.page, '#/sessions', '.lrow')
     const firstRows = (await (await first).json()).sessions || []
-    const drawn = await b.page.$$eval('.lrow .lt', (els, [u, p]) => ({ untitled: els.filter((e) => e.textContent === u).length,
-      pending: els.filter((e) => e.textContent === p).length }), [UNTITLED, TITLE_PENDING])
-    const pend = firstRows.filter((x) => x.title_source === 'pending').length
-    assert.ok(pend > 0, 'a fresh home\'s first answer has titles not known yet')
-    assert.deepEqual(firstRows.filter((x) => x.title == null && x.title_source !== 'pending').map((x) => x.session_id), [], 'no first-answer row says "no title"')
-    assert.deepEqual(drawn, { untitled: 0, pending: pend }, 'rows drawn from the first answer: pending titles as not read yet, none untitled')
-    await settledTitles(b)
-    assert.deepEqual(((await b.get('sessions', {})).doc?.sessions || []).filter((x) => x.title == null), [], 'every session of this home has a title once the sidecar is filled')
-    const filled = await b.page.$$eval('.lrow .lt', (els, [u, p]) => els.filter((e) => e.textContent === u || e.textContent === p).length, [UNTITLED, TITLE_PENDING])
-    assert.equal(filled, 0, 'rows drawn from the filled answer show their titles')
+    assert.ok(firstRows.length > 0)
+    assert.deepEqual(firstRows.filter((x) => x.title == null).map((x) => x.session_id), [], 'no row of the first answer lacks its title')
+    assert.equal(await b.page.$$eval('.lrow .lt', (els, u) => els.filter((e) => e.textContent === u).length, UNTITLED), 0)
   } finally { await b.stop() }
 })
 
@@ -69,7 +53,7 @@ for (const width of [1280, 1024]) {
     test(`(7)(14) the library and its empty state at ${width} in ${theme}: one window control, no head numbers, titled truncation`, { skip }, async () => {
       const b = await withBoard({ bytes: BYTES, width, theme, chromium: gate.chromium })
       try {
-        await go(b.page, '#/sessions', '.lrow'); await settledTitles(b)
+        await go(b.page, '#/sessions', '.lrow'); await settle(b.page)
         const l = await layout(b.page)
         assert.equal(l.hscroll, false); assert.deepEqual(l.untitled, [])
         assert.equal(l.segs, 1); assert.equal(l.segInHead, 1)
@@ -91,7 +75,7 @@ for (const width of [800, 600, 390]) {
   test(`(14) at ${width} px the page does not scroll sideways, every agent name is visible and titles keep half the row`, { skip }, async () => {
     const b = await withBoard({ bytes: BYTES, width, chromium: gate.chromium })
     try {
-      await go(b.page, '#/sessions', '.lrow'); await b.page.waitForLoadState('networkidle')
+      await go(b.page, '#/sessions', '.lrow'); await settle(b.page)
       const l = await layout(b.page)
       assert.equal(l.hscroll, false); assert.equal(l.hiddenNames, 0)
       const narrow = await b.page.evaluate(() => [...document.querySelectorAll('.lrow')]
@@ -152,7 +136,7 @@ test('(9)(10) a failed read keeps the old list with Retry and its reason out of 
     assert.ok(!(await visible()).includes(TOKEN), 'the reason is not in the visible text')
     await page.unroute('**/api/sessions?**')
     await page.route('**/api/sessions?**', (r) => r.fulfill({ json: EMPTY }))
-    await go(page, '#/settings/appearance', '[data-theme-choice]'); await page.waitForLoadState('networkidle') // a screen that reads no status
+    await go(page, '#/settings/appearance', '[data-theme-choice]'); await settle(page) // a screen that reads no status
     const from = b.requests.length
     await go(page, '#/sessions', '.libempty a[href="#/capture"]')
     await page.waitForTimeout(INTERVAL.sessions + 1000) // one more `sessions` poll: the empty state does not re-read status with it

@@ -15,10 +15,11 @@ import { parseJsonc } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { envProxies, urlHostsDeep, truthy, perOs } from './_common.mjs'
 import { renderPlugin } from './_plugins.mjs'
-import { ROUTE_PLACES } from '../../off/marker.mjs'
+import { ROUTE_PLACES, HOME_PLACES } from '../../off/marker.mjs'
+import { homeRoot } from '../../off/loc.mjs'
 
 const MANAGED = { linux: '/etc/opencode/opencode.json', darwin: '/Library/Application Support/opencode/opencode.json' }
-const globalDir = (env, home) => path.join(env.get('XDG_CONFIG_HOME') || path.join(home, '.config'), 'opencode')
+const globalDir = (env, home) => path.join(homeRoot(HOME_PLACES.opencode, { home, env }), 'opencode') // the place the marker undo looks too
 
 function configDocs(ctx) {
   const dir = globalDir(ctx.environ, ctx.home)
@@ -45,7 +46,7 @@ function inject(ctx) {
     }],
     watch: ['package.json', 'package-lock.json', 'bun.lock', 'node_modules'].map((n) => ({ path: path.join(dir, n), why: 'OpenCode installs @opencode-ai/plugin there on its first run with any plugin' })),
     notes: [
-      { code: 'harness-note', text: `with any plugin present, OpenCode's next first run fetches @opencode-ai/plugin from the npm registry once and may write package.json, package-lock.json and node_modules/ in ${dir}; uninstall reports those and never deletes them` },
+      { code: 'harness-note', text: `with any plugin present, OpenCode's next first run fetches @opencode-ai/plugin from the npm registry and may write package.json, package-lock.json and node_modules/ in ${dir}; every OpenCode start waits for that install until it succeeds once, so where the npm registry cannot be reached each start stalls until the install gives up (about 6.5 minutes measured); uninstall reports those files and never deletes them` },
       { code: 'harness-note', text: 'OpenCode loads trocar\'s plugin also under --pure / OPENCODE_PURE (they skip only npm plugins), so such a run is captured too' },
     ],
   }
@@ -53,9 +54,12 @@ function inject(ctx) {
 
 // Which processes are OpenCode (D51 preset, every OS): its Bun binary (npm's .opencode, ~/.opencode/bin, the desktop's opencode-cli core). Bun
 // re-executing itself as plain bun (BUN_BE_BUN=1, Linux reads the env) is not the agent; the Node launcher (node …/bin/opencode) is not either.
+// The desktop app's main process (<any>.app/Contents/MacOS/OpenCode wherever the app sits; on Windows the file OpenCode.exe, which its Electron helpers share; also `opencode` once normalized)
+// only talks to its `opencode-cli serve` sidecar, which makes every model call: nothing but that tells it from the CLI, whose file is lowercase, so this exclude item reads the exe, case-sensitive
+// (measured, desktop 2.0.32 on macOS, 2.0.27 on Windows; the npm channel's opencode.exe).
 const processes = {
   names: [{ name: 'opencode' }, { name: '.opencode' }, { name: 'opencode-cli' }],
-  exclude: [{ name: ['opencode', '.opencode', 'opencode-cli'], env: { BUN_BE_BUN: '1' } }],
+  exclude: [{ name: ['opencode', '.opencode', 'opencode-cli'], env: { BUN_BE_BUN: '1' } }, { name: 'opencode', exe: /(?:\.app\/Contents\/MacOS\/OpenCode|[\\/]OpenCode\.exe)$/ }],
   longLived: [{ args: '^(-\\S+ )*(serve|web)( |$)' }], // the subcommand, not an argument that says serve
 }
 
@@ -91,7 +95,8 @@ const proxyMode = {
   trusts: {},
   userCertFiles: [],
   blockers: [],
-  effects: [{ id: 'opencode-1x-npm', paths: [CONFIG('package.json'), CONFIG('bun.lock'), CONFIG('node_modules')], when: 'the first OpenCode 1.x run with a plugin installs @opencode-ai/plugin in the config directory; off reports it and deletes nothing' }],
+  effects: [{ id: 'opencode-1x-npm', paths: [CONFIG('package.json'), CONFIG('bun.lock'), CONFIG('node_modules')], when: 'the first OpenCode 1.x run with a plugin installs @opencode-ai/plugin in the config directory; every OpenCode start waits for that install until it succeeds once, so where the npm registry cannot be reached each start stalls until the install gives up (about 6.5 minutes measured); off reports it and deletes nothing',
+    short: 'OpenCode installs a plug-in package at its next start; where npm cannot be reached, each start waits for it (about 6.5 minutes)' }], // short: the on plan's sentence (1.6 §3.3); install and status say `when`
 }
 
 export default {
@@ -107,6 +112,7 @@ export default {
     ...(truthy(ctx.env.get('OPENCODE_EXPERIMENTAL_WEBSOCKETS')) ? ['api.openai.com', ...providerHosts(configDocs(ctx), 'openai')].map((host) => ({ host, reason: 'ws-path' })) : []),
   ],
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']),
+  present: [{ base: 'home', path: '.opencode/bin' }, { command: 'opencode' }, { base: 'home', dir: '.local/share', env: 'XDG_DATA_HOME', path: 'opencode' }, { base: 'home', dir: '.config', env: 'XDG_CONFIG_HOME', path: 'opencode' }],
   inject,
   trust: {
     // the marker first: when it is there, a failure names it, not a CA file the user exported for OpenCode

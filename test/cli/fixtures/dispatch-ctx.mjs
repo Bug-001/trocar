@@ -1,6 +1,7 @@
 // test/cli/fixtures/dispatch-ctx.mjs — what a test of the command line as a whole hands to runCli (src/cli/main.mjs): a sandbox HOME laid out like the user's (the seven-homes files), a fake systemd and a
 // fake daemon behind the control socket, and one `deps` object that serves every command (on, off, status, doctor, uninstall, daemon) at once. Exports only. Nothing here reaches the machine the tests
 // run on: every OS tool goes to the recording runner, every process question to a table the test owns, the VPN probe is injected, HOME is a temp directory (0.1 §3).
+import fs from 'node:fs'
 import path from 'node:path'
 import { runCli } from '../../../src/cli/main.mjs'
 import { readManifest, installComplete } from '../../../src/off/manifest.mjs'
@@ -10,6 +11,10 @@ import { tmpDir } from '../../helpers/tmp.mjs'
 import { sevenHomes } from '../../off/fixtures/seven-homes.mjs'
 import { fakeIo, fakeSystem, ROOTS, snapshot } from './on-ctx.mjs'
 import { reply, SOCK } from './status-ctx.mjs'
+import { recordingExec } from './on-ctx.mjs'
+import { modelWorld } from '../../helpers/model-world.mjs'
+import { startControlServer, controlRequest } from '../../../src/collector/core/control.mjs'
+import { CONTROL_FILE, PIPE_PREFIX } from '../../../src/off/control-client.mjs'
 
 export { snapshot, fakeIo }
 const descs = await loadHarnesses()
@@ -53,4 +58,38 @@ export async function installedViaCli(opts) {
   const first = await s.run(['on', '--yes'])
   if (first.exit !== 0) throw new Error(`the fixture's first on failed (${first.exit}): ${first.io.text()}`)
   return s
+}
+
+/** The macOS / Windows counterpart of `sandbox`: a model world (test/helpers/model-world.mjs: the in-memory key custody and root store, a codex on PATH)
+ *  whose daemon is a real control server on a temp socket, brought up when the arch's own login entry is enabled or started (its OS tool calls go to the
+ *  recording runner). → { home, dir, run(argv) → { exit, io }, close() }. On win32 the CLI reaches it through `deps.request` (a pipe path is no socket here). */
+export async function modelSandbox({ platform }) {
+  const w = await modelWorld({ os: platform, commands: ['codex'] })
+  fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', 'config.toml'), '')
+  const sock = path.join(tmpDir('trocar-ms-'), 'c.sock'), token = 'a'.repeat(64)
+  let up = false
+  const routes = {
+    'GET /status': async () => ({ doors: {} }),
+    'GET /holders': async () => ({ count: 0, holders: [] }),
+    'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups || {}).map(([g, p]) => [g, `http://127.0.0.1:${p}`])) }),
+    'POST /off': async ({ body }) => { if (body && body.exit) up = false; return { desired: 'off', actual: 'off', recording: false, confirmed: true, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 4242, doors: {} } },
+  }
+  const server = await startControlServer({ socketPath: sock, token, routes })
+  const endpoint = platform === 'win32' ? { path: `${PIPE_PREFIX}${'0'.repeat(16)}`, token } : { path: sock, token }
+  const bring = () => { up = true; fs.mkdirSync(w.dir, { recursive: true }); fs.writeFileSync(path.join(w.dir, CONTROL_FILE), JSON.stringify(endpoint)); return { code: 0, out: '', err: '' } }
+  const request = async (q) => { if (!up) throw Object.assign(new Error('connect ENOENT'), { code: 'ENOENT' }); return controlRequest({ ...q, socketPath: sock, token }) }
+  const exec = recordingExec()
+  const { userUnit } = await import(`../../../src/collector/arch/${platform}/autostart.mjs`)
+  const real = userUnit({ home: w.home, node: process.execPath, script: '/repo/bin/trocar.mjs', run: exec.run, env: w.env, spawn: () => ({ pid: 4242, unref() {}, on() {} }) })
+  let registered = false // the login entry as the OS would answer for it: there once enabled, gone once disabled or removed
+  const unregister = (verb) => (...a) => { registered = false; return real[verb](...a) }
+  const unit = { ...real, enable: () => { registered = true; return bring() }, startNow: () => bring(), start: () => bring(), registered: () => ({ state: registered ? 'present' : 'absent' }), disable: unregister('disable'), remove: unregister('remove') }
+  const { renderWrapper } = await import(`../../../src/collector/arch/${platform}/wrapper.mjs`)
+  const deps = {
+    getuid: () => 501, exec: exec.run, request, sleep: tick, unit, custody: w.custody, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, procs: async () => [], drainMs: 0,
+    backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: platform === 'win32' ? '.exe' : '' }, dirs: w.ctx.dirs },
+    parts: { os: platform, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } },
+  }
+  const run = async (argv) => { const io = fakeIo(); const exit = await runCli(argv, { io, home: w.home, platform, uid: 501, env: w.env, deps }); return { exit, io } }
+  return { home: w.home, dir: w.dir, run, close: () => server.close() }
 }

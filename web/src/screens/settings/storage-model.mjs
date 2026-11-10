@@ -72,7 +72,10 @@ export function receiptOf(out, keep) {
     const e = out.receipt && out.receipt.error
     return { kind: 'not-changed', text: W.RCPT_NOT_CHANGED, tech: (e && (e.message || e.code)) || String(e || ''), keep }
   }
-  if (out.status === 0) return { kind: 'offline', text: W.RCPT_OFFLINE, tech: out.error || '', keep }
+  // no answer: to the plan request, nothing was written (4.4 先计划后确认); to the confirm, the write may have landed
+  if (out.status === 0) return out.confirmSent ? { kind: 'unknown', text: W.RCPT_UNKNOWN, tech: out.error || '', keep } : { kind: 'offline', text: W.RCPT_OFFLINE, tech: out.error || '', keep }
+  // a 5xx to the confirm: the service may have failed after the write landed
+  if (out.confirmSent && out.status >= 500) return { kind: 'unknown', text: W.RCPT_FAILED_UNKNOWN, tech: out.error && out.error !== `HTTP ${out.status}` ? `HTTP ${out.status} · ${out.error}` : `HTTP ${out.status}`, keep }
   if (out.status === 404 || out.status === 405) return { kind: 'read-only', text: W.RCPT_READ_ONLY, tech: `HTTP ${out.status}`, keep }
   return { kind: 'not-changed', text: W.RCPT_NOT_CHANGED, tech: out.error || `HTTP ${out.status}`, keep }
 }
@@ -86,7 +89,7 @@ export function failOf(what, r) {
   const obj = r != null && typeof r === 'object'
   const status = obj && typeof r.status === 'number' ? r.status : null
   const why = obj ? r.error : r
-  return { line: READ_FAIL(what, status), pairs: [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : String(why)]] }
+  return { line: READ_FAIL(what, status, obj && r.timedOut === true), pairs: [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : String(why)]] }
 }
 
 // flatText(pairs) — the copy text of technical pairs: `k: v` per line, the bare value on a continuation row

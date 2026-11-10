@@ -193,10 +193,12 @@ export function psIdentity(pid, { exec = null, env = process.env } = {}) {
   if (m) m.identity.set(key, v)
   return v
 }
+// lstart is local time: asked in the machine's own zone (no TZ), so a shell with TZ set, the daemon (launchd sets none) and an older copy all write one string for one process
+const idEnv = (env) => { const e = psEnv(env); delete e.TZ; return e }
 function psIdentityAsk(pid, { exec = null, env = process.env } = {}) {
-  return then(execTool('ps', ['-o', 'lstart=', '-p', String(pid)], { run: exec, env: psEnv(env) }), (r) => {
+  return then(execTool('ps', ['-o', 'lstart=', '-p', String(pid)], { run: exec, env: idEnv(env) }), (r) => {
     if (!(r.code === 0 && /\S/.test(r.out))) return { start_time: null, boot_id: null }
-    return then(execTool('sysctl', ['-n', 'kern.boottime'], { run: exec, env: psEnv(env) }), (b) => {
+    return then(execTool('sysctl', ['-n', 'kern.boottime'], { run: exec, env: idEnv(env) }), (b) => {
       const sec = b.code === 0 && /\bsec\s*=\s*(\d+)/.exec(b.out)
       return { start_time: r.out.replace(/\s+/g, ' ').trim(), boot_id: sec ? sec[1] : null }
     })
@@ -448,7 +450,7 @@ async function winTableViaDaemon(m) {
     // questions of `on` and `off` (op.lock's own pid, the daemon lock's) be answered without a powershell.exe start (D62, 1.6 §3.1).
     if (s && s.boot_id != null) m.winBoot = s.boot_id
     return rows
-  } catch (e) { m.notes.push(String((e && e.message) || e)); return null }
+  } catch (e) { m.notes.push(String((e && (e.reason || e.message)) || e)); return null }
 }
 /** The Windows table: the daemon's warm helper when this scope has a reader and it answers, else the one fixed PowerShell question. */
 async function procsOfWin({ exec, env }) {

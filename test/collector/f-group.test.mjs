@@ -47,6 +47,7 @@ import { sealSegment } from '../../src/raw/seal.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
@@ -61,7 +62,7 @@ function fakeArch(p, extraEnv = {}) {
 }
 function sandbox() {
   const root = tmpDir('as-f-') // short: unix socket paths are length-limited
-  const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   return { root, home, trocar: path.join(home, '.trocar'), collector: path.join(home, '.trocar', 'collector'), sock: path.join(root, 'run', 'c.sock'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
 }
 const req = (sock, method, p, body) => controlRequest({ socketPath: sock, method, path: p, body })
@@ -88,7 +89,7 @@ async function endpoint(s) {
 // (iii): `trocar collector status` with no daemon answering — it reads the disk
 async function statusOffline(s) {
   const o = []
-  const code = await runStatusCli(['--failures'], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home,
+  const code = await runStatusCli(['--failures', '--details'], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home,
     deps: { request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test: nothing looked at' }] }) } }) // on a Mac status asks launchd and the keychain (read-only): the runner is the test's
   return { code, text: o.join('\n') }
 }
@@ -300,8 +301,9 @@ test('F3 parts: off, a helper death (degraded), a SIGHUP stop and its clean rest
     await req(s.sock, 'POST', '/on', {}); await req(s.sock, 'POST', '/off')
     h = await endpoint(s)
     assert.deepEqual([h.summary.state, typeof h.summary.since], ['off', 'string'], '(g)')
-    // (a, unit) the helper dies → degraded, with how it ended
-    clients[0]._child.kill('SIGKILL')
+    // (a, unit) the helper dies → degraded, with how it ended (it runs only while a harness is on)
+    await req(s.sock, 'POST', '/on', {})
+    clients.at(-1)._child.kill('SIGKILL')
     await until(async () => (await req(s.sock, 'GET', '/status')).degraded)
     h = await endpoint(s)
     assert.deepEqual(cond(h, 'degraded').map((c) => c.exit), ['SIGKILL'], '(a) 降级')

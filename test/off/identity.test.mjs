@@ -125,7 +125,7 @@ test('compileIdentity: the signature shape; refuses /g /y, a wide name without a
   assert.throws(() => compileIdentity({ harness: 'codex', names: [{ name: 'codex', args: /x/g }] }), /codex.*\/g and \/y/)
   assert.throws(() => compileIdentity({ harness: 'codex', names: [{ name: 'codex', args: /x/y }] }), /\/g and \/y/)
   assert.throws(() => compileIdentity({ harness: 'codex', names: [{ name: 'codex' }], exclude: [{ name: 'node' }] }), /codex.*"node" is not one of the names/)
-  assert.throws(() => compileIdentity({ harness: 'codex', names: [{ name: 'codex' }], exclude: [{}] }), /needs name, name0, args or env/)
+  assert.throws(() => compileIdentity({ harness: 'codex', names: [{ name: 'codex' }], exclude: [{}] }), /exclude\[0\]/)
   assert.throws(() => compileIdentity({ harness: 'codex', names: [{ name: '/usr/bin/codex' }] }), /not a normalized program name/)
   assert.throws(() => compileIdentity({ harness: 'codex', names: [{ name: 'codex', args: '(' }] }), /not a regular expression/)
 })

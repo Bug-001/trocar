@@ -13,7 +13,7 @@
 // bytes carry its whole input (3.1:60). The bytes are untouched: every stitched block is located in the record
 // and field it came from (locate), so it resolves verbatim through a field-qualified text_ref (4.2:40, gate G1).
 // Leaf module.
-import { boardFlat, reqCountsFor, ctxTokens, normEvents, itemNodes } from './openai.mjs';
+import { boardFlat, reqCountsFor, ctxTokens, normEvents, itemNodes, REPLY_RULES, responsesEnded } from './openai.mjs';
 import { storedRequestBody } from './request-body.mjs';
 import { storedReply, noSpanWhy, replyPart, nodeParts, scanned } from './sse-spans.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
@@ -24,7 +24,7 @@ const parse = (s) => { if (typeof s !== 'string') return null; try { const v = J
 const bodyOf = (rec) => { const v = storedRequestBody(rec); return v && typeof v === 'object' ? v : null; }; // the record's one parse of its first client message
 // The server messages of a call, in order; an error envelope keeps them under resp.partial (same numbering as
 // ws_raw's m slices and as the text_ref field resp.messages.<j>).
-export function serverMessages(rec) {
+function serverMessages(rec) {
   const r = (rec && rec.resp) || {};
   const m = r.kind === 'ws' ? r.messages : (r.partial && r.partial.messages);
   return Array.isArray(m) ? m : [];
@@ -47,7 +47,7 @@ const hasClientDataFrame = (rec) => (Array.isArray(rec.ws_raw) ? rec.ws_raw : []
   const h = Buffer.from(f.h, 'base64');
   return h.length > 0 && (h[0] & 0x0f) <= 2;
 });
-export function unstoredRequestOf(rec) {
+function unstoredRequestOf(rec) {
   if (!rec || rec.transport !== 'ws' || rec.req_body != null || typeof rec.req_body_b64 === 'string' || !hasClientDataFrame(rec)) return null;
   const why = [];
   if (rec.ws_truncated === true) why.push('it was over the per-call size cap (ws_truncated: its frames keep only their headers)');
@@ -178,7 +178,7 @@ export function normRespWs(rec) {
 // of (one item = one message of a successor's context). An item no message closed is read from response.completed, item by item
 // (another item of the same reply may have been closed): there the path starts at the item's node in that message's output, and
 // the items stand in output order. Each message is scanned once.
-export function replyPartsWs(rec) {
+function replyPartsWs(rec) {
   const msgs = serverMessages(rec), held = []; // [output_index, j, item, path]
   let keyed = true;
   msgs.forEach((m, j) => {
@@ -216,10 +216,10 @@ function stitchOf(rec) {
 }
 
 // The dissector object the board's flat-lane assembler calls (D25: the shared layer names no wire; the
-// registry registers this under 'openai-responses-ws'). prepare (→ a planner whose context(rec) stitches) / roleOf / laneOf / agentOf / failed are the hooks a
+// registry registers this under 'openai-responses-ws'). prepare (→ a planner whose context(rec) stitches) / roleOf / laneOf / agentOf / ended are the hooks a
 // wire with a cross-record context provides.
 export const RESPONSES_WS = Object.freeze({
-  id: 'openai-responses-ws', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
+  id: 'openai-responses-ws', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'], fold: 'flat', rules: REPLY_RULES,
   roleOf,
   // one record at a time, in step order: a connection's calls are sequential, so step order is its seq order
   prepare: (read) => createChain(read),
@@ -232,6 +232,6 @@ export const RESPONSES_WS = Object.freeze({
   replyParts: (rec) => replyPartsWs(rec),
   reqCounts: (req) => reqCountsFor('responses', req),
   ctxTokens,
-  // a call failed when its terminal says so, or when no terminal arrived at all (the connection cut it)
-  failed: (norm, rec) => norm.stop_reason === 'error' || norm.stop_reason === 'failed' || !!(rec && rec.error),
+  // the reply's own terminal, as on HTTP; a call the connection cut before it is failed by the record's error (endpoints.mjs failedOf)
+  ended: responsesEnded,
 });

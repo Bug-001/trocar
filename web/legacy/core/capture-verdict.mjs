@@ -13,17 +13,18 @@ import { INTERVAL } from './poll.mjs'
 
 export const CAPH_MS = INTERVAL.status // the poll period of the pages that show this card while visible (4.4 §live-poll: `status` is the costliest read)
 
-// state → { cls }. cls: ok | warn | bad | dim. `loading`, `stale`, `unreadable` and `unrecognized` are the board's read states.
+// state → { cls }: 1.5 §采集状态's 灯 / 点 column — bad = 坏, warn = 注意, ok = the status dot, dim = 不点灯. Every face draws this cls.
+// `loading`, `stale`, `unreadable` and `unrecognized` are the board's read states.
 const LOOK = Object.freeze({
-  unreadable: { cls: 'warn' },
+  unreadable: { cls: 'dim' },
   'not-running': { cls: 'bad' }, 'not-responding': { cls: 'bad' },
-  failing: { cls: 'bad' },
-  unknown: { cls: 'warn' },
+  failing: { cls: 'warn' },
+  unknown: { cls: 'dim' },
   off: { cls: 'dim' },
   ok: { cls: 'ok' },
   residue: { cls: 'warn' },
   'not-installed': { cls: 'dim' },
-  loading: { cls: 'dim' }, stale: { cls: 'warn' }, unrecognized: { cls: 'warn' },
+  loading: { cls: 'dim' }, stale: { cls: 'dim' }, unrecognized: { cls: 'dim' },
 })
 const list = (x) => (Array.isArray(x) ? x : [])
 const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {})
@@ -122,7 +123,7 @@ export function agentVerdicts(doc, ov = null) {
   for (const g of list(doc && doc.failures && doc.failures.groups)) {
     if (!g || g.harness == null) continue
     const r = row(g.harness)
-    if (g.last_ts && (!r.lastFailure || String(g.last_ts) > String(r.lastFailure))) r.lastFailure = g.last_ts
+    if (g.level === 'problem' && g.last_ts && (!r.lastFailure || String(g.last_ts) > String(r.lastFailure))) r.lastFailure = g.last_ts // a newer note is not a failure (C.3 `latest`)
   }
   for (const c of list(doc && doc.changed)) if (c && c.harness != null) row(c.harness)
   for (const [id, t] of Object.entries(topo)) { const r = row(id); r.topology = t || null; r.findings = t && Array.isArray(t.findings) ? t.findings : null }

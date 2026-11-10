@@ -29,6 +29,7 @@ const K = STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES
 // one cold read as the worker reads, until no member is above the reduction frontier and its background is done → {calls, truncated,
 // retained, blocks}
 const READ = `${TICK}
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const fs = await import('node:fs')
 const { runQuery } = await import(${JSON.stringify(QUERY)})
 const { extendSession } = await import(${JSON.stringify(new URL('../../src/query/named/session.mjs', import.meta.url).href)})
@@ -46,7 +47,7 @@ const before = process.memoryUsage().heapUsed
 // step-order columns. In a function of its own, so the top-level frame's registers keep no answer.
 const ask = async () => {
   let doc = await runQuery('session', { id, limit: '20' }, { home, writer: true, progress: tick })
-  while (await extendSession({ home, writer: true, progress: tick }, id, Infinity));
+  await drain(() => extendSession({ home, writer: true, progress: tick }, id, Infinity))
   doc = await runQuery('session', { id, limit: '20' }, { home, writer: true, progress: tick })
   return { calls: doc.lanes.reduce((n, l) => n + l.count, 0), truncated: doc.truncated }
 }
@@ -56,8 +57,11 @@ const retained = process.memoryUsage().heapUsed - before
 const blocks = defs(fs.readFileSync(projectionFile(home, id)))
 console.log(JSON.stringify({ calls, truncated, retained, blocks }))`
 // single-threaded: a concurrent compile job still in flight holds a closure and its context across the read's last GCs (+1.33 MB on
-// one read in about two at live(0.12)), a V8 artefact that is not what the read keeps
-const cold = (home, id) => once(['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', ...heapFlags(), '--input-type=module', '-e', READ, home, id], 'a cold read')
+// one read in about two at live(0.12)), a V8 artefact that is not what the read keeps. No bytecode flushing: on node 26 the bytecode
+// compiled before the baseline is flushed by the read's GCs in some reads and not in others (the 2N read measured 1.07 MB apart with
+// heap snapshots that differ by 0.14 MB, all of it bytecode: 933 against 576 B a call), so the baseline is code the read may give back.
+// The flag isolates the data the read retains, which is what the budget is about: the product runs without it
+const cold = (home, id) => once(['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', '--no-flush-bytecode', ...heapFlags(), '--input-type=module', '-e', READ, home, id], 'a cold read')
 const read = async (opts, calls) => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, ...opts })
   s.append(calls)
@@ -89,6 +93,7 @@ const BLOCK_COLUMNS = 77
 // from its log, not refolded: 3.5:42); the read extracts it, so each round grows on a store of its own (a fresh fs object: the
 // projection opened again), as a worker forked again does.
 const GROWN = `${TICK}
+const { drain } = await import(${at('../helpers/bounded.mjs')})
 const fs = await import('node:fs')
 await import(${JSON.stringify(QUERY)})
 const { extendSession } = await import(${at('../../src/query/named/session.mjs')})
@@ -100,7 +105,7 @@ const [home, opts, N] = [process.argv[1], JSON.parse(process.argv[2]), Number(pr
 const s = bigSession({ home, ...opts })
 const grow = async (own) => {
   for (let n = 0; n < N; n += 100) { s.append(Math.min(100, N - n)); tick() }
-  while (await extendSession({ home, fs: own, writer: true, progress: tick }, s.id, Infinity));
+  await drain(() => extendSession({ home, fs: own, writer: true, progress: tick }, s.id, Infinity))
 }
 console.log(JSON.stringify(s.id))
 for await (const _ of (await import('node:readline')).createInterface({ input: process.stdin })) {
@@ -188,14 +193,16 @@ test('the plan of a cut session keeps at most PLAN_PER_MEMBER a member', async (
 // the shown calls grow with the session between steps, and the cut moves at most once.
 // The session is grown and extracted in a process of its own (grower: growing it is not what is measured); the reader, one process
 // with a small heap kept across the reads (readerFlags), reads it on each line it is sent and answers with what it showed.
-// Message Threads, subagents side by side, past the room of a 112 MB reader: the reader's heap sets how big the session is (a fold of
+// Message Threads, subagents side by side, past the room of a 160 MB reader: the reader's heap sets how big the session is (a fold of
 // it holding twice the budget) and the cut's step (a tenth of the rows that fit, a power of two: 128 calls at 112 MB, 256 at 160 MB,
-// measured 2026-10-31), so a smaller reader is a smaller session past the same bound. Not below: the --since reader holds whole pages
-// of 16 KB tool names beside its reads, and at 80 MB it ran out of heap.
+// measured 2026-10-31), so a smaller reader is a smaller session past the same bound. Not below: the fold stops at its line (budget
+// less half a step), then writing the answer files of this shape (16 KB tool names, a pack of 512 calls) holds 13–16 MB more, and
+// node 26 grows its new space to 8 MB inside a 112 MB limit where node 22 keeps 2 MB: at 112 MB the live heap
+// reached 84–91 MB past a fold line of 71, and the reader ran out of heap (95 MB live on node 26, 104 MB on node 22) in some runs.
 // A pending answer is asked again until it carries none; it ticks only when its done or work moved (as the CLI counts progress,
 // src/query/client.mjs), so an answer stuck pending stops ticking and the wait on the reader fails after STALL.
 const MOVED = `const moved = (d, at) => { const now = d.pending ? JSON.stringify([d.pending.done, d.pending.work]) : null; if (now !== null && now !== at) tick(); return now }`
-const PAST = { heapMb: 112, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12, names: 16_000 } }
+const PAST = { heapMb: 160, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12, names: 16_000 } }
 const GROWING = `${TICK}
 ${MOVED}
 const { runQuery } = await import(${JSON.stringify(QUERY)})

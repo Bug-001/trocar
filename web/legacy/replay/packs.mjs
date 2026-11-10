@@ -14,11 +14,11 @@
 //     `whole` = the tail's bytes from 0 (a rewritten tail): what it held before is let go first
 //   applyHead(desk, head) → the `session --head` answer as the desk's head: its scalars and its lane heads
 // Lane heads: a held tail's (the highest n) over desk.head's (the `session --head` answer); packs hold none. The worker writes the
-// head only when a part only it carries changes and a poll round reads it before the tails, so a held tail's header is never older
-// than the head's.
+// head only when a part only it carries changes and a poll round reads it before the tails: a held tail's header lags the head's by
+// one round at most, as at a first read's end (the head without pending, then the tail with the lane's count; 1.2 §编号).
 // desk.newest = the newest member the desk holds in record order (placeOf / after): the head's mark or a held `{r}` id (1.5 K-32).
 
-import { changed, addRow, removeRow, newHeld, boardDef } from './model.mjs'
+import { changed, addRow, removeRow, newHeld, boardDef, putLane, probeCount } from './model.mjs'
 
 const enc = new TextEncoder(), dec = new TextDecoder()
 
@@ -176,19 +176,22 @@ function mergeHeads(desk, touched) {
     let best = null, r = -1
     for (const o of desk.files.values()) { const h = o.heads.get(lane); if (h && rank(o) > r) { best = h; r = rank(o) } }
     best ??= desk.head?.lanes?.find((h) => h.lane === lane)
-    if (best) desk.lanes.set(lane, best); else desk.lanes.delete(lane)
+    if (best) putLane(desk, best); else desk.lanes.delete(lane)
   }
 }
 
-const SCALARS = ['mark', 'pending', 'truncated', 'meta', 'stats', 'logged', 'probes', 'unknown']
+const SCALARS = ['mark', 'pending', 'truncated', 'meta', 'stats', 'unknown'] // logged and probes: set below, with their defaults
 export function applyHead(desk, head) {
   changed(desk)
   const touched = new Set([...(desk.head?.lanes || []), ...(head.lanes || [])].map((h) => h.lane))
+  // a pack rewritten under its number: the ledger was read over the old text, so it is walked again (2.4); a new pack only adds to it
+  const tags = new Map((desk.head?.packs || []).map((p) => [p.n, p.tag]))
+  if ((head.packs || []).some((p) => tags.has(p.n) && tags.get(p.n) !== p.tag)) for (const h of desk.held.values()) { h.ledgered = false; h.cursors = new Set() }
   desk.head = head
   held(desk, head.mark)
   for (const k of SCALARS) desk[k] = head[k] ?? null
-  desk.logged = head.logged ?? 0; desk.probes = head.probes ?? 0
-  if (!head.pending) desk.firstPending = false
+  desk.logged = head.logged ?? 0; desk.probes = probeCount(head.probes)
+  if (!head.pending || head.pending.seen) desk.firstPending = false
   desk.errors = [...(head.errors || []), ...desk.errors.filter((x) => FAILS.has(x))]
   mergeHeads(desk, touched)
 }

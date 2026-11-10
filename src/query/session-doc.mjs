@@ -13,7 +13,7 @@ import { posCmp } from './projection.mjs';
 import { QueryArgError } from './named/index.mjs';
 
 /** `--limit`: rows a page holds at most, its default and its ceiling (3.5 §会话读). */
-export const LIMIT_MAX = 1000;
+const LIMIT_MAX = 1000;
 // One page of rows holds at most this much serialized (3.5 §会话读 ①).
 export const PAGE_BYTES = 1048576;
 
@@ -36,7 +36,7 @@ function rowAt(log, rid, off) {
   return v ? log.read(...v) : null;
 }
 // the lane's line as it stood at byte `off`, or null
-export function laneAt(log, key, off) {
+function laneAt(log, key, off) {
   let at = log.lane(key);
   while (at && at[0] > off) { const p = log.read(...at).p; at = p == null ? null : [p]; }
   return at ? log.read(...at) : null;
@@ -46,7 +46,7 @@ const headOf = (o) => { if (!o || o.l == null) return null; const { l, p, ...h }
 export const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call: !!r.is_llm, response: { status: r.status ?? null } });
 
 /** columns(slotOf) → the step-order columns of a fold log's calls, by each call's slot in the projection (`slotOf`): its row's ts, its
- *  lane (`ln`, the lane keys interned in `keys`), how many `user` events it has (`uc`) and whether it has a compaction or summarize
+ *  lane (`ln`, the lane keys interned in `keys`), how many `user` events it has (`uc`) and whether it has a compaction, landing or summarize
  *  event (`cs`), its context bytes (`cx`), its largest composition bucket and share (`cb`) and its flag bits (`fl`, flagsOf); the rids in step order, and each lane's rids and slots in step order (`by`, by lane int); the live lane keys. sync()
  *  brings them to the log's frontier from the lines past the last sync (and keeps the lane headers it reads: `heads`), each moved row taken out and put back by binary search: a
  *  warm state and a cold open build the same columns. */
@@ -54,8 +54,9 @@ export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array
   cx: new Float64Array(0), cb: new Uint8Array(0), fl: new Uint8Array(0),
   keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
-// The flag bits of a step: one definition with the board (src/view/head-cols.mjs). A cache break counts when its cause is outside the quiet
-// ones (web/legacy/core/metrics.mjs QUIET_CAUSES).
+// The flag bits of a step: one definition with the board (src/view/head-cols.mjs). The cacheBreak bit marks a changed prefix: the cause is
+// outside the quiet ones (web/legacy/core/metrics.mjs QUIET_CAUSES), the fact the context window's change line draws (1.4 ④). Whether
+// the step is a cache break is 2.2's call, which also reads the hit ratio.
 export { FLAG };
 const QUIET = new Set(['append', 'first-call', 'volatile-nonce-only']);
 const EVENT_FLAG = { user: FLAG.user, summarize: FLAG.summarize, spawn: FLAG.spawn };
@@ -120,12 +121,16 @@ function slot(cols, k) {
   for (const c of ['ln', 'uc', 'cs', 'cx', 'cb', 'fl']) { const a = new cols[c].constructor(n); a.set(cols[c]); cols[c] = a; }
 }
 const laneInt = (cols, key) => { let v = cols.keys.get(key); if (v === undefined) cols.keys.set(key, (v = cols.keys.size)); return v; };
-export function sync(cols, log) {
+// sync(cols, log, progress) → the columns at the log's frontier. changedSince gives the newest first: walked from the oldest, an insert
+// lands near the end of the arrays. `progress` hears every SYNC_ROWS rows, so a whole sync is not taken for a wedged worker.
+const SYNC_ROWS = 256;
+export function sync(cols, log, progress = null) {
   const f = log.frontier;
   if (f == null || f === cols.at) return cols;
   const ch = log.changedSince(cols.at);
-  for (const rid of ch.rids) {
-    const k = cols.slotOf(rid);
+  for (let i = ch.rids.length - 1; i >= 0; i--) {
+    if (progress && i % SYNC_ROWS === 0) progress();
+    const rid = ch.rids[i], k = cols.slotOf(rid);
     if (k === undefined) throw new Error(`the fold log names ${rid}, which the context projection has no row for`);
     const old = cols.ts[k], o = log.peek(...log.latest(rid)), r = rowOf(o);
     if (old !== undefined) {
@@ -139,7 +144,7 @@ export function sync(cols, log) {
       const l = byLane(cols, cols.ln[k]), j = placeOf(cols, cols.ts[k], rid, l.rids);
       l.rids.splice(j, 0, rid); l.slots.splice(j, 0, k);
       cols.uc[k] = o.e.filter((e) => e.type === 'user').length;
-      cols.cs[k] = o.e.some((e) => e.type === 'compaction' || e.type === 'summarize') ? 1 : 0;
+      cols.cs[k] = o.e.some((e) => e.type === 'compaction' || e.type === 'compaction-landed' || e.type === 'summarize') ? 1 : 0;
       cols.cx[k] = r.ctx || 0; cols.cb[k] = compByte(r.comp); cols.fl[k] = flagsOf(r, o.e);
     } else { cols.ts[k] = undefined; cols.ln[k] = -1; cols.uc[k] = 0; cols.cs[k] = 0; cols.cx[k] = 0; cols.cb[k] = 0; cols.fl[k] = 0; }
   }
@@ -210,12 +215,12 @@ function itemsOf(cols, log) {
   return c.view;
 }
 
-/** viewOf({id, log, cols, members, plan, mark}) → what every answer at the log's frontier reads besides its page: the rows' order
+/** viewOf({id, log, cols, members, plan, mark, progress}) → what every answer at the log's frontier reads besides its page: the rows' order
  *  (cols), the lane headers in the order of their first row, stats (the last frontier line's `st`), logged, probes, unknown, the
  *  failed members, meta (the plan's facts of the index rows, src/query/rows.mjs sessionFacts), and the cut (`plan.read`, the index rows the reduction reads, in step order) and mark the
  *  records are taken from. */
-export function viewOf({ id, log, cols, members, plan, mark }) {
-  sync(cols, log);
+export function viewOf({ id, log, cols, members, plan, mark, progress }) {
+  sync(cols, log, progress);
   const f = log.frontier, its = itemsOf(cols, log);
   const at = (rid) => (tsOf(cols, rid) === undefined ? Infinity : placeOf(cols, tsOf(cols, rid), rid));
   const head = (k) => cols.heads.get(k) || cols.heads.set(k, headOf(log.read(...log.lane(k)))).get(k); // a loaded column's: read once
@@ -232,11 +237,11 @@ export function viewOf({ id, log, cols, members, plan, mark }) {
     keys.splice(lo, 0, k);
   }
   const lanes = cols.sorted.keys.map(head);
-  const main = lanes.find((l) => l.kind === 'main'), fl = f == null ? null : log.read(f);
+  const fl = f == null ? null : log.read(f);
   return {
     log, f, cols, plan, mark, lanes, failed: its.failed, logged: its.logged, probes: its.probes, unknown: its.unknown,
     stats: fl ? fl.st : { calls: 0, streams: 0, subagents: 0, monitors: 0, compactions: 0, totalIn: 0, totalOut: 0, peakCtx: 0 },
-    meta: sessionMetaOfFacts({ ...plan.facts.facts(), title: main ? main.task ?? null : null }),
+    meta: sessionMetaOfFacts(plan.facts.facts()), // the title is titleOf's (named/session.mjs stateAt)
     has: (rid) => { const k = cols.slotOf(rid); return k !== undefined && cols.ts[k] !== undefined; },
   };
 }

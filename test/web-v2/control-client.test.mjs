@@ -125,3 +125,14 @@ test('K-30: a 403 to a post fires onForbidden once; later get() and post() send 
   })
   assert.equal(fired, 1)
 })
+
+// 1.11 §改级别 回执: no answer to the plan means nothing was written; no answer to a confirm (the first, or one after a stale plan) means
+// the write may have landed. planConfirm says which (confirmSent), over the api shape post() gives: status 0, never a throw.
+test('planConfirm: confirmSent is true exactly when a confirm went out before the answer that did not arrive', async () => {
+  const LOST = { ok: false, status: 0, data: null, error: 'fetch failed' }
+  const PLAN = (id) => ({ ok: false, status: 409, data: { need: 'confirm', plan: { class: 'files', keep: 'log' }, plan_id: id }, error: 'HTTP 409' })
+  const run = async (answers) => planConfirm({ api: { control: async () => answers.shift() }, verb: 'classes', body: { kind: 'set', class: 'files', keep: 'log' }, ask: async () => true })
+  assert.equal((await run([LOST])).confirmSent, false, 'the plan request got no answer')
+  assert.equal((await run([PLAN('p1'), LOST])).confirmSent, true, 'the confirm got no answer')
+  assert.equal((await run([PLAN('p1'), PLAN('p2'), LOST])).confirmSent, true, 'the confirm after a stale plan got no answer')
+})

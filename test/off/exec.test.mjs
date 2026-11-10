@@ -8,7 +8,7 @@ import path from 'node:path'
 import net from 'node:net'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { execTool, runAsync } from '../../src/off/exec.mjs'
+import { execTool, runAsync, viaShell } from '../../src/off/exec.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { takeRefusals } from '../helpers/no-real-os.mjs'
 
@@ -155,7 +155,7 @@ test('0.1 §3 src/off, src/cli and src/netenv reach node:child_process only thro
   assert.deepEqual(childProcessUsers(root).sort(), ['src/cli/b.mjs', 'src/cli/d.mjs', 'src/netenv/c.mjs', 'src/off/a.mjs'])
 })
 
-test('runAsync quiet settles on the child\'s exit, not when something it started lets go of the pipes; past the timeout it is status null', { skip: process.platform === 'win32', timeout: 20_000 }, async () => {
+test('runAsync quiet settles on the child\'s exit, not when something it started lets go of the pipes; past the timeout it is status null', { skip: process.platform === 'win32' && 'its tools are shell-script stubs', timeout: 20_000 }, async () => {
   // the stubs' own `sleep` must resolve: with PATH = bin alone it is "not found" (127) at once, so the timeout case only passed when the machine was slow
   const bin = tmpDir('trocar-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
   stub(bin, 'opener', 'sleep 5 & exit 0'); stub(bin, 'stuck', 'exec sleep 5'); stub(bin, 'nope', 'exit 3')
@@ -166,7 +166,7 @@ test('runAsync quiet settles on the child\'s exit, not when something it started
   assert.equal((await runAsync('nope', [], { env, timeout: 3000, quiet: true })).status, 3)
 })
 
-test('MA15 an answer already in the pipe is whole when the event loop gets to it only after the limit: a callback stalled past it costs nothing', { skip: process.platform === 'win32', timeout: 20_000 }, async () => {
+test('MA15 an answer already in the pipe is whole when the event loop gets to it only after the limit: a callback stalled past it costs nothing', { skip: process.platform === 'win32' && 'its tools are shell-script stubs', timeout: 20_000 }, async () => {
   const bin = tmpDir('trocar-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
   stub(bin, 'answers', 'echo the-whole-answer')
   await runAsync('answers', [], { env, timeout: 5000 }) // macOS spends ~100 ms on a new script's first exec: the rounds below are about the answer, not that
@@ -187,7 +187,7 @@ test('MA15 an answer already in the pipe is whole when the event loop gets to it
   } finally { client.destroy(); server.close() }
 })
 
-test('MA16 the limit is a limit: what does not answer is null just past it, whether it ignores TERM, leaves a grandchild on the pipe, or simply hangs', { skip: process.platform === 'win32', timeout: 20_000 }, async () => {
+test('MA16 the limit is a limit: what does not answer is null just past it, whether it ignores TERM, leaves a grandchild on the pipe, or simply hangs', { skip: process.platform === 'win32' && 'its tools are shell-script stubs', timeout: 20_000 }, async () => {
   const bin = tmpDir('trocar-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
   const tools = { deaf: "trap '' TERM\nexec sleep 30", holder: 'sleep 2 & exit 0', hung: 'exec sleep 30' }
   for (const [tool, body] of Object.entries(tools)) {
@@ -198,4 +198,26 @@ test('MA16 the limit is a limit: what does not answer is null just past it, whet
     assert.equal(r.status, null, tool)
     assert.ok(Date.now() - t0 < 1500, `${tool}: ${Date.now() - t0} ms`)
   }
+})
+
+// win32: npm and npx are batch files (npm.cmd); spawn finds none by its bare name (ENOENT) and Node refuses to start one without a shell. The one
+// exec seam runs any tool PATH + PATHEXT resolve to a .cmd / .bat through cmd.exe /d /s /c, every argument quoted; an .exe and every other OS are
+// untouched, and an argument cmd.exe cannot quote is refused before anything runs.
+test('execTool on win32: a tool that resolves to a .cmd runs through cmd.exe /d /s /c with its path and arguments; an .exe and other OSes run as named', () => {
+  const dir = tmpDir('trocar-exec-win-'), spaced = path.join(dir, 'Program Files', 'nodejs')
+  fs.mkdirSync(spaced, { recursive: true }); fs.writeFileSync(path.join(spaced, 'npm.CMD'), ''); fs.writeFileSync(path.join(dir, 'git.EXE'), '') // PATHEXT's case: win32's disk is case-blind, the disk this runs on may not be
+  const env = { PATH: `${dir};${spaced}`, PATHEXT: '.COM;.EXE;.BAT;.CMD' }
+  const seen = []
+  const run = (file, args, opts) => (seen.push({ file, args, verbatim: opts.windowsVerbatimArguments === true }), { status: 0, stdout: '', stderr: '' })
+  execTool('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { run, env, platform: 'win32' })
+  execTool('git', ['status'], { run, env, platform: 'win32' })
+  execTool('npm', ['install'], { run, env, platform: 'darwin' })
+  const [npm, git, mac] = seen
+  assert.deepEqual([npm.file, npm.args.slice(0, 3), npm.verbatim], ['cmd.exe', ['/d', '/s', '/c'], true])
+  const line = npm.args[3]
+  assert.ok(line.toLowerCase().startsWith(`""${path.join(spaced, 'npm.cmd')}" `.toLowerCase()) && line.endsWith('"'), line)
+  assert.deepEqual(line.slice(1, -1).split('" ')[1].split(' '), ['install', '--omit=dev', '--no-audit', '--no-fund'])
+  assert.deepEqual([git.file, git.args, git.verbatim], ['git', ['status'], false])
+  assert.deepEqual([mac.file, mac.args], ['npm', ['install']])
+  for (const bad of ['a"b', '%PATH%', 'x!y', 'a\nb']) assert.throws(() => viaShell('npm', [bad], { platform: 'win32', env }), { code: 'EUNSAFEARG' }, bad)
 })

@@ -136,3 +136,10 @@ test('trust plan: owned files — in an agent\'s directory only with "trocar" in
   assert.throws(() => plan(() => ({ owned: [sh, { ...P, path: `${DIR}/bin/trocar-helper` }] })), /holds launch shims only/, 'the shim dir is first on PATH: nothing else of trocar goes in it')
   assert.throws(() => plan(() => ({ owned: [{ ...P, role: 'daemon' }] })), /unknown owned-file role/)
 })
+
+test('trust plan: a certificate block goes only into the user\'s own CA file — never a login file, trocar\'s own tree, or a package-manager or system file (4.11 rule U)', () => {
+  const block = (p) => () => plan(() => ({ entries: [{ kind: 'text', format: 'pem-block', path: p }] }))
+  const ok = block('/h/certs/corp.pem')()
+  assert.deepEqual([ok.entries[0].path, ok.entries[0].pem], ['/h/certs/corp.pem', CA.certPem], 'the root is what is placed')
+  for (const p of ['/h/.bashrc', '/h/.trocar/ca/x.pem', `${DIR}/ca/x.pem`, '/h/.npm-global/lib/ca.pem', '/etc/ssl/certs/ca.pem', '/usr/share/ca.pem']) assert.throws(block(p), /own CA file/, p)
+})

@@ -240,3 +240,21 @@ test('C.3「已解决的组」: such a failure from before a daemon restart that
     } finally { b.done() }
   }
 })
+
+test('1.6 C.3 failures.since: an install begun inside the 24 h starts the window; a previous install\'s failures stay in flows/ but are not this one\'s', () => {
+  const b = home()
+  try {
+    const old = { ts: at(5 * H), event: 'failure', where: 'uninstall', code: 'entry-not-undone', reason: 'r' }
+    b.manifest({ version: 3, install: { state: 'complete' }, created_at: at(H), entries: [], files: [] })
+    b.flows([old, { ts: at(H / 2), event: 'daemon-start', pid: 4242 }]); b.lock(); b.state('on', at(H / 2))
+    const bytes = fs.readFileSync(path.join(b.c, 'flows', `${day(old.ts)}.ndjson`), 'utf8')
+    const r = b.health()
+    assert.deepEqual([r.summary.state, r.collector.failures, r.read.since], ['ok', [], at(H)])
+    assert.equal(fs.readFileSync(path.join(b.c, 'flows', `${day(old.ts)}.ndjson`), 'utf8'), bytes, 'nothing is deleted')
+    b.flows([{ ts: at(H / 4), event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'r' }])
+    assert.deepEqual([b.health().summary.state, b.health().collector.failures.map((g) => g.last.code)], ['failing', ['lookup-miss']])
+    // the same old failure under an install older than the window counts, as before
+    b.manifest({ version: 3, install: { state: 'complete' }, created_at: at(100 * H), entries: [], files: [] })
+    assert.deepEqual([b.health().read.since, b.health().collector.failures.map((g) => g.last.code).sort()], [at(24 * H), ['entry-not-undone', 'lookup-miss']])
+  } finally { b.done() }
+})

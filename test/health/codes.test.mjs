@@ -85,7 +85,7 @@ test('D38 the scan fails on a name outside the set (planted tree)', () => {
 // 4.6 §记录「连接行」: an untracked / untrusted row's class is its reason's — forwarded by design is expected, every other reason
 // and none is a failure. The by-design lists are the spec's words, written out here (W38): a reason added to either set must be added in both.
 test('4.6 连接行: untracked / untrusted rows forwarded by design are expected; pid-unresolved, a trust reason and no reason stay failures', () => {
-  const SPEC = { untracked: ['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user'], untrusted: ['not-verified', 'outside-host-set'] }
+  const SPEC = { untracked: ['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user'], untrusted: ['not-verified', 'forward-only-host', 'outside-host-set'] }
   for (const nc of Object.keys(SPEC)) {
     for (const reason of [null, ...new Set([...UNTRACKED_REASONS, ...TRUST_REASONS])]) {
       const row = { flow_id: 'f', decision: 'splice', not_captured: nc, reason }
@@ -210,9 +210,9 @@ test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot i
 // The table below is the spec's §12 table written out by hand (code, where, class), not read back from the module, so a name
 // added, dropped or moved in codes.mjs and not in the RFC turns this red.
 const SPEC_12_FAILURES = [
-  ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['engine-port-taken', 'ingress'], ['upstream-unavailable', 'ingress'],
+  ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['ingress-challenge-unanswered', 'ingress'], ['engine-port-taken', 'ingress'], ['door-unconfirmed', 'ingress'], ['upstream-unavailable', 'ingress'],
   // the kernel family (fallback-active, forwarder-*) retired with the kernel on both arches (D47 and its win32 twin): no producer anywhere
-  ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'],
+  ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'], ['system-proxy-unreadable', 'netenv'],
   ['task-register-failed', 'install'], ['launchd-register-failed', 'install'], // the darwin autostart (4.9 §11)
   ['elevated-token', 'start'], ['root-token', 'start'], // elevated-token's darwin name (4.9 §11)
 ] // every row of the §12 table is the class 失败

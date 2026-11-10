@@ -6,10 +6,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { pageModel, holdOrder } from '../../web/src/screens/capture/model.mjs'
 import { logModel } from '../../web/src/screens/capture/log-model.mjs'
-import { captureVerdict } from '../../web/legacy/core/capture-verdict.mjs'
+import { captureVerdict, CAPH_MS } from '../../web/legacy/core/capture-verdict.mjs'
+import { capCard } from '../../web/src/screens/overview/model.mjs'
 import { ALIASES, harnessKey } from '../../web/legacy/core/chips.mjs'
 import { COMMANDS, CHANGE_REMOVAL, UNKNOWN_REASON, CONDITION_KIND, LOG } from '../../web/legacy/labels/capture.mjs'
 import { redactUrlCredentials } from '../../web/legacy/core/sensitive.mjs'
+import { mark } from '../../web/legacy/core/ui.mjs'
 import { failureWord, FAILURE_WORDS } from '../../src/cli/words.mjs'
 import { STATUS_REASONS } from '../../src/health/codes.mjs'
 import { foldFlows } from '../../src/health/flows.mjs'
@@ -75,6 +77,19 @@ test('M3: a proxy URL\'s userinfo is hidden everywhere in the model, product and
   assert.ok(all.includes('***@'))
   for (const s of [r.copy, r.diag]) assert.ok(s.includes('***@'), s)
   for (const s of [all, r.copy, r.diag, m.service.copy, m.service.diag]) for (const bad of ['alice:pw', 'PlantedVpnName', 'PlantedProductName']) assert.equal(s.includes(bad), false, bad)
+})
+
+test('1.6 C.3 inferred: a hop reached by an inferred edge is marked inferred on the path, as an inferred node is; a measured one is not', () => {
+  const INF = mark('inf').replace(/<[^>]*>/g, '')
+  const pathOf = (edges, nodes = [{ id: 'a', name: 'claude-code' }, { id: 'x', name: 'internet' }]) => {
+    const r = rowOf(model(doc({ hs: { codex: {} }, topology: { codex: { at: T, routing: 'proxy', captured: false, nodes, edges, branches: [{ path: ['a', 'x'] }] } } })), 'codex')
+    const p = r.tech.find((x) => x.k === 'path')
+    return p.v.text ?? p.v.mono ?? JSON.stringify(p.v)
+  }
+  assert.ok(pathOf([{ from: 'a', to: 'x', via: 'direct', inferred: true }]).includes(`internet ${INF}`))
+  assert.ok(!pathOf([{ from: 'a', to: 'x', via: 'direct' }]).includes(INF))
+  assert.ok(!pathOf([{ from: 'x', to: 'a', via: 'direct', inferred: true }]).includes(INF), 'only the edge that reaches the hop on this path')
+  assert.ok(pathOf([{ from: 'a', to: 'x', via: 'direct' }], [{ id: 'a', name: 'claude-code' }, { id: 'x', name: 'internet', inferred: true }]).includes(`internet ${INF}`))
 })
 
 // the userinfo a proxy URL can carry: [userinfo as written, the parts that must not show]
@@ -197,4 +212,72 @@ test('M9: the conditions the collector folds land on their agent row or in the s
   assert.equal(m.service.conds.length, critical.filter((c) => c.harness == null).length + 1)
   assert.ok(m.service.conds.some((s) => s.includes(UNKNOWN_REASON)))
   assert.ok(m.service.tech.some((p) => plain(p.v) === 'made-up-kind-3f2a'))
+})
+
+test('M3: every technical-details value on both pages, shown or copied, hides a proxy URL\'s userinfo — the server\'s free-text reasons included', () => {
+  const url = 'http://alice:pw-7d2e@proxy.example:8080', secret = ['alice', 'pw-7d2e']
+  const why = `upstream ${url} refused`
+  const groups = [{ level: 'problem', where: 'engine', code: 'upstream-refused', reason: why, harness: 'codex', count: 1, first_ts: T, last_ts: T },
+    { level: 'expected', where: 'connection', code: 'upstream-refused', reason: why, count: 1, first_ts: T, last_ts: T }]
+  const errors = [{ where: 'capture health', reason: why }, { where: 'the install record', reason: why }, { where: 'elsewhere', reason: why }]
+  const d = doc({ topology: { codex: { at: T, routing: 'proxy', captured: true, nodes: [], branches: [], notes: [why] } },
+    extra: { failures: { since: T, groups }, errors, linger: 'unknown', linger_reason: why, relayed: 'unknown', relayed_reason: why } })
+  d.daemon.error = why
+  const pairsText = (pairs) => pairs.map(({ k, v }) => `${k}: ${plain(v)}`).join('\n')
+  const m = model(d), log = logModel(d), bad = logModel({ unreadable: why })
+  const tech = [m.service.tech, ...m.rows.map((r) => r.tech), m.changes && m.changes.tech, ...log.rows.map((r) => r.tech), log.partial, log.manifest,
+    log.foot && log.foot.errors, bad.foot.errors].filter(Boolean)
+  const seen = [...tech.map(pairsText), m.service.copy, ...m.rows.map((r) => r.copy), JSON.stringify(m), JSON.stringify(log), JSON.stringify(bad)]
+  assert.ok(seen.some((s) => s.includes('***@proxy.example')))
+  for (const s of seen) for (const x of secret) assert.equal(s.includes(x), false, `${x} in ${s}`)
+})
+
+// 1.5 §采集状态: the table's last column (灯 / 点) is the lamp every face draws for the state — the verdict, the overview capture card's
+// head and the capture page's service-row gutter. Rows and expectations are read from the spec table itself; the 覆盖 row covers the
+// stale read and the first-answer 「读取中」. A grey `dim` lamp is the kit's unlit dot (1.5 §前置定义 灯), so it counts as none.
+test('the capture state lamp follows 1.5 §采集状态 on the verdict, the overview card and the capture page', () => {
+  const S15 = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.5-states-aesthetics.md', import.meta.url), 'utf8')
+  const sec = S15.slice(S15.indexOf('## 采集状态'))
+  const rows = sec.slice(0, sec.indexOf('\n\n', sec.indexOf('| 次序'))).split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| 次序')).map((l) => l.split('|').map((c) => c.trim()))
+  const LAMP = [['不点灯', 'none'], ['坏', 'bad'], ['注意', 'warn'], ['留意', 'note'], ['状态点', 'ok']]
+  const lit = (cls) => (['ok', 'warn', 'bad', 'note'].includes(cls) ? cls : 'none')
+  const want = new Map()
+  for (const [, , st, , lamp] of rows) {
+    if (lamp === '—') continue // the 「· 读不全」 suffix row lights nothing of its own
+    const l = LAMP.find(([w]) => lamp.startsWith(w))
+    assert.ok(l, `a lamp word this test knows: ${lamp}`)
+    const name = /^`([a-z-]+)`$/.exec(st)?.[1] ?? (st.startsWith('读不出') ? 'unreadable' : st.startsWith('没见过') ? 'unrecognized' : st.includes('轮询') ? 'stale' : null)
+    assert.ok(name, `a row of the table maps to a state: ${st}`)
+    want.set(name, l[1])
+    if (name === 'stale') want.set('loading', l[1])
+  }
+  assert.ok(want.size >= 12, [...want.keys()].join(' '))
+  const now = Date.parse(T) + 60e3, fresh = now
+  const input = (state) => state === 'loading' ? { data: null, okAt: null }
+    : state === 'stale' ? { data: doc(), okAt: now - 2 * CAPH_MS - 1 }
+      : state === 'unreadable' ? { data: { ...doc(), health: undefined, unreadable: 'r' }, okAt: fresh }
+        : { data: doc({ state: state === 'unrecognized' ? 'zz-new' : state }), okAt: fresh }
+  for (const [state, lamp] of want) {
+    const c = input(state), v = captureVerdict(c.data, { okAt: c.okAt, now })
+    assert.equal(v.state, state)
+    assert.equal(lit(v.cls), lamp, `${state}: verdict`)
+    assert.equal(lit(capCard(c, now).cls), lamp, `${state}: overview card head`)
+    const gut = pageModel(c.data, v).service.gut
+    assert.ok(gut, `${state}: the service row always draws its lamp, as the card head does`)
+    assert.equal(lit(gut), lamp, `${state}: capture page gutter`)
+  }
+})
+
+// 1.9 §保真边界 · invariant 4: a harness whose form notes carry loopback-direct (its routes send loopback direct, 1.6 §3.3) says in its
+// technical details that requests to this computer are not captured — the status note's own words, once; one without that note says nothing of it
+test('1.9 §保真边界: the loopback-direct form note shows once in that agent\'s technical details, and only there', () => {
+  const text = 'requests to localhost, 127.0.0.1, ::1 are not captured (planted)'
+  const d = doc({ hs: { codex: {}, 'kimi-code': {} } })
+  const note = { code: 'loopback-direct', text }
+  d.harnesses.codex.forms = [{ form: 'codex.cli', notes: [note] }, { form: 'codex.app', notes: [note, { code: 'harness-note', text: 'another note' }] }]
+  d.harnesses['kimi-code'].forms = [{ form: 'kimi-code.cli', notes: [{ code: 'harness-note', text: 'another note' }] }]
+  const m = model(d)
+  const said = (id) => rowOf(m, id).tech.filter((p) => JSON.stringify(p.v).includes(text)).length
+  assert.equal(said('codex'), 1)
+  assert.equal(said('kimi-code'), 0)
 })

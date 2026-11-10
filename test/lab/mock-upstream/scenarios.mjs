@@ -10,7 +10,8 @@ export const SCENARIOS = {
   ok: {},
   thinking: { thinking: true },
   'tool-use': { tool: true },
-  subagent: { subagent: true },
+  subagent: { subagent: 1 },
+  'subagent-pair': { subagent: 2 }, // two subagent calls in one reply: an agent that runs tool calls together starts both at once
   'near-limit': { tool: true, nearLimit: true }, // usage: session.mjs withUsageTotal
   ...Object.fromEntries([400, 401, 403, 404, 408, 409, 413, 422, 500, 503, 504, 529].map((s) => [`http-${s}`, { status: s }])),
   'http-429': { status: 429, retryAfter: 1 },
@@ -122,10 +123,11 @@ export function plan(seen, raw, body, sc = {}) {
   const extra = sc.extra ? sc.extra() : [], text = reply + extra.join('')
   const thinking = sc.thinking ? `mock-thinking: the last user turn is ${(seen.text || '').length} chars long` : null
   const tools = toolsOf(body), turn = turnOf(body), act = !turn.quiet && acts(turn, sc)
-  const tool = !act ? null : sc.subagent ? subagentCall(tools) : sc.tool && tools.length ? shellCall(tools.map((t) => t.name)) : null
+  const calls = !act ? [] : sc.subagent ? Array.from({ length: sc.subagent }, (_, i) => subagentCall(tools, sc.subagent > 1 ? i + 1 : 0)).filter(Boolean)
+    : sc.tool && tools.length ? [shellCall(tools.map((t) => t.name))] : []
   return {
     model: body.model || 'mock-model', text, parts: [...splitEvery(reply, 12), ...extra],
-    thinking, thinkingParts: thinking && splitEvery(thinking, 12), tool, toolArgs: tool && JSON.stringify(tool.input), compaction: turn.compacting,
+    thinking, thinkingParts: thinking && splitEvery(thinking, 12), calls: calls.map((c) => ({ ...c, args: JSON.stringify(c.input) })), compaction: turn.compacting,
     inputTokens: tokens(raw.length), outputTokens: tokens(text.length + (thinking || '').length),
   }
 }

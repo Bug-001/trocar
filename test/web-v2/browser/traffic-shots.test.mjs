@@ -5,7 +5,7 @@
 // 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
+import { probe, withBoard, shoot, layoutFaults, settle } from './harness.mjs'
 import { FILTER_CLASS } from '../../../web/legacy/labels/traffic.mjs'
 
 const gate = await probe()
@@ -102,7 +102,7 @@ test('收回 partly not recorded stays in its cell; every agent cell has its ico
       })
       await go(b.page, '#/traffic?window=all')
       await hostLinks(b.page).locator('.c2').first().waitFor({ timeout: 30000 })
-      await b.page.waitForLoadState('networkidle')
+      await settle(b.page)
       assert.deepEqual(await layoutFaults(b.page), { overlap: [], cut: [], untitled: [], emptyIcons: [] }, `traffic ${width}`)
       await shoot(b.page, 'traffic-unrecorded', { width, theme: 'light' })
       assert.deepEqual(b.errors, [])

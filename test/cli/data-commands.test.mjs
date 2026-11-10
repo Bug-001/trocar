@@ -237,3 +237,13 @@ test('V79: query, classes shown and raw write nothing but the index they may reb
   for (const rel of Object.keys(before)) assert.ok(rel in after, `${rel} is gone`)
   assert.ok(Object.keys(after).some((rel) => rel.startsWith('index/')), 'the index is where the index goes')
 })
+
+test('V83: a class table that cannot be parsed is reported with the HOME part of its path as ~', async () => {
+  const { home } = await dataHome()
+  fs.writeFileSync(path.join(home, '.trocar', 'classes.json'), '{', { mode: 0o600 })
+  for (const argv of [['classes'], ['classes', 'set', 'telemetry', 'log']]) {
+    const r = await run(argv, home)
+    assert.ok(r.err.length > 0, `${argv.join(' ')}: the problem is said`)
+    assert.ok(!r.err.includes(home), `${argv.join(' ')}: no absolute HOME path:\n${r.err}`)
+  }
+})

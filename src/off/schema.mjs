@@ -10,6 +10,9 @@ export const SCHEMA_VERSION = 2
 /** R4. `unknown` (3) is for `status` / `doctor` only: it must never be read as `ok`. `crash` is `trocar daemon`'s (src/collector/cli.mjs). */
 export const EXIT = Object.freeze({ ok: 0, incomplete: 1, usage: 2, unknown: 3, crash: 70 })
 
+/** The commands whose `ok` is their own verdict (C.3 / C.4), never "did not finish". */
+export const VERDICT_COMMANDS = Object.freeze(['status', 'doctor'])
+
 /** R5: the top-level keys every receipt carries, in the order `newReceipt` writes them. */
 export const RECEIPT_KEYS = Object.freeze(['schema', 'command', 'ok', 'changed', 'created', 'removed', 'skipped', 'restart', 'relayed', 'undo', 'log'])
 
@@ -24,7 +27,7 @@ export const errorDoc = (command, code, message, detail) => ({
 /** C.1: a client reads `error.code` and nothing else, so a receipt that says `ok: false` always has one: `failed` with its first sentence, unless the command gave its own. A run that
  *  stopped before writing to wait for a person (`needs_yes`, `declined`, `dry_run`) did not fail, and a reading's `ok` (status, doctor, a query) is its own conclusion, not a failure. */
 export function withError(doc) {
-  if (doc.ok !== false || doc.error || doc.needs_yes || doc.declined || doc.dry_run || !RECEIPT_KEYS.every((k) => Object.hasOwn(doc, k))) return doc
+  if (doc.ok !== false || VERDICT_COMMANDS.includes(doc.command) || doc.error || doc.needs_yes || doc.declined || doc.dry_run || !RECEIPT_KEYS.every((k) => Object.hasOwn(doc, k))) return doc
   const said = [...(doc.problems || []), ...(doc.notes || [])].find((s) => typeof s === 'string' && s)
   return { ...doc, error: { code: 'failed', message: said || `trocar ${doc.command} did not finish; the rest of this document says what is left` } }
 }

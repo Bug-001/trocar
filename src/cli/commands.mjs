@@ -26,6 +26,7 @@ const HARNESS = '[<harness>...]'
 const JSON_OPT = ['--json', 'print one JSON document instead of text, and nothing on stderr']
 const YES = ['--yes', 'answer the confirmation, for a run that is not in a terminal']
 const DRY = ['--dry-run', 'print what it would do and write nothing']
+const DETAILS = ['--details', 'also print every fact the short text leaves out: each file, key, process and note']
 const queriesDoc = via('./query.mjs', 'queriesDoc') // imported when asked: the query core must not load for `trocar on`
 
 // A refusal is said on stderr; under --json main.mjs makes it the `usage` document.
@@ -39,39 +40,39 @@ async function help(_argv, c) {
 export const COMMANDS = Object.freeze([
   { name: 'install',
     group: 'Capture', mutates: true, run: via('./install.mjs', 'runInstallCli'),
-    usage: 'trocar install [--yes] [--dry-run] [--json]',
+    usage: 'trocar install [--yes] [--dry-run] [--details] [--json]',
     summary: 'Sets up the certificates, once per machine. It makes this machine\'s own root, trusts it for your user, and places the certificate each agent reads for itself. It prints the plan and waits for you to confirm; it never turns capture on.',
-    options: [YES, DRY, JSON_OPT],
+    options: [YES, DRY, DETAILS, JSON_OPT],
     exits: [[0, 'everything is installed'], [1, 'some of it is not'], [2, 'nothing ran: a usage error, root, or a confirmation nobody could give']] },
   { name: 'on',
     group: 'Capture', mutates: true, run: via('./on.mjs', 'runOnCli'),
-    usage: `trocar on ${HARNESS} [--yes] [--dry-run] [--json]`,
+    usage: `trocar on ${HARNESS} [--yes] [--dry-run] [--details] [--json]`,
     summary: 'Starts capturing the named agents, or every agent install knows when you name none. It only points each agent at trocar and starts the collector; it touches no certificate and restarts no agent. Run trocar install first.',
-    options: [YES, DRY, JSON_OPT],
+    options: [YES, DRY, DETAILS, JSON_OPT],
     exits: [[0, 'every named agent is being captured'], [1, 'some of them are not'], [2, 'nothing ran: a usage error, an unknown agent, root, or a confirmation nobody could give']] },
   { name: 'off',
     group: 'Capture', mutates: true, run: via('../off/main.mjs', 'runOffCli'),
-    usage: `trocar off ${HARNESS} [--now] [--yes] [--dry-run] [--json]`,
+    usage: `trocar off ${HARNESS} [--now] [--yes] [--dry-run] [--details] [--json]`,
     summary: 'Takes away everything trocar does to the named agents, or to all of them when you name none. Then the agents see the real upstream again and trocar writes no new records. It works even when trocar itself is broken.',
-    options: [['--now', 'cut the connections still in flight instead of letting them finish'], YES, DRY, JSON_OPT],
+    options: [['--now', 'cut the connections still in flight instead of letting them finish'], YES, DRY, DETAILS, JSON_OPT],
     exits: [[0, 'trocar is out of the way'], [1, 'a step did not finish'], [2, 'nothing ran: a usage error, an unknown agent, or root']] },
   { name: 'status',
     group: 'Capture', mutates: false, run: via('./status.mjs', 'runStatusCli'),
-    usage: `trocar status ${HARNESS} [--failures] [--json]`,
-    summary: 'Says which agents are being captured and why not, for the ones that are not. With no name it is one screen: the collector, the agents, the connections still going through trocar, and what failed in the last day. Name an agent for its details.',
-    options: [['--failures', 'list every failure of the last day, not just the newest'], JSON_OPT],
+    usage: `trocar status ${HARNESS} [--failures] [--details] [--json]`,
+    summary: 'Says which agents are being captured and why not, for the ones that are not. With no name it is one screen: the collector, the agents, the connections still going through trocar, and what failed in the last 24 hours (or since this install, when that is later). Name an agent for its details.',
+    options: [['--failures', 'list every failure of that window, not just the newest'], DETAILS, JSON_OPT],
     exits: [[0, 'every agent is being captured'], [1, 'some are not'], [2, 'a usage error, or an unknown agent'], [3, 'it could not be read; the reason is in the output']] },
   { name: 'uninstall',
     group: 'Capture', mutates: true, recordsPath: false, run: via('./uninstall.mjs', 'runUninstallCli'), // 4.11 present: it deletes the recorded PATH
-    usage: 'trocar uninstall [--purge-data] [--yes] [--dry-run] [--json]',
+    usage: 'trocar uninstall [--purge-data] [--yes] [--dry-run] [--details] [--json]',
     summary: 'Removes what install put on this machine: the root, the certificates the agents read, and the records of both. Capture must be off first. Your captured data stays unless you ask for it to go.',
-    options: [['--purge-data', 'also delete the captured records'], YES, DRY, JSON_OPT],
+    options: [['--purge-data', 'also delete the captured records'], YES, DRY, DETAILS, JSON_OPT],
     exits: [[0, 'all of it is gone'], [1, 'capture is still on, or some of it is still there'], [2, 'nothing ran: a usage error, root, or a confirmation nobody could give']] },
   { name: 'doctor',
     group: 'Capture', mutates: false, run: via('./doctor.mjs', 'runDoctor'),
-    usage: `trocar doctor ${HARNESS} [--json]`,
+    usage: `trocar doctor ${HARNESS} [--details] [--json]`,
     summary: 'Finds what keeps capture or the network from working and says how to fix it. It looks at the agents, your proxy, the certificates, who can read the captured files, and the backups nothing claims. It changes nothing.',
-    options: [JSON_OPT],
+    options: [DETAILS, JSON_OPT],
     exits: [[0, 'nothing is wrong'], [1, 'something is wrong, and it says what'], [2, 'a usage error, or an unknown agent'], [3, 'it could not judge; it says what it could not read']] },
 
   { name: 'query',
@@ -95,9 +96,9 @@ export const COMMANDS = Object.freeze([
 
   { name: 'update',
     group: 'Maintenance', mutates: true, run: via('./update.mjs', 'runUpdateCli'),
-    usage: 'trocar update [--yes] [--dry-run] [--json]',
+    usage: 'trocar update [--yes] [--dry-run] [--details] [--json]',
     summary: 'Takes this trocar to the newest code and leaves the machine as it was: installed, and capturing whatever it was capturing. The agents it captures are switched off while the code changes and switched on again after it.',
-    options: [YES, DRY, JSON_OPT],
+    options: [YES, DRY, DETAILS, JSON_OPT],
     exits: [[0, 'it is up to date'], [1, 'it was not updated, or not finished; it says why'], [2, 'nothing ran: a usage error, an npm copy with nothing to finish, this trocar is not a git checkout, root, or a confirmation nobody could give']] },
   { name: 'raw',
     group: 'Maintenance', mutates: false, run: via('./raw.mjs', 'run'),

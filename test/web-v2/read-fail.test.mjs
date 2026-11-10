@@ -3,7 +3,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFailure } from '../../web/legacy/core/ui.mjs'
-import { statsCard, recentCard, capCard } from '../../web/src/screens/overview/model.mjs'
+import { statsCard, recentCard, capCard, readFail } from '../../web/src/screens/overview/model.mjs'
+import { failOf as storageFail } from '../../web/src/screens/settings/storage-model.mjs'
+import { failOf as trafficFail } from '../../web/src/screens/traffic/model.mjs'
 import { capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
 import { logModel } from '../../web/src/screens/capture/log-model.mjs'
 import { HEALTH_READ } from '../../web/legacy/labels/common.mjs'
@@ -35,6 +37,18 @@ test('readFailure: the visible line holds none of the reason; the reason is esca
   // the cause class (K-29): a returned status is in the line; unreachable (0) and a server error are told apart
   for (const status of [404, 500, 503]) assert.ok(readFailure('Stats', { status }).line.includes(String(status)), `status ${status} in the line`)
   assert.notEqual(readFailure('Stats', { status: 0 }).line, readFailure('Stats', { status: 500 }).line)
+})
+
+// K-29 cause classes: an answer the deadline cut (http's `timedOut`) is told apart from one that never came and from a returned status,
+// on every screen's failure line; its reason stays out of the line
+test('K-29: a read the deadline ended has its own cause class on every failure line, apart from unreachable and from a status', () => {
+  const builders = { readFailure: (w, r) => readFailure(w, r).line, overview: (w, r) => readFail(w, r).line, storage: (w, r) => storageFail(w, r).line, traffic: (w, r) => trafficFail(w, r).line }
+  for (const [name, line] of Object.entries(builders)) {
+    const t = tok(), late = line('Stats', { ok: false, status: 0, timedOut: true, error: `no answer within 60 s ${t}` })
+    assert.ok(!late.includes(t), `${name}: no reason in the line`)
+    for (const other of [{ ok: false, status: 0, error: 'Failed to fetch' }, { ok: false, status: 503, error: 'x' }]) assert.notEqual(late, line('Stats', other), `${name}: ${JSON.stringify(other)}`)
+    assert.equal(late, line('Stats', { ok: false, status: 0, timedOut: true, error: 'other words' }), `${name}: the class, not the reason, decides`)
+  }
 })
 
 test('overview cards: stats and recent read failures, the price line and an unreadable capture card keep the reason out of the visible line; the technical pairs carry it', () => {

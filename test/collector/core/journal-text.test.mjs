@@ -8,6 +8,7 @@ import path from 'node:path'
 import { applyJsonKey, applyTextEntry, previewTextEntry, undoEntry, newManifest, readManifest, sha256, manifestPath, writeOwnedFile, removeOwnedFile, describeEntry } from '../../../src/collector/core/trust/journal.mjs'
 import { lineComment, OFF_PREFIX } from '../../../src/off/text-edit.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
+import { POSIX_WORLD } from '../../helpers/platform-shape.mjs'
 
 function box() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-jt-'))
@@ -17,7 +18,7 @@ function box() {
 const ENV = 'OPENAI_API_KEY=sk-secret-123\nSSL_CERT_FILE="/corp/ca.pem"\n'
 const ROW = `- insert: [{ name: "/p/index.js" }] ${lineComment('dsh plugin')}`
 
-test('journal text: a dotenv block — manifest has the ops and the prior path, never the file; undo is byte-identical, then already-restored', () => {
+test('journal text: a dotenv block — manifest has the ops and the prior path, never the file; undo is byte-identical, then already-restored', { skip: POSIX_WORLD }, () => {
   const b = box()
   try {
     const file = path.join(b.root, '.codex', '.env'); fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, ENV, { mode: 0o600 })
@@ -76,7 +77,7 @@ test('journal text: an rc line — the user added lines before and after it; und
   } finally { b.done() }
 })
 
-test('journal text: a crash after the intent is undone; a refused edit writes nothing; trocar text from an unlisted install is refused', () => {
+test('journal text: a crash after the intent is undone; a refused edit writes nothing; trocar text from an unlisted install is refused', { skip: POSIX_WORLD }, () => {
   const b = box()
   try {
     const file = path.join(b.root, '.env'); fs.writeFileSync(file, ENV)
@@ -99,11 +100,10 @@ test('journal owned files: a plugin in an agent\'s directory is listed with the 
   try {
     const plug = path.join(b.root, '.config', 'opencode', 'plugins', 'trocar-ca.js')
     const m = newManifest()
-    writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, harness: 'o', role: 'plugin', file: plug, data: '// trocar collector\n', mode: 0o644, exclusive: true })
+    writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, harness: 'o', role: 'plugin', file: plug, data: '// trocar collector\n', mode: 0o644 })
     const item = readManifest(b.dir).files[0]
     assert.deepEqual([item.role, item.mode, item.created_dirs], ['plugin', 0o644, [path.join(b.root, '.config'), path.join(b.root, '.config', 'opencode'), path.dirname(plug)]])
     assert.equal(fs.statSync(plug).mode & 0o777, 0o644)
-    assert.throws(() => writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, role: 'plugin', file: plug, data: 'x', exclusive: true }), /already exists; trocar will not write over it/)
     fs.writeFileSync(path.join(path.dirname(path.dirname(plug)), 'opencode.json'), '{}') // the user's own config appears
     fs.appendFileSync(plug, '// edited\n')
     assert.deepEqual(removeOwnedFile(item), { path: plug, result: 'removed', changed: true })
@@ -143,4 +143,39 @@ test('journal json: a member that is not there is never added, a config key neve
   applyJsonKey({ phase: 'on', dir, home, manifest: m, harness: 'z-code', file, keys: ['network', 'httpProxy'], value: 'http://127.0.0.1:1' })
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { network: { HttpProxy: 'x', httpProxy: 'http://127.0.0.1:1' }, env: { https_proxy: 'y' } })
   assert.equal(m.entries.length, 1)
+})
+
+// 4.11 P4 「trocar 拥有的文件不写在别人的上面」: a path the manifest does not list, with a file already there — written over only when the file is
+// trocar's (in a subfolder of its collector directory, or carrying its sentinel); a file that is not trocar's, or that cannot be read, is refused, byte for byte
+// as it was, unrecorded. `top`: a file directly in the collector directory is one of its settings or state files the user may edit, not trocar's by place
+for (const where of ['outside', 'inside', 'top']) {
+  for (const [at, seed] of [['none', null], ['ours', '// trocar collector: trust plugin, an earlier one\n'], ['foreign', '// the user\'s own plugin\n'], ['unreadable', 'x\n']]) {
+    test(`writeOwnedFile · ${where} trocar's tree · ${at} at the path`, () => {
+      const b = box()
+      try {
+        const file = where === 'inside' ? path.join(b.dir, 'ca', 'combined-x.pem') : where === 'top' ? path.join(b.dir, 'settings.json') : path.join(b.root, '.agent', 'plugins', 'trocar-ca.js')
+        if (seed != null) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, seed) }
+        const sealed = { ...fs, readFileSync: (f, ...a) => { if (at === 'unreadable' && f === file) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
+        const m = newManifest()
+        const data = '// trocar collector: new\n'
+        const refused = where !== 'inside' && (at === 'foreign' || at === 'unreadable')
+        const write = () => writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, harness: 'h', role: 'plugin', file, data, mode: 0o644, fs: sealed })
+        if (refused) {
+          assert.throws(write, (e) => e.code === 'not-trocars-file' && e.path === file)
+          assert.equal(fs.readFileSync(file, 'utf8'), seed, 'left byte for byte')
+          assert.deepEqual(m.files.filter((f) => f.path === file), [], 'no record of it')
+        } else {
+          write()
+          assert.equal(fs.readFileSync(file, 'utf8'), data)
+          assert.deepEqual(readManifest(b.dir).files.map((f) => f.path), [file])
+        }
+      } finally { b.done() }
+    })
+  }
+}
+// A receipt describes every kind of entry a text edit leaves, in words: a certificate block has no `line`, and the user read "trocar's line undefined".
+test('describeEntry: no shape install writes reads undefined', () => {
+  const shapes = [{ kind: 'text', format: 'pem-block' }, { kind: 'text', format: 'line', line: 'x' }, { kind: 'text', format: 'dotenv-block', vars: { A: 'b' } }, { kind: 'text', format: 'yaml-list', line: '- x' },
+    { kind: 'json-array-item', item: 'x', keys: ['a'] }, { kind: 'json-key', keys: ['a'], value: 'b' }, { kind: 'run-key' }, { kind: 'scheduled-task' }]
+  for (const e of shapes) assert.doesNotMatch(describeEntry(e), /undefined/, JSON.stringify(e))
 })

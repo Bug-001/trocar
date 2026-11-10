@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from '../../../legacy/core/api.mjs'
+import { CUT_OFF } from '../../../legacy/core/http.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { CLASS_NAME } from '../../../legacy/core/classes.mjs'
 import * as W from '../../../legacy/labels/settings.mjs'
@@ -193,17 +194,26 @@ test('V5: only llm and token-count to log ask first; Cancel has focus, Esc and C
 })
 
 test('V6: each answer leaves its receipt; server words only in technical details; 405 turns the levels to text; 403 stops', async () => {
-  const cases: Array<[string, (b: Body) => Answer | Promise<Answer>]> = [
+  const cases: Array<[string, (b: Body) => Answer | Promise<Answer>, string?]> = [
     ['not-changed', (b) => (b.confirm ? { ok: false, status: 400, data: { error: `bad class ${TOKEN}` }, error: 'HTTP 400' } : serve(b))],
-    ['offline', () => { throw new Error(`fetch failed ${TOKEN}`) }],
+    // post() never throws: a lost answer is status 0 (http.mjs); to the plan, nothing was written
+    ['offline', (b) => (b.confirm ? serve(b) : { ok: false, status: 0, data: null, error: `fetch failed ${TOKEN}` })],
+    // the confirm went out and its answer was cut (a post's status 0, http.mjs): the write may have landed, so no 'nothing was changed'
+    ['unknown', (b) => (b.confirm ? { ok: false, status: 0, data: null, error: CUT_OFF } : serve(b))],
+    // a 5xx to the confirm: the service may have failed after writing, so no 'nothing was changed' either
+    ['unknown', (b) => (b.confirm ? { ok: false, status: 500, data: { error: `write failed ${TOKEN}` }, error: `write failed ${TOKEN}` } : serve(b)), W.RCPT_FAILED_UNKNOWN],
+    // a 5xx to the plan: nothing is written before the confirm
+    ['not-changed', (b) => (b.confirm ? serve(b) : { ok: false, status: 500, data: { error: `plan failed ${TOKEN}` }, error: `plan failed ${TOKEN}` })],
     ['already', (b) => (b.confirm ? { ok: true, status: 200, data: { ok: true, before: { keep: 'log' }, after: { keep: 'log' } }, error: null } : serve(b))],
   ]
   await mount()
-  for (const [kind, a] of cases) {
+  for (const [kind, a, words] of cases) {
     answer = a
     await press(radio('telemetry', 'log'))
     const rc = row('telemetry').querySelector<HTMLElement>('[data-receipt]')!
     expect(rc.getAttribute('data-receipt')).toBe(kind)
+    if (words) expect(rc.textContent).toContain(words)
+    if (kind === 'unknown') expect(visible()).not.toContain(TOKEN)
     if (kind === 'not-changed') {
       expect(visible()).not.toContain(TOKEN)
       await press(rc.querySelector('.disc-t')!)

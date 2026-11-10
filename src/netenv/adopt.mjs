@@ -10,6 +10,7 @@ import { redactProxyUrl, settingSha, parseProxyUrl } from './redact.mjs'
 import { readNetenvFile } from './index.mjs'
 import { buildTopology } from './topology.mjs'
 import { renderCompact, BRANCH_SEP } from './topology-text.mjs'
+import { errnoReason } from '../cli/words.mjs'
 
 const errCode = (e) => (e && e.code) || String((e && e.message) || e)
 const unknown = (reason, detail) => ({ unknown: { reason, detail } })
@@ -20,7 +21,7 @@ const present = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : nu
  *  `last` = the key's last segment) | { unknown }. A file that is not there holds none. */
 function valuesOf(file, f, fs) {
   let text, mtimeMs
-  try { text = fs.readFileSync(file, 'utf8'); mtimeMs = fs.statSync(file).mtimeMs } catch (e) { return e && e.code === 'ENOENT' ? { values: [] } : unknown(e && e.code === 'EACCES' ? 'denied' : 'absent', `${file}: ${errCode(e)}`) }
+  try { text = fs.readFileSync(file, 'utf8'); mtimeMs = fs.statSync(file).mtimeMs } catch (e) { return e && e.code === 'ENOENT' ? { values: [] } : unknown(errnoReason(e) || 'absent', `${file}: ${errCode(e)}`) }
   if (f.format === 'json') {
     const { data, error } = parseJsonc(text)
     if (error) return unknown('unparseable', `${file} does not parse as JSON`)
@@ -153,7 +154,7 @@ export function readAdopted(home, { fs = nodeFs } = {}) {
 // ── what `on` found and drew, and the drift from it (§9.5) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** The facts as they will be once `on` has turned `ids` on: wanted on, a daemon that answers, a helper and the links there, the entry in place, and no process of it yet. The chain `on` prints and records is the
  *  topology of these facts: where a new connection of the agent will go. Driver mode only: another routing's chain depends on what its platform starts (proxy mode: the kernel), so it is drawn from the facts after `on`. */
-export function projectedOn(facts, ids) {
+function projectedOn(facts, ids) {
   const harnesses = { ...facts.harnesses }
   for (const h of ids) if (harnesses[h]) harnesses[h] = { ...harnesses[h], entry: { state: 'intact' }, installedAt: facts.at, procs: [], negatives: [] }
   return { ...facts, desired: { ...facts.desired, ...Object.fromEntries(ids.map((h) => [h, 'on'])) }, daemon: { ...facts.daemon, state: 'running' }, link: { ...facts.link, attached: true, helper: 'ok' }, harnesses }

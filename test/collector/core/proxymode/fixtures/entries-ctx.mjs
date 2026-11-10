@@ -28,6 +28,7 @@ export function world({ os = 'darwin', env = {}, persistent = {}, systemProxy = 
     policy: (spec) => (policies.has(JSON.stringify(spec)) ? { set: true, value: 'http://managed.example:1', where: `policy:${JSON.stringify(spec)}` } : { set: false }),
     dir, manifest: newManifest(), fs, now: () => new Date('2026-10-16T00:00:00Z'), persistentEnv: () => persistent, systemProxy,
     render: (id, v) => `// ${id} ${v.door}\n`, newId: () => `trocar-${++n}`,
+    pacToken: 'ab'.repeat(16), // the doors' token on passes, from which the PAC address's key is made (4.11 P10)
   }
   const pick = (l) => (l && l.perOs ? l.perOs[os] : l)
   /** Make a form installed: its first `present` place that exists on this OS. */

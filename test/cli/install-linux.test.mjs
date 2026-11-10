@@ -12,7 +12,13 @@ import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { codeId, selfCommand } from '../../src/version.mjs'
 import { fakeIo, fakeSystem, onCtx, seedClaude, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
+import { X509Certificate } from 'node:crypto'
+import zcode from '../../src/collector/harness/z-code.mjs'
+import { createCa } from '../../src/collector/core/tls/ca.mjs'
+import { validateReceipt } from '../../src/cli/schema.mjs'
+import { unsaidIn } from '../../src/cli/words.mjs'
 
+const fps = (text) => (String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((p) => new X509Certificate(p).fingerprint256)
 const certBytes = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([k]) => k.startsWith('.trocar/collector/ca/') || k === '.claude/settings.json'))
 
 test('Linux install: CA + trust entries (phase install) + trocar-off, no unit, no state; a second install changes nothing; the on after it leaves every certificate byte as install wrote it', async () => {
@@ -20,8 +26,8 @@ test('Linux install: CA + trust entries (phase install) + trocar-off, no unit, n
   seedClaude(home)
   const ctx = (io) => ({ ...onCtx(home, io), platform: 'linux' })
   const io = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], ctx(io)), 0, io.text())
-  // R1: the receipt says each user file it changed — path, what was changed, where the backup is — not only the plan before the yes
+  assert.equal(await runInstallCli(['--yes', '--details'], ctx(io)), 0, io.text())
+  // R1 · 1.6 §1.1 ④ rule 10: the receipt's --details says each user file it changed — path, what was changed, where the backup is
   const receipt = io.text().slice(io.text().indexOf("Installed. trocar's certificates are in place."))
   assert.match(receipt.replace(/\s+/g, ' '), /~\/\.claude\/settings\.json env\.NODE_EXTRA_CA_CERTS added \(backup/, receipt)
   assert.match(receipt.replace(/\s+/g, ' '), /trocar's own files: .*trocar-off/, receipt)
@@ -188,6 +194,22 @@ test('Linux install replaces a collector that answers another code: the receipt 
   assert.equal(sys.daemon.state.up, true, 'the unit brought the collector up again')
 })
 
+// 1.6 §3.2 step 5, as on macOS / Windows: an install that changes the unit a running collector on this code was started from (the NODE_EXTRA_CA_CERTS
+// its Environment= carries) replaces it; one that leaves the unit as it is leaves the collector
+test('Linux install replaces a running collector on this code when it changes the unit, and only then', async () => {
+  const home = tmpDir('trocar-install-unit-')
+  seedClaude(home)
+  const sys = fakeSystem({ up: true })
+  const stops = []
+  const deps = { daemonCode: async () => (sys.daemon.state.up ? codeId() : null), stopDaemon: async () => { sys.daemon.state.up = false; stops.push('stop'); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } } }
+  const run = async (env) => { const io = fakeIo(); assert.equal(await runInstallCli(['--yes', '--json'], { ...onCtx(home, io, { exec: sys.exec, daemon: sys.daemon, deps, env }), platform: 'linux' }), 0, io.text()); return io.json() }
+  await run({})
+  sys.daemon.state.up = true // a collector runs, started from the unit just written
+  assert.deepEqual([(await run({})).daemon.replaced, stops], [false, []], 'the same unit: the collector is left')
+  const r = await run({ NODE_EXTRA_CA_CERTS: path.join(home, 'corp', 'relay.pem') })
+  assert.deepEqual([r.daemon.replaced, r.daemon.state, stops], [true, 'running', ['stop']], JSON.stringify(r.daemon))
+})
+
 // 1.6 §5.5 step 4: the update that runs install replaces the collector itself, right after it
 test('Linux install under an update that replaces the collector next leaves it running and plans no replacement', async () => {
   const home = tmpDir('trocar-install-keep-')
@@ -209,4 +231,227 @@ test('Linux install: the plan names every file of the standalone undo', async ()
   assert.equal(await runInstallCli(['--dry-run', '--json'], { ...onCtx(home, io), platform: 'linux' }), 0, io.text())
   const planned = io.json().planned
   for (const f of standaloneFiles(home, 'linux')) assert.ok(planned.some((p) => p.path === f), `${f} is planned: ${JSON.stringify(planned)}`)
+})
+
+// 4.6 「这个 harness 装好了没有」 · 1.6 附录 C.2 `skipped`: what install has nothing to place for is in the receipt's `skipped`, with its reason —
+// an agent present whose inject gives nothing (Codex with no home yet) and an agent that is not here — never one it set up
+test('Linux install --json: the receipt\'s skipped names each agent install had nothing to place for, with a reason; not the agent it set up', async () => {
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const all = await loadHarnesses()
+  const home = tmpDir('trocar-install-skipped-')
+  seedClaude(home)
+  fs.mkdirSync(path.join(home, 'bin'), { recursive: true }); fs.writeFileSync(path.join(home, 'bin', 'codex'), '#!/bin/sh\n', { mode: 0o755 }) // codex on PATH, no ~/.codex
+  const io = fakeIo()
+  const exit = await runInstallCli(['--yes', '--json'], { ...onCtx(home, io, { harnesses: all, env: { PATH: path.join(home, 'bin') } }), platform: 'linux' })
+  assert.equal(exit, 0, io.text())
+  const doc = JSON.parse(io.stdoutText())
+  const names = doc.skipped.map((s) => s.what)
+  assert.ok(names.includes('codex'), JSON.stringify(doc.skipped))
+  for (const d of all.filter((x) => !['claude-code', 'codex'].includes(x.name))) assert.ok(names.includes(d.name), `${d.name} is not here: skipped`)
+  assert.ok(!names.includes('claude-code'), 'the agent install set up is not skipped')
+  assert.ok(doc.skipped.every((s) => typeof s.reason === 'string' && s.reason.length > 0), 'each with its reason')
+})
+
+// Rule U through the command itself (4.11 P4): the CLI hands the plan its finder of the user's own certificate files. Without it the plan finds
+// none and Z-Code's desktop CA file silently gets no block, so this goes through runInstallCli, not installCollector.
+test('Linux install: the CA file Z-Code\'s desktop setting names gets trocar\'s root appended after the user\'s own bytes', async () => {
+  const home = tmpDir('trocar-install-zcode-')
+  const own = createCa({ commonName: 'desktop proxy CA' }).certPem
+  const desk = path.join(home, 'certs', 'relay-ca.pem')
+  fs.mkdirSync(path.dirname(desk), { recursive: true }); fs.writeFileSync(desk, own)
+  fs.mkdirSync(path.join(home, '.zcode', 'v2'), { recursive: true }); fs.writeFileSync(path.join(home, '.zcode', 'v2', 'setting.json'), JSON.stringify({ httpProxyCaCertPath: desk }))
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], { ...onCtx(home, io, { harnesses: [zcode] }), platform: 'linux' }), 0, io.text())
+  const root = fs.readFileSync(path.join(home, '.trocar', 'collector', 'ca', 'trocar-ca.pem'), 'utf8')
+  const text = fs.readFileSync(desk, 'utf8')
+  assert.ok(text.startsWith(own), 'the user\'s bytes first, as they were')
+  assert.deepEqual(fps(text), [...fps(own), ...fps(root)], 'trocar\'s root appended once')
+})
+
+// 4.6 check 10 (plan = act): the dry run names the desktop CA file the real run appends to, and touches nothing
+test('Linux install --dry-run: the plan names the CA file Z-Code\'s desktop setting names, as the run then changes it, and writes nothing', async () => {
+  const home = tmpDir('trocar-install-zcode-dry-')
+  const own = createCa({ commonName: 'desktop proxy CA' }).certPem
+  const desk = path.join(home, 'certs', 'relay-ca.pem')
+  fs.mkdirSync(path.dirname(desk), { recursive: true }); fs.writeFileSync(desk, own)
+  fs.mkdirSync(path.join(home, '.zcode', 'v2'), { recursive: true }); fs.writeFileSync(path.join(home, '.zcode', 'v2', 'setting.json'), JSON.stringify({ httpProxyCaCertPath: desk }))
+  const before = snapshot(home)
+  const dry = fakeIo()
+  assert.equal(await runInstallCli(['--dry-run', '--json'], { ...onCtx(home, dry, { harnesses: [zcode] }), platform: 'linux' }), 0, dry.text())
+  assert.ok(dry.json().planned.some((p) => p.path === desk), `the desktop CA file is planned: ${JSON.stringify(dry.json().planned)}`)
+  assert.deepEqual(snapshot(home), before, 'a dry run writes nothing')
+  assert.equal(await runInstallCli(['--yes'], { ...onCtx(home, fakeIo(), { harnesses: [zcode] }), platform: 'linux' }), 0)
+  assert.ok(changedFiles(before, snapshot(home)).includes(path.relative(home, desk)), 'and the run changes that file')
+})
+
+// A mask of this unit is the unit file replaced by a link to /dev/null: `systemctl --user mask` itself refuses while trocar's file is there (measured on Linux), so it is
+// made by hand. install writes over it, as over any entry under trocar's name, and the plan and the receipt say so.
+test('Linux install over a masked unit: replaced, and said in the plan and the receipt', async () => {
+  for (const seeded of ['after an install', 'with no record']) {
+    const home = tmpDir('trocar-mask-')
+    seedClaude(home)
+    const sys = fakeSystem({ up: false })
+    const ctx = (io) => ({ ...onCtx(home, io, { exec: sys.exec, daemon: sys.daemon }), platform: 'linux' })
+    if (seeded === 'after an install') assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0)
+    const unit = unitPath(home)
+    fs.mkdirSync(path.dirname(unit), { recursive: true }); fs.rmSync(unit, { force: true }); fs.symlinkSync('/dev/null', unit)
+    const dry = fakeIo()
+    assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(dry)), 0, dry.text())
+    const plan = dry.json()
+    assert.equal(plan.planned.filter((p) => p.path === unit).length, 1, `${seeded}: the unit is one row of the plan: ${JSON.stringify(plan.planned)}`)
+    assert.ok(plan.planned.find((p) => p.path === unit).detail.includes('masked'), `${seeded}: and that row says it is masked`)
+    assert.equal(plan.changed.filter((c) => c.path === unit).length, 1, `${seeded}: the user's link is a change of a file of theirs`)
+    assert.equal(fs.lstatSync(unit).isSymbolicLink(), true, 'a dry run leaves it')
+    const io = fakeIo()
+    assert.equal(await runInstallCli(['--yes', '--json'], ctx(io)), 0, io.text())
+    const done = io.json()
+    const row = done.changed.find((c) => c.path === unit)
+    assert.deepEqual(validateReceipt(done), [], 'the receipt keeps the schema, why_no_backup included')
+    assert.ok(row && row.backup === null && !done.created.includes(unit), `${seeded}: the receipt lists the link as changed, not as trocar's own file: ${JSON.stringify([done.changed, done.created])}`)
+    assert.equal(fs.lstatSync(unit).isSymbolicLink(), false, `${seeded}: the link is replaced`)
+    assert.match(fs.readFileSync(unit, 'utf8'), /\[Service\]/)
+  }
+})
+
+// 1.6 §1.1②: one fact once. A harness install skips is said under Skipped: in the plan, with its reason; the receipt does not say the same reason
+// again as a Note (a real Linux run listed codex and z-code both ways)
+test('Linux install: a skipped harness\'s reason is said once, not again as a note; the documents keep each skip, the dry run\'s too', async () => {
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const linux = (await loadHarnesses()).filter((d) => d.trust) // the Linux descriptors: most have no home here
+  const run = async (argv, home = tmpDir('trocar-skip-once-')) => { if (!fs.existsSync(path.join(home, '.claude'))) seedClaude(home); const io = fakeIo(); assert.equal(await runInstallCli(argv, { ...onCtx(home, io, { harnesses: linux }), platform: 'linux' }), 0, io.text()); return { io, home } }
+  const d = await run(['--dry-run', '--json']), dry = d.io.json()
+  assert.ok(dry.skipped.length && dry.skipped.every((x) => x.what && x.reason), 'the dry run\'s document keeps each skip with its reason (C.1)')
+  assert.deepEqual(validateReceipt(dry), [])
+  const doc = (await run(['--yes', '--json'])).io.json()
+  assert.deepEqual(doc.skipped.map((x) => x.what), dry.skipped.map((x) => x.what), 'the same skips as the plan')
+  assert.deepEqual(validateReceipt(doc), [])
+  for (const s of doc.skipped) assert.ok(!(doc.notes || []).some((n) => String(n).startsWith(`${s.what}: `)), `${s.what}: skipped, and not again a note`)
+  // the text of an install in the dry run's home (a dry run changes nothing): each reason once, as printed (HOME as ~, folded lines joined)
+  const flat = (t) => t.split(d.home).join('~').replace(/\s+/g, ' ')
+  const text = flat((await run(['--yes'], d.home)).io.text())
+  for (const s of dry.skipped) assert.equal(text.split(flat(s.reason)).length - 1, 1, `${s.what}: its reason said once: ${s.reason}`)
+})
+
+// the same rule for a skip whose reason is the descriptor's own note: codex on PATH with no Codex home yet is skipped with that note, said once
+test('Linux install: codex on PATH with no Codex home is skipped, and its reason is not said again as a note', async () => {
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const linux = (await loadHarnesses()).filter((d) => d.trust)
+  const home = tmpDir('trocar-skip-codex-')
+  seedClaude(home)
+  const bin = path.join(home, 'bin'); fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\n', { mode: 0o755 })
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes', '--json'], { ...onCtx(home, io, { harnesses: linux, env: { PATH: bin } }), platform: 'linux' }), 0, io.text())
+  const doc = io.json(), codex = doc.skipped.find((x) => x.what === 'codex')
+  assert.ok(codex, JSON.stringify(doc.skipped))
+  assert.ok(!(doc.notes || []).some((n) => String(n).startsWith('codex: ')), JSON.stringify(doc.notes))
+})
+
+// 4.11 P4b · invariant 4 (Linux): a replace-semantics bundle (Codex's, Hermes') is composed from the CAs the harness's own settings name, the install
+// shell's SSL_CERT_FILE among them. One that a CA added since does not hold is `bundle-lacks-ca` in status, and install — the repair — plans and makes
+// the rewrite; afterwards the bundle holds that CA and status is ready again
+const codexHome = (home) => { fs.mkdirSync(path.join(home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(home, '.codex', 'config.toml'), '') } // a Codex that has run once
+for (const [name, seed] of [['codex', codexHome], ['hermes', (home) => { fs.mkdirSync(path.join(home, '.hermes', 'hermes-agent'), { recursive: true }); fs.writeFileSync(path.join(home, '.hermes', 'config.yaml'), 'model: {}\n') }]]) {
+  test(`Linux ${name}: a CA the install shell's SSL_CERT_FILE adds after install is bundle-lacks-ca; install --dry-run plans the rewrite, install makes it, status is ready`, async () => {
+    const desc = (await import(`../../src/collector/harness/${name}.mjs`)).default
+    const home = tmpDir(`trocar-bundle-${name}-`)
+    seed(home)
+    const ca = createCa({ commonName: 'relay CA' }).certPem
+    const caFile = path.join(home, 'certs', 'relay-ca.pem'); fs.mkdirSync(path.dirname(caFile), { recursive: true }); fs.writeFileSync(caFile, ca)
+    const ctx = (io, env = {}) => ({ ...onCtx(home, io, { harnesses: [desc], env }), platform: 'linux' })
+    let io = fakeIo()
+    assert.equal(await runInstallCli(['--yes'], ctx(io)), 0, io.text())
+    const bundle = path.join(home, '.trocar', 'collector', 'ca', `combined-${name}.pem`)
+    assert.ok(fs.existsSync(bundle) && !fps(fs.readFileSync(bundle, 'utf8')).includes(fps(ca)[0]), 'built without it')
+    const shell = { SSL_CERT_FILE: caFile }
+    const { runStatus, asDaemon, reply } = await import('./fixtures/status-ctx.mjs')
+    const { linuxNetFacts } = await import('../../src/collector/arch/linux/netfacts.mjs')
+    const s = { home, sh: { env: { HOME: home, ...shell } }, sys: { exec: { run: () => ({ status: 0, stdout: '', stderr: '' }) } } }
+    const setupNow = async () => JSON.parse((await runStatus(s, ['--json', name], { deps: { netFactsDeps: async () => ({ harnesses: [desc], archFacts: linuxNetFacts }) } })).text).harnesses[name].setup
+    assert.deepEqual(await setupNow(), { state: 'needed', missing: [{ form: name, what: 'bundle-lacks-ca' }], uncaptured: [] })
+    // whatever the capture state (the daemon says on): doctor carries the finding and exits 1; `status <harness>` names it with trocar install
+    const { runDoctor } = await import('../../src/cli/doctor.mjs')
+    const sdeps = { request: asDaemon(reply({ harnesses: { [name]: { desired: 'on' } } })), deps: { netFactsDeps: async () => ({ harnesses: [desc], archFacts: linuxNetFacts }) } }
+    const st = await runStatus(s, ['--json', name], sdeps)
+    assert.equal(JSON.parse(st.text).harnesses[name].desired, 'on')
+    const dio = fakeIo()
+    const dexit = await runDoctor(['--json'], { io: dio, home, platform: 'linux', env: { HOME: home, ...shell, XDG_RUNTIME_DIR: path.join(home, 'run') }, deps: { has: () => true, procs: async () => [], lingerRead: () => ({ state: true }), user: 'alice', exec: s.sys.exec.run, request: sdeps.request, socketPath: (await import('./fixtures/status-ctx.mjs')).SOCK, netFactsDeps: sdeps.deps.netFactsDeps } })
+    const found = JSON.parse(dio.stdoutText()).findings.find((f) => f.code === 'bundle-lacks-ca' && f.harness === name)
+    assert.equal(dexit, 1, dio.text())
+    assert.deepEqual(found && [found.class, found.commands.map((c) => c.run)], ['problem', ['trocar install']])
+    const t = (await runStatus(s, [name], sdeps)).text
+    assert.ok(t.includes('trocar install'), t)
+    io = fakeIo()
+    assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(io, shell)), 0, io.text())
+    assert.ok(io.json().planned.some((p) => p.path === bundle), `the bundle's rewrite is planned: ${JSON.stringify(io.json().planned)}`)
+    assert.ok((io.json().notes || []).some((n) => n.includes(bundle) && n.includes('it lacks a CA your settings add now')), 'the plan says why')
+    io = fakeIo()
+    assert.equal(await runInstallCli(['--yes'], ctx(io, shell)), 0, io.text())
+    assert.match(io.text().replace(/\s+/g, ' '), /it lacks a CA your settings add now/) // the receipt says why (folded at 80 columns)
+    assert.ok(fps(fs.readFileSync(bundle, 'utf8')).includes(fps(ca)[0]), 'the bundle holds the CA now')
+    assert.deepEqual(await setupNow(), { state: 'ready', missing: [], uncaptured: [] })
+  })
+}
+
+// 4.11 P4b (Linux): additions only — an install from a shell without the variable keeps a bundle that holds the CA, skip-intact, byte for byte (an install
+// or update from another shell must not take away what a working agent trusts; a CA no longer named stays until uninstall + install, 4.6 「合并包」)
+test('Linux codex: an install from a shell without the CA keeps the bundle that holds it, byte for byte', async () => {
+  const desc = (await import('../../src/collector/harness/codex.mjs')).default
+  const home = tmpDir('trocar-bundle-keep-')
+  codexHome(home)
+  const ca = createCa({ commonName: 'relay CA' }).certPem
+  const caFile = path.join(home, 'certs', 'relay-ca.pem'); fs.mkdirSync(path.dirname(caFile), { recursive: true }); fs.writeFileSync(caFile, ca)
+  const ctx = (io, env = {}) => ({ ...onCtx(home, io, { harnesses: [desc], env }), platform: 'linux' })
+  let io = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], ctx(io, { SSL_CERT_FILE: caFile })), 0, io.text())
+  const bundle = path.join(home, '.trocar', 'collector', 'ca', 'combined-codex.pem')
+  const before = fs.readFileSync(bundle)
+  assert.ok(fps(before.toString('utf8')).includes(fps(ca)[0]))
+  io = fakeIo()
+  assert.equal(await runInstallCli(['--dry-run', '--json'], ctx(io)), 0, io.text())
+  assert.ok(!io.json().planned.some((p) => p.path === bundle), `not planned: ${JSON.stringify(io.json().planned)}`)
+  io = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], ctx(io)), 0, io.text())
+  assert.ok(fs.readFileSync(bundle).equals(before), 'the bundle as it was')
+})
+
+// review cases (additions only): the .env line install comments out, a source that cannot be read, and a CA added on top keep what the bundle carries
+test('Linux codex: a second install keeps the CA of the .env line the first one took over; an unreadable source keeps it; a CA added on top joins it', async () => {
+  const desc = (await import('../../src/collector/harness/codex.mjs')).default
+  const home = tmpDir('trocar-bundle-review-')
+  codexHome(home)
+  const relay = createCa({ commonName: 'relay CA' }).certPem
+  const relayFile = path.join(home, 'certs', 'relay-ca.pem'); fs.mkdirSync(path.dirname(relayFile), { recursive: true }); fs.writeFileSync(relayFile, relay)
+  fs.writeFileSync(path.join(home, '.codex', '.env'), `SSL_CERT_FILE=${relayFile}\n`)
+  const ctx = (io, env = {}) => ({ ...onCtx(home, io, { harnesses: [desc], env }), platform: 'linux' })
+  const bundle = path.join(home, '.trocar', 'collector', 'ca', 'combined-codex.pem')
+  const holds = (pem) => fps(fs.readFileSync(bundle, 'utf8')).includes(fps(pem)[0])
+  assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0)
+  assert.ok(holds(relay), 'the first install merges the .env line it takes over')
+  const once = fs.readFileSync(bundle)
+  assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0)
+  assert.ok(fs.readFileSync(bundle).equals(once), 'the second install keeps it, byte for byte')
+  fs.chmodSync(relayFile, 0)
+  try { assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0); assert.ok(fs.readFileSync(bundle).equals(once), 'an unreadable source takes nothing away') } finally { fs.chmodSync(relayFile, 0o644) }
+  const corp = createCa({ commonName: 'corp CA' }).certPem
+  const corpFile = path.join(home, 'certs', 'corp-ca.pem'); fs.writeFileSync(corpFile, corp)
+  assert.equal(await runInstallCli(['--yes'], ctx(fakeIo(), { SSL_CERT_FILE: corpFile })), 0)
+  assert.deepEqual([holds(relay), holds(corp)], [true, true], 'the added CA joins the one already carried')
+})
+
+// 1.6 §1.1 ④ · §1.4 · §3.2: the default plan and receipt say no unsaid word; the plan names each file of yours by full path, and --details its keys and trocar's own files
+test('§1.1 ④: Linux install\'s default plan and receipt say no unsaid word; the plan names each file of yours and --details the rest', async () => {
+  const home = tmpDir('trocar-install-linux-voice-')
+  seedClaude(home)
+  const run = async (argv) => { const io = fakeIo(); await runInstallCli(argv, { ...onCtx(home, io), platform: 'linux' }); return io }
+  const json = (await run(['--dry-run', '--json'])).json()
+  const plan = (await run(['--dry-run'])).text(), details = (await run(['--dry-run', '--details'])).text()
+  const ours = (p) => p.startsWith(path.join(home, '.trocar'))
+  for (const i of json.planned.filter((x) => x.path)) {
+    const shown = i.path.replace(home, '~')
+    assert.ok(details.includes(shown), `--details names ${shown}`)
+    if (!ours(i.path)) assert.ok(plan.includes(shown), `the plan names the file of yours ${shown}:\n${plan}`)
+  }
+  assert.deepEqual(unsaidIn(plan), [], plan)
+  const done = (await run(['--yes'])).text()
+  assert.deepEqual(unsaidIn(done), [], done)
 })

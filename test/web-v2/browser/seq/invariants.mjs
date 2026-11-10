@@ -8,7 +8,7 @@ import { WRITE_GAP_MS } from '../../../../web/legacy/core/router.mjs'
 import { BOARD_LINES } from '../../perf-lines.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
-  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review', 'I-order'])
+  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review', 'I-order', 'I-jump'])
 
 export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
@@ -42,9 +42,9 @@ export const LIMITS = Object.freeze({
 
 const STACK = [/^\s*at \S.*:\d+:\d+\)?\s*$/m, /FATAL ERROR/, /<--- Last few GCs --->/, /\b(?:node|v8)::\w/]
 const CJK = /[぀-ヿ㐀-鿿豈-﫿가-힯]/
-// where the board draws captured bytes, not its own words: verbatim bodies (<pre>, blocks.mjs), block rows (tag + preview) and
-// outline entries. A stack the session itself holds (a tool_result's trace) is content; I-stack reads only what is left.
-const CAPTURED = 'pre, .cblk, .navsub'
+// where the board draws captured bytes, not its own words: verbatim bodies (<pre>, blocks.mjs), block rows (tag + preview), cells in
+// either view (the drawer's too) and outline entries. A stack the session itself holds (a tool_result's trace) is content; I-stack reads only what is left.
+const CAPTURED = 'pre, .cblk, .cell, .navsub'
 
 /** What tells one bug from another of the same `<id>:<screen>`: the detail's first item with every number (and hex run holding a
  *  digit) as `#`, whitespace folded. Saved with an open regression; a violation is known only when its sig AND this match. */
@@ -69,10 +69,10 @@ async function heapUsed(page) {
 // the replay desk as the reader sees it: the step counter's two numbers, the 跟随最新 chip and the window's request-row heads
 const viewOf = (page) => page.evaluate((sel) => {
   const no = document.querySelector('#stepbar .sb-no')
-  const m = no && /(\d+)\s*\/\s*(\d+)/.exec(no.textContent)
+  const m = no && window.__stepNo()
   return {
     hash: location.hash,
-    step: m ? +m[1] : null, of: m ? +m[2] : null, follow: document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true',
+    step: m ? m.n : null, of: m ? m.m : null, follow: document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true',
     heads: [...document.querySelectorAll('#ctxwin .cblk[data-bi]')].map((e) => `${e.dataset.bi}:${e.dataset.sec || ''}`),
     reply: !!document.querySelector('#ctxwin .cwreply'),
     // a load control (2.3 #10 · 1.2 读取状态): any [data-load-step]; on the desk, any control inside an aria-busy frame or the
@@ -121,7 +121,7 @@ const rateKey = (url) => {
 }
 
 /** I-rate over the probe's fetch log (see LIMITS for every bound; the session rule is 4.4:52, live-poll). → [detail] */
-function rateFaults(log, { actions = [], hidden = [] } = {}) {
+export function rateFaults(log, { actions = [], hidden = [] } = {}) {
   const out = []
   const [lo, hi] = LIMITS.actionWindowMs
   // a page load is no reader action (a goto, a background tab's open): its reads are judged as the load's opening below
@@ -137,10 +137,11 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
   for (const a of actions) if (a.a === 'load') firstIn(a.t + lo, a.t + LIMITS.openReadMs, loadExempt)
   const last = new Map() // key → {start, dur, fails, pending, recovered}
   let sessionAt = -Infinity // the start of the latest poll round (its head read, or a `session` read), whatever caused it
+  let byHand = false // that round was opened by the reader or a screen, not by the timer
   for (const e of sorted) {
     const name = nameOf(e.url), key = rateKey(e.url), p = last.get(key)
     const since = sessionAt, failed = failedRead(e)
-    if (name === 'session' || name === 'd/head') sessionAt = e.start
+    if (name === 'session' || name === 'd/head') { sessionAt = e.start; byHand = byReader(e.start) || exempt.has(e) || loadExempt.has(e) }
     if (key == null) continue
     // the reader's read (and a screen it opened) starts the timer's chain over. Input reaching a hidden page is the harness's emulation:
     // such reads are the reader's, not the hidden tab's
@@ -152,7 +153,10 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     // an open tail read again in its own poll round (no head read since) is the round's whole read after a Range answer that was not
     // the file's lines or a 416 (4.4 §答案文件, replay.mjs readTail): once per round
     if (p && /^d\/open/.test(name) && since <= p.start && !p.chained) { last.set(key, { ...p, chained: true }); continue }
-    last.set(key, { start: e.start, dur: (e.end ?? e.start) - e.start, fails: failed ? (p ? p.fails : 0) + 1 : 0, pending: !!e.pending, recovered: !failed && !!p && p.fails > 0 })
+    // a tail starts once its round's head has answered, and the redraw before it can queue: the rounds are what is paced, so a tail is judged by its round
+    const tail = /^d\/open/.test(name) && since > -Infinity
+    if (tail && byHand) { last.delete(key); continue }
+    last.set(key, { start: e.start, round: tail ? since : null, dur: (e.end ?? e.start) - e.start, fails: failed ? (p ? p.fails : 0) + 1 : 0, pending: !!e.pending, recovered: !failed && !!p && p.fails > 0 })
     if (!p) continue
     const base = DELTA_PACED.has(name) ? LIMITS.interval.session : LIMITS.interval[name] || LIMITS.intervalOther
     if (DELTA_PACED.has(name) && !p.fails) {
@@ -163,7 +167,7 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     // duration unless it answered `pending` or ended a back-off
     let want = p.fails ? Math.min(base * 2 ** (p.fails - 1), LIMITS.backoffCapMs) : base
     if ((name === 'session' || name === 'd/head') && !p.fails && !p.pending && !p.recovered) want = Math.max(want, LIMITS.sessionDurFactor * p.dur)
-    const gap = e.start - p.start
+    const gap = tail && p.round != null ? since - p.round : e.start - p.start
     if (gap < LIMITS.rateSlack * want) out.push(`${key}: ${gap} ms after the last timer read, expected ≥ ${Math.round(LIMITS.rateSlack * want)} ms`)
   }
   return out
@@ -200,11 +204,12 @@ function packFaults(log) {
  * check(ctx) → { violations:[{id, sig, fp, detail}], pending:[{id, value, pointer}], view }.
  * ctx: { page, requests, errors, actions:[{t,a}], faults:[{name, kind, from, to}], hidden:[{from,to}], follow, grownAt (ms of the last
  * growth, or null), truth() → the main-lane count, real, prev (the `view` of the previous check), baseline (Map, optional: per-route
- * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null), stepAt (the step's start on
+ * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null), jump ({t, jump, landed} of an
+ * Overview row click just run, else null), stepAt (the step's start on
  * the page's clock, performance.timeOrigin + now(); default: judge every long task) }. Call it when the page has settled.
  */
 export async function check(ctx) {
-  const { page, requests = [], errors = [], actions = [], faults = [], hidden = [], follow = false, grownAt = null, truth, real = false, prev = null, drag = null } = ctx
+  const { page, requests = [], errors = [], actions = [], faults = [], hidden = [], follow = false, grownAt = null, truth, real = false, prev = null, drag = null, jump = null } = ctx
   const base = ctx.baseline || baselines.get(page) || (baselines.set(page, new Map()), baselines.get(page))
   let s = await probeSnap(page)
   const v = await viewOf(page)
@@ -212,10 +217,12 @@ export async function check(ctx) {
   const violations = [], pending = []
   const bad = (id, detail) => violations.push({ id, sig: `${id}:${screen}`, fp: fingerprint(detail), detail })
 
+  const armed = (t) => faults.some((f) => t >= f.from && t <= (f.to ?? Infinity) + LIMITS.consoleGraceMs)
   // 1.2 §点击与选中文字: a drag that selected text opened or closed nothing
   if (drag?.made && drag.changed.length) bad('I-select', drag.changed.slice(0, 3).join(' | '))
+  // 2.5 #5: a click on an Overview row lands on the step and block it names; a fault armed around the click may hold the step's read
+  if (jump && !jump.landed && !armed(jump.t)) bad('I-jump', `the row ${jump.jump} did not land`)
   if (errors.length) bad('I-pageerror', errors.slice(0, 3).join(' | '))
-  const armed = (t) => faults.some((f) => t >= f.from && t <= (f.to ?? Infinity) + LIMITS.consoleGraceMs)
   const loose = s.consoleErrors.filter((c) => !armed(c.t))
   if (loose.length) bad('I-console', loose.slice(0, 3).map((c) => c.msg).join(' | '))
   if (s.blank.length) bad('I-blank', `${s.blank.length} blank frame(s), first at ${s.blank[0].hash}`)
@@ -234,7 +241,7 @@ export async function check(ctx) {
   // the world grew since the baseline: what the route draws grew with the data, so the baseline is taken again (not a leak)
   if (first && grownAt != null && grownAt > first.at) { base.delete(route); first = undefined }
   while (first && s.inflight > first.inflight && Date.now() < deadline) { await page.waitForTimeout(100); s = await probeSnap(page) }
-  const now = { window: s.listeners.window, document: s.listeners.document, intervals: s.intervals, inflight: s.inflight, dom: v.dom, heap: await heapUsed(page), at: Date.now() }
+  const now = { window: s.listeners.window, document: s.listeners.document, intervals: s.intervals, inflight: s.inflight, dom: v.dom, heap: await heapUsed(page), read: s.deskRead, at: Date.now() }
   // a visit with a failed read drew a failure state; one with reads in flight, or hidden for a while (reads paused, 4.4), has not
   // drawn yet: no baseline (a later clean visit is)
   let visit = visits.get(page)
@@ -250,8 +257,11 @@ export async function check(ctx) {
     if (more.length) bad('I-leak', more.map((k) => `${k} ${first[k]} → ${now[k]}`).join(', '))
     if (now.dom > LIMITS.memRatio * first.dom) bad('I-mem', `elements ${first.dom} → ${now.dom}`)
     // a first visit's heap is a cold page's (no store, no caches yet): the heap's baseline is the route's first revisit
-    if (first.warm == null) first.warm = now.heap
-    else if (now.heap > LIMITS.memRatio * first.warm + LIMITS.memSlackBytes) bad('I-heap', `heap ${first.warm} → ${now.heap}`)
+    if (first.warm == null) { first.warm = now.heap; first.warmRead = now.read }
+    // what the desks read since stays in the heap whatever route is on screen: the session cache keeps it, within its own bound (1.2
+    // §路由「离开再回来」, 0.2 §5), so it counts as baseline. A reload starts the page's count over.
+    // shortcut: an evicted desk's bytes stay counted, so a leak after an eviction has that much more room; upgrade if the probe can see the cache
+    else if (now.heap > LIMITS.memRatio * (first.warm + Math.max(0, now.read - first.warmRead)) + LIMITS.memSlackBytes) bad('I-heap', `heap ${first.warm} → ${now.heap}`)
   }
   if (now.heap > LIMITS.memCapBytes) pending.push({ id: 'I-memcap', value: now.heap, pointer: PENDING.get('I-memcap') })
 
@@ -260,7 +270,7 @@ export async function check(ctx) {
   // a hidden tab reads nothing (4.4:49-51): following is held to the growth only from the later of the growth and the return
   const shownAt = Math.max(grownAt ?? 0, ...hidden.map((h) => h.to ?? Infinity))
   if (desk && follow && grownAt != null && truth && shownAt !== Infinity) {
-    let w = v, m = await truth()
+    let m = await truth(), w = await viewOf(page) // truth() can wait out a read: the view it is held to is the one after it
     while (!(w.step === m && w.of === m && w.reply) && Date.now() < shownAt + LIMITS.followMs) {
       await page.waitForTimeout(250); w = await viewOf(page); m = await truth()
     }

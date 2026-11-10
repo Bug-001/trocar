@@ -4,30 +4,34 @@
 // install noted, the standalone undo copy, and the backups no manifest names. It never changes a thing of the user's and starts nothing: its OS queries are read-only (`ps`, the trust-store
 // lookup, the process table); the files it may write are `status`'s ~/.trocar/netenv.json (the topology) and, when a sealed capture file could only be read in part, one line in ~/.trocar/raw/journal.jsonl.
 //
-// Exit (R4): 1 — a capture file others can read (「采集文件可被他人读取」: the bytes hold live API keys) · 3 — it could not judge: no records examined, no file's permissions examined, a file whose permissions
-// could not be read, a capture file only partly read — never 0 (reading nothing and answering 「过」 is what this command once did, 0.1 §3) · 0 — the rest. The status block is a report and
-// does not change the exit (review B-7). Everything the world gives is a `deps` entry a test replaces (0.1 §3): `has(bin)` (dependency probe), `verify()` (the trust-store check), and the
+// Exit (R4): 1 — a problem: a capture file others can read (「采集文件可被他人读取」: the bytes hold live API keys), a capture failure `status` counts (D38) · 3 — it could not judge: no records examined, no file's permissions examined, a file whose permissions
+// could not be read, a capture file only partly read — never 0 (reading nothing and answering 「过」 is what this command once did, 0.1 §3) · 0 — the rest. The harness table of the status block is a report and
+// does not change the exit (review B-7); the capture failures it counts do (capture-failures). Everything the world gives is a `deps` entry a test replaces (0.1 §3): `has(bin)` (dependency probe), `verify()` (the trust-store check), and the
 // ones `runStatusCli` takes (`request`, `procs`, `lingerRead`, …). With none, `has` looks at PATH, `verify` asks the user trust store of THIS home, everything else is real.
 import nodeFs from 'node:fs'
+import { codeId } from '../version.mjs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { EXIT, newReceipt } from '../off/schema.mjs' // as in status.mjs: the keys and the exit codes, not ./schema.mjs's checker (D62)
-import { unknown, shellArg as shq } from './text.mjs' // shq: a path with a space or a quote stays one argument of the chmod line
+import { unknown, andList, wrap, colors, WIDTH, shellArg as shq } from './text.mjs'
+import { plainSentence } from './words.mjs' // shq: a path with a space or a quote stays one argument of the chmod line
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { statusFacts, statusDocOf } from './status.mjs'
-import { diagnose, renderFindings } from '../netenv/findings.mjs'
+import { diagnose, renderFindings, needsYou } from '../netenv/findings.mjs'
+import { RESTART_REASONS } from '../health/codes.mjs'
 import { serveSource } from '../paths.mjs'
-import { formatInstallNotes } from './status-text.mjs'
+import { formatInstallNotes, windowWords, problemsWords } from './status-text.mjs'
 import { trocarHome, backupDir, collectorDir } from '../off/paths.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
+import { rootName, rootStore as userRootStore, strayRoots } from '../off/root-store.mjs'
+import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 import { printJson } from './json.mjs'
 
-const USAGE = 'usage: trocar doctor [<harness>...] [--json]'
+const USAGE = 'usage: trocar doctor [<harness>...] [--details] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 const errText = (e) => String((e && (e.code || e.message)) || e)
-const indent = (s) => String(s).split('\n').map((l) => `  ${l}`).join('\n')
 
 /** Is `bin` an executable on PATH? Looked up in the files (no `which`: no process to start), `PATHEXT` on Windows. */
 export function onPath(bin, { env = process.env, platform = process.platform, fs = nodeFs } = {}) {
@@ -84,7 +88,7 @@ async function collect({ home, env, sourceFlags, deps, capture }) {
       } catch (e) { readErrors.push(`${f}: ${(e && e.message) || e}`) }
     }
   }
-  return { sources, files, extra, records, srcMeta, readErrors }
+  return { sources, files, extra, records, srcMeta, readErrors, backups: backups.files }
 }
 
 /** The things `doctor` looked at and could not judge (附录 C.4 `undetermined`), in English, from the structured result — never a reason string of another module. */
@@ -101,6 +105,14 @@ function undeterminedOf(res, readErrors, { files = 0, records = 0, root = null }
   for (const e of readErrors) out.push({ what: 'a captured file', reason: e })
   return out
 }
+/** 4.11 §3 ㉔ → { roots } (the trocar roots the store holds that the install record does not list) | { why } (not known: the store or the record could not be read). */
+async function strayOf({ home, fs, deps }) {
+  let m
+  try { m = readManifest(collectorDir(home), fs) } catch (e) { rethrowSandbox(e); return { why: `the install record cannot be read (${errText(e)})` } }
+  if (m && m.unsupported) return { why: 'the install record is of a version this trocar does not read' }
+  const r = await strayRoots(deps.rootStore, m)
+  return r.error ? { why: `the root store could not be listed (${r.error})` } : r
+}
 /** Only these keep `doctor` from judging (exit 3). No captured data yet does not. */
 const realUndetermined = (u) => u.filter((x) => x.reason !== 'no captured data yet')
 
@@ -115,8 +127,13 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   const fs = deps.fs || nodeFs
   // the capture half of this command is sixteen modules `status` never touches (D62): start loading it, then ask the OS — it compiles while the daemon answers
   const capture = deps.capture || import('./doctor-deps.mjs')
-  // the capture files and what `status` reads are independent: the disk walk and the OS questions run together (D62 task E)
-  const [c, f] = await Promise.all([collect({ home, env, sourceFlags: [], deps, capture }), statusFacts({ names, home, env, platform, deps })])
+  // 4.11 §3 ㉔: a trocar root no install record lists (macOS / Windows; Linux keeps its root in no trust store). One store for the command: on
+  // Windows `status`'s has and this list read one certutil listing (1.6 §3.7)
+  const listsRoots = platform === 'darwin' || platform === 'win32' // not proxy mode: the OSes whose root sits in a user trust store
+  if (listsRoots && !deps.rootStore) deps = { ...deps, rootStore: (deps.backends && deps.backends.rootStore) || userRootStore({ platform, run: deps.exec || null, home, env, fs, once: true }) }
+  // the capture files and what `status` reads are independent: the disk walk and the OS questions run together (D62 task E). The listing is a
+  // synchronous OS tool, so it is started last, after the daemon request and the file reads are on their way
+  const [c, f, s] = await Promise.all([collect({ home, env, sourceFlags: [], deps, capture }), statusFacts({ names, home, env, platform, deps }), listsRoots ? strayOf({ home, fs, deps }) : null])
   const { checkDeps, runSelfTest, orphanBackups, checkStandalone } = await capture
   const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
   const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors, platform })
@@ -128,19 +145,39 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   else findingsError = f.topology_error || 'the network facts could not be read on this platform'
   // what `doctor` looks at besides the network: the files only you may read, the copy of the undo program, the backups no install record names
   const extra = []
+  if (s && s.roots && s.roots.length) extra.push({ code: 'stray-root', class: 'problem', what: `Your trust store holds a trocar root no install record lists: ${s.roots.map(rootName).join(', ')}.`, why: 'trocar trusts one root per user; trocar uninstall removes every trocar root.', commands: [{ run: 'trocar uninstall', shell: 'sh' }, { run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
   for (const bad of res.q4b.bad) extra.push({ code: 'file-readable-by-others', class: 'problem', what: `${bad.file} (mode ${bad.mode}) can be read by someone else, and captured files hold live credentials.`, why: 'Only you may read what trocar captured.', commands: [{ run: `chmod 600 ${shq(bad.file)}`, shell: 'sh' }], verify: 'trocar doctor' })
   // the copy of the undo program is `install`'s; a machine where nothing was installed has nothing to check (§3.7)
   const installed = !!(status.install && status.install.state)
   const standalone = installed ? (() => { try { return checkStandalone({ home, platform, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })() : { ok: true }
   if (standalone.error) extra.push({ code: 'standalone-unreadable', class: 'problem', what: 'The standalone undo program could not be checked.', why: standalone.error, commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
   else if (!standalone.ok) extra.push({ code: 'standalone-stale', class: 'problem', what: `${standalone.path} ${standalone.missing ? 'is not there' : 'is not the current version'}, so it may not undo everything.`, why: standalone.reason || 'its bytes are not the ones this trocar writes', commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
+  // §3.7: the collector on other code than this trocar (it reports `code`, D67⑤): what this version changed in the collector is not in effect
+  const dc = status.daemon || {}
+  if (dc.runs_this_code === false) extra.push({ code: 'daemon-other-code', class: 'problem', what: `trocar's collector runs other code (${dc.code}) than this trocar (${codeId()}), so what this version changed in the collector is not in effect.`, why: 'The collector was started from other code: another copy of trocar, or this one before its files were replaced.', commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar status' })
+  // D38: the capture failures `status` counts, in its window, from the one health read both documents fold (`status.failures`): doctor never
+  // says no problems while status lists some. One finding with status's count; the way out is status's own list.
+  const fl = status.failures
+  if (fl && fl.problem > 0) extra.push({ code: 'capture-failures', class: 'problem', count: fl.problem, what: `trocar recorded ${fl.problem} capture failure${fl.problem === 1 ? '' : 's'} ${windowWords(fl, Date.now())}.`, why: 'Some of what the agents sent then was not captured, or did not get through.', commands: [{ run: 'trocar status --failures', shell: 'sh' }], verify: 'trocar status --failures' })
   let orphans = [], orphansError = null
   try { const m = readManifest(collectorDir(home), fs); orphans = m && m.unsupported ? null : orphanBackups({ home, manifest: m, fs }); if (orphans === null) orphansError = 'the install record is of a version this trocar does not read, so which backups it names cannot be said' } catch (e) { orphansError = `${manifestPath(collectorDir(home))}: ${errText(e)}` }
   if (orphans && orphans.length) extra.push({ code: 'backup-unclaimed', class: 'note', what: `${orphans.length} backup file(s) belong to no install record.`, why: 'An edit that was interrupted left them behind.', commands: [{ run: `Look at them, then remove them: ${orphans[0]}`, shell: 'sh' }], verify: 'trocar doctor' })
   if (orphansError) extra.push({ code: 'backup-unclaimed', class: 'note', what: `Whether any backup belongs to no install record is ${unknown(orphansError)}.`, why: 'The install record could not be read.', commands: [], verify: 'trocar doctor' })
+  // an earlier trocar's `on` saved its own intermediate copies of a file, each with the door password in it (1.6 §3.7): the path only, never the password; no door file, no password
+  const door = readIngressConfig({ dir: collectorDir(home), fs })
+  if (door.error && c.backups.length) extra.push({ code: 'backup-holds-door-password', class: 'note', what: `Whether a backup holds trocar's local proxy password is ${unknown(door.error)}.`, why: 'The file with the password could not be read.', commands: [], verify: 'trocar doctor' })
+  if (door.listenerToken) {
+    const secret = Buffer.from(door.listenerToken)
+    for (const file of c.backups) {
+      let bytes = null
+      try { bytes = fs.readFileSync(file) } catch (e) { rethrowSandbox(e); continue }
+      if (bytes.includes(secret)) extra.push({ code: 'backup-holds-door-password', class: 'note', what: `${file} holds trocar's local proxy password.`, why: 'An earlier trocar saved its own intermediate copy of a file there.', commands: [{ run: `If you no longer need it: rm ${shq(file)}`, shell: 'sh' }], verify: 'trocar doctor' })
+    }
+  }
   const all = findings === null ? null : [...extra.filter((x) => x.class === 'problem'), ...findings, ...extra.filter((x) => x.class !== 'problem')]
   const summary = all === null ? null : { problem: all.filter((x) => x.class === 'problem').length, expected: all.filter((x) => x.class === 'expected').length, note: all.filter((x) => x.class === 'note').length }
   const undetermined = undeterminedOf(res, c.readErrors, { files: c.files.length, records: c.records.length, root: (status.cert || {}).root || null })
+  if (s && s.why) undetermined.push({ what: 'whether your trust store holds a trocar root no install record lists', reason: s.why })
   const exit = summary && summary.problem ? EXIT.incomplete : realUndetermined(undetermined).length ? EXIT.unknown : EXIT.ok
   let notes = []
   // the capture health `status` already read of the same files (gatherStatus): one command, one read (D62). A read that failed is `null` there and
@@ -154,11 +191,12 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
 
 /** → the exit code. `argv` is what follows `doctor`; `io` = { out, err }. */
 export async function runDoctor(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
-  let json = false
+  let json = false, details = false
   const names = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--json') json = true
+    else if (a === '--details') details = true
     else if (a.startsWith('-')) { io.err(`trocar doctor: unknown option '${a}'\n${USAGE}`); return EXIT.usage }
     else names.push(a)
   }
@@ -167,7 +205,40 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   const doc = await doctorDoc({ names: named.ids, home, env, platform, deps })
   const { exit } = doc
   if (json) { const { exit: _drop, ...out } = doc; printJson(io, out); return exit }
+  const c = colors(io) // the headline bold on a terminal (§1.1 颜色)
+  for (const [i, l] of (details ? doctorDetails : doctorShort)(doc).entries()) io.out(i ? l : c.bold(l))
+  return exit
+}
+
+/** `doctor` by default (1.6 §3.7, §1.1 ④): the problems, and the expected findings that ask something of you, numbered under a headline that counts
+ *  the problems and says what you must do; the rest is counted in one line that points at --details. The capture failures are one line and where to
+ *  see them. */
+export function doctorShort(doc, { now = Date.now() } = {}) {
   const s = doc.summary
+  if (s === null) return [plainSentence(`trocar doctor: findings are ${unknown(doc.findings_error)}.`), ...judged(doc).map(plainSentence)]
+  const fl = doc.status && doc.status.failures
+  const shown = (f) => f.class === 'problem' || needsYou(f)
+  const told = (doc.findings || []).filter(shown).map((f) => (f.code === 'capture-failures' ? { ...f, ...(fl ? { what: `${problemsWords(fl, now, 'capture failure')}.` } : {}), see: 'trocar status --failures' } : f))
+  const rest = (doc.findings || []).filter((f) => !shown(f))
+  const restart = [...new Set(told.filter((f) => f.class === 'expected' && RESTART_REASONS.includes(f.code)).map((f) => f.harness).filter(Boolean))]
+  const other = [...new Set(told.filter((f) => f.class === 'expected' && !RESTART_REASONS.includes(f.code)).map((f) => f.harness || 'trocar'))]
+  const todo = [restart.length && `${andList(restart)} need${restart.length === 1 ? 's' : ''} a restart`, other.length && `${andList(other)} need${other.length === 1 ? 's' : ''} a step from you`].filter(Boolean).join(', and ')
+  const n = s.problem
+  const head = n ? `trocar doctor: ${n} problem${n === 1 ? '' : 's'}${todo ? `, and ${todo}` : ''}.` : todo ? `trocar doctor: no problems, but ${todo}.` : 'trocar doctor: no problems.'
+  const lines = [head]
+  if (told.length) lines.push('', ...renderFindings(told, { short: true }))
+  lines.push(...judged(doc).map(plainSentence))
+  const hidden = renderFindings(rest).filter((l) => /^(?:\d+\.|Note:) /.test(l)).length // what --details prints of them, one per finding said,
+    + (doc.install_notes || []).filter((l) => !/^Notes of/.test(l)).length + doc.undetermined.filter((x) => x.reason === 'no captured data yet').length // and the notes only it prints
+  if (hidden) lines.push('', `${hidden} note${hidden === 1 ? '' : 's'}: trocar doctor --details`)
+  return lines
+}
+/** What doctor could not judge (exit 3): said in both texts, since it is why the exit is what it is. */
+const judged = (doc) => realUndetermined(doc.undetermined).map((u) => `Could not judge ${u.what}: ${u.reason}`)
+
+/** `doctor --details`: every finding with its why, its pids and every command, the notes, and what the last install noted. */
+export function doctorDetails(doc) {
+  const s = doc.summary, out = []
   // §3.7: the headline says what the list below it numbers — problems AND the expected findings (a Windows test machine 2026-10-18:
   // "1 problem." over three numbered entries). Notes are not numbered, so they are not counted here. The exit code is unchanged.
   const headline = (x) => {
@@ -177,10 +248,11 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
     if (x.expected) parts.push(`${x.expected} expected finding${x.expected === 1 ? '' : 's'}`)
     return `trocar doctor: ${parts.join(' and ')}.`
   }
-  io.out(s === null ? `trocar doctor: findings are ${unknown(doc.findings_error)}.` : headline(s))
-  if (doc.findings && doc.findings.length) { io.out(''); for (const l of renderFindings(doc.findings)) io.out(l) }
-  for (const u of realUndetermined(doc.undetermined)) io.out(`Could not judge ${u.what}: ${u.reason}`)
-  for (const u of doc.undetermined.filter((x) => x.reason === 'no captured data yet')) io.out(`${u.what.replace(/^./, (m) => m.toUpperCase())}: no captured data yet`)
-  if (doc.install_notes.length) { io.out(''); for (const l of doc.install_notes) io.out(l) }
-  return exit
+  out.push(s === null ? `trocar doctor: findings are ${unknown(doc.findings_error)}.` : headline(s))
+  if (doc.findings && doc.findings.length) out.push('', ...renderFindings(doc.findings))
+  out.push(...judged(doc))
+  for (const u of doc.undetermined.filter((x) => x.reason === 'no captured data yet')) out.push(`${u.what.replace(/^./, (m) => m.toUpperCase())}: no captured data yet`)
+  // a note folds inside 80 columns under its own text (§1.1⑥): the terminal would break it mid-word
+  if (doc.install_notes.length) out.push('', ...doc.install_notes.flatMap((l) => (/^\s/.test(l) ? wrap(l.trim(), WIDTH - 2, '      ').map((t) => `  ${t}`) : [l])))
+  return out
 }

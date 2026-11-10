@@ -1,26 +1,33 @@
 // test/helpers/model-world.mjs — a tmp-HOME world for the collector model's install / on / uninstall (plan T20): the stub custody, an in-memory
 // user root store (an add can be declined or left pending), the sources ctx over the real tmp fs with an injected `which`, and runInstall bound to
 // it; sharedCertFileWorld adds rule U's one file two harnesses name. Nothing here touches a keychain, a trust store or the user's real HOME. Exports only.
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from './tmp.mjs'
 import { custodyStub } from './custody-stub.mjs'
-import { rootIdOf } from '../../src/off/root-store.mjs'
+import { rootIdOf, ROOT_SUBJECT } from '../../src/off/root-store.mjs'
 import { runInstall } from '../../src/collector/model-install.mjs'
 import { sourcesCtx } from '../../src/collector/arch/model-backends.mjs'
+import { dirsFor } from '../../src/off/loc.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 
-/** An in-memory root store: `answer` is what an add says ('ok' | 'declined' | 'pending'); `calls` records every verb. */
+/** An in-memory root store: `answer` is what an add says ('ok' | 'declined' | 'pending'); `calls` records every verb. `list` answers the held
+ *  certificates whose subject is trocar's (a fingerprint put in `held` by hand counts as one). */
 export function rootStoreStub({ answer = 'ok' } = {}) {
-  const held = new Set(), calls = []
+  const held = new Set(), ders = new Map(), calls = []
   return {
     held, calls, set answer(a) { answer = a },
     has: (id) => { calls.push('has'); return { present: held.has(id.fp256) } },
-    add: (der) => { calls.push('add'); if (answer !== 'ok') return { ok: false, state: answer, reason: `the OS prompt was ${answer}` }; held.add(rootIdOf(der).fp256); return { ok: true } },
+    add: (der) => { calls.push('add'); if (answer !== 'ok') return { ok: false, state: answer, reason: `the OS prompt was ${answer}` }; const { fp256 } = rootIdOf(der); held.add(fp256); ders.set(fp256, der); return { ok: true } },
     remove: (id) => { calls.push('remove'); held.delete(id.fp256); return { ok: true } },
+    list: () => ({ roots: [...held].filter((fp) => !ders.has(fp) || new crypto.X509Certificate(ders.get(fp)).subject === `CN=${ROOT_SUBJECT}`).map((fp) => (ders.has(fp) ? rootIdOf(ders.get(fp)) : { fp256: fp })) }),
   }
 }
+
+/** The per-user folders of `os`, the product's own answer (dirsFor), under this host's path rules because the files really live here. */
+export const worldDirs = (os, home) => Object.fromEntries(Object.entries(dirsFor(os, home, {})).map(([k, v]) => [k, v.replaceAll('\\', path.sep)]))
 
 /** world({ os, env (an object, or home → object), commands }) → { home, dir, env, custody, store, ctx, install(over) } — `commands` are the names `which` finds (under home/bin). */
 export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd = null } = {}) {
@@ -32,7 +39,7 @@ export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd =
   const custody = custodyStub()
   const store = rootStoreStub()
   const fullEnv = { HOME: home, PATH: bin, ...(typeof env === 'function' ? env(home) : env) }
-  const ctx = sourcesCtx({ os, home, env: fullEnv, cwd: cwd || home, dirs: { appSupport: path.join(home, 'Library', 'Application Support'), localAppData: path.join(home, 'AppData', 'Local') } })
+  const ctx = sourcesCtx({ os, home, env: fullEnv, cwd: cwd || home, dirs: worldDirs(os, home) })
   ctx.exists = (p) => (p === home || p.startsWith(`${home}${path.sep}`)) && fs.existsSync(p) // hermetic: the dev machine's /Applications never makes a form present
   const harnesses = await loadHarnesses()
   const owns = (p) => { try { return fs.statSync(p).uid === process.getuid() } catch { return null } }
@@ -40,11 +47,13 @@ export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd =
   return { home, dir, env: fullEnv, custody, store, ctx, harnesses, owns, install }
 }
 
-/** Rule U's shared file (4.11 P4): Claude Code (bundled store) and Kimi Code (its native program) present, NODE_EXTRA_CA_CERTS naming one user
- *  certificate file holding `userPem` — both harnesses' settings name it, so install places one block, recorded under the first. → world + { file } */
-export async function sharedCertFileWorld({ userPem }) {
-  const w = await modelWorld({ commands: ['claude', 'kimi'], env: (home) => ({ CLAUDE_CODE_CERT_STORE: 'bundled', NODE_EXTRA_CA_CERTS: path.join(home, 'certs', 'mine.pem') }) })
-  const file = w.env.NODE_EXTRA_CA_CERTS
+/** Rule U's shared file (4.11 P4): by default Claude Code (bundled store) and Kimi Code (its native program) present, NODE_EXTRA_CA_CERTS naming one
+ *  user certificate file holding `userPem` — both harnesses' settings name it, so install places one block, recorded under the first. `variable`,
+ *  `commands`, `env`, `dirs` give another pair the same shape (SSL_CERT_FILE for Codex and Hermes). → world + { file } */
+export async function sharedCertFileWorld({ userPem, variable = 'NODE_EXTRA_CA_CERTS', commands = ['claude', 'kimi'], env = { CLAUDE_CODE_CERT_STORE: 'bundled' }, dirs = [] }) {
+  const w = await modelWorld({ commands, env: (home) => ({ ...env, [variable]: path.join(home, 'certs', 'mine.pem') }) })
+  const file = w.env[variable]
+  for (const d of dirs) fs.mkdirSync(path.join(w.home, d), { recursive: true }) // a harness home a form's presence needs
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, userPem)
   const kimi = path.join(w.home, '.kimi-code', 'bin', 'kimi')
   fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])) // a Mach-O header: the wrapper's precondition

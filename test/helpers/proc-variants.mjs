@@ -70,7 +70,7 @@ export function variantsOf(seed) {
   const withExe = (exe) => [seed.argv[0] === seed.exe ? exe : seed.argv[0], ...seed.argv.slice(1)]
   for (const [k, exe] of prefixesOf(os, file)) add(`prefix:${k}`, exe, withExe(exe))
   // letter case: the file name upper-cased (darwin and Windows compare names ignoring case; the normalizer lower-cases on every OS)
-  if (seed.exe.endsWith(file)) {
+  if (seed.exe.endsWith(file) && !seed.exeCase) {
     const upper = seed.exe.slice(0, seed.exe.length - file.length) + file.toUpperCase()
     if (upper !== seed.exe) add('case', upper, withExe(upper))
   }

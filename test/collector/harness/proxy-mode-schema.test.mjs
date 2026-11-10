@@ -33,9 +33,14 @@ const MUTATIONS = {
   'write-target': (pm) => { pm.routes[firstRoute(pm)].file = { base: 'abs', path: '/Library/Managed Preferences/agent.plist' } },
   'write-target (perOs)': (pm) => { pm.routes[firstRoute(pm)].file = { perOs: { darwin: { base: 'home', path: '.agent.json' }, win32: { base: 'abs', path: 'C:/ProgramData/Agent/settings.json' } } } },
   'write-target (cwd)': (pm) => { pm.routes[firstRoute(pm)].file = { base: 'cwd', path: '.agent/settings.json' } },
+  'shape (exe name)': (pm) => { pm.forms[0].exe = { [pm.forms[0].os[0]]: ['/Applications/Editor.app/Contents/MacOS/Editor Helper'] } }, // a path, not the program name
+  'shape (exe os)': (pm) => { pm.forms[0].exe = { linux: ['editor'] } }, // an OS the form is not on
+  'shape (argv os)': (pm) => { pm.forms[0].argv = { linux: ['serve'] } }, // an OS the form is not on
+  'shape (argv words)': (pm) => { pm.forms[0].argv = { [pm.forms[0].os[0]]: [] } }, // no word: nothing to tell the form by
   'shape (notes)': (pm) => { pm.notes = [{ id: 'launch-flag' }] },
   'shape (notes list)': (pm) => { pm.notes = 'a launch flag skips the hook' },
   'shape (effects list)': (pm) => { pm.effects = { id: 'residue' } },
+  'shape (userCertFiles semantics)': (pm) => { pm.userCertFiles = [{ env: 'USER_CA', semantics: 'add' }] }, // only replace is marked: unmarked is add
 }
 
 // The real loader over a directory of one generated module per descriptor; the module hands back an object built here (functions and all).
@@ -59,6 +64,16 @@ test('every real descriptor carries proxyMode and loads; one without it is refus
   assert.deepEqual(real.filter((d) => !d.proxyMode).map((d) => d.name), [])
   const { proxyMode, ...bare } = eighth
   await assert.rejects(loadOne(bare), /harness eighth .*shape: no proxyMode/)
+})
+
+test('a descriptor with inject carries a non-empty top-level present of <loc> (no perOs) or { command } items (spec 4.11 校验)', async () => {
+  const bad = { absent: undefined, empty: [], perOs: [{ perOs: {} }], base: [{ base: 'nowhere' }], command: [{ command: '' }] }
+  for (const [axis, present] of Object.entries(bad)) {
+    const d = { ...eighth, inject() {} }
+    if (present !== undefined) d.present = present
+    await assert.rejects(loadOne(d), /harness eighth .*\b(present|shape): /, axis)
+  }
+  assert.equal((await loadOne({ ...eighth, inject() {}, present: [{ command: 'eighth' }, { base: 'home', path: '.eighth' }, { base: 'abs', path: '/eighth' }] })).length, 1)
 })
 
 for (const d of subjects) {

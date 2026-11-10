@@ -14,6 +14,9 @@
 //   3. Every refusal is written to a ledger (`globalThis[Symbol.for('trocar.no-real-os')].refused`). A test process that ends with a
 //      refusal nobody acknowledged (`takeRefusals()` in test/helpers/no-real-os.mjs) exits 1 and names it: a caller that catches
 //      ESANDBOX as "the tool failed" no longer turns a path it never ran into a green test.
+//   4. `node:fs` is wrapped the same way: a write under the machine's own folders (ROOTS) or the real home is refused with ESANDBOX and goes in the same ledger, unless it is in the
+//      temp dir or the checkout. A test that makes an app "present" at its descriptor's absolute place wrote two empty files into /Applications on 2026-11-06, and every later
+//      run of the install tests on that machine saw them as installed apps.
 // Load it with `--require` like the other preloads; the test files' children inherit the variable (not the wrapper: a child that
 // must be guarded runs the same preload, or relies on layer 1). Guard: test/helpers/no-real-os.test.mjs, test/off/exec.test.mjs.
 'use strict'
@@ -22,9 +25,23 @@ const os = require('node:os')
 const path = require('node:path')
 const util = require('node:util')
 const cp = require('node:child_process')
+const { fileURLToPath } = require('node:url')
 const { syncBuiltinESMExports } = require('node:module')
 
 process.env.TROCAR_TEST_SANDBOX = '1'
+// A fresh HOME does not move the session's runtime directory, and on Linux the running collector's control socket is $XDG_RUNTIME_DIR/trocar/collector.sock:
+//    a test that hands process.env on would ask the developer's own daemon. Moved to a path in the run's temp dir where nothing listens (and
+//    nothing is: a test that needs one makes its own). Only when it is set: a platform without one gets none (CLAUDE.md, 平台缝).
+//    os.tmpdir() is the run's own here because leak-guard.cjs loads first (package.json's test script) and moved TMPDIR.
+if (process.env.XDG_RUNTIME_DIR) process.env.XDG_RUNTIME_DIR = path.join(os.tmpdir(), 'no-session-runtime')
+// Windows: os.homedir() reads USERPROFILE, never HOME, and a test that hands process.env on would reach the developer's real profile (their ~/.trocar,
+//    their agents' configs). Moved into the run's temp dir like XDG_RUNTIME_DIR; os.tmpdir() reads TEMP / TMP there, not the profile. HOME stays the tests'.
+if (process.platform === 'win32') {
+  const profile = path.join(os.tmpdir(), 'no-real-profile')
+  Object.assign(process.env, { USERPROFILE: profile, HOMEDRIVE: path.parse(profile).root.slice(0, 2), HOMEPATH: profile.slice(2) })
+}
+// The rule for a child given an explicit env: on win32, one with HOME and no USERPROFILE (any case) gets USERPROFILE = that HOME; nothing else is added.
+const profileFor = (env, platform) => (platform === 'win32' && env.HOME && !Object.keys(env).some((k) => k.toUpperCase() === 'USERPROFILE') ? env.HOME : undefined)
 
 // + the macOS native pieces trocar ships (T13): the signing helper writes the login keychain, procenv reads another process's
 // memory, plutil reads managed preferences — a test injects a runner or a stub, never the committed binary or the real tool
@@ -103,26 +120,67 @@ function guard(name, a) {
   }
 }
 
+/** `a` with the options' explicit env given a USERPROFILE by profileFor, copied (the caller's object is not touched). */
+function withProfile(a) {
+  const i = [1, 2].find((j) => a[j] && typeof a[j] === 'object' && !Array.isArray(a[j]))
+  const env = i && a[i].env, profile = env && profileFor(env, process.platform)
+  if (!profile) return a
+  const out = [...a]; out[i] = { ...a[i], env: { ...env, USERPROFILE: profile } }
+  return out
+}
+
 function patch(name) {
   const original = cp[name]
   if (typeof original !== 'function' || original.trocarGuarded) return
-  const wrapped = function (...a) { guard(name, a); return original.apply(this, a) }
+  const wrapped = function (...a) { guard(name, a); return original.apply(this, withProfile(a)) }
   Object.defineProperty(wrapped, 'name', { value: name })
   Object.defineProperty(wrapped, 'trocarGuarded', { value: true })
   const custom = original[util.promisify.custom] // exec / execFile resolve to {stdout, stderr}; that function holds the original
-  if (custom) Object.defineProperty(wrapped, util.promisify.custom, { value: function (...a) { guard(name, a); return custom.apply(this, a) } })
+  if (custom) Object.defineProperty(wrapped, util.promisify.custom, { value: function (...a) { guard(name, a); return custom.apply(this, withProfile(a)) } })
   cp[name] = wrapped
 }
 for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync']) patch(name)
 syncBuiltinESMExports() // an ESM `import { spawnSync } from 'node:child_process'` reads the patched functions
 
+const inside = (p, root) => p === root || p.startsWith(root + path.sep)
+const realOf = (p) => { try { return fs.realpathSync(p) } catch { return p } }
+const WIN_ROOTS = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.SystemRoot]
+const ROOTS = [...new Set([...(process.platform === 'win32' ? WIN_ROOTS : ['/Applications', '/Library', '/System', '/usr', '/etc', '/private/etc']), os.userInfo().homedir].filter(Boolean))]
+const FREE = [...new Set([os.tmpdir(), realOf(os.tmpdir()), process.cwd(), realOf(process.cwd()), path.resolve(__dirname, '..', '..')])] // __dirname: a checkout whose test/helpers is a link
+
+const pathOf = (p) => (typeof p === 'string' ? p : Buffer.isBuffer(p) ? p.toString() : p instanceof URL && p.protocol === 'file:' ? fileURLToPath(p) : null) // anything else (an fd) is not this guard's
+
+/** Throws ESANDBOX (and records it) when `p` is under ROOTS and not in FREE. shortcut: judged on the path as written, so a link in the temp dir that points out of it passes; upgrade if one ever does. */
+function guardWrite(name, p) {
+  const given = pathOf(p)
+  if (given === null) return
+  const at = path.resolve(given)
+  if (!ROOTS.some((r) => inside(at, r)) || FREE.some((r) => inside(at, r))) return
+  const message = `refusing ${name} of ${at} under npm test (0.1 §3): write in a tmpDir(), and give the code under test its roots`
+  refused.push({ tool: name, command: at, message })
+  throw Object.assign(new Error(message), { code: 'ESANDBOX' })
+}
+const opensForWrite = (flags) => (typeof flags === 'number' ? (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT)) !== 0 : typeof flags === 'string' && /[wa+]/.test(flags)) // no flags (fs.open(path, callback)): a read
+const WRITERS = { writeFile: [0], appendFile: [0], mkdir: [0], mkdtemp: [0], rm: [0], rmdir: [0], unlink: [0], truncate: [0], chown: [0], lchown: [0], chmod: [0], lchmod: [0], utimes: [0], lutimes: [0], rename: [0, 1], copyFile: [1], cp: [1], link: [1], symlink: [1], createWriteStream: [0], open: 'open' }
+function patchFs(obj, name, spec, wrap = (g, f) => function (...a) { g(a); return f.apply(this, a) }) {
+  const original = obj[name]
+  if (typeof original !== 'function') return
+  const judge = (a) => { if (spec === 'open') { if (opensForWrite(a[1])) guardWrite(name, a[0]) } else for (const i of spec) guardWrite(name, a[i]) }
+  obj[name] = Object.defineProperty(wrap(judge, original), 'name', { value: name })
+}
+const later = (g, f) => async function (...a) { g(a); return f.apply(this, a) }
+for (const [name, spec] of Object.entries(WRITERS)) {
+  patchFs(fs, name, spec); patchFs(fs, `${name}Sync`, spec); patchFs(fs.promises, name, spec, later)
+}
+syncBuiltinESMExports() // fs and fs/promises too
+
 process.on('exit', () => {
   if (!refused.length) return
   const lines = refused.map((r) => `  ${r.command || r.tool}`)
-  fs.writeSync(2, `\nno-real-os: ${refused.length} attempt${refused.length === 1 ? '' : 's'} to run a real OS tool ${refused.length === 1 ? 'was' : 'were'} refused in this process and never acknowledged:\n${lines.join('\n')}\n` +
+  fs.writeSync(2, `\nno-real-os: ${refused.length} attempt${refused.length === 1 ? '' : 's'} to run a real OS tool or write on the real machine ${refused.length === 1 ? 'was' : 'were'} refused in this process and never acknowledged:\n${lines.join('\n')}\n` +
     '  something ran a real tool, and whatever caught the ESANDBOX error went on as if the tool had failed; the path was not tested.\n' +
-    '  inject a runner (run) there, or put a stub on PATH inside the temp dir; a test that provokes the refusal on purpose calls takeRefusals() from test/helpers/no-real-os.mjs\n')
+    '  inject a runner (run) there, or put a stub on PATH inside the temp dir, or write in a tmpDir(); a test that provokes the refusal on purpose calls takeRefusals() from test/helpers/no-real-os.mjs\n')
   process.exitCode = 1
 })
 
-module.exports = { REAL_TOOLS, realToolsIn, commandWords }
+module.exports = { REAL_TOOLS, realToolsIn, commandWords, profileFor }

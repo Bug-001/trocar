@@ -3,22 +3,23 @@
 // core/metrics.mjs (cacheState, isBreak, breakCost, hitRatio), the rows, the head and lanes.mjs; words are the label constants.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { scopeModel } from '../../web/src/screens/replay/models.mjs'
+import { overviewModel, scopeModel } from '../../web/src/screens/replay/models.mjs'
 import { deskOf, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { buildLanes, anchorLane, turnsReviewed } from '../../web/legacy/replay/lanes.mjs'
-import { problemSteps } from '../../web/legacy/replay/timeline.mjs'
+import { problemSteps, chapterAt } from '../../web/legacy/replay/timeline.mjs'
 import { isBreak, isFailed, breakCost, hitRatio, refOf } from '../../web/legacy/core/metrics.mjs'
 import { FLAG } from '../../src/view/head-cols.mjs'
 import { L } from '../../web/legacy/core/labels.mjs'
 import * as W from '../../web/legacy/labels/replay.mjs'
+import { priceStateNote } from '../../web/legacy/replay/stepbar.mjs'
 
 const U = (read, create, fresh, out = 10) => ({ read, create, fresh, out })
 const PRICES = { m: [3, 15, 3.75, 0.3] }
-function stateOf(desk, { at = 0, view, ...extra } = {}) {
-  const lanes = buildLanes(desk), anchor = anchorLane(lanes), N = anchor.calls.length
+function stateOf(desk, { at = 0, ...extra } = {}) {
+  const lanes = buildLanes(desk), anchor = anchorLane(lanes)
   return { desk, meta: desk.meta, lanes, anchor, anchorTs: anchor.calls.map((c) => Date.parse(c.ts)), playhead: at, playRid: anchor.calls[at].rid,
-    view: view || { lo: 0, hi: N }, sawView: 'ctx', problems: problemSteps(anchor), pricing: PRICES, diffRef: null, ...extra }
+    sawView: 'ctx', problems: problemSteps(anchor), pricing: PRICES, diffRef: null, ...extra }
 }
 const scope = (rows, o = {}, more = []) => scopeModel(stateOf(deskOf([{ kind: 'main', rows }, ...more], o.answer), o), 60)
 // a varied main lane: breaks with and without a cost, failures, no usage, uncertain cache numbers, compactions
@@ -37,10 +38,10 @@ const ROWS = [
 const tierOf = (u) => { const r = u.read / (u.read + (u.create || 0) + u.fresh); return r >= 0.7 ? 'high' : r >= 0.3 ? 'mid' : 'low' }
 
 test('1.3 #2 · /N: bars = hi − lo on the full and a narrowed window; a problem mark sits on its own step\'s column', () => {
-  for (const view of [{ lo: 0, hi: ROWS.length }, { lo: 2, hi: 7 }]) {
-    const m = scope(ROWS, { view })
-    assert.equal(m.bars.length, view.hi - view.lo)
-    assert.deepEqual(m.bars.map((b) => b.i), Array.from({ length: view.hi - view.lo }, (_, j) => view.lo + j))
+  for (const span of [{ lo: 0, hi: ROWS.length }, { lo: 2, hi: 7 }]) {
+    const m = scope(ROWS, { span })
+    assert.equal(m.bars.length, span.hi - span.lo)
+    assert.deepEqual(m.bars.map((b) => b.i), Array.from({ length: span.hi - span.lo }, (_, j) => span.lo + j))
     for (const p of m.problems.items) assert.equal(m.bars[p.col].rid, p.rid)
   }
 })
@@ -72,18 +73,58 @@ test('1.3 #5 · a compaction is a neutral mark on its step (inferred says so), n
   assert.equal(m.trace.length, plain.trace.length)
 })
 
-test('1.3 #8 · brush left / width = lo / N, (hi − lo) / N; the pin at (playhead + 0.5) / N; sampled only past 240 steps', () => {
+test('1.3 #5 · the step a marked compaction lands on draws nothing on the problem row and is no problem', () => {
+  const rows = [{ usage: U(0, 100, 10), cacheBreak: { firstCall: true } }, { usage: U(90, 20, 5), compaction: true, cacheBreak: { cause: 'append' } },
+    { usage: U(0, 200, 5), cacheBreak: { cause: 'compaction' } }, { usage: U(100, 10, 5), cacheBreak: { cause: 'append' } }]
+  const m = scope(rows)
+  assert.deepEqual(m.problems.items.map((p) => [p.i, p.kind]), [[1, 'compact']])
+  assert.equal(m.problems.n, 0)
+  assert.deepEqual(problemSteps(anchorLane(buildLanes(deskOf([{ kind: 'main', rows }])))), [])
+})
+
+test('1.3 #8 · sampled only past 240 steps, never more than 240 marks', () => {
   for (const N of [12, 240, 241]) {
     const rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) }))
-    const lo = Math.floor(N / 3), hi = lo + 5, at = lo + 2
-    const m = scope(rows, { view: { lo, hi }, at })
-    assert.equal(m.overview.brush.left, lo / N)
-    assert.equal(m.overview.brush.width, (hi - lo) / N)
-    assert.equal(m.overview.pin, (at + 0.5) / N)
-    assert.equal(m.overview.sampled, N > 240)
-    assert.equal(m.legend.sampled, N > 240)
-    assert.ok(m.overview.marks.length <= 240)
+    const s = stateOf(deskOf([{ kind: 'main', rows }]), { span: { lo: 2, hi: 7 }, at: 3 }), ov = overviewModel(s)
+    assert.equal(ov.sampled, N > 240)
+    assert.equal(scopeModel(s, 60).legend.sampled, N > 240)
+    assert.ok(ov.marks.length <= 240)
   }
+})
+
+test('1.3 #8 · the box is the window when it is narrower than its part, and nothing when it is the whole part; part names the part of lo', () => {
+  const N = 12, rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) }))
+  for (const [span, part, box] of [[{ lo: 5, hi: 7 }, 1, { lo: 5, hi: 7 }], [{ lo: 4, hi: 9 }, 1, null], [{ lo: 0, hi: 4 }, 0, null]]) {
+    const desk = deskOf([{ kind: 'main', rows }])
+    desk.head = headOf('R0-0', N, { starts: [4, 9] })
+    const m = scopeModel(stateOf(desk, { span, at: 11 }), 60)
+    assert.equal(m.part, part)
+    assert.deepEqual(m.box, box)
+  }
+})
+
+test('1.3 #8 · the overview is the head\'s while the head covers the steps: rows arriving change no mark and no part', () => {
+  for (const N of [40, 200, 500]) {
+    const rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) })), head = headOf('R0-0', N, { starts: [10, 30], flags: { 7: FLAG.failed } })
+    const before = deskOf([]), after = deskOf([{ kind: 'main', rows }])
+    before.head = after.head = head
+    const a = overviewModel({ desk: before, anchor: null, playRid: null, lanes: [], span: null }), b = overviewModel(stateOf(after, { at: 3 }))
+    assert.deepEqual(b, a)
+    assert.deepEqual(a.parts, head.chapters)
+    assert.equal(a.mode, N <= 60 ? 'bars' : N <= 240 ? 'line' : 'buckets')
+    assert.ok(a.marks.every((k) => k.g >= 0 && k.g < N))
+  }
+})
+
+test('1.3 #8 · a tier-0 head is calls by time: no parts, no window', () => {
+  const desk = deskOf([])
+  desk.head = { tier: 0, steps: 30, buckets: [{ calls: 2 }, { calls: 8 }] }
+  const s = { desk, anchor: null, playRid: null, lanes: [] }, ov = overviewModel(s), m = scopeModel(s, 60)
+  assert.equal(ov.mode, 'time')
+  assert.deepEqual(ov.parts, [])
+  assert.equal(ov.marks.length, 2)
+  assert.equal(m.box, null)
+  assert.equal(m.at, null)
 })
 
 test('1.3 #9 · flags = isBreak steps, × = failed steps, n = both; flag height follows √ breakCost, fixed when it is null; 结构估计 on a changed prefix', () => {
@@ -146,6 +187,11 @@ test('1.3 #14 · cost view: ≈ on the peak and hovers; no price or no usage is 
     if (!b.hatched) assert.ok(b.h > 0 && b.tip.includes('≈'))
     assert.doesNotMatch(b.tip, /\$0(?![.\d])/)
   })
+  // no table yet, or an unreadable one: a hatched bar gives the table's reason, never "no unit price"
+  for (const [extra, why] of [[{ pricing: null }, W.PRICES_LOADING], [{ pricing: null, pricingErr: 'E-read' }, priceStateNote(null, 'E-read')]]) {
+    const n = scopeModel(stateOf(deskOf([{ kind: 'main', rows }]), { sawView: 'cost', ...extra }), 60)
+    rows.forEach((r, i) => { if (!r.error && r.usage) assert.ok(n.bars[i].hatched && n.bars[i].tip.includes(why) && !n.bars[i].tip.includes(W.COST_WHY['no-price']), `step ${i}`) })
+  }
   s.sawView = 'ctx'
   const c = scopeModel(s, 60), pk = s.anchor.peakCtx
   rows.forEach((r, i) => { if (!r.error && r.ctx / pk >= 3 / 72) assert.equal(c.bars[i].h, Math.min(1, r.ctx / pk)) })
@@ -164,7 +210,7 @@ const headOf = (axis, N, { starts = [], inferred = [], flags = {} } = {}) => ({ 
   cols: b64(Array.from({ length: N }, (_, i) => [(i * 37) % 256, 0x20, flags[i] || 0])),
   chapters: [0, ...starts].map((s0, k, a) => ({ k, s0, s1: a[k + 1] ?? N, ts0: null, inferred: inferred.includes(s0) })) })
 
-test('1.3 #18 · chapters: k / n, a–b, inferred; ‹ › null at the ends; overview ticks at chapter starts; rough bars keep count and place once rows are held', () => {
+test('1.3 #18 · chapters: k / n, a–b, inferred; ‹ › null at the ends; rough bars keep count and place once rows are held', () => {
   const N = 12, rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) })), starts = [4, 9]
   for (const [at, k] of [[0, 1], [5, 2], [11, 3]]) {
     const desk = deskOf([{ kind: 'main', rows }])
@@ -173,14 +219,80 @@ test('1.3 #18 · chapters: k / n, a–b, inferred; ‹ › null at the ends; ove
     assert.deepEqual([m.chapters.k, m.chapters.n, m.chapters.a, m.chapters.b, m.chapters.inferred], [k, 3, c.s0 + 1, c.s1, c.inferred])
     assert.equal(m.chapters.prev, k > 1 ? desk.head.chapters[k - 2].s1 - 1 : null)
     assert.equal(m.chapters.next, k < 3 ? desk.head.chapters[k].s0 : null)
-    assert.deepEqual(m.overview.chapterTicks.map((t) => t.left), [0, ...starts].map((s0) => s0 / N))
   }
   const rough = (desk) => { desk.head = headOf('R0-0', N, { starts }); return scopeModel({ desk, anchor: null, playRid: null, lanes: [], initialStep: 7 }, 3) }
   const before = rough(deskOf([])), after = rough(deskOf([{ kind: 'main', rows }]))
   assert.ok(before.rough && after.rough)
-  assert.deepEqual(after.bars.map((b) => [b.i, b.col]), before.bars.map((b) => [b.i, b.col]))
+  assert.deepEqual(after.bars.map((b) => [b.g, b.col]), before.bars.map((b) => [b.g, b.col]))
   assert.ok(before.bars.every((b) => b.rid === undefined), 'a cell drawn from cols carries no rid')
   assert.ok(after.bars.every((b) => typeof b.rid === 'string'), 'a held row carries its rid')
+})
+
+test('1.3 #18 #22 · no chapter row without a compaction; ‹ › count from the part the bars show; go back only while the playhead is in another part', () => {
+  const N = 12, rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) }))
+  const one = deskOf([{ kind: 'main', rows }]); one.head = headOf('R0-0', N)
+  assert.equal(scopeModel(stateOf(one, { at: 5 }), 60).chapters, null)
+  const desk = deskOf([{ kind: 'main', rows }]); desk.head = headOf('R0-0', N, { starts: [4, 9] })
+  const chs = desk.head.chapters
+  for (const at of [0, 5, 11]) for (const k of [0, 1, 2]) {
+    const c = chs[k], m = scopeModel(stateOf(desk, { at, span: { lo: c.s0, hi: c.s1 }, brushed: true }), 60)
+    assert.equal(m.chapters.a, c.s0 + 1, `at ${at}, bars in part ${k}`)
+    assert.equal(m.chapters.prev, k ? chs[k - 1].s1 - 1 : null)
+    assert.equal(m.chapters.next, k < 2 ? chs[k + 1].s0 : null)
+    assert.equal(m.chapters.back, chapterAt(chs, at) === k ? null : at + 1)
+  }
+})
+
+test('1.3 #24 · the short part\'s card: steps, time and prompts of the head\'s part while the window is the whole part; none when it is narrower', () => {
+  const N = 12, rows = Array.from({ length: N }, () => ({ usage: U(1, 1, 1) }))
+  const desk = deskOf([{ kind: 'main', rows }]); desk.head = headOf('R0-0', N, { starts: [4, 9] })
+  const c = Object.assign(desk.head.chapters[1], { ts0: '2026-01-01T10:00:00Z', ts1: '2026-01-01T10:30:00Z', prompts: 3 })
+  const card = scopeModel(stateOf(desk, { at: 5 }), 60).chapters.card
+  assert.deepEqual([card.steps, card.ms, card.prompts], [c.s1 - c.s0, Date.parse(c.ts1) - Date.parse(c.ts0), c.prompts])
+  assert.equal(scopeModel(stateOf(desk, { at: 5 }), 2).chapters.card, null)
+})
+
+// the same session three ways: nothing held, the steps from `from` on held, all held
+function threeDesks(N, from, head) {
+  const rows = (n) => Array.from({ length: n }, () => ({ usage: U(1, 1, 1) })), withHead = (desk) => { desk.head = head; return desk }
+  return { rough: withHead(deskOf([])), part: withHead(deskOf([{ kind: 'main', rows: rows(N - from), head: { count: N } }])), all: withHead(deskOf([{ kind: 'main', rows: rows(N) }])) }
+}
+const roughState = (desk, initialStep) => ({ desk, anchor: null, playRid: null, lanes: [], initialStep })
+
+test('1.3 #23 · one window: rough, part-held and all-held desks give the same bars, step for step; only rows differ', () => {
+  const N = 14, from = 6, starts = [4, 9], head = headOf('R0-0', N, { starts }), d = threeDesks(N, from, head)
+  for (const g of [7, 11, 13]) for (const K of [3, 60]) {
+    const ms = [scopeModel(roughState(d.rough, g + 1), K), scopeModel(stateOf(d.part, { at: g - from }), K), scopeModel(stateOf(d.all, { at: g }), K)]
+    for (const m of ms) {
+      assert.deepEqual(m.bars.map((b) => [b.g, b.col]), ms[0].bars.map((b) => [b.g, b.col]))
+      assert.deepEqual(m.view, ms[0].view)
+      assert.equal(m.trace.length, m.bars.length)
+      assert.equal(m.bars[m.cursor.col].g, g)
+    }
+  }
+})
+
+test('1.3 #23 · a span in a part with no row held: bars from the cells, the rows\' tracks empty, the cost view empty columns', () => {
+  const N = 14, from = 6, flags = { 1: FLAG.failed, 2: FLAG.compaction }, head = headOf('R0-0', N, { starts: [4, 9], flags }), span = { lo: 0, hi: 4 }
+  const { part } = threeDesks(N, from, head), m = scopeModel(stateOf(part, { at: 3, span }), 60)
+  assert.deepEqual(m.bars.map((b) => b.g), [0, 1, 2, 3])
+  assert.ok(m.bars.every((b) => b.rid === undefined && b.i === undefined && !b.cur))
+  assert.equal(m.cursor.col, null)
+  assert.deepEqual(m.bars.map((b) => [b.fail, b.compact]), [[false, false], [true, false], [false, true], [false, false]])
+  assert.ok(m.bars[3].h > 0 && m.bars[3].segs.length)
+  assert.deepEqual(m.trace.map((c) => c.state), ['gap', 'gap', 'gap', 'gap'])
+  assert.deepEqual([m.problems.items, m.chapters.k], [[], 1], 'no marks yet; the label says the part the bars show')
+  const c = scopeModel(stateOf(part, { at: 3, span, sawView: 'cost' }), 60)
+  assert.ok(c.bars.every((b) => b.h === 0 && !b.hatched && !b.segs))
+})
+
+test('1.3 #23 · bucket > 1: every step of the window draws, from the cell that holds it', () => {
+  const N = 12, per = 4, cols = b64([[10, 0x10, 0], [200, 0x20, FLAG.failed], [100, 0x30, 0]])
+  const head = { tier: 1, axis: 'R0-0', steps: N, peak: 1000, bucket: per, cols, chapters: [{ k: 0, s0: 0, s1: N, ts0: null, inferred: false }] }
+  const m = scopeModel({ ...roughState(deskOf([]), 2), desk: Object.assign(deskOf([]), { head }) }, 60)
+  assert.equal(m.bars.length, N)
+  m.bars.forEach((b) => assert.equal(b.fail, Math.floor(b.g / per) === 1, `step ${b.g}`))
+  assert.equal(new Set(m.bars.slice(8).map((b) => b.h)).size, 1)
 })
 
 test('1.3 #20 · the prompts row name: K / P known or not (four combinations); P does not move when more of the lane is held', () => {
@@ -207,17 +319,17 @@ test('2.1 #5 · the review bracket: width = clamp((k − lo) / (hi − lo)); a b
   const lanes = buildLanes(desk), mon = lanes.find((l) => l.kind === 'monitor'), main = anchorLane(lanes)
   const k = turnsReviewed(main.calls.map((c) => Date.parse(c.ts)), mon.calls[0].ts)
   assert.ok(k > 3 && k < 9, 'the reviewed range ends inside the narrowed window')
-  for (const view of [{ lo: 0, hi: ROWS.length }, { lo: 3, hi: 9 }]) {
-    const m = scopeModel(stateOf(desk, { view, reviewRange: { k } }), 60)
-    assert.equal(m.review.width, Math.max(0, Math.min(1, (k - view.lo) / (view.hi - view.lo))))
+  for (const span of [{ lo: 0, hi: ROWS.length }, { lo: 3, hi: 9 }]) {
+    const m = scopeModel(stateOf(desk, { span, reviewRange: { k } }), 60)
+    assert.equal(m.review.width, Math.max(0, Math.min(1, (k - span.lo) / (span.hi - span.lo))))
     for (const b of m.bars) assert.equal(b.reviewed, b.i < k)
   }
 })
 
 test('keys · every bar, trace cell, problem and tick carries its rid; a row inserted before the window leaves the window\'s rids as they were', () => {
   const rows = ROWS.map((r, i) => ({ ...r, rid: `X${i}` })), ev = [{ type: 'user', rid: 'X6', lane: 'R0-0' }]
-  const a = scopeModel(stateOf(deskOf([{ kind: 'main', rows }], { events: ev }), { view: { lo: 5, hi: 10 }, at: 6 }), 60)
-  const b = scopeModel(stateOf(deskOf([{ kind: 'main', rows: [{ usage: U(1, 1, 1), rid: 'X-new' }, ...rows] }], { events: ev }), { view: { lo: 6, hi: 11 }, at: 7 }), 60)
+  const a = scopeModel(stateOf(deskOf([{ kind: 'main', rows }], { events: ev }), { span: { lo: 5, hi: 10 }, at: 6 }), 60)
+  const b = scopeModel(stateOf(deskOf([{ kind: 'main', rows: [{ usage: U(1, 1, 1), rid: 'X-new' }, ...rows] }], { events: ev }), { span: { lo: 6, hi: 11 }, at: 7 }), 60)
   for (const m of [a, b]) for (const it of [...m.bars, ...m.trace, ...m.problems.items, ...m.asks.ticks]) assert.equal(typeof it.rid, 'string')
   assert.deepEqual(b.bars.map((x) => x.rid), a.bars.map((x) => x.rid))
   assert.deepEqual(b.trace.map((x) => x.rid), a.trace.map((x) => x.rid))
@@ -232,7 +344,7 @@ test('1.3 #7 · #12 · #13 on the real server: every harness dir\'s session ligh
     for (const { session_id: id } of sessions) {
       const desk = await deskFrom(get, id), lanes = buildLanes(desk), anchor = anchorLane(lanes)
       if (!anchor) continue
-      const N = anchor.calls.length, s = { desk, meta: desk.meta, lanes, anchor, playhead: 0, playRid: anchor.calls[0].rid, view: { lo: 0, hi: N }, sawView: 'ctx', problems: problemSteps(anchor), pricing: null }
+      const N = anchor.calls.length, s = { desk, meta: desk.meta, lanes, anchor, playhead: 0, playRid: anchor.calls[0].rid, span: { lo: 0, hi: N }, sawView: 'ctx', problems: problemSteps(anchor), pricing: null }
       const m = scopeModel(s, 60)
       assert.equal(m.bars.length, N, id)
       assert.equal(m.trace.length, N, id)
