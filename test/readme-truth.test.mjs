@@ -16,6 +16,10 @@ import { COMMANDS } from '../src/cli/commands.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
 const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+// the README is the product page; what it leaves to docs/ is held to the same bar (4.5 #5)
+const PAGES = ['README.md', 'docs/install.md', 'docs/board.md', 'docs/capture.md'];
+const pages = PAGES.map((p) => ({ p, text: readFileSync(path.join(ROOT, p), 'utf8') }));
+const all = pages.map((x) => x.text).join('\n');
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 // what bin/trocar.mjs dispatches: the table of commands and the first word of each hidden alias (src/cli/commands.mjs, RFC 1.6 §2)
@@ -24,8 +28,8 @@ const implementedVerbs = new Set(COMMANDS.map((c) => c.name));
 // Only text the reader would actually TYPE counts as an instruction: fenced code blocks and inline
 // `code` spans. Prose like "trocar sits on the wire" is not a command, and the README's own
 // prose about a command must not read as an instruction to type it.
-const fenced = [...readme.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]).join('\n');
-const inlineCode = [...readme.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]).join('\n');
+const fenced = [...all.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]).join('\n');
+const inlineCode = [...all.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]).join('\n');
 const commandText = fenced + '\n' + inlineCode;
 
 test('every `trocar <verb>` the README tells you to run actually exists', () => {
@@ -52,17 +56,17 @@ test('the README teaches no command that is gone (`collector …`, `etl`, `shard
 });
 
 test('the README no longer says what D39 and the code made false: the steer of `trocar on`, <redacted> credentials, "observe-only: never rewrite", a test count', () => {
-  assert.doesNotMatch(readme, /`trocar on` writes the steer/, '`trocar on` is the collector now');
-  assert.doesNotMatch(readme, /`trocar (monitor|desktop|capture|mitm) /, 'the old capture\'s commands are retired (D39⑥ executed 2026-10-11): the README must not teach them');
-  assert.doesNotMatch(readme, /replaced with `<redacted>`/, 'credential headers are stored verbatim (files 0600; trocar doctor checks them)');
-  assert.doesNotMatch(readme, /never inject or\s+rewrite traffic/, 'D30: a request is changed or re-sent only by the operator, and the one `Connection: close` line is trocar\'s');
-  assert.doesNotMatch(readme, /\b\d+ passing\b/, 'a hard-coded test count is stale the day after');
-  assert.doesNotMatch(readme, /`monitor off --remove-ca` deletes it/, '--remove-ca takes the trust entry out; the CA files stay');
-  assert.doesNotMatch(readme, /trocar mitm\s+# :9899\ntrocar desktop on/, '`desktop on` installs its own MITM on 9898; a hand-started one on 9899 is not what its rule points at');
+  assert.doesNotMatch(all, /`trocar on` writes the steer/, '`trocar on` is the collector now');
+  assert.doesNotMatch(all, /`trocar (monitor|desktop|capture|mitm) /, 'the old capture\'s commands are retired (D39⑥ executed 2026-10-11): the README must not teach them');
+  assert.doesNotMatch(all, /replaced with `<redacted>`/, 'credential headers are stored verbatim (files 0600; trocar doctor checks them)');
+  assert.doesNotMatch(all, /never inject or\s+rewrite traffic/, 'D30: a request is changed or re-sent only by the operator, and the one `Connection: close` line is trocar\'s');
+  assert.doesNotMatch(all, /\b\d+ passing\b/, 'a hard-coded test count is stale the day after');
+  assert.doesNotMatch(all, /`monitor off --remove-ca` deletes it/, '--remove-ca takes the trust entry out; the CA files stay');
+  assert.doesNotMatch(all, /trocar mitm\s+# :9899\ntrocar desktop on/, '`desktop on` installs its own MITM on 9898; a hand-started one on 9899 is not what its rule points at');
 });
 
 test('every `npm run <script>` the README mentions exists in package.json', () => {
-  const used = [...readme.matchAll(/npm run ([a-z:-]+)/g)].map((m) => m[1]);
+  const used = [...all.matchAll(/npm run ([a-z:-]+)/g)].map((m) => m[1]);
   for (const s of used) {
     assert.ok(pkg.scripts?.[s], `README says "npm run ${s}" but package.json has no such script`);
   }
@@ -70,10 +74,9 @@ test('every `npm run <script>` the README mentions exists in package.json', () =
 
 test('every repo file the README links to exists', () => {
   // markdown links + bare image paths, relative only
-  const refs = [...readme.matchAll(/\]\((?!https?:)([^)#]+)\)/g)].map((m) => m[1].trim());
-  for (const r of refs) {
-    const p = path.join(ROOT, r.replace(/^\.\//, ''));
-    assert.ok(existsSync(p), `README links to ${r}, which does not exist`);
+  for (const { p: page, text } of pages) {
+    const refs = [...text.matchAll(/\]\((?!https?:)([^)#]+)\)/g)].map((m) => m[1].trim());
+    for (const r of refs) assert.ok(existsSync(path.join(ROOT, path.dirname(page), r)), `${page} links to ${r}, which does not exist`);
   }
 });
 
