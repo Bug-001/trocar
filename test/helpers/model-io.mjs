@@ -36,7 +36,7 @@ export const startAfterNow = () => Math.ceil(Date.now() / 1000) * 1000 + 1000
 /** The agent as the OS readers see it: { pid, exe, start, uid, env, cwd, ports (its sockets' local ports), alive }. Its start is after now: a
  *  test whose install runs later (a daemon child installs as it starts) gives it `startAfterNow()` again once that install is done. */
 export function agentOf({ w, name, env }) {
-  return { pid: PID, name, exe: path.join(w.home, 'bin', name), start: startAfterNow(), uid: process.getuid(), env, cwd: w.home, ports: new Set(), alive: true }
+  return { pid: PID, name, exe: path.join(w.home, 'bin', name), start: startAfterNow(), uid: process.getuid?.() ?? null, env, cwd: w.home, ports: new Set(), alive: true }
 }
 
 /** darwin: the spawnSync-shaped runner of the socktable helper / lsof / ps / procenv (socktable, procinfo, the process table, scutil) answering for `a` only. */
@@ -99,7 +99,7 @@ export async function statusDoc({ w, platform, box, a, all, live }) {
     ? (ctx) => gatherWin32Facts(ctx, { helper: { call: async (verb) => (verb === 'ps' ? { sessionId: 1, procs: rows.map((p) => ({ ...p, ppid: 1, name: a.name, exe, cmdline: exe, cmdlineState: 'ok', sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false })) } : verb === 'tcp-table' ? { rows: [] } : Promise.reject(Object.assign(new Error('not faked'), { code: 'not-faked' }))) }, readSystemProxy: async () => ({ ok: false, reason: 'absent' }) })
     : (ctx) => darwinNetFacts(ctx, { exec: () => ({ status: 1, stdout: '', stderr: 'not faked' }) })
   const sio = { t: '', out(s) { this.t += s }, err(s) { this.t += s }, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-  const procs = async () => rows.map((p) => ({ ...p, ppid: 1, uid: process.getuid(), exe, argv: [exe], env: () => null, envRead: false }))
+  const procs = async () => rows.map((p) => ({ ...p, ppid: 1, uid: process.getuid?.() ?? null, exe, argv: [exe], env: () => null, envRead: false }))
   await statusRun(['--json'], { io: sio, env: w.env, home: w.home, platform, deps: { platform, procs, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts }), rootStore: w.store } })
   return JSON.parse(sio.t.slice(sio.t.indexOf('{')))
 }
