@@ -183,6 +183,7 @@ test('#17 unpriced models: priceMatch null with usable calls; at least N = the m
     { model: 'claude-opus-4', calls: 9, failed: 0, no_usage: 0, sessions: 7 },
   ], table)
   assert.deepEqual(got, [{ model: 'glm-x', sessions: 4 }])
+  assert.equal(unpricedModels([{ model: 'glm-x', calls: 5, sessions: 2 }], null), null, 'no table read: no verdict, not every model')
 })
 
 test('#18 the template: a member of the file when it exists, a whole file when not; pasted verbatim the model stays unpriced (no $0)', () => {

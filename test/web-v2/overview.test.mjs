@@ -192,6 +192,8 @@ test('#5 no price table yet: no model is said to lack a unit price (that is not 
     usage: { rows: [{ harness: A, model: 'zz-unpriced-model', lane: 'main', sessions: 1, calls: 3, failed: 0, no_usage: 0, input: 10, output: 5, cache_read: 30, cache_write: 10, cache_known: true }], coverage: { sessions_read: 1, sessions_in_window: 1 } } }
   const loading = statsCard(stateOf(quiet(), { stats: statsOk(doc), pricing: { data: null, ok: null, err: null } }), NOW)
   assert.equal(loading.unpriced, null); assert.equal(loading.cost.text, '≈ —')
+  const badShape = statsCard(stateOf(quiet(), { stats: statsOk(doc), pricing: { data: { source: 'default' }, ok: true, err: null } }), NOW)
+  assert.equal(badShape.unpriced, null, 'an answer with no models array is no table either')
   assert.ok(statsCard(stateOf(quiet(), { stats: statsOk(doc) }), NOW).unpriced, 'with the table read, the unpriced model is named')
 })
 
