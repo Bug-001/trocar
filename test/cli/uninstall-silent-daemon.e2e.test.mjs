@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { unservable } from '../helpers/model-daemon.mjs'
+import { UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { forkModelDaemon, CHILD_IDENTITY } from '../helpers/model-daemon-child.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
@@ -21,7 +21,7 @@ const io = () => { const out = []; return { out: (s) => out.push(s), err: (s) =>
 const exec = () => ({ status: 0, stdout: '', stderr: '' })
 const noFlows = (snap) => Object.fromEntries(Object.entries(snap).filter(([k]) => !k.includes(`${path.sep}flows${path.sep}`)))
 
-test('1.6 §3.6 e2e: a real daemon stopped with SIGSTOP — uninstall refuses with nothing changed, off gets past it, then uninstall takes everything out', { skip: await unservable(platform), timeout: 120_000 }, async () => {
+test('1.6 §3.6 e2e: a real daemon stopped with SIGSTOP — uninstall refuses with nothing changed, off gets past it, then uninstall takes everything out', { skip: UNSERVABLE[platform], timeout: 120_000 }, async () => {
   const w = await modelWorld({ os: platform, commands: ['codex'] })
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
   const envFile = path.join(w.home, '.codex', '.env')
