@@ -232,11 +232,9 @@ export const FILES_READING = 'Still reading this session · files so far'
 // FOLD_STOPS with a line of its own (the board does not import it), else `other`; the code and the reason are in the technical details
 export const FOLD_STOPPED = Object.freeze({
   'heap-no-room': 'Reading this session stopped: it does not fit in the memory the reader has',
+  'projection-write-failed': 'Reading this session stopped: trocar could not save its index files (the disk may be full, or the folder not writable)',
   other: 'Reading this session stopped on an error',
 })
-// the stop because trocar's own index files could not be saved (`projection-write-failed`): its line stands outside the table, since that
-// code is a key of the CLI's failure catalog and the catalog's sentence is about the log record (0.1 §2: no twin of it here)
-export const READ_STOPPED_UNSAVED = 'Reading this session stopped: trocar could not save its index files (the disk may be full, or the folder not writable)'
 // 1.5 K-32: the head drawn is older than what the capture has indexed
 export const behindBy = (n, more) => `${n}${more ? '+' : ''} newer calls are not shown yet`
 // 2.3 §大致页面: the lanes the session head does not list by name
