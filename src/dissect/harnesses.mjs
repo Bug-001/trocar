@@ -159,7 +159,7 @@ export const LEGACY_PROVIDER = Object.freeze({ cc: 'anthropic', codex: 'openai',
 export function wireProviderOfEndpoint(endpoint) {
   const row = endpointOf(endpoint); // the endpoint table (./endpoints.mjs); D3: a bare /messages (a gateway's own route) is no wire
   const wire = (row && row.wire) || '';
-  return wire === 'anthropic' ? 'anthropic' : wire.startsWith('openai-') ? 'openai' : null;
+  return wire.startsWith('openai-') ? 'openai' : wire || null;
 }
 
 export function headerOf(rec, name) {

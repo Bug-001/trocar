@@ -9,6 +9,7 @@ import { isWsHandshake } from './ws-handshake.mjs';
 import { hintsOf } from './harnesses.mjs';
 import { RESPONSES_WS } from './openai-ws.mjs';
 import { ANTHROPIC } from './anthropic-board.mjs';
+import { GEMINI } from './gemini.mjs';
 import { CC_THREADS, isContinuation } from './cc-threads.mjs';
 import { endpointOf, pathOf, failedOf } from './endpoints.mjs';
 import { respOf } from './record-fields.mjs';
@@ -17,7 +18,7 @@ import { sharesBody } from './request-body.mjs';
 export { isWsHandshake };
 
 // D37 ⑥: no dissector in v1 — stored as captured, read as 「未识别」 and labelled. Vertex first: its
-// Gemini models also end in :generateContent. Gemini itself is the endpoint table's `unsupported` row (./endpoints.mjs).
+// Gemini models also end in :generateContent, which the endpoint table names the Gemini API wire.
 const UNSUPPORTED = [
   ['vertex', /\/projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/models\/[^/:]+:[A-Za-z]+$/],
   ['bedrock', /\/model\/[^/]+\/(invoke|invoke-with-response-stream|converse|converse-stream)$/],
@@ -29,7 +30,7 @@ export function unsupportedOf(rec) {
   return endpointOf(ep)?.unsupported ?? null;
 }
 
-// → 'anthropic' | 'openai-responses' | 'openai-chat' | 'openai-responses-ws' | 'ws-handshake' | null.
+// → 'anthropic' | 'gemini' | 'openai-responses' | 'openai-chat' | 'openai-responses-ws' | 'ws-handshake' | null.
 // null = no registered wire claims these bytes (they are counted and labelled, never guessed at).
 export function wireFormatOf(rec) {
   if (!rec) return null;
@@ -38,7 +39,7 @@ export function wireFormatOf(rec) {
   if (rec.transport === 'ws') return wire === 'openai-responses' ? 'openai-responses-ws' : null;
   if (isWsHandshake(rec)) return 'ws-handshake';
   if (unsupportedOf(rec) || (row && row.class === 'token-count')) return null;
-  if (wire === 'anthropic') return 'anthropic';
+  if (wire === 'anthropic' || wire === 'gemini') return wire;
   // The OpenAI dissector reads its endpoints AND refuses Anthropic bytes on them ("bytes beat path": a
   // gateway that posts an Anthropic body to /chat/completions is still the Anthropic wire). With no
   // recognizable endpoint (v0 fixtures, odd relays) the body shape alone decides.
@@ -52,7 +53,7 @@ export function wireFormatOf(rec) {
 // sub-agents, the Anthropic wire, ./anthropic-board.mjs). Adding a wire = one dissector object + one row. The
 // WebSocket row's object also carries the cross-record hooks (prepare → a planner with context(rec) / admits /
 // laneOf / ended, src/dissect/openai-ws.mjs).
-const BOARD = { anthropic: ANTHROPIC, 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-responses-ws': RESPONSES_WS };
+const BOARD = { anthropic: ANTHROPIC, 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-responses-ws': RESPONSES_WS, gemini: GEMINI };
 export function boardDissectorFor(rec) {
   return BOARD[wireFormatOf(rec)] || null;
 }

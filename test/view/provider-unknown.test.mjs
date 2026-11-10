@@ -1,22 +1,22 @@
 // test/view/provider-unknown.test.mjs — D25 / 3.1 #4: traffic no dissector reads is counted as unknown, never rendered through a known
-// dissector and never given a known provider. The regression this guards: the CC walker found a bogus block in Gemini's tools[] and
+// dissector and never given a known provider. The regression this guards: the CC walker found a bogus block in an unread wire's tools[] and
 // then accused the provider of contradicting its own cache accounting. Read through `sessions` and `session` (test/helpers/session-doc.mjs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { homeWith, query } from '../helpers/session-doc.mjs';
 
 const OC = { pid: 1, exe: '/x/opencode', agent: 'opencode' }; // a harness that can point at any backend: its provider is the wire's
-// real-shaped Gemini generateContent traffic: `contents[]` + `systemInstruction`, google-genai UA; nothing Anthropic, nothing OpenAI
-const gemini = (id, ts) => ({
-  id, ts_request: ts, host: 'generativelanguage.googleapis.com', proc: OC,
-  endpoint: '/v1beta/models/gemini-3-pro:streamGenerateContent',
-  req_headers: { 'x-session-id': 'sess-gem', 'user-agent': 'google-genai-sdk/1.2.0 gl-python/3.12' },
+// traffic of a wire no dissector reads: a made-up endpoint and body shape; nothing Anthropic, nothing OpenAI, nothing Gemini
+const unread = (id, ts) => ({
+  id, ts_request: ts, host: 'llm.example', proc: OC,
+  endpoint: '/v9/foo:infer',
+  req_headers: { 'x-session-id': 'sess-unk', 'user-agent': 'some-sdk/1.0' },
   req_body: JSON.stringify({
-    systemInstruction: { parts: [{ text: 'You are a helpful assistant.' }] },
-    contents: [{ role: 'user', parts: [{ text: 'hello world' }] }],
-    tools: [{ functionDeclarations: [{ name: 'read_file', parameters: { type: 'object' } }] }],
+    preamble: { segments: [{ text: 'You are a helpful assistant.' }] },
+    turns: [{ speaker: 'human', segments: [{ text: 'hello world' }] }],
+    tools: [{ declarations: [{ name: 'read_file', parameters: { type: 'object' } }] }],
   }),
-  resp: { kind: 'sse', status: 200, usageMetadata: { promptTokenCount: 812, candidatesTokenCount: 44 } },
+  resp: { kind: 'json', status: 200, body: { tally: { in: 812, out: 44 } } },
 });
 const cc = {
   id: 'c1', ts_request: '2026-07-19T00:00:00Z', endpoint: '/v1/messages?beta=true', host: 'api.anthropic.com', proc: OC,
@@ -31,10 +31,10 @@ const read = async (records, id) => {
 };
 
 test('unknown traffic is counted as unknown with its endpoint, has no provider, and fabricates no call, usage or ground truth', async () => {
-  const { meta, doc } = await read([gemini('g1', '2026-07-19T00:00:00Z'), gemini('g2', '2026-07-19T00:00:01Z')], 'sess-gem');
+  const { meta, doc } = await read([unread('u1', '2026-07-19T00:00:00Z'), unread('u2', '2026-07-19T00:00:01Z')], 'sess-unk');
   assert.equal(meta.provider, null, 'an unrecognized wire gives no provider, never a guess');
   assert.equal(doc.unknown.records, 2, 'unrecognized records are counted, not dropped');
-  assert.deepEqual(doc.unknown.endpoints, ['/v1beta/models/gemini-3-pro:streamGenerateContent']);
+  assert.deepEqual(doc.unknown.endpoints, ['/v9/foo:infer']);
   assert.deepEqual(doc.calls, [], 'no call row (so no blocks, usage or ground truth) for undissected bytes');
 });
 

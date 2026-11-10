@@ -50,7 +50,7 @@ const INDEX_V = 12;
 // dissectors' normResp, analyze.mjs's). A change to any of those bumps FACTS_V, not INDEX_V alone: an INDEX_V-only bump copies these
 // facts as they were. INDEX_V: the envelope's fields and the file's shape. A mark carries both (4.2 §段索引 两个版本键); one with no
 // `fv` is FACTS_V 1's when its v is 12 (the facts as INDEX_V 12 is released with them), and of no known facts before it.
-const FACTS_V = 1;
+const FACTS_V = 2; // 2: a Gemini reply is read (kin_reply)
 const fvOf = (o) => o.fv ?? (o.v === 12 ? 1 : null);
 // What a reader's `v` asks of a mark: SEGMENT (the default), the segment index's two keys; a number, that `v` alone (the usage sidecar's, usage.mjs)
 const SEGMENT = Symbol('the segment index');
