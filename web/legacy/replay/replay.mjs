@@ -715,8 +715,8 @@ function openDesk(ctx, route0, makeView) {
   // the open tails (4.4 live-poll): `Range: bytes=<held − 1>-` with `If-Range: <its tag>` on the tail the head names; a 200 is a new file (its
   // generation changed), applied whole. The one byte of overlap is the held last line's end, so a tail with nothing new answers 206 with
   // that byte, not a 416 (which the browser logs as an error each round). The whole file when none is held of that n, with no tag or no
-  // byte, when it is shorter than what is held (416), when the first byte is not that line end, or when what came is not its lines. A relayed answer carries no generation tag: none, or the named
-  // query's version, which the next If-Range does not match (200 whole). → {ok, anchor} | a failed answer
+  // byte, when it is shorter than what is held (416), when the first byte is not that line end, or when what came is not its lines.
+  // A relayed answer carries no generation tag: none, or the named query's version, which the next If-Range does not match (200 whole). → {ok, anchor} | a failed answer
   const tails = new Map() // part → {n, used, tag}
   // every row of the session is here: the server has none pending, each sealed pack is whole at the head's tag and each open tail read
   function allRows() {

@@ -262,9 +262,9 @@ test('3.5 §手里车道的页: the anchor lane reads its ledger chain to the en
   } finally { await b.stop() }
 })
 
-// 4.4 live-poll: an open session with nothing new is read round after round; no round's tail read answers an error status, so the
-// browser logs no error for it (a 416 is logged as "Failed to load resource" on every round)
-test('4.4 live-poll: the tail reads of an open session with nothing new answer without an error status, and log no console error', { skip }, async () => {
+// 4.4 live-poll: an open session with nothing new is read round after round; each round's tail read answers 206 (no error status, so
+// the browser logs no error: a 416 is logged as "Failed to load resource" on every round) and no tail is read whole again
+test('4.4 live-poll: the tail reads of an open session with nothing new answer 206 without a whole re-read, and log no console error', { skip }, async () => {
   const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
   try {
     const { page } = b, w = world(11, { calls: 30 }), logged = []
@@ -276,7 +276,10 @@ test('4.4 live-poll: the tail reads of an open session with nothing new answer w
     for (const t0 = Date.now(); tails().filter((r) => r.range != null).length < 6 && Date.now() - t0 < 20000;) await page.waitForTimeout(100)
     const ranged = tails().filter((r) => r.range != null)
     assert.ok(ranged.length >= 6, `${ranged.length} tail reads after the first ones`)
-    assert.deepEqual(ranged.filter((r) => !(r.status < 400)).map((r) => `${r.url} ${r.range} ${r.status}`), [])
+    assert.deepEqual(ranged.filter((r) => r.status !== 206).map((r) => `${r.url} ${r.range} ${r.status}`), [], 'nothing new: a 206, no error status')
+    // and no read of a whole tail after its first: the held bytes are the file's prefix, round after round
+    const firstWhole = new Set()
+    assert.deepEqual(tails().filter((r) => r.range == null).filter((r) => { const k = r.url.split('?')[0]; return firstWhole.has(k) || !firstWhole.add(k) }).map((r) => r.url), [])
     assert.deepEqual(logged, [])
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
