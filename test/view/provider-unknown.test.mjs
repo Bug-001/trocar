@@ -38,6 +38,22 @@ test('unknown traffic is counted as unknown with its endpoint, has no provider, 
   assert.deepEqual(doc.calls, [], 'no call row (so no blocks, usage or ground truth) for undissected bytes');
 });
 
+// 3.1 #4 · invariant 4: a wire this version records and does not read (the endpoint table's `unsupported`) is named where it stands
+const bedrock = (id, ts, endpoint = '/model/anthropic.claude-x/invoke-with-response-stream') => ({
+  id, ts_request: ts, host: 'bedrock-runtime.us-east-1.amazonaws.com', proc: OC, endpoint,
+  req_headers: { 'x-session-id': 'sess-br', 'user-agent': 'aws-sdk-js/3.0.0' },
+  req_body: JSON.stringify({ messages: [{ role: 'user', content: [{ text: 'hi' }] }] }),
+  resp: { kind: 'json', status: 200, body: {} },
+});
+test('unknown records that are all of a wire this version does not read say which wire; any other unread record keeps the general reason', async () => {
+  const { doc } = await read([bedrock('b1', '2026-07-19T00:00:00Z'), bedrock('b2', '2026-07-19T00:00:01Z')], 'sess-br');
+  assert.equal(doc.unknown.records, 2)
+  assert.ok(doc.unknown.reason.includes('bedrock'), `the wire is named: ${doc.unknown.reason}`)
+  const mixed = (await read([bedrock('b1', '2026-07-19T00:00:00Z'), bedrock('b2', '2026-07-19T00:00:01Z', '/v9/whatever')], 'sess-br')).doc
+  assert.equal(mixed.unknown.records, 2)
+  assert.ok(!mixed.unknown.reason.includes('bedrock'), 'a record of no known wire among them: no wire is claimed for it')
+});
+
 test('a real Claude Code call on the same harness is still read as Anthropic (no regression)', async () => {
   const { meta, doc } = await read([cc], 's1');
   assert.equal(meta.provider, 'anthropic');

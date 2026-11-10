@@ -22,7 +22,8 @@ const UNSUPPORTED = [
   ['vertex', /\/projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/models\/[^/:]+:[A-Za-z]+$/],
   ['bedrock', /\/model\/[^/]+\/(invoke|invoke-with-response-stream|converse|converse-stream)$/],
 ];
-function unsupportedOf(rec) {
+/** unsupportedOf(rec) → the name of the inference wire this version records and does not read that `rec` is on (D37 ⑥), else null. */
+export function unsupportedOf(rec) {
   const ep = pathOf(rec && rec.endpoint);
   for (const [name, re] of UNSUPPORTED) if (re.test(ep)) return name;
   return endpointOf(ep)?.unsupported ?? null;
