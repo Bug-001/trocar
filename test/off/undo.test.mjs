@@ -193,11 +193,14 @@ test('install and on entries in one file, back to how install left it: on\'s ent
   applyJsonKey({ ...at, phase: 'on', file, keys: ['env', 'HTTPS_PROXY'], value: 'http://127.0.0.1:47011' })
   applyJsonKey({ ...at, phase: 'on', file, keys: ['env', 'NO_PROXY'], value: 'localhost' })
   saveManifest(s.b.dir, m, fs)
+  const onBackups = readManifest(s.b.dir).entries.filter((e) => e.path === file && e.phase === 'on').map((e) => e.backup)
+  assert.equal(onBackups.filter(Boolean).length, 2, 'each on run backed the file up')
   fs.writeFileSync(file, installed)
   const r = await s.run({ phases: ['on'] })
   assert.deepEqual(r.results.filter((x) => x.path === file).map((x) => x.result), ['already-restored', 'already-restored'])
   assert.deepEqual(r.manifest.entries.filter((e) => e.path === file).map((e) => e.phase), ['install'])
   assert.deepEqual(fs.readFileSync(file), installed)
+  assert.deepEqual([onBackups.filter((b) => fs.existsSync(b)), (r.manifest.kept_backups || []).filter((k) => k.path === file)], [[], []], 'on\'s backups held only what install or on left: gone, none kept as changed')
 })
 
 // 4.11 P13: the kinds the collector model adds. A json-array-item is a file entry (step 1); `switch` and `config-entry` files go with the plugins; a
