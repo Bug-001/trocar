@@ -147,6 +147,28 @@ test('3.5 #37: memory that never lets go: the waiting session gets its heap-no-r
   } finally { svc.stop() }
 })
 
+test('3.5 #37: after its heap-no-room stop, a lane read asked again for many of the waiting timer\'s turns, a kick and a follow do not try the session while there is no room', { timeout: 120_000 }, async () => {
+  const { home, sessions: [s] } = await homeOf('trocar-room-reask-', 'room-a')
+  const b = ballasted(foldLog(home, s))
+  const { r, svc } = await parked(home, s, b, { idleMs: 60_000 })
+  try {
+    await until(r, 'the stop was written', () => stoppedOn(home, s.id))
+    const tries = b.tries()
+    const tail = answer(), asked = svc.relay({ name: 'lane', params: { id: s.id, tail: 'main' }, res: tail }).catch(() => {})
+    const a0 = r.again
+    await until(r, 'the lane read was asked again through four of the waiting timer\'s turns', () => r.again >= a0 + Math.ceil((4 * ROOM_MS) / 250))
+    svc.kick([s.last])
+    svc.follow(s.id)
+    await until(r, 'more asks after the kick and the follow', () => r.again >= a0 + Math.ceil((5 * ROOM_MS) / 250))
+    assert.equal(tail.status, 0, 'no answer while there is no room: asked again (102)')
+    assert.equal(b.tries(), tries, 'not tried: the stop stands while there is no room')
+    assert.equal(b.stops(), 1, 'the stop is written once')
+    b.release()
+    await asked
+    assert.equal(tail.status, 200, 'room, and the read is answered')
+  } finally { svc.stop() }
+})
+
 test('3.5 #37: once the heap has room the session is folded, no request or kick naming it', { timeout: 120_000 }, async () => {
   const { home, sessions: [s] } = await homeOf('trocar-room-back-', 'room-a', 'room-b') // the newest session, which a request folds, is the other one
   const b = ballasted(foldLog(home, s))
