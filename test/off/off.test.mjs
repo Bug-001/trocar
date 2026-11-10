@@ -12,7 +12,7 @@ import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { undoSide, offWorld, runOff } from '../../src/off/orchestrate.mjs'
-import { formatOffReceipt, formatOffText, isCommandLine } from '../../src/off/receipt.mjs'
+import { formatOffReceipt, formatOffText, isCommandLine, COMMAND_INDENT } from '../../src/off/receipt.mjs'
 import { applyJsonKey } from '../../src/collector/core/trust/journal.mjs'
 import { certBlocks, SYSTEM_BUNDLES } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
@@ -986,6 +986,17 @@ test('a HOME with a space, or in another case where file names are case-blind, i
       const unquoted = words.join(' ').replace(/(^|\s)('[^']*'|"[^"]*")/g, '$1') // a quoted path (a quote that opens a word, not trocar's) is a command's, kept as the shell needs it
       assert.ok(!unquoted.includes(home) && !(FOLDS && unquoted.toLowerCase().includes(home.toLowerCase())), `${name}, ${home}: no words hold the HOME:\n${words.join('\n')}`)
     }
+  }
+})
+
+// §1.1⑤ in a line to copy: the command that takes trocar's root out names HOME as ~ where the shell expands it, in the text and --details
+test('the line that takes trocar\'s root out names an unquoted HOME as ~', () => {
+  const home = '/Users/al'
+  const receipt = { command: 'off', ok: true, outcome: 'done', all: true, harnesses: [], routing: { confirmed: true }, changed: [], removed: [],
+    still_trusting: [{ what: 'root', reason: 'it could not be removed', command: `security remove-trusted-cert ${home}/.trocar/collector/ca/ca.pem` }] }
+  for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+    const out = f(receipt, { home }).split('\n')
+    assert.ok(out.includes(`${COMMAND_INDENT}security remove-trusted-cert ~/.trocar/collector/ca/ca.pem`), `${name}:\n${out.join('\n')}`)
   }
 })
 

@@ -22,7 +22,7 @@ const WIDTH = 80
 // HOME is matched as off compares paths (pathKey): case-blind where the file names are (Windows, macOS), so C:\\Users\\ann is that HOME
 const FOLDS = pathKey('/a', { realpath: null }) === pathKey('/A', { realpath: null })
 const fold = (s) => (FOLDS ? s.toLowerCase() : s)
-const offTilde = (p, home) => (home && typeof p === 'string' && (fold(p) === fold(home) || fold(p).startsWith(fold(home) + path.sep)) ? `~${p.slice(home.length)}` : p)
+const offTilde = (p, home) => (home && typeof p === 'string' && fold(p.slice(0, home.length)) === fold(home) && (p.length === home.length || p[home.length] === path.sep) ? `~${p.slice(home.length)}` : p)
 const UNTIL_WORDS = { restart: 'until it restarts', 'next-connection': 'until its next new connection', 'next-handshake': 'until its next handshake', 'session-end': 'until its current session ends' }
 
 /** One line of at most 80 columns, or the line split at spaces (§1.1 版式 6): a text at column 0 folds at column 0, an indented one hangs at
@@ -164,7 +164,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   }
   if ((r.still_trusting || []).length) {
     const roots = r.still_trusting.filter((p) => p.what === 'root')
-    for (const p of roots) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out by hand with this line:`), `${COMMAND_INDENT}${p.command}`) // a command keeps its own line, whole (1.6 §1.1⑥)
+    for (const p of roots) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out by hand with this line:`), ...textLines(`${COMMAND_INDENT}${p.command}`, home)) // a command keeps its own line, whole (1.6 §1.1⑥)
     const procs = r.still_trusting.filter((p) => p.what !== 'root')
     if (procs.length) {
       lines.push('Still trusting the trocar certificate, but not going through trocar:')
@@ -226,7 +226,7 @@ export function formatOffText(r, { home = null, tense = r.dry_run ? 'future' : '
       : unread.length ? 'Capture is off, but trocar could not check everything: what it could not read is below.'
       : r.all || !ids.length ? "Capture is off. trocar is no longer on your agents' path." : `Capture is off for ${ids.join(', ')}. trocar is no longer on ${one ? 'its' : 'their'} path.`)
   if (!past) { // the plan names every file of yours it undoes (§1.4)
-    const own = (p) => !!home && p.startsWith(home) && /^[\\/]\.trocar([\\/]|$)/.test(p.slice(home.length)) // trocar's own files (its switch files) are --details facts
+    const own = (p) => !!home && fold(p.slice(0, home.length)) === fold(home) && /^[\\/]\.trocar([\\/]|$)/.test(p.slice(home.length)) // trocar's own files (its switch files) are --details facts
     for (const p of [...new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || []).map((x) => (typeof x === 'string' ? x : x.path))])].filter((p) => !own(p))) lines.push(`  ${t(p)}`) // a path is one value: whole on its own line, never folded at a space in it (§1.1⑥)
   }
   if (past && r.routing && !r.routing.confirmed) lines.push(...fit(`trocar could not confirm it is off their path (${r.routing.state || 'reason unknown'}). Run it again:`), `${COMMAND_INDENT}trocar off`)
@@ -237,7 +237,7 @@ export function formatOffText(r, { home = null, tense = r.dry_run ? 'future' : '
     const who = [...new Map(r.holders.map((x) => [x.pid, x])).values()]
     lines.push(...fit(`${counted(who, (x) => x.harness)} started earlier still ${who.length === 1 ? 'passes' : 'pass'} through trocar until ${who.length === 1 ? 'it exits' : 'they exit'}; nothing of ${who.length === 1 ? 'it' : 'theirs'} is recorded.`))
   }
-  for (const p of (r.still_trusting || []).filter((x) => x.what === 'root')) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out with this line:`), `${COMMAND_INDENT}${p.command}`)
+  for (const p of (r.still_trusting || []).filter((x) => x.what === 'root')) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out with this line:`), ...textLines(`${COMMAND_INDENT}${p.command}`, home))
   for (const k of (r.kept_bundles || []).filter((x) => x.holds_ca)) lines.push(...fit(`${t(k.path)} still holds the trocar certificate: it could not be rewritten (${k.error}). Fix that file, then run trocar off again.`))
   if ((r.pending || []).length) {
     lines.push(past ? "Found by trocar's own marks and not undone yet:" : "Will be undone by trocar's own marks:")
