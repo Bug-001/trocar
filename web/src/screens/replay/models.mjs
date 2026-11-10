@@ -112,7 +112,7 @@ export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {})
 function readOf(desk, boot = false) {
   const p = desk && desk.pending, b = desk && desk.behind
   if (!p) return b ? { state: 'behind', n: b.n, more: !!b.more, text: W.behindBy(b.n, b.more) } : null
-  if (p.stopped) return { state: 'stopped', code: p.stopped.code ?? null, reason: p.stopped.reason ?? null, text: W.FOLD_STOPPED[p.stopped.code] || W.FOLD_STOPPED['fold-failed'] }
+  if (p.stopped) return { state: 'stopped', code: p.stopped.code ?? null, reason: p.stopped.reason ?? null, text: W.FOLD_STOPPED[p.stopped.code] || W.FOLD_STOPPED.other }
   const done = Number(p.done) || 0, total = Number(p.total) || 0
   const share = (x) => (total > 0 ? Math.floor((x / total) * 100) : 0)
   if (p.read != null) { const pct = share(Number(p.read) || 0), n = Number(p.calls) || 0; return { state: 'updating', pct, n, text: W.updatingTo(pct, n) } }

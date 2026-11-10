@@ -765,9 +765,15 @@ function saidOnce(ctx, id, record, stop = 'projection-write-failed') {
   writeFails.set(id, { code: stop, reason: record.reason });
   ctx.persist?.(record);
 }
-function writeFailed(ctx, id, e) {
+/** writeFailure(home, id, e) → the D38 record of a write of a session's answer files that failed with `e`. Its code is the head's stop. */
+export function writeFailure(home, id, e) {
   const io = /^E[A-Z]+$/.test(e?.code ?? ''); // a system error (ENOSPC, EACCES, …); else the render threw
-  saidOnce(ctx, id, { where: 'projection', code: 'projection-write-failed', reason: io ? unsaved(ctx.home ?? trocarHome(), e) : `The answer of session ${id} could not be built: ${String((e && e.message) || e).split('\n')[0]}` }, io ? 'projection-write-failed' : 'fold-failed');
+  return io ? { where: 'projection', code: 'projection-write-failed', reason: unsaved(home, e) }
+    : { where: 'projection', code: 'fold-failed', reason: `The answer of session ${id} could not be built: ${String((e && e.message) || e).split('\n')[0]}` };
+}
+function writeFailed(ctx, id, e) {
+  const r = writeFailure(ctx.home ?? trocarHome(), id, e);
+  saidOnce(ctx, id, r, r.code);
 }
 /** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs), the same bytes
  *  here and in the worker: the title is a function of the disk. */

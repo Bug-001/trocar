@@ -228,11 +228,11 @@ export const updatingTo = (pct, calls) => `Updating to this version · ${pct}%${
 // 2.4 还在读: what stands where the empty list's line would while the ledger is answered behind the fold
 export const FILES_UPDATING = 'Updating to this version · files so far'
 export const FILES_READING = 'Still reading this session · files so far'
-// 1.5 K-31: the server's background read of this session stopped (the head's pending.stopped), one line per code of
-// src/health/codes.mjs FOLD_STOPS (the board does not import it); the code and the reason are in the technical details
+// 1.5 K-31: the server's background read of this session stopped (the head's pending.stopped): a code of src/health/codes.mjs
+// FOLD_STOPS with a line of its own (the board does not import it), else `other`; the code and the reason are in the technical details
 export const FOLD_STOPPED = Object.freeze({
   'heap-no-room': 'Reading this session stopped: it does not fit in the memory the reader has',
-  'fold-failed': 'Reading this session stopped on an error',
+  other: 'Reading this session stopped on an error',
 })
 // 1.5 K-32: the head drawn is older than what the capture has indexed
 export const behindBy = (n, more) => `${n}${more ? '+' : ''} newer calls are not shown yet`
