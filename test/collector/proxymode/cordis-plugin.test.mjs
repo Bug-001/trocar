@@ -148,7 +148,7 @@ async function nodeRun(mode) {
   const ca = path.join(d, 'root.pem'), sw = path.join(d, 'switch'), plugin = path.join(d, 'plugin.mjs')
   fs.writeFileSync(plugin, renderTemplate(fs.readFileSync(templateUrl('cordis-plugin'), 'utf8'), { CA_FILE: ca, SWITCH: sw, PROXY_ENV: dsh.proxy.env, NO_PROXY_ENV: ['NO_PROXY', 'no_proxy'] }))
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(https?_proxy|all_proxy|no_proxy|node_use_env_proxy|node_options)$/i.test(k))) // the user's proxy is not this test's
-  return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', CHILD, sw, plugin, ca, pathToFileURL(path.resolve('src')).href, mode], { encoding: 'utf8', timeout: 30000, env }))
+  return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', CHILD, sw, pathToFileURL(plugin).href, ca, pathToFileURL(path.resolve('src')).href, mode], { encoding: 'utf8', timeout: 30000, env }))
 }
 const CONNECT = /^CONNECT trocar-test\.invalid:\d+ HTTP\/1\.1\r\n/
 
