@@ -135,7 +135,8 @@ export function renderRails(el, s) {
       (open ? `<div class="bgkids">${bgs.map((l) => railHtml(l, s)).join('')}</div>` : '')
   }
   for (const l of tcs) html += tcRailHtml(l, s)
-  el.innerHTML = html || `<div class="railsonly">${esc(ONLY_MAIN)}</div>`
+  // a tier-0 head has read no lane: no claim about them, but the row is kept so the lanes come in without moving the strip (1.5 K-31)
+  el.innerHTML = html || `<div class="railsonly">${s.desk && s.desk.head && !s.desk.head.tier ? '&nbsp;' : esc(ONLY_MAIN)}</div>`
   if (s.selTick) { const t = el.querySelector(`[data-rid="${attrSel(s.selTick)}"]`); if (t) t.classList.add('sel') }
 }
 

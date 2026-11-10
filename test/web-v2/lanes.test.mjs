@@ -9,7 +9,7 @@ import { renderTicks, renderRails, railToggles, flipRail, wireRails, hasRails } 
 import { wireDetail } from '../../web/legacy/replay/detail.mjs'
 import { deskOf } from './desk-world.mjs'
 import { applySession } from '../../web/legacy/replay/model.mjs'
-import { LANE_KIND, TC_NO_SIZE } from '../../web/legacy/labels/replay.mjs'
+import { LANE_KIND, TC_NO_SIZE, ONLY_MAIN } from '../../web/legacy/labels/replay.mjs'
 import { esc } from '../../web/legacy/core/fmt.mjs'
 import { laneMeta, eventOnly } from '../../src/view/analyze.mjs'
 import { HARNESSES } from '../../src/dissect/harnesses.mjs'
@@ -312,4 +312,15 @@ test('2.1 §token 计数行: the row\'s "no size" number is probes.count − pro
   const el = { innerHTML: '', querySelector: () => null }
   renderRails(el, s)
   assert.ok(el.innerHTML.includes(esc(TC_NO_SIZE(2))), 'two of five came back without a size')
+})
+
+// 1.3 无叠加轨 · 1.5 K-31: a tier-0 head has read no lane yet: the overlay area says nothing about the session's lanes, and still
+// takes its row, so a tier-1 head draws its rows without moving what is above and below; past tier 0, a main-only session says so
+test('1.3 无叠加轨: a tier-0 head draws no "only the main thread" line, but keeps the row; tier 1 draws it', () => {
+  for (const tier of [0, 1]) {
+    const s = { ...railDesk({ subs: 0, bgs: 0, tc: false }), desk: { head: { tier } } }, el = { innerHTML: '', querySelector: () => null }
+    renderRails(el, s)
+    assert.match(el.innerHTML, /class="railsonly"/)
+    assert.equal(el.innerHTML.includes(ONLY_MAIN), tier > 0)
+  }
 })
