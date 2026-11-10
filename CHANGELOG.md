@@ -4,7 +4,21 @@ Keep a Changelog style, versions follow SemVer (in 0.x a minor version may break
 
 ## [Unreleased]
 
+- [2026-11-09](docs/release-notes/2026-11-09.md)
+- [2026-11-10](docs/release-notes/2026-11-10.md)
+
+## [0.2.0] - 2026-11-09
+
+The first published release.
+
+- [2026-11-08](docs/release-notes/2026-11-08.md)
+- [2026-11-07](docs/release-notes/2026-11-07.md)
+- [2026-11-06](docs/release-notes/2026-11-06.md)
+- [2026-11-05](docs/release-notes/2026-11-05.md)
+- [2026-11-04](docs/release-notes/2026-11-04.md)
+- [2026-11-03](docs/release-notes/2026-11-03.md)
 - [2026-11-02](docs/release-notes/2026-11-02.md)
+- [2026-11-01](docs/release-notes/2026-11-01.md)
 - [2026-10-31](docs/release-notes/2026-10-31.md)
 - [2026-10-30](docs/release-notes/2026-10-30.md)
 - [2026-10-25](docs/release-notes/2026-10-25.md)
@@ -31,5 +45,6 @@ The first tagged version: tagged in git, not published to npm.
 - [2026-10-07](docs/release-notes/2026-10-07.md)
 - [2026-10-06](docs/release-notes/2026-10-06.md)
 
-[Unreleased]: https://github.com/Bug-001/trocar/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Bug-001/trocar/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Bug-001/trocar/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Bug-001/trocar/releases/tag/v0.1.0

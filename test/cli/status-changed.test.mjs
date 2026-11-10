@@ -9,6 +9,7 @@ import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { runStatus, reply, asDaemon, down } from './fixtures/status-ctx.mjs'
 import { validateReceipt, UNDO_LINE } from '../../src/cli/schema.mjs'
 import { foldFlows } from '../../src/health/flows.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const docOf = async (s, o) => (await runStatus(s, ['--json'], o)).io.json()
 
@@ -26,14 +27,14 @@ async function seeded() {
   return { s, on, inst }
 }
 
-test('C.3 changed[]: one item per harness item of phase install and on — harness and path from the manifest, undo the command that takes it out; a machine-wide item is not listed', async () => {
+test('C.3 changed[]: one item per harness item of phase install and on — harness and path from the manifest, undo the command that takes it out; a machine-wide item is not listed', { skip: POSIX_WORLD }, async () => {
   const { s, on, inst } = await seeded()
   const doc = await docOf(s, { request: asDaemon(reply()) })
   const got = doc.changed.map((c) => [c.harness, c.path, c.undo]).sort()
   assert.deepEqual(got, [[inst.harness, inst.path, UNDO_LINE.install], [on.harness, on.path, `${UNDO_LINE.on} ${on.harness}`]].sort())
 })
 
-test('C.3 changed[]: an install record that cannot be read is null (unknown), never an empty list, and errors says so', async () => {
+test('C.3 changed[]: an install record that cannot be read is null (unknown), never an empty list, and errors says so', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   fs.writeFileSync(path.join(s.dir, 'install-manifest.json'), '{ not json')
   const doc = await docOf(s, { request: asDaemon(reply()) })
@@ -46,7 +47,7 @@ const ago = (ms) => new Date(NOW - ms).toISOString()
 const healthOf = (records) => ({ collector: { failures: foldFlows(records, { now: NOW }).groups, expected: {}, conditions: [] }, raw: { failures: [] }, read: { since: ago(24 * 3600e3) } })
 
 const GROUPS_MAX = 50 // 1.6 附录 C.3: 最多 50 组
-test('C.3 failures.groups: at most 50, the newest first, and the cut is in errors', async () => {
+test('C.3 failures.groups: at most 50, the newest first, and the cut is in errors', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const recs = Array.from({ length: GROUPS_MAX + 1 }, (_, i) => ({ ts: ago((GROUPS_MAX + 1 - i) * 1000), event: 'failure', where: 'engine', code: `code-${i}` }))
   const doc = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf(recs) } })
@@ -56,7 +57,7 @@ test('C.3 failures.groups: at most 50, the newest first, and the cut is in error
   assert.ok(doc.errors.some((e) => e.where === 'capture health'))
 })
 
-test('C.3 failures.groups: the same last_ts — the group whose newest line was written later is first (the log\'s order breaks the tie)', async () => {
+test('C.3 failures.groups: the same last_ts — the group whose newest line was written later is first (the log\'s order breaks the tie)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const t = ago(1000)
   for (const order of [['code-a', 'code-b'], ['code-b', 'code-a']]) {
@@ -66,7 +67,7 @@ test('C.3 failures.groups: the same last_ts — the group whose newest line was 
   }
 })
 
-test('validateReceipt: the C.3 status document validates; a status changed item without undo is exactly one problem naming it', async () => {
+test('validateReceipt: the C.3 status document validates; a status changed item without undo is exactly one problem naming it', { skip: POSIX_WORLD }, async () => {
   const { s } = await seeded()
   const doc = await docOf(s, { request: asDaemon(reply()) })
   assert.deepEqual(validateReceipt(doc), [])
@@ -76,6 +77,31 @@ test('validateReceipt: the C.3 status document validates; a status changed item 
   assert.ok(bad[0].includes('changed[0].undo'))
 })
 
+// C.3: a wait on an upstream loses nothing and has no command, so its group is kept as a note; another failure beside it is still a problem
+test('C.3 failures.groups: upstream-slow groups stay at level note and count as no problem', { skip: POSIX_WORLD }, async () => {
+  const s = await installedHome()
+  const slow = { ts: ago(2000), event: 'failure', where: 'engine', code: 'upstream-slow', agent: 'codex', host: 'walled.test', phase: 'tls', waited_ms: 5000, reason: 'walled.test has not answered' }
+  const alone = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf([slow, { ...slow, ts: ago(1000) }]) } })
+  assert.deepEqual(alone.failures.groups.filter((g) => g.code === 'upstream-slow').map((g) => [g.level, g.count, g.harness]), [['note', 2, 'codex']], 'kept, with its count and its harness')
+  assert.equal(alone.failures.problem, 0)
+  const beside = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf([slow, { ts: ago(1000), event: 'failure', where: 'engine', code: 'leaf-error', reason: 'no leaf' }]) } })
+  assert.deepEqual(beside.failures.groups.map((g) => [g.code, g.level]).sort(), [['leaf-error', 'problem'], ['upstream-slow', 'note']])
+  assert.equal(beside.failures.problem, 1)
+})
+
+// C.3, D38: the same failure of several harnesses is a group each, so a count and a name always belong together
+test('C.3 failures.groups: one failure of three harnesses is three groups, each with its own count; records of no harness are a group of their own', { skip: POSIX_WORLD }, async () => {
+  const s = await installedHome()
+  const rec = (i, who) => ({ ts: ago(5000 - i * 100), flow_id: `f${i}`, pid: 40 + i, ...(who ? { agent: who } : {}), decision: 'decrypt', host: 'h.test', reason: 'client-rejected-leaf', not_captured: 'client-rejected-leaf' })
+  const ev = (i, who) => ({ ts: ago(4000 - i * 100), event: 'failure', where: 'engine', code: 'leaf-error', ...(who ? { agent: who } : {}), reason: 'no leaf' })
+  const recs = [rec(1, 'claude-code'), rec(2, 'claude-code'), rec(3, 'claude-code'), rec(4, 'hermes'), rec(5, 'kimi-code'), rec(6, null), ev(1, 'codex'), ev(2, 'hermes')]
+  const { failures } = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf(recs) } })
+  const of = (code) => failures.groups.filter((g) => g.code === code).map((g) => [g.harness ?? null, g.count]).sort()
+  assert.deepEqual(of('client-rejected-leaf'), [['claude-code', 3], ['hermes', 1], ['kimi-code', 1], [null, 1]].sort())
+  assert.deepEqual(of('leaf-error'), [['codex', 1], ['hermes', 1]])
+  assert.equal(failures.problem, 8)
+})
+
 // C.3「已解决的组」: each failure and the ok event that ends its condition (one record shape per pair, as the daemon writes them)
 const ENDED = [
   [{ event: 'helper-down', where: 'helper', reason: 'no helper at /usr/local/libexec/trocar/redirector' }, { event: 'helper-ok' }],
@@ -83,7 +109,7 @@ const ENDED = [
   [{ event: 'failure', where: 'agents', code: 'agent-list-invalid', reason: 'agents.json is not JSON' }, { event: 'agent-list-ok' }],
 ]
 for (const [fail, ok] of ENDED) {
-  test(`C.3 failures.groups: a ${fail.code || fail.event} group that ${ok.event} ended stays, at level note, and counts as no problem; a new one makes it a problem again`, async () => {
+  test(`C.3 failures.groups: a ${fail.code || fail.event} group that ${ok.event} ended stays, at level note, and counts as no problem; a new one makes it a problem again`, { skip: POSIX_WORLD }, async () => {
     const s = await installedHome()
     const recs = [{ ts: ago(3000), ...fail }, { ts: ago(2000), ...ok }]
     const resolved = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf(recs) } })

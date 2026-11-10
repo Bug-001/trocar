@@ -20,3 +20,8 @@ test('V103 every FINDING_CODES code has a statusReason clause whose text is non-
     for (const f of ['fix', 'command']) if (r[f] != null) assertEnglish(r[f], `${code}.${f}`, { width: false })
   }
 })
+
+test("status's engine-port-taken fix turns on only the harness it names, never every harness", () => {
+  assert.equal(statusReason('engine-port-taken', { harness: 'codex' }).command, 'trocar on codex')
+  assert.equal(statusReason('engine-port-taken', {}).command, null)
+})

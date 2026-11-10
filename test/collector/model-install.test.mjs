@@ -8,13 +8,16 @@ import path from 'node:path'
 import tls from 'node:tls'
 import { modelWorld, sharedCertFileWorld } from '../helpers/model-world.mjs'
 import { planInstall, ruleUFiles } from '../../src/collector/model-install.mjs'
+import { BLOCK_OPEN, BLOCK_END } from '../../src/off/text-edit.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
+import { backupDir } from '../../src/off/paths.mjs'
 import { codeId } from '../../src/version.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { recordingExec } from '../cli/fixtures/on-ctx.mjs'
+import { hookFile } from '../../src/collector/harness/templates/index.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const put = (f, data) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, data) }
@@ -149,6 +152,16 @@ test('D54 · CM1: install; install changes no byte, makes no second key, raises 
   assert.equal(readManifest(w.dir).install.code, codeId(), 'the record names the code that ran install (1.6 §5.5: what update compares)')
 })
 
+// 4.11 §1: a key helper kept (no terminal to answer the key's box, or the box not answered) still signs: install says so as a note and exits 0,
+// so an update goes on to on (a refusal there would leave every agent off)
+test('macOS: a key helper kept, not replaced, is a note: exit 0, the way out said', async () => {
+  const w = await everything()
+  const why = 'the installed trocar-sign-helper keeps signing; run trocar install in a terminal to replace it'
+  const r = await w.install({ wrapperKit: { renderWrapper }, installHelper: () => ({ replaced: false, kept: true, why }) })
+  assert.equal(r.exit, 0, JSON.stringify({ p: r.problems, pend: r.pending }))
+  assert.ok(r.notes.includes(why) && !r.problems.includes(why))
+})
+
 test('CM25 · CM26: no admin item, nothing root-owned under HOME, and no write to a login environment (rc / profile / environment.d) — a recording fs over every harness present', async () => {
   const w = await everything()
   const wrote = []
@@ -211,6 +224,19 @@ async function lostKeyWorld() {
   return { w, r1, at1: carrierTimes(w) }
 }
 const later = () => new Date(Date.now() + 3600e3)
+
+test('1.6 C.3 failures.since: an install over the manifest an unclean uninstall kept (install: null) starts now; one over a complete install keeps its start', async () => {
+  const w = await everything()
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const first = readManifest(w.dir).created_at
+  await w.install({ wrapperKit: { renderWrapper }, now: later })
+  assert.equal(readManifest(w.dir).created_at, first, 'the same install, run again')
+  const f = path.join(w.dir, 'install-manifest.json')
+  fs.writeFileSync(f, JSON.stringify({ ...json(f), install: null, created_at: '2026-01-01T00:00:00.000Z' }))
+  const at = later()
+  await w.install({ wrapperKit: { renderWrapper }, now: () => at })
+  assert.equal(readManifest(w.dir).created_at, at.toISOString())
+})
 const bundleOf = (w) => json(path.join(w.home, '.zcode', 'cli', 'config.json')).network.caCertFile
 const fpsIn = (f) => certBlocks(fs.readFileSync(f, 'utf8')).map((b) => b.fp)
 function carrierTimes(w) {
@@ -254,6 +280,26 @@ test('CM35: the old root\'s removal refused → the new root is installed all th
   assert.deepEqual(r2.items.find((i) => i.item === 'old-root'), { item: 'old-root', state: 'orphan', fp256: r1.fp256 })
   assert.ok(readManifest(w.dir).entries.some((e) => e.kind === 'system-root' && e.fp256 === r1.fp256 && e.orphan), 'kept on record: uninstall removes it')
   assertOnlyNewRoot(w, r1, r2, at1)
+})
+
+// 1.6 R2: the older root's block comes out of the user's file only after a copy of its bytes is in the backup folder, and through the link a
+// dotfiles setup has there (the link stays a link, the file it names is what changes)
+test('CM35 · R2: the older root\'s block leaves the user\'s file after a backup of its bytes, and through its link', async () => {
+  const { w, r1 } = await lostKeyWorld()
+  const real = w.env.SSL_CERT_FILE, link = path.join(w.home, 'certs', 'via-link.pem')
+  fs.symlinkSync(real, link)
+  w.env.SSL_CERT_FILE = link
+  const f = path.join(w.dir, 'install-manifest.json'), m = json(f)
+  for (const e of m.entries.filter((x) => x.format === 'pem-block')) e.path = link // the block was placed through the link
+  fs.writeFileSync(f, JSON.stringify(m))
+  const before = fs.readFileSync(real)
+  w.custody.switches.keyLost = true
+  const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+  assert.equal(r2.exit, 0, JSON.stringify({ c: r2.carriers, p: r2.problems, pe: r2.pending }))
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link stays a link')
+  assert.deepEqual(fpsIn(real), [certBlocks(USER_PEM)[0].fp, r2.fp256])
+  const dir = backupDir(w.home)
+  assert.ok(fs.readdirSync(dir).some((n) => fs.readFileSync(path.join(dir, n)).equals(before)), `the bytes with ${r1.fp256}'s block are in the backup folder`)
 })
 
 // the reverse: the key is there but trocar cannot read its root back — trocar-ca.pem gone, or the manifest's record gone — install must not crash on
@@ -353,3 +399,168 @@ test('1.6 §3.6: an uninstall that deletes a file trocar made for its key or lin
   const rows = formatUninstallReceipt(receipt, { home: w.home, platform: 'darwin' }).split('\n')
   for (const p of yours) assert.ok(rows.some((l) => l.trim().startsWith(`${tilde(p, w.home)}: `)), `${p}: what was taken out is said: ${rows.join('\n')}`)
 })
+
+// 4.8 §7: uninstall deletes the task under trocar's name only when it is trocar's (the task file install wrote, or with no file, the one this copy would
+// write); any other is left, and the receipt says so naming its program only
+test('win32 uninstall: a task under trocar\'s name that is not trocar\'s is left and said; trocar\'s own is deleted', async () => {
+  const task = (cmd, args) => `<Task><Actions><Exec><Command>${cmd}</Command><Arguments>${args}</Arguments></Exec></Actions></Task>`
+  const ours = task('conhost.exe', '--headless "C:\\trocar.cmd" daemon --supervise')
+  for (const [registered, deleted] of [[task('C:\\evil.exe', '/secret'), false], [ours, true]]) {
+    const w = await modelWorld({ os: 'win32' })
+    await w.install()
+    const calls = []
+    const exec = (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: file === 'schtasks' && args.includes('/XML') ? registered : '', stderr: '' } }
+    const { exit, receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: 'win32', exec, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, unit: { text: () => ours } } })
+    assert.equal(exit, 0, JSON.stringify(receipt.problems))
+    assert.equal(calls.some((c) => c.startsWith('schtasks /Delete')), deleted)
+    assert.deepEqual(receipt.autostart.removed.length > 0, deleted)
+    assert.equal(receipt.notes.some((n) => n.includes('C:\\evil.exe')), !deleted, 'the program is named when it is left')
+    assert.ok(!JSON.stringify(receipt).includes('/secret'), 'never its arguments')
+  }
+})
+
+// 4.11 P4 「trocar 拥有的文件不写在别人的上面」: a file already at a plugin's path that the manifest does not list is written over only when it carries
+// trocar's sentinel; a file that is not trocar's, or cannot be read, is left byte for byte, unrecorded, its carrier skipped with the path and why (D38)
+for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earlier extension\n'], ['foreign', '// the user\'s own extension\n'], ['unreadable', 'x\n']]) {
+  test(`P4 · a loaderless plugin, ${at} at its path`, async () => {
+    const [eighth] = await loadHarnesses(new URL('./harness/fixtures/', import.meta.url))
+    const w = await modelWorld()
+    const file = path.join(w.home, '.eighth', 'extensions', 'trocar-pi-extension.js')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    if (seed != null) fs.writeFileSync(file, seed)
+    const sealed = { ...fs, readFileSync: (f, ...a) => { if (at === 'unreadable' && f === file) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
+    const r = await w.install({ harnesses: [eighth], ...(at === 'unreadable' ? { fs: sealed } : {}) })
+    const rec = readManifest(w.dir).files.filter((f) => f.path === file)
+    const row = r.carriers.find((c) => c.harness === 'eighth' && c.carrier === 'plugin')
+    if (at === 'foreign' || at === 'unreadable') {
+      assert.equal(fs.readFileSync(file, 'utf8'), seed, 'left byte for byte')
+      assert.deepEqual([rec, row.state, row.code, row.why.includes(file)], [[], 'skipped', 'not-trocars-file', true])
+      assert.equal(r.exit, 1)
+    } else {
+      assert.ok(fs.readFileSync(file, 'utf8').includes('trocar collector'))
+      assert.deepEqual([rec.length, row.state], [1, 'placed'])
+    }
+  })
+}
+
+// 4.11 P4 (macOS / Windows): the plug-in file install would place where a file that is not trocar's already is — the plan lists that carrier as skipped,
+// the run leaves the file byte for byte and unrecorded, its carrier row says not-trocars-file, and flows/ has the failure line (D38); exit 1
+// 1.6 §3.2 / §1.4 (macOS / Windows): the plan says what the run does — a loader file holding trocar's marked text that no record lists skips
+// that carrier in the plan, with marked-without-record and the file, as the run skips it
+// the same for rule U's block: the user's certificate file holding a block from an install whose record is gone — the plan skips it as the run does
+for (const os of ['darwin']) { // the plan's code is the same on both OSes; everything() builds a macOS world
+  test(`1.6 §3.2 · ${os}: the plan skips rule U's block in a file holding marked text no record lists, as the run does`, async () => {
+    const w0 = await modelWorld({ os })
+    const mine = path.join(w0.home, 'mine.pem')
+    const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
+    put(mine, `${USER_PEM}${BLOCK_OPEN}\n${USER_PEM}${BLOCK_END}\n`) // a block an earlier install wrote, its record gone (no root left trusted to refuse first)
+    const rows = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile }).filter((r) => r.carrier === 'pem-block' && r.paths[0] === mine)
+    assert.ok(rows.length, 'rule U names the file')
+    assert.deepEqual([...new Set(rows.map((r) => JSON.stringify([r.state, r.code])))], [JSON.stringify(['skipped', 'marked-without-record'])])
+    const r = await w.install({ wrapperKit: { renderWrapper } })
+    assert.ok(r.carriers.some((c) => c.carrier === 'pem-block' && c.path === mine && c.state === 'skipped' && c.code === 'marked-without-record'), JSON.stringify(r.carriers))
+  })
+}
+
+for (const os of ['darwin', 'win32']) {
+  test(`1.6 §3.2 · ${os}: the plan skips a carrier whose loader holds marked text no record lists, as the run does`, async () => {
+    const w = await modelWorld({ os, commands: ['dsh'] })
+    const loader = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile }).find((r) => r.carrier === 'plugin' && r.loader)
+    assert.ok(loader && loader.paths[0])
+    const file = loader.paths[0]
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${BLOCK_OPEN}\n- insert: []\n${BLOCK_END}\n`)
+    const rows = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile }).filter((r) => r.harness === loader.harness && r.carrier === 'plugin')
+    assert.deepEqual([...new Set(rows.map((r) => JSON.stringify([r.state, r.code, r.paths[0]])))], [JSON.stringify(['skipped', 'marked-without-record', file])])
+    const r = await w.install({ wrapperKit: { renderWrapper } })
+    assert.ok(r.carriers.some((c) => c.harness === loader.harness && c.state === 'skipped' && c.code === 'marked-without-record'), JSON.stringify(r.carriers))
+  })
+}
+
+for (const os of ['darwin', 'win32']) {
+  test(`4.11 P4 · ${os}: a plug-in file that is not trocar's is skipped in the plan and the run, and on record`, async () => {
+    const w = await modelWorld({ os, commands: ['dsh'] })
+    fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
+    const plan0 = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile })
+    const plugin = plan0.find((r) => r.carrier === 'plugin' && !r.loader)
+    assert.ok(plugin && plugin.paths[0], JSON.stringify(plan0))
+    const file = path.join(plugin.paths[0], hookFile('cordis-plugin'))
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '// the user\'s own plugin\n')
+    const rows = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile }).filter((r) => r.harness === plugin.harness && r.carrier === 'plugin')
+    assert.deepEqual([...new Set(rows.map((r) => JSON.stringify([r.state, r.code, r.paths[0]])))], [JSON.stringify(['skipped', 'not-trocars-file', file])], 'every form\'s row says the carrier is skipped, and where')
+    const r = await w.install({ wrapperKit: { renderWrapper } })
+    assert.equal(r.exit, 1)
+    assert.equal(fs.readFileSync(file, 'utf8'), '// the user\'s own plugin\n', 'left byte for byte')
+    assert.deepEqual(readManifest(w.dir).files.filter((f) => f.path === file), [])
+    assert.ok(r.carriers.some((c) => c.carrier === 'plugin' && c.state === 'skipped' && c.code === 'not-trocars-file' && c.path === file), JSON.stringify(r.carriers))
+    const flows = fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+    assert.ok(flows.some((e) => e.event === 'failure' && e.code === 'not-trocars-file' && e.path === file), 'on record (D38)')
+  })
+}
+
+// 4.11 P4: a login entry under trocar's name the record does not list is trocar's — install replaces it, and what was registered is backed up first
+test('4.11 P4 · an unrecorded registration under trocar\'s name is backed up, then replaced', async () => {
+  const w = await modelWorld({ os: 'win32' })
+  const old = Buffer.from('<Task>an older one</Task>')
+  const unit = { path: path.join(w.dir, 'task.xml'), text: () => '<Task>trocar</Task>', registeredBytes: () => old }
+  await w.install({ unit })
+  assert.equal(fs.readFileSync(unit.path, 'utf8'), '<Task>trocar</Task>')
+  const bk = path.join(w.home, '.trocar', 'backup')
+  assert.ok(fs.readdirSync(bk).some((n) => fs.readFileSync(path.join(bk, n)).equals(old)), 'the registered bytes are kept')
+})
+
+// 4.11 P4b: install's own carrier item that is gone is placed again by install — the one way to put it back (on writes no certificate item, D55①).
+// The old record leaves the manifest and the new one owns what the old one created; a value the user put in its place is the user's (rule U).
+for (const os of ['darwin', 'win32']) {
+  const zcode = async () => {
+    const w = await modelWorld({ os })
+    fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
+    const r1 = await w.install({ wrapperKit: { renderWrapper } })
+    assert.equal(r1.exit, 0, JSON.stringify({ p: r1.problems, pe: r1.pending }))
+    return { w, cfg: path.join(w.home, '.zcode', 'cli', 'config.json') }
+  }
+  const keyRecords = (w, cfg) => readManifest(w.dir).entries.filter((e) => e.kind === 'json-key' && e.path === cfg && e.phase === 'install')
+  // the agent rewrote its config without trocar's key, or the file is gone (the directories install made for it stay owned: uninstall takes them away)
+  for (const [how, gone, after] of [['rewrote its file without', (cfg) => fs.writeFileSync(cfg, JSON.stringify({ theme: 'dark' })), { theme: 'dark' }], ['removed its file with', (cfg) => fs.rmSync(cfg), {}]]) {
+    test(`4.11 P4b · ${os}: an install key the agent ${how} it is placed again by install, exit 0; the old record retired`, async () => {
+      const { w, cfg } = await zcode()
+      const bundle = json(cfg).network.caCertFile
+      const [old] = keyRecords(w, cfg)
+      gone(cfg)
+      const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+      assert.equal(r2.exit, 0, JSON.stringify({ p: r2.problems, pe: r2.pending }))
+      assert.deepEqual(json(cfg), { ...after, network: { caCertFile: bundle } }, 'placed again, the agent\'s keys kept')
+      const recs = keyRecords(w, cfg)
+      assert.equal(recs.length, 1, 'one record: the old one retired')
+      assert.notEqual(recs[0].installed_at, old.installed_at)
+      if (!Object.keys(after).length) for (const d of old.created_dirs || []) assert.ok(recs[0].created_dirs.includes(d), `${d}: still owned`)
+    })
+  }
+  // the directory install made for the file stays trocar's when the record is retired over a file the agent rewrote: once that file is gone too,
+  // uninstall leaves the HOME as it was before install (invariant 5), the directory included
+  test(`4.11 P4b · ${os}: a directory install made stays trocar's across a retired record; uninstall takes it once the file is gone, keeps it with the file`, async () => {
+    for (const gone of [true, false]) {
+      const { w, cfg } = await zcode()
+      const made = path.dirname(cfg)
+      assert.ok(keyRecords(w, cfg)[0].created_dirs.includes(made), 'install made the directory of the file')
+      fs.writeFileSync(cfg, JSON.stringify({ theme: 'dark' })) // the agent rewrote its config without trocar's key
+      const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+      assert.equal(r2.exit, 0, JSON.stringify({ p: r2.problems, pe: r2.pending }))
+      if (gone) fs.rmSync(cfg) // later the agent's file is gone
+      const deps = { platform: os, exec: recordingExec().run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, ...(os === 'win32' ? { unit: { text: () => '' } } : {}) }
+      const { exit, receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps })
+      assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+      if (gone) assert.equal(fs.existsSync(made), false, `${made}: install made it, so uninstall takes it`)
+      else assert.deepEqual(json(cfg), { theme: 'dark' }, 'the agent\'s file stays, and with it the directory')
+    }
+  })
+  test(`4.11 P4b · ${os}: an install key whose value the user replaced with their own is the user's: left, rule U, exit 0`, async () => {
+    const { w, cfg } = await zcode()
+    const mine = path.join(w.home, 'certs', 'z.pem'); put(mine, USER_PEM)
+    fs.writeFileSync(cfg, JSON.stringify({ network: { caCertFile: mine } }))
+    const before = fs.readFileSync(cfg)
+    const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+    assert.equal(r2.exit, 0, JSON.stringify({ p: r2.problems, pe: r2.pending }))
+    assert.deepEqual(fs.readFileSync(cfg), before, 'the user\'s value stays')
+    assert.equal(r2.carriers.find((c) => c.harness === 'z-code' && c.carrier === 'pem-block').state, 'placed')
+  })
+}

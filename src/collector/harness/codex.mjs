@@ -18,8 +18,10 @@
 import path from 'node:path'
 import { parseTomlLite, parseDotenv, hostOf, dig, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { envProxies, argAfter, dotenvLayer, isOwnPath, perOs } from './_common.mjs'
+import { envProxies, argAfter, dotenvLayer, isOwnPath, perOs, editorExtension } from './_common.mjs'
 import { ROUTE_PLACES } from '../../off/marker.mjs'
+
+const EXTENSION = 'openai.chatgpt' // the VS Code extension id (its dir is `<id>-<version>[-<target>]`)
 
 const ETC_CONFIG = '/etc/codex/config.toml'
 const SYSTEM_CONFIG = { linux: ETC_CONFIG, darwin: ETC_CONFIG }
@@ -56,7 +58,7 @@ function inject(ctx) {
   for (const env of [ctx.env, ...ctx.running]) if (env.get('CODEX_HOME')) homes.add(path.resolve(codexHome(env, ctx.home)))
   const present = [...homes].filter((h) => ctx.listDir(h).length)
   const notes = [...homes].filter((h) => !present.includes(h)).map((h) => ({ code: CODE.harnessNote, text: `CODEX_HOME ${h} does not exist, so no trust entry is written there` }))
-  if (!present.length) return { notes: [...notes, { code: CODE.harnessNote, text: `no Codex home exists (${def}, or a CODEX_HOME of this shell or of a running codex), so no trust entry is written; after running Codex once, run trocar uninstall, then trocar install` }] }
+  if (!present.length) return { notes: [...notes, { code: CODE.harnessNote, text: `no Codex home exists (${def}, or a CODEX_HOME of this shell or of a running codex), so no trust entry is written; after running Codex once, run trocar install (or Set up on the board)` }] }
   const bundle = path.join(ctx.collectorDir, 'ca', 'combined-codex.pem')
   const seen = new Set() // SSL_CERT_FILE values the block overrides: the user's lines, the launch env
   const see = (v) => { if (typeof v === 'string' && v !== '' && !isOwnPath(ctx, v)) seen.add(v) }
@@ -84,13 +86,13 @@ const proxy = {
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (every form reads $CODEX_HOME/.env, the app's
-// embedded codex included; NO_PROXY is required on win, R3-W5). Trust is the root installed by `install` (D57): trocar writes no SSL_CERT_FILE.
+// embedded codex included; NO_PROXY is required on win). Trust is the root installed by `install` (D57): trocar writes no SSL_CERT_FILE.
 const ENV_FILE = ROUTE_PLACES.codex.file // where `on` writes the proxy block, the place the marker undo looks too
 const proxyMode = {
   forms: [
     { id: 'codex.cli', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },
-    { id: 'codex.cli-standalone', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },
-    { id: 'codex.vscode', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ base: 'home', path: '.vscode/extensions', glob: 'openai.chatgpt-*' }], verified: { darwin: true, win32: true },
+    { id: 'codex.cli-standalone', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: { reason: 'not-measured' } } },
+    { id: 'codex.vscode', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: editorExtension(EXTENSION, ['desktop']), verified: { darwin: true, win32: true },
       // the extension starts (and ends) its own `codex … app-server`: the user cannot quit it, and killing it is the editor's business — a window reload is
       // what makes it start one that reads .env again (mac machine 2026-10-19: the CLI's kill step was printed for these processes)
       restart: { hint: 'In VS Code, run Developer: Reload Window (the ChatGPT extension then starts its codex again); or quit VS Code and start it again' } },
@@ -101,7 +103,7 @@ const proxyMode = {
     { id: 'codex.wsl', os: ['win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'wsl' }], verified: { win32: { reason: 'out-of-scope' } } }, // D56⑥
   ],
   routes: {
-    env: { kind: 'dotenv-block', file: ENV_FILE, proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'create', takesEffect: 'takes effect once you restart codex and the app-server it runs (it reads .env at start only)' },
+    env: { kind: 'dotenv-block', file: ENV_FILE, proxyKeys: proxy.env, noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'create', takesEffect: 'takes effect once you restart codex and the app-server it runs (it reads .env at start only)' },
   },
   certs: {},
   trusts: {
@@ -132,6 +134,7 @@ export default {
   layers: (ctx) => [dotenvLayer(ctx, path.join(codexHome(ctx.environ, ctx.home), '.env'), { name: '$CODEX_HOME/.env', drop: (k) => /^CODEX_/.test(k), live: false })],
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy']),
+  present: [{ base: 'home', dir: '.codex', env: 'CODEX_HOME' }, { command: 'codex' }, ...editorExtension(EXTENSION)],
   inject,
   trust: {
     chain: [{ var: 'SSL_CERT_FILE', semantic: 'append' }, { var: 'CODEX_CA_CERTIFICATE', semantic: 'append' }], // both count (lab ①)

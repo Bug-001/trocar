@@ -5,8 +5,9 @@ import path from 'node:path'
 import fs from 'node:fs'
 import tls from 'node:tls'
 import { contractWorld, daemonFor, placesOf, snapshot } from './contract-world.mjs'
+import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { seeds, userEdits, readDotenv, readJsonc, PROXY_NAMES } from './file-shapes.mjs'
-import { resolveLoc } from '../../src/collector/core/proxymode/sources.mjs'
+import { resolveLoc, routes } from '../../src/collector/core/proxymode/sources.mjs'
 
 export const OSES = ['darwin', 'win32']
 const BASE = { dotenv: ["# the user's own", 'OPENAI_API_KEY=sk-x', 'FOO_TIMEOUT=30'], json: ['{', '  "model": "m-1",', '  "env": {', '    "FOO_TIMEOUT": "30"', '  }', '}'] }
@@ -108,7 +109,9 @@ export function casesFor(os, harnesses) {
     const neighbour = harnesses[(hi + 1) % harnesses.length]
     // forms with the same route and the same first `present` place are one world to the product: one case names them all
     const worlds = new Map()
-    for (const f of h.proxyMode.forms.filter((x) => x.os.includes(os))) {
+    // a form not measured on `os` beside measured ones gets no entry (4.11 P5, CM44: out-of-scope-forms.test.mjs drives it): no case expects one
+    const routed = routes(h.proxyMode, os)
+    for (const f of h.proxyMode.forms.filter((x) => x.os.includes(os) && routed(x))) {
       const p0 = f.present[0], key = JSON.stringify([f.route, p0 && p0.perOs ? p0.perOs[os] : p0])
       worlds.set(key, [...(worlds.get(key) || []), f.id])
     }
@@ -166,8 +169,11 @@ async function drive(spec, harnesses) {
     bad('install')
     const s1 = snapshot(w)
     const d = await daemonFor(w)
+    // the endpoint as the product resolves it for this OS (the one resolver off and uninstall use), while the daemon names it; `asked` is what reached it
+    const endpoint = controlEndpointFor({ platform: spec.os, dir: w.dir, env: w.env })
     try {
       const on = await w.cmd.on([spec.h])
+      const askedOn = [...d.asked]
       bad('on')
       const s2 = snapshot(w)
       await w.cmd.on([spec.h])
@@ -176,6 +182,7 @@ async function drive(spec, harnesses) {
       const edited = applyEdit(spec, file, format, route)
       const sE = snapshot(w)
       const off = await w.cmd.off([spec.h])
+      const askedOff = d.asked.slice(askedOn.length)
       bad('off')
       const s4 = snapshot(w)
       const off2 = await w.cmd.off([])
@@ -184,7 +191,7 @@ async function drive(spec, harnesses) {
       const un = await w.cmd.uninstall()
       bad('uninstall')
       const s6 = snapshot(w)
-      return { w, c, on, ins, off, off2, un, s0, s1, s2, s3, sE, s4, s5, s6, edited, file, format, route }
+      return { w, c, on, ins, off, off2, un, s0, s1, s2, s3, sE, s4, s5, s6, edited, file, format, route, endpoint, asked: [...d.asked], askedOn, askedOff }
     } finally { await d.close() }
   })()
 }

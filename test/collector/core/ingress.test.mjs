@@ -17,6 +17,7 @@ import { startMockProxy } from '../../lab/mock-upstream/proxy.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { checkRecord, isFailure } from '../../../src/health/codes.mjs'
+import { failureWord } from '../../../src/cli/words.mjs'
 import { within, closeWithin } from '../../helpers/bounded.mjs'
 
 const T = { timeout: 20_000 }
@@ -65,11 +66,11 @@ async function lab(t, { meta = {}, timing = {}, connectUpstream, redirector = cr
     store: { envelope: (e) => { envelopes.push(e); return true }, flow: (f) => { flows.push(structuredClone(f)); return true } },
     onFailure: (f) => failures.push(f), ...(noToken ? {} : { ingressToken: TOKEN }), ...(onHeld ? { onHeld } : {}),
   })
-  const { ingressPort } = await engine.listen({ ingress: { port: 0 } })
+  const { port: transparentPort, ingressPort } = await engine.listen({ ingress: { port: 0 } })
   const made = []
   t.after(async () => { for (const c of made) c.sock.destroy(); echo.close(); for (const s of upConns) s.destroy(); await closeWithin(engine) })
   const settled = async (n) => { for (let i = 0; i < 400 && flows.length < n; i++) await sleep(10) }
-  return { engine, ingressPort, echo, echoPort, upConns, dials, flows, failures, envelopes, redirector, settled, client: () => { const c = client(ingressPort); made.push(c); return c } }
+  return { engine, transparentPort, ingressPort, echo, echoPort, upConns, dials, flows, failures, envelopes, redirector, settled, client: () => { const c = client(ingressPort); made.push(c); return c } }
 }
 
 test('W13 CONNECT with the right credentials: the upstream is dialled, then 200; the agent\'s bytes go through; the row says how it came and carries no prelude', T, async (t) => {
@@ -137,6 +138,86 @@ test('W13 the Basic challenge round trip (VS Code\'s Chromium): no credentials �
   again.sock.destroy()
   assert.deepEqual(L.failures, [])
   assert.equal(L.engine.stats().ingress.challenged, 1)
+})
+
+// A challenged client that never comes back with the right credentials is a silent loss (4.8 §5.1, D38): after ingressChallengeMs one
+// ingress-challenge-unanswered for the source (door + the pid that holds the client's end), never a credential value; one per episode.
+const CHALLENGE_MS = 150
+const SENT = [['no-credentials', ''], ['not-basic', 'Proxy-Authorization: Bearer abc.def-secret\r\n'], ['malformed-basic', 'Proxy-Authorization: Basic !!not*base64%%\r\n']]
+const challengeLab = (t) => { const redirector = createStaticRedirector(); redirector.ownerOfPeer = async () => ({ pid: 4242, process: 'Code Helper' }); return lab(t, { redirector, timing: { ingressChallengeMs: CHALLENGE_MS } }) }
+const challenge = async (L, header) => {
+  const target = `127.0.0.1:${L.echoPort}`
+  const c = L.client(); c.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${header}\r\n`)
+  assert.match(await c.head(), /^HTTP\/1\.1 407 /); await c.closed()
+}
+const unanswered = (L) => L.failures.filter((f) => f.code === 'ingress-challenge-unanswered')
+
+for (const [kind, header] of SENT) {
+  test(`W13 a 407 challenge (${kind}) the client never answers: one ingress-challenge-unanswered with the source and what was sent, no credential value`, T, async (t) => {
+    const L = await challengeLab(t)
+    await challenge(L, header)
+    await sleep(CHALLENGE_MS * 3)
+    const got = unanswered(L)
+    assert.equal(got.length, 1)
+    assert.deepEqual([got[0].event, got[0].where, got[0].pid, got[0].challenges, got[0].sent], ['failure', 'ingress', 4242, 1, [kind]])
+    assert.deepEqual(checkRecord(got[0]), []); assert.equal(isFailure(got[0]), true)
+    // the program and its pid are the record's fields (status prints them); the reason is for a person (1.6 §1.1): neither again, and no closed code of what was sent
+    assert.deepEqual([got[0].pid, got[0].process], [4242, 'Code Helper'])
+    assert.equal(got[0].reason.includes('Code Helper') || got[0].reason.includes('4242'), false, got[0].reason)
+    assert.equal(got[0].reason.includes(kind), false, got[0].reason)
+    const all = JSON.stringify(L.failures)
+    for (const secret of ['abc.def-secret', '!!not*base64%%', TOKEN]) assert.equal(all.includes(secret), false, 'no credential value in any record')
+    assert.equal(L.upConns.length, 0)
+  })
+}
+
+test('W13 a challenge answered by the same source with the right credentials writes no failure', T, async (t) => {
+  const L = await challengeLab(t)
+  for (const [, header] of SENT) {
+    await challenge(L, header)
+    const again = L.client(); again.write(connectHead(`127.0.0.1:${L.echoPort}`))
+    assert.match(await again.head(), /^HTTP\/1\.1 200 /); again.sock.destroy()
+  }
+  await sleep(CHALLENGE_MS * 3)
+  assert.deepEqual(L.failures, [])
+})
+
+test('W13 one source challenged again and again without answering: one record for the episode, the challenges counted', T, async (t) => {
+  const L = await challengeLab(t)
+  for (let i = 0; i < 4; i++) await challenge(L, SENT[i % 3][1])
+  await sleep(CHALLENGE_MS * 3)
+  for (let i = 0; i < 3; i++) await challenge(L, '')
+  await sleep(CHALLENGE_MS * 3)
+  const got = unanswered(L)
+  assert.equal(got.length, 1, 'one record, not one per challenge')
+  assert.equal(got[0].challenges >= 4, true)
+  assert.deepEqual([...got[0].sent].sort(), SENT.map(([k]) => k).sort())
+  assert.equal(L.engine.stats().ingress.challenged, 7)
+})
+
+// A group's door (its user is the group id trocar chose) challenged by a client that exits on the 407, like curl: the owner of its end is asked
+// before the 407 goes out, the record names the group as it is, and the reason adds only what the headline does not say (4.8 §5.1).
+test('W13 an unanswered challenge at a group door: the group id as user, the owner asked while the client still holds its end, a reason that is not the headline', T, async (t) => {
+  const records = [], open = new Map() // the client's local port → its socket, while it is open
+  const ownerOfPeer = async (peer) => { await sleep(50); const s = open.get(peer.port); return s && !s.destroyed ? { pid: 777, process: 'curl' } : { pid: null, why: 'no-row' } }
+  const ing = createIngress({ token: TOKEN, timing: { ingressChallengeMs: CHALLENGE_MS }, ownerOfPeer, failure: (r) => records.push(r), handleFlow: () => {}, connectUpstream: () => { throw new Error('no upstream in this test') }, lookupIngress: async () => null })
+  const srv = net.createServer((s) => ing.connection(s, { user: 'claude-code:settings', token: TOKEN, open: false }))
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r)); t.after(() => new Promise((r) => srv.close(r)))
+  const s = net.connect(srv.address().port, '127.0.0.1'); s.on('error', () => {})
+  await new Promise((r) => s.once('connect', r)); open.set(s.localPort, s)
+  const got = new Promise((r) => s.once('data', (d) => { s.destroy(); r(d.toString('latin1')) })) // gone the moment the answer comes
+  s.write('CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n')
+  assert.match(await within(got, 2000, 'the 407'), /^HTTP\/1\.1 407 /)
+  await sleep(CHALLENGE_MS * 3)
+  const [rec, ...more] = records.filter((f) => f.code === 'ingress-challenge-unanswered')
+  assert.deepEqual([rec && rec.user, rec && rec.pid, rec && rec.process, more.length], ['claude-code:settings', 777, 'curl', 0])
+  assert.equal(JSON.stringify(records).includes('(not a route name)'), false)
+  // the reason names the agent (the group id's harness part), not the group id, and not the program or pid the record's fields carry
+  assert.ok(rec.reason.includes('claude-code'), rec.reason)
+  for (const x of [':settings', '777', 'curl']) assert.equal(rec.reason.includes(x), false, rec.reason)
+  const runs = (s, n = 4) => { const w = s.toLowerCase().split(/[\s,;:]+/).filter(Boolean); return w.slice(n - 1).map((_, i) => w.slice(i, i + n).join(' ')) }
+  const headline = new Set(runs(failureWord('ingress', 'ingress-challenge-unanswered')))
+  assert.deepEqual(runs(rec.reason).filter((x) => headline.has(x)), [], `the reason does not say the headline again: ${rec.reason}`)
 })
 
 test('W13 no token reaches a record through the user field: the token sent as a username, or as a credential with no colon, is written as "(not a route name)"; a real route name is kept', T, async (t) => {
@@ -474,6 +555,30 @@ test('W15 a direct upstream, decrypted: one dial for the whole flow (the wrapper
   assert.deepEqual(L.failures, [])
 })
 
+// 4.8 §5.2: a call that came through the proxy entry is recorded in the same format as one the transparent path steered — only the fields that
+// say how it came (and per-flow ids and times) may differ
+test('one call, two ways in: through the transparent path and through the proxy entry, the envelopes and the direct-upstream connection rows are the same', T, async (t) => {
+  const o = await origin(t)
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true } })
+  const sock = net.connect(L.transparentPort, '127.0.0.1'); sock.on('error', () => {})
+  await new Promise((r) => sock.once('connect', r))
+  L.redirector.set(sock.localPort, { dst: { address: '127.0.0.1', port: o.port, family: 4 }, pid: 4242, agent: 'claude-code', decrypt: true })
+  assert.equal((await talk(sock, trocarCa.certPem)).got, RESP)
+  await L.settled(1)
+  assert.equal((await talk((await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)).sock, trocarCa.certPem)).got, RESP)
+  await L.settled(2)
+  assert.deepEqual([L.flows[0].ingress, typeof L.flows[1].ingress], [undefined, 'object'], 'the first came the transparent way, the second through the entry')
+  assert.equal(L.envelopes.length, 2)
+  // the row's bytes_up / bytes_down go too: they count the TLS handshake, whose signature length varies per connection; that the CONNECT and
+  // the 200 are not counted is asserted by the W13 CONNECT and SOCKS5 tests above, and the call's own bytes are compared on the envelope
+  const drop = (x, keys) => { const y = structuredClone(x); for (const k of Object.keys(y)) if (keys.includes(k) || k.startsWith('ts')) delete y[k]; return y }
+  const env = (e) => { const y = drop(e, ['id', 'flow_id', 'seq', 'capture', 'dst', 'duration_ms']); if (y.proc) { delete y.proc.pid; delete y.proc.exe } return y }
+  assert.deepEqual(env(L.envelopes[1]), env(L.envelopes[0]))
+  const row = (f) => drop(f, ['id', 'flow_id', 'seq', 'capture', 'dst', 'ingress', 'pid_source', 'pid_ms', 'unread', 'facts_ms', 'held_ms', 'upstream', 'duration_ms', 'bytes_up', 'bytes_down'])
+  assert.deepEqual(row(L.flows[1]), row(L.flows[0]))
+  assert.deepEqual(L.failures, [])
+})
+
 // `trocar status` prints stats().decrypted / spliced as outcomes: a row that keeps its planned decision while nothing was forwarded (RFC 4.6
 // §记录 连接行怎么落码) counts in neither. Field case: the upstream FINs after reading the engine's ClientHello.
 test('W15 a connection whose upstream hangs up during the engine\'s TLS handshake is not counted as decrypted; a decrypted one is', T, async (t) => {
@@ -630,6 +735,43 @@ test('W15 a proxy that does not answer is waited for without a limit and said on
   const stays = S.client(); stays.write(connectHead('upstream.test:443'))
   await until(() => S.failures.length, 'the SOCKS5 upstream-slow event'); await sleep(300)
   assert.deepEqual(S.failures.map((f) => [f.code, f.phase]), [['upstream-slow', 'proxy-reply']], 'one event, for the client that stayed; none for the one that left before the threshold')
+})
+
+// a TCP connect that takes `ms`, on a real socket: the slow dial, then the upstream at `port`
+const lateSocket = (port, ms) => { const s = new net.Socket(); s.connecting = true; setTimeout(() => { if (!s.destroyed) s.connect(port, '127.0.0.1') }, ms); return s }
+
+test('a door dial that does not connect is waited for without a limit and said once: upstream-slow (phase connect) on CONNECT, SOCKS5 and a forwarded request; the client not cut', T, async (t) => {
+  for (const [name, open] of [
+    ['CONNECT', (c) => c.write(connectHead('upstream.test:443'))],
+    ['SOCKS5', async (c) => { c.write(Buffer.from([5, 1, 2])); await c.bytes(2); c.write(Buffer.from([1, USER.length, ...Buffer.from(USER), TOKEN.length, ...Buffer.from(TOKEN)])); await c.bytes(2); c.write(Buffer.from([5, 1, 0, 3, 13, ...Buffer.from('upstream.test'), 1, 187])) }],
+    ['forwarded', (c) => c.write(absHead(80, '/', '', 'GET', 'upstream.test'))],
+  ]) {
+    const L = await lab(t, { timing: { upstreamSlowMs: 60 }, connectUpstream: () => hungSocket() })
+    const c = L.client(); await open(c); const said = c.buf.length
+    await until(() => L.failures.length, `${name}: the upstream-slow event`); await sleep(150)
+    assert.deepEqual(L.failures.map((f) => [f.where, f.code, f.phase, f.host, f.agent]), [['engine', 'upstream-slow', 'connect', 'upstream.test', 'claude-code']], name)
+    assert.ok(L.failures[0].waited_ms >= 60, `waited_ms ${L.failures[0].waited_ms}`); assert.deepEqual(checkRecord(L.failures[0]), [])
+    assert.equal(c.sock.destroyed || c.buf.length !== said, false, `${name}: nothing said, nothing cut`)
+  }
+})
+
+test('a door dial: the slow connect and the slow proxy reply are one event each; a connect that comes late still goes through; a fast one and one the client left say nothing', T, async (t) => {
+  // connected late, then the proxy is slow as well: two waits, two events; the wait had no limit, the proxy's answer reaches the agent
+  const proxy = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => setTimeout(() => s.write('HTTP/1.1 200 Connection established\r\n\r\n'), 150)) })
+  await listen(proxy); t.after(() => proxy.close())
+  const L = await lab(t, { timing: { upstreamSlowMs: 60 }, connectUpstream: (d) => lateSocket(d.port, 150), meta: { upstream: { kind: 'http', host: '127.0.0.1', port: proxy.address().port } } })
+  const c = L.client(); c.write(connectHead('upstream.test:443'))
+  assert.match(await c.head(), /^HTTP\/1\.1 200 /)
+  assert.deepEqual(L.failures.map((f) => [f.code, f.phase, f.host]), [['upstream-slow', 'connect', 'upstream.test'], ['upstream-slow', 'proxy-reply', 'upstream.test']])
+  c.sock.destroy()
+  // direct, connected within the threshold: nothing
+  const F = await lab(t, { timing: { upstreamSlowMs: 400 } })
+  const fast = F.client(); fast.write(connectHead(`127.0.0.1:${proxy.address().port}`))
+  assert.match(await fast.head(), /^HTTP\/1\.1 200 /); await sleep(500); assert.deepEqual(F.failures, []); fast.sock.destroy()
+  // the client left during the dial: the dial is dropped and the watch with it
+  const G = await lab(t, { timing: { upstreamSlowMs: 400 }, connectUpstream: () => hungSocket() })
+  const gone = G.client(); gone.write(connectHead('upstream.test:443')); await until(() => G.dials.length, 'the dial'); gone.sock.destroy()
+  await sleep(500); assert.deepEqual(G.failures, [])
 })
 
 test('W15 a proxy whose reply to CONNECT is not an HTTP status line is a dial that failed, not a refusal: 502, bad_proxy_reply in the row, the proxy\'s own bytes not forwarded', T, async (t) => {

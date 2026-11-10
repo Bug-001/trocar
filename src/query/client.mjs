@@ -12,7 +12,7 @@ import { controlEndpointFor } from '../off/control-client.mjs'
 /** The control plane's read route (4.6 §控制面). */
 export const QUERY_PATH = '/query'
 /** Names that read the machine as it is right now, not the captured corpus: they stay in the asking process (D63④). */
-export const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
+const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
 /** Every query name there is (src/query/named/index.mjs QUERIES, which this list is checked against by
  *  test/query/docs.test.mjs — the query core is most of a CLI's load time, so the daemon must be able to refuse an
  *  unknown name without importing it, and before forking a worker for it). */
@@ -47,7 +47,7 @@ const PENDING_WAIT_MS = 200
 /** Which path a name and an environment take, without asking anything: `true` = this process must answer it.
  *  A caller that injects its own `fs` or `now` reads its own files on its own clock, which the daemon's worker
  *  cannot do for it, so that caller is local too (the one rule, in one place). */
-export const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_ENV.some((k) => env[k])
+const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_ENV.some((k) => env[k])
 
 /**
  * queryDocument(name, params, ctx) → { text, via }: `text` is the whole document, serialized with `indent` and
@@ -57,10 +57,10 @@ export const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_
  * answered here, and why (1.6 §4.1 「谁答」; the CLI passes none under --json). Throws what the query core throws
  * (QueryArgError for an unknown name or parameter) on either path.
  * THE COLD PATH (3.5 §谁执行它): a 503 (no warm worker yet) is answered here at once with what is on disk (`handOff`); a read that
- * would extract or fold a member here instead waits on the worker the daemon forked for it. An answer that carries `pending` is asked
- * again after PENDING_WAIT_MS until it carries none (3.5 §归约前沿: the terminal prints a whole answer) — a `session` as `{id, since:
+ * would extract or fold a member here instead waits on the worker the daemon forked for it. A `session` that carries `pending` is asked
+ * again after PENDING_WAIT_MS until it carries none (3.5 §归约前沿: the terminal prints a whole answer) — as `{id, since:
  * <the newest answer's mark>}` (its own parameters while that mark is null), then once more with its own parameters, which is what is
- * printed. A 503 while waiting is no progress yet; a pending answer is progress when its `done` or `work` moved. No progress within
+ * printed; a `lane` answers at once, at the frontier. A 503 while waiting is no progress yet; a pending answer is progress when its `done` or `work` moved. No progress within
  * `deadlineMs` → this process folds it all, where the local path never has `pending`.
  */
 export async function queryDocument(name, params = {}, { home, userHome, dir, platform, env, deps, fs, now, indent = 0, deadlineMs = DEADLINE_MS, say } = {}) {
@@ -110,12 +110,12 @@ export async function queryDocument(name, params = {}, { home, userHome, dir, pl
       continue
     }
     let d = null
-    if (text.includes('"pending"')) try { d = JSON.parse(text) } catch { /* NDJSON (lane --pack / --tail): never pending */ }
+    if (name === 'session' && text.includes('"pending"')) try { d = JSON.parse(text) } catch { /* not a document */ }
     const p = d && d.pending
     if (!p && whole) return { text, via: 'daemon' }
     // a `session` that is still folding is followed by its delta from the newest mark (3.5 §归约前沿): the
     // poll costs the newly folded members, not the whole document; once none is pending, the caller's own ask
-    const mark = p && name === 'session' ? d.mark : null
+    const mark = p ? d.mark : null
     whole = mark == null; at = whole ? ask(params) : ask({ id: params.id, since: mark })
     if (!p) continue
     wait(p)

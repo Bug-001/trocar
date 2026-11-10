@@ -8,6 +8,7 @@ import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
+import { recordingExec } from './fixtures/on-ctx.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const A = 'kimi-code', B = 'codex'
@@ -30,7 +31,7 @@ test('V91 · 1.6 §3.3: on A B, A needing setup → exit 1, error.code setup-nee
     'GET /status': async () => ({ doors: {} }),
     'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
   } })
-  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, daemonReader: reader, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+  const deps = { getuid: () => 501, exec: recordingExec().run, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, daemonReader: reader, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
   const on = async (argv) => { const io = fakeIo(); return { exit: await runOnCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps }), io } }
   try {
     const before = filesOf(w)
@@ -42,6 +43,11 @@ test('V91 · 1.6 §3.3: on A B, A needing setup → exit 1, error.code setup-nee
     assert.equal(r.io.errText(), '', '--json: stderr stays empty')
     assert.deepEqual(filesOf(w), before, 'not one byte of A written')
     assert.match(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'), /HTTPS_PROXY=http:\/\/127\.0\.0\.1:\d+/, 'B is turned on')
+    // 1.6 §1.1⑥: the text form gives the refused harness's steps each whole on a line of its own, in order, never inside a sentence
+    const t = await on([A, '--yes'])
+    const lines = t.io.text().split('\n')
+    assert.deepEqual(lines.filter((l) => /^ {4}trocar \S/.test(l)).map((l) => l.trim()), [...(j.refused[0].commands || [j.refused[0].command]), `trocar on ${A}`], t.io.text()) // C.2: macOS / Windows carry `commands`
+    assert.ok(!lines.some((l) => /\S.*trocar (install|on) /.test(l) && !/^\s+trocar /.test(l) && l.includes('Run')), t.io.text())
   } finally { await server.close() }
 })
 
@@ -55,7 +61,7 @@ test('V91 · 4.11 P4b: the root gone from the user\'s store → on refuses setup
       'GET /status': async () => ({ doors: {} }),
       'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
     } })
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs, rootStore: { has: async () => ({ present }) } }, harnesses: w.harnesses, which: w.ctx.which, daemonReader: reader, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+    const deps = { getuid: () => 501, exec: recordingExec().run, procs: async () => [], backends: { dirs: w.ctx.dirs, rootStore: { has: async () => ({ present }) } }, harnesses: w.harnesses, which: w.ctx.which, daemonReader: reader, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
     try {
       const io = fakeIo(), exit = await runOnCli([B, '--yes', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), j = io.json()
       assert.deepEqual([exit, j.error ? j.error.code : null, j.refused.map((x) => x.harness)], present ? [0, null, []] : [1, 'setup-needed', [B]], io.text())

@@ -247,3 +247,23 @@ test('foldFlows: the same times in every write order; a connection row stands fo
     assert.deepEqual([g.count, g.first_ts, g.last_ts], [2, at(3 * H), at(1 * H)])
   }
 })
+
+// 1.6 C.3「已解决的组」: a process judged untrusted that then reports trust (a plugin's marker that came after the grace) ended that failure: the group
+// stays, at level note, and is no problem; the trust of another pid ends nothing, and a new untrusted judgement makes it a problem again
+test('foldFlows: agent-trusted of the same pid resolves its agent-untrusted group; another pid does not', () => {
+  const recs = [
+    { ts: at(3 * H), event: 'daemon-start', pid: 2 },
+    { ts: at(2 * H), event: 'agent-untrusted', pid: 20, agent: 'deepseek-dsh', code: 'no-marker', reason: 'no-marker' },
+    { ts: at(2 * H), event: 'agent-untrusted', pid: 30, agent: 'opencode', code: 'no-marker', reason: 'no-marker' },
+    { ts: at(H), event: 'agent-trusted', pid: 20 },
+  ]
+  const byAgent = (f) => Object.fromEntries(f.groups.map((g) => [g.last.agent, !!g.resolved]))
+  assert.deepEqual(byAgent(foldFlows(recs, { now: NOW })), { 'deepseek-dsh': true, opencode: false })
+  const again = foldFlows([...recs, { ts: at(H / 2), event: 'agent-untrusted', pid: 21, agent: 'deepseek-dsh', code: 'no-marker', reason: 'no-marker' }], { now: NOW })
+  assert.deepEqual(byAgent(again), { 'deepseek-dsh': false, opencode: false })
+  // the same pid after its process exited (or the daemon restarted) is another process: its trust ends nothing
+  for (const gone of [{ event: 'agent-exit', pid: 20 }, { event: 'daemon-start', pid: 3 }]) {
+    const f = foldFlows([...recs.slice(0, 3), { ts: at(1.5 * H), ...gone }, recs[3]], { now: NOW })
+    assert.equal(byAgent(f)['deepseek-dsh'], false, gone.event)
+  }
+})

@@ -29,11 +29,11 @@ export function reply(body, raw, sc, ctx = {}) {
       deltas: [...p.thinkingParts.map((thinking) => ({ type: 'thinking_delta', thinking })), { type: 'signature_delta', signature }],
     })
   }
-  if (p.tool) {
-    const tu = { type: 'tool_use', id: rid('toolu_mock_'), name: p.tool.name }
-    blocks.push({ start: { ...tu, input: {} }, final: { ...tu, input: p.tool.input }, deltas: splitEvery(p.toolArgs, 16).map((partial_json) => ({ type: 'input_json_delta', partial_json })) })
+  for (const c of p.calls) {
+    const tu = { type: 'tool_use', id: rid('toolu_mock_'), name: c.name }
+    blocks.push({ start: { ...tu, input: {} }, final: { ...tu, input: c.input }, deltas: splitEvery(c.args, 16).map((partial_json) => ({ type: 'input_json_delta', partial_json })) })
   }
-  const message = { id, type: 'message', role: 'assistant', model: p.model, content: blocks.map((b) => b.final), stop_reason: p.tool ? 'tool_use' : 'end_turn', stop_sequence: null, usage }
+  const message = { id, type: 'message', role: 'assistant', model: p.model, content: blocks.map((b) => b.final), stop_reason: p.calls.length ? 'tool_use' : 'end_turn', stop_sequence: null, usage }
   if (!body.stream) return jsonReply(200, message, headers)
 
   const ev = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`

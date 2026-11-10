@@ -4,7 +4,7 @@
 // A bad class name, regex or rule number is exit 2 with one line and nothing written (edit throws before it touches a file).
 import { EXIT, newReceipt } from './schema.mjs'
 import { printJson, errorDoc } from './json.mjs'
-import { columns, colors, size, tilde, ago, wrap } from './text.mjs'
+import { columns, colors, size, tilde, tildeText, ago, wrap } from './text.mjs'
 import { usageLine, commandNamed } from './commands.mjs'
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { trocarHome } from '../off/paths.mjs'
@@ -50,7 +50,7 @@ export function classesTable(doc, { home = null, colors: c } = {}) {
 }
 
 /** `trocar classes <class>` (§4.2): the class, where its level comes from, and its rules by number. */
-export function classDetail(doc, name, { now = Date.now(), colors: c } = {}) {
+function classDetail(doc, name, { now = Date.now(), colors: c } = {}) {
   const x = doc.classes.find((y) => y.class === name)
   const change = doc.last_change && doc.last_change.class === name ? `, changed ${ago(doc.last_change.ts, now)}` : ''
   // Whose table it is, is the table's own question, not the class's: every class of your copy is yours to change,
@@ -67,7 +67,7 @@ export function classDetail(doc, name, { now = Date.now(), colors: c } = {}) {
 const brief = (c) => (c ? `keep ${keepOf(c)}, ${rules(c).length} rule${rules(c).length === 1 ? '' : 's'}` : 'not in the table')
 
 /** The receipt of a change (§4.2): the class before and after, the files written, and what the change does and does not touch. */
-export function changeLines(r, { home = null } = {}) {
+function changeLines(r, { home = null } = {}) {
   const said = { removed: 'Removed', written: 'Wrote', appended: 'Recorded the change in' }
   const out = [r.before === null && r.after === null
     ? 'classes: the table is as trocar ships it again'
@@ -130,7 +130,7 @@ export function classesChange(op, { home, source = 'cli', dryRun = false }) {
 export async function run(argv, { io, json, args, home, deps = {} }) {
   const refuse = (code, message, { exit = EXIT.usage, usage = false } = {}) => {
     if (json) printJson(io, errorDoc('classes', code, message))
-    else { for (const line of wrap(message)) io.err(line); if (usage) io.err(usageLine(commandNamed('classes'))) } // §1.1⑥: folded, never ragged past 80 columns
+    else { for (const line of wrap(tildeText(message, home))) io.err(line); if (usage) io.err(usageLine(commandNamed('classes'))) } // §1.1⑥: folded, never ragged past 80 columns
     return exit
   }
   const op = opOf(args.positionals, args.flags)
@@ -155,7 +155,7 @@ export async function run(argv, { io, json, args, home, deps = {} }) {
   if (json) { printJson(io, doc); return EXIT.ok }
   const now = (deps.ms || Date.now)()
   for (const line of name === undefined ? classesTable(doc, { home, colors: c }) : classDetail(doc, name, { now, colors: c })) io.out(line)
-  for (const e of doc.errors) io.err(`Could not read ${e.where}: ${e.reason}`)
+  for (const e of doc.errors) for (const line of wrap(tildeText(`Could not read ${e.where}: ${e.reason}`, home))) io.err(line) // §1.1⑤⑥: the file the reason names as ~/…, folded at spaces as refuse() folds
   // §4.1: the exit code says whether a document could be given, not whether it was whole — the document above was given,
   // its `errors` are on stderr, so this is 0 in both modes (a macOS test machine 2026-10-18: the text form exited 1, `--json` 0).
   return EXIT.ok

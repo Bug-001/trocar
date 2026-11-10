@@ -10,12 +10,14 @@ import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 import { trocarHome, collectorHome, rawHome } from '../paths.mjs'
-import { codeId, setupHelperCommand } from '../version.mjs'
-import { startSealing } from './seal-queue.mjs'
+import { codeIdAsync, setupHelperCommand } from '../version.mjs'
+import { startSealing, forkSealer } from './seal-queue.mjs'
 import { createIndexKeeper } from './index-keeper.mjs'
+import { parseSegment } from './core/record/segments.mjs'
 import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
+import { loadParts } from './net-deps.mjs'
 import { createTrustChecker } from './core/trust/confirm.mjs'
 import { readManifest, installedAt } from './core/trust/journal.mjs'
 import { daemonMayStart } from '../off/manifest.mjs'
@@ -23,7 +25,7 @@ import { rewriteBundles } from './core/trust/bundle.mjs'
 import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
-import { createQueryService } from '../query/service.mjs'
+import { createQueryRouter } from '../query/router.mjs'
 import { createServer as createBoard, tipTable } from '../server.mjs'
 import { readIngressConfig } from './core/ingress-config.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
@@ -33,7 +35,7 @@ import { loadCa, checkCa } from './core/tls/ca.mjs'
 import { createLeafIssuer } from './core/tls/leaf.mjs'
 import { bundleRoots, rootsLeftOut } from './core/tls/roots.mjs'
 import { createRecordStore } from './core/record/store.mjs'
-import { createEngine } from './core/engine/engine.mjs'
+import { createEngine, pidAlive } from './core/engine/engine.mjs'
 import { appendEvent, createFailureRecorder } from './core/events.mjs'
 import { createLoopWatch } from './core/loop-late.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
@@ -48,31 +50,30 @@ import { createModelCollector, replacesDaemon } from './core/proxymode/collector
 import { TEMPLATES } from './harness/templates/index.mjs'
 import { readStateFile } from '../off/state.mjs'
 
-export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
+/** When this process started, from the OS's own clock of it (1.6 C.3 `daemon.since`). Set once, as the module loads in the daemon. A daemon started
+ *  later in the same process (only tests run two) answers its own start instead: install compares it with the login entry's time (1.6 §3.2 step 5). */
+const SINCE = new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString()
+let boards = 0 // the daemons this process started (boardFor runs once per daemon)
 
-// What install / uninstall need from arch and harness, without starting anything: the descriptors, the OS key,
-// and the process table (`scan` reads /proc; it does not need the helper).
-export async function loadParts({ arch = null, harnesses = null, env = process.env, agentList = [], platform = process.platform } = {}) {
-  const A = arch || (await loadArch(platform)) // the CLI's platform (V14: a platform with no collector is refused here, by loadArch's own error)
-  const list = harnesses || (await loadHarnesses())
-  // darwin / win32 run the collector model (runModelDaemon): no redirector here, and this parts view answers an empty process table
-  // the registry judges by name on every OS (D51) and is built FIRST: the doors ask it (identify), the redirector does not feed it
-  const registry = createRegistry(list, { agentList }) // agentList: readAgentList's entries (the user's ~/.trocar/agents.json, D51③); the daemon swaps them in place
-  const redirector = isModelOs(A.os) ? null : await A.createRedirector({ env }) // awaited: a test's arch may answer async
-  // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `trocar on` says so (1.6 §1.1), it never enables it (R8)
-  return { arch: A, os: A.os, harnesses: list, registry, scan: () => (redirector ? redirector.scan() : []), match: (f) => registry.match(f), linger: () => (redirector && typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (redirector && typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
-}
+export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
 /** What `trocar status` and `doctor` need to draw the network topology (1.6 §9.7). It lives in ./net-deps.mjs — the small arch-facing entry, so a
  *  read-only command does not load this module's whole graph (89 ms on a Windows test machine; D62) — and is re-exported here for the callers that have it. */
 export { netFactsDeps } from './net-deps.mjs'
+export { loadParts } // and `install` / `on`'s parts view, for what starts the daemon anyway
 
 export const collectorPaths = (dir = collectorHome(trocarHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
 const errText = (e) => String((e && e.message) || e)
 const BUNDLE_BUSY_MS = 2000 // a bundle rebuild that found the op lock held (1.6 R12) is tried again after this long ...
 const BUNDLE_BUSY_RETRIES = 30 // ... at most this many times; the daily round is the next chance after that
 const OFF_HINT = 'capture is switched off for this harness (its desired state is off); it is not judged, not watched and not counted as untrusted'
-const VERSION = (() => { try { return codeId() } catch { return null } })() // which code this daemon runs (D67⑤): `code` on the control channel, and the version of its daemon-start record. null: said as unknown in daemon-start
+// which code this daemon runs (D67⑤): `code` on the control channel, and the version of its daemon-start record. Outside a git checkout it is a hash of
+// the code: read without holding the event loop, started at the daemon's entry so it runs beside the rest of the start, and awaited only where the code
+// is said (D62①: `on`'s first question is answered as soon as the daemon listens). null: said as unknown
+let ownCode
+const VERSION = () => (ownCode ??= codeIdAsync().catch(() => null))
+// `code` is a value a test passes, or VERSION itself
+const codeOf = async (c) => (typeof c === 'function' ? c() : c)
 // (startDaemon's `code` defaults to it; a test's stand-in login entry passes the code it stands for, since the daemon it starts runs in-process)
 // Every failure record carries a code (trocar's name from src/health/codes.mjs, or the errno): the fold key (D-3).
 const coded = (e, code) => Object.assign(new Error(errText(e)), { code: (e && e.code) || code })
@@ -113,7 +114,7 @@ function ownedLikeDir(dir, chown) {
 // What status reports beside the live state: capture health read from disk by the reader the board uses
 // (src/health/read.mjs, D38) — failures by kind, current conditions, what could not be read (D-2: never "none").
 // `dir` is <trocar home>/collector; `harnesses` is the daemon's own table (4.11 §3 ㉓): the switch is read for those ids only.
-export function healthOnDisk(dir, harnesses) {
+function healthOnDisk(dir, harnesses) {
   try { return captureHealth({ home: path.dirname(dir), harnesses }) } catch (e) { return { error: `capture health could not be read: ${errText(e)}` } }
 }
 
@@ -156,14 +157,14 @@ function noteUncleanStop(lock, failure) {
 
 /** The ONE place a daemon's record store, its sealer and its index keeper are wired (the platform-seam rule: no per-platform
  *  copy), so BOTH entries — Linux's runDaemon and the model OSes' runModelDaemon — seal AND keep the index current:
- *  `seal.start()` does the upgrade rename and the last run's leftovers, then every segment this run closes, one at a
+ *  `seal.start()` does the last run's leftovers, then every segment this run closes, one at a
  *  time in a forked child, so this event loop never encodes or hashes (4.2 §自动封存).
  *    The keeper (D62, index-keeper.mjs) indexes the bytes this daemon just appended, debounced and in chunks, so no
  *  query ever pays for a cold index build; it hands a segment over to the sealer's child when the segment closes.
  *    `seal.start()` MUST come after the control server claimed the collector (before that the lock may be a LIVE
  *  daemon's, and the start scan clears the lock's `segment`); `seal.stop()` belongs at the top of the stop, before
- *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off,
- *  and nothing of trocar's writes anything after the stop (the tail the stop closes is indexed by that next start's
+ *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off
+ *  (a stop by `uninstall` has no next start: `seal.last()` seals it, and whatever else is still plaintext, before the daemon exits), and nothing of trocar's writes anything after the stop (the tail the stop closes is indexed by that next start's
  *  sealer, and until then a query resumes it from the last indexed byte). */
 function storeWithSealing({ P, failure, query }) {
   const home = path.dirname(P.dir)
@@ -179,6 +180,29 @@ function storeWithSealing({ P, failure, query }) {
     // after store.close(): the segment the stop just closed is indexed to its last byte, so the daemon leaves behind
     // the index of everything it wrote; only then does the keeper write nothing more (D62)
     async settle() { try { await keeper.idle() } finally { await keeper.stop() } },
+    // after settle(), only when `uninstall` stops the daemon (4.2 §自动封存): no next start will seal what is still plaintext, so the queue first
+    // finishes what it holds, then the temps of interrupted seals go (the start scan's step), then every plaintext segment left — the one the stop
+    // closed, and any this run failed on — is sealed once at normal priority. Every worker's progress goes into the lock's `sealing` for the uninstall
+    // that waits (1.6 §3.6). A failure is said as the queue's are (D38) and keeps the plaintext → false; a daemon killed meanwhile takes the worker
+    // with it (the crash path).
+    async last(lock, beatMs) {
+      const beat = setInterval(() => { try { lock.refresh() } catch { /* the next beat tries again */ } }, beatMs) // the stop cleared the lock's timer: still alive to a reader (4.6 §控制面)
+      try {
+        const say = (file, p) => { try { lock.name({ sealing: { segment: path.basename(file).replace(/\.ndjson$/, ''), ...p } }) } catch { /* a lock not rewritten costs the uninstall one silent interval */ } }
+        if (queue) { await queue.idle({ onProgress: say }); queue.dropTemps() }
+        let names = []
+        try { names = fs.readdirSync(rawHome(home)).sort() } catch { /* no raw/: nothing was written */ }
+        let ok = true
+        for (const n of names) {
+          const seg = parseSegment(n)
+          if (!seg || seg.sealed) continue
+          const file = path.join(rawHome(home), n)
+          const r = await forkSealer(file, { lockFile: P.lock, normal: true, onProgress: (p) => say(file, p) })
+          if (r.code !== 0) { ok = false; failure('raw', Object.assign(new Error(`sealing ${file} failed (${r.reason || `the sealer exited with ${r.code}`}); its plaintext is kept and is sealed when trocar runs again`), { code: 'seal-failed' }), { file }) }
+        }
+        return ok
+      } finally { clearInterval(beat) }
+    },
   }
   return { store, seal, keeper }
 }
@@ -198,8 +222,11 @@ function stopByOf(b) {
   if (b.by === undefined) return null
   if (typeof b.by !== 'string' || !COMMAND_NAME.test(b.by) || b.by === 'off') throw Object.assign(new Error('"by" names the command stopping the daemon: lower-case letters, digits and hyphens, at most 32, and not off (an exit request without by is off\'s)'), { status: 400 })
   if (b.exit !== true) throw Object.assign(new Error('"by" goes with "exit": it names who stops the whole daemon'), { status: 400 })
+  if (b.seal !== undefined && typeof b.seal !== 'boolean') throw Object.assign(new Error('"seal" must be true or false'), { status: 400 })
   return b.by
 }
+// Does this exit request's stop seal the segment it closes (4.2 §自动封存)? Only `uninstall`'s, and not with seal:false (--purge-data deletes the data after).
+const sealsLast = (b, by) => by === 'uninstall' && b.seal !== false
 const drainBy = (by) => (by ? { by: 'stop', who: by } : {}) // engine.drain's: the stop's own label, with the command that asked
 // GET /status's connection counts (1.6 §1.3, §5.2): the connections of the harnesses off in THIS daemon's memory, not state.json's (`scope: 'memory'` says so, and
 // only such a count may end the drain's wait: an older daemon's status lacks it). A daemon being replaced keeps its harnesses on, so the off set would read 0, the
@@ -213,7 +240,7 @@ function retryNow(engine, failure, names) {
   return gone.map((g) => ({ harness: g.agent, neg_key: g.neg_key, pid: g.pid, hosts: g.hosts }))
 }
 
-async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, who = null, before = async () => {}, after = async () => {} }) {
+async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, who = null, sealLast = false, lockRefreshMs, before = async () => {}, after = async () => {} }) {
   const failed = []
   const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
   await before(step)
@@ -222,6 +249,7 @@ async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, r
   await after(step)
   await step('record', () => store.close())
   await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
+  if (sealLast) await step('raw', async () => { if (!(await seal.last(lock, lockRefreshMs))) failed.push('raw') }) // a failed seal was said by last(); daemon-stop names the step too
   failure.flush()
   failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(relayed ? { relayed } : {}), ...(failed.length ? { failed } : {}) })
   failure.final()
@@ -259,7 +287,7 @@ export function lockKeeper({ file, fields, segmentOf = () => null }) {
  *  never computes an answer; the worker exits by itself when nobody queries. `stop()` belongs in the stop, before the control server
  *  closes, so a worker a stop cuts off is not left behind. */
 function queryRouteFor({ P, failure, fork, queryIdleMs }) {
-  const svc = createQueryService({ home: path.dirname(P.dir), failure, fork, idleMs: queryIdleMs })
+  const svc = createQueryRouter({ home: path.dirname(P.dir), failure, fork, idleMs: queryIdleMs })
   return { routes: { 'GET /query': svc.route }, stop: svc.stop, svc, tips: tipTable() }
 }
 
@@ -280,38 +308,44 @@ function boardToken(dir) {
  *  routes(r) adds the board to the control routes: `GET /status` gains `board: {port, state, reason}` (never the token), and
  *  `GET /board` answers `{port, state, reason, token}` for `trocar board`. start() once the daemon is ready; stop() before the control server closes. */
 function boardFor({ P, failure, query, tips, log = () => {} }) {
+  const since = boards++ ? new Date().toISOString() : SINCE
   let st = { port: null, state: 'no-port', reason: 'no board port recorded: run trocar install' }
   let server = null, token = null, started = Promise.resolve(), stopped = false
   async function listen() {
     const cfg = readIngressConfig({ dir: P.dir })
     if (cfg.boardPort === undefined) { if (cfg.error) st = { ...st, reason: `${cfg.error}: run trocar install` }; return }
     const port = cfg.boardPort
+    const fail = (e) => {
+      st = { port, state: 'port-taken', reason: `the board could not listen on 127.0.0.1:${port} (${(e && e.code) || errText(e)}); capture goes on` }
+      failure('daemon', coded(e, 'start-failed'), { port })
+    }
     try {
       token = boardToken(P.dir)
-      const s = createBoard({ home: path.dirname(P.dir), token, query, tips }).server
+      const b = createBoard({ home: path.dirname(P.dir), token, query, tips }), s = b.server
       s.on('clientError', (e, sock) => sock.destroy())
       await new Promise((resolve, reject) => { s.once('error', reject); s.listen(port, '127.0.0.1', resolve) })
       s.on('error', (e) => log('board', e)) // after the listen: the board never takes the daemon down
       if (stopped) { s.close(); return } // the daemon stopped while it was listening
       server = s
       st = { port, state: 'serving', reason: null }
-    } catch (e) {
-      st = { port, state: 'port-taken', reason: `the board could not listen on 127.0.0.1:${port} (${(e && e.code) || errText(e)}); capture goes on` }
-      failure('daemon', coded(e, 'start-failed'), { port })
-    }
+      // the static plane is read now, while `on` is answered: a walk that fails takes the board down and is said, as a failed listen is
+      b.statics().catch((e) => { if (stopped) return; if (server === s) { s.close(); server = null }; fail(e) })
+    } catch (e) { fail(e) }
   }
   const tokenAnswer = async () => { await started; return { ...st, token } }
   return {
     start() { started = listen(); return started },
     state: () => ({ ...st }),
     tokenAnswer,
-    routes: (r) => ({ ...r, 'GET /status': async (q) => { const a = await r['GET /status'](q); await started; return { ...a, board: { ...st } } }, 'GET /board': tokenAnswer }),
+    // every daemon's GET /status passes here: the board's state, and `since`, this process's own start (1.6 C.3 `daemon.since`), not a token from its lock
+    routes: (r) => ({ ...r, 'GET /status': async (q) => { const a = await r['GET /status'](q); await started; return { ...a, since, board: { ...st } } }, 'GET /board': tokenAnswer }),
     stop() { stopped = true; if (server) { server.close(); server.closeAllConnections(); server = null } },
   }
 }
 
 async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, code = VERSION, lockRefreshMs = 1000, stopGraceMs = 2000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork, queryIdleMs }) {
   const P = collectorPaths(dir)
+  codeOf(code) // the code's hash starts now, beside the rest of the start (awaited where it is said)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
   // The arch is loaded once, here at the entry (loadParts below takes it back): the platform's start gates and endpoint come before anything is claimed.
@@ -321,6 +355,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   // The other platforms keep core/control.mjs's $XDG_RUNTIME_DIR/trocar/collector.sock, whose file modes guard it (no token there).
   let A0 = arch
   if (!A0) { try { A0 = await loadArch() } catch { A0 = null } } // a platform with no collector has no part of its own (netFactsDeps' pattern)
+  if (A0 && typeof A0.nodePreflight === 'function') { // macOS / Windows (4.9 §7, 4.8 §7): the Node floor `on` holds, asked first because it is free; Linux's arch has none
+    const pf = A0.nodePreflight()
+    // not `on`'s doctor line: the login entry names this fixed Node, and only `install` rewrites the entry (`on` never does). startDaemon's catch writes the {where:'start'} record; nothing was claimed
+    if (pf && pf.ok === false) throw Object.assign(new Error(`the background process runs on Node ${pf.have || '(version unreadable)'} at ${process.execPath}, and trocar needs Node ${pf.min} or newer: update that Node, or run trocar install with a newer Node so the login entry starts that one`), { code: 'node-too-old' })
+  }
   if (A0 && typeof A0.refuseElevated === 'function') { // win32 (4.8 §7, W25, R7): the daemon does not run on an elevated or SYSTEM token
     const r = await A0.refuseElevated({ env, onUnknown: (why) => log('daemon', new Error(why)) }) // a token that cannot be read is not a refusal (R11): said, and the start goes on
     if (r) throw Object.assign(new Error(r.reason), { code: r.code }) // startDaemon's catch writes the {where:'start', code:'elevated-token'} record; nothing was claimed
@@ -445,7 +484,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       const report = { rebuilt: [], failed: [], lost: [] }
       let held = null
       try {
-        held = tryOpLock({ file: path.join(P.dir, 'op.lock') })
+        held = tryOpLock({ file: path.join(P.dir, 'op.lock'), identity })
         if (!held.lock) {
           if (bundleBusy++ < BUNDLE_BUSY_RETRIES) { bundleRetry = setTimeout(refreshBundles, BUNDLE_BUSY_MS); bundleRetry.unref() }
           return
@@ -507,6 +546,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     let helperUp = false // the helper came up in this run: one that dies after that is never started again (4.6 §事件)
     let lock = null
     let sw = null
+    // a helper is running in this run and has not died: it runs only while some harness is on (4.6 §开关语义); off that leaves none on stops it, and that is no death
+    const helperLive = () => !helperDown && redirector.helperInfo().pid != null
+    let releaseAsked = 0 // the pending helper releases (releaseWhenDrained), counted apart from exits: neither cancels the other; /on cancels both
 
     engine = createEngine({
       redirector: {
@@ -534,13 +576,19 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       retention, // sampled with it (D40)
       onFailure: (rec) => failure.event(rec), // the engine's and the WebSocket recorder's failures: flows/, folded
       onError: (e) => log('engine', e), // stderr only: every one of them is also a record through onFailure
+      alive: (pid) => pidAlive(pid) || tracker.metaFor(pid) != null, // a held close (4.6 §引擎 5): gone = the OS has no such pid and nor has the tracker
     })
+    // the harnesses `on` with no names means, and a version 1 state.json is carried to (1.6 §1.5, V28): the installed ones — the table's harnesses the
+    // install manifest names, because trocar wrote an entry or a file for them (4.11 §3 ㉓: an id outside the table is never reached). One it never
+    // installed is no capture target: not judged, no agent-untrusted
+    const installed = () => { const named = new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness)); return harnessList.map((d) => d.name).filter((id) => named.has(id)) }
     // The engine's door (4.8 §5.1): Linux listens transparently on the port the install recorded.
     const want = enginePort ?? manifest.engine_port ?? 0
+    const wereOn = () => Object.entries(readState(P.state, () => {}, { installed: installed() }).harnesses).filter(([, h]) => h.desired === 'on').map(([id]) => id)
     const first = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
       // G3: the port is squatted (chosen at install). Nothing is steered
       // (the helper is not spawned yet), so the agents' connections stay direct; say so, and how to get a new port.
-      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "trocar uninstall" and "trocar on" to pick a new one`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
+      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or start over to get a new one: run "trocar off", then "trocar uninstall", then "trocar install", then ${wereOn().length ? `"trocar on ${wereOn().join(' ')}"` : '"trocar on <harness>" for each harness to capture'}`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
       throw e
     })
     const port = first.port
@@ -555,7 +603,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       syncTracker() // which harnesses are on, and their policy, before the live processes are judged
       if (!caState.ok) throw new Error(`the collector CA is unusable (${caState.which}: ${caState.reason}); not attaching, agent connections go direct`)
       if (helperDown && helperUp) throw new Error(`the capability helper is down (${helperDown}); restart the collector`)
-      if (helperDown) await startHelper() // never up in this run (not installed at start, 4.6 「助手还没装」): asked again now; still missing = its own helper-down says why
+      if (!helperLive()) await startHelper() // none running: never up (not installed, 4.6 「助手还没装」), nothing on at start, or stopped by the last off; still missing = its own helper-down says why
       if (v6Held) throw new Error(`${v6Held}; refusing to attach so no IPv6 connection is steered to it (M8)`)
       const { proto } = redirector.helperInfo()
       if (proto !== redirector.expectedProto) throw new Error(`helper speaks protocol ${proto}, this daemon expects ${redirector.expectedProto}; run \`${setupHelperCommand()}\` (G2)`)
@@ -577,10 +625,6 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (candidates.length) failure('tracker', Object.assign(new Error(`${reason}; its command line fits ${candidates.join(' and ')}`), { code: 'exe-unreadable' }), { pid, errno: code || null, candidates })
     })
 
-    // the harnesses `on` with no names means, and a version 1 state.json is carried to (1.6 §1.5, V28): the installed ones — the table's harnesses the
-    // install manifest names, because trocar wrote an entry or a file for them (4.11 §3 ㉓: an id outside the table is never reached). One it never
-    // installed is no capture target: not judged, no agent-untrusted
-    const installed = () => { const named = new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness)); return harnessList.map((d) => d.name).filter((id) => named.has(id)) }
     // a manifest the CLI wrote since (and that this build reads, and that is complete) replaces the one read at start; one that cannot be read leaves the old one, and says so
     const reloadManifest = () => {
       try { const fresh = readManifest(P.dir); if (fresh && !fresh.unsupported && daemonMayStart(fresh)) manifest = fresh } catch (e) { failure('daemon', coded(e, 'manifest-unreadable')) }
@@ -589,13 +633,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const syncTracker = () => { const st = sw.state(); tracker.setEnabled(sw.enabled()); tracker.setPolicy({ byHarness: Object.fromEntries(Object.entries(st.harnesses).map(([id, h]) => [id, { mode: h.policy, extraHosts: h.extra_hosts }])) }) }
     // bring the kernel watch table to the enabled set. With the helper dead there is no table to bring: its links and watch table died with it,
     // so nothing is asked of it (no unwatch failure to record) and every pid counts as taken out
-    const reconcileTable = () => { syncTracker(); return tracker.reconcile({ kernelGone: !!helperDown }) }
+    const reconcileTable = () => { syncTracker(); return tracker.reconcile({ kernelGone: !helperLive() }) }
     // the switch calls this when harnesses go off, before the links come off: their processes leave the kernel watch table first
     sw = createSwitch({ redirector, stateFile: P.state, known: harnessList.map((d) => d.name), installed, ensureReady, onEvent: event, reconcile: reconcileTable })
     // the file may only take capture away (switch.mjs). A harness the file turned off is off like one the route turned off: its connections still relayed
     // are closed where the engine sees a boundary (1.6 §1.3) — the CLI writes the file before it asks the route, and a daemon whose route nobody reached
     // would otherwise keep them for good
-    const reload = async () => { const r = await sw.reloadIfChanged(); if (r.changed) syncTracker(); if (r.turnedOff.length) engine.drain({ agents: new Set(r.turnedOff) }); return r }
+    const reload = async () => { const r = await sw.reloadIfChanged(); if (r.changed) syncTracker(); if (r.turnedOff.length) { engine.drain({ agents: new Set(r.turnedOff) }); if (!sw.anyOn()) releaseWhenDrained(false) } return r }
     // An unwatch the helper did not answer leaves a pid the kernel may still steer although its harness is off. It is asked again here — before every
     // beat and at the 5 s check — until it is answered; true = the table is clean.
     const settle = async () => { if (tracker.stuckPids().length) await reconcileTable(); return tracker.stuckPids().length === 0 }
@@ -606,14 +650,29 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // the helper up and pointed at the engine. Not installed (no file at its path: a script install's first `install`, 4.6 「助手还没装」) is no
     // reason to exit: helper-down is on disk with the reason, nothing is attached (agents go direct), and the next `on` asks again (ensureReady).
     // A helper that is there and fails to start is still a start failure.
-    async function startHelper() {
+    // Start and stop are chained (helperOp): a release that is stopping the helper is finished before an `on` starts the next one.
+    let helperOp = Promise.resolve()
+    const chained = (fn) => { const r = helperOp.then(fn); helperOp = r.catch(() => {}); return r }
+    const startHelper = () => chained(async () => {
+      if (helperLive()) return
       await redirector.start()
-      await redirector.configure(port)
+      try { await redirector.configure(port) } catch (e) { await redirector.close().catch(() => {}); throw e } // a half-started helper is dropped: the next `on` starts a fresh one
       const was = helperDown
       helperDown = null; helperUp = true
-      if (was) { sw.clearDown(); if (lock) lock.name({ helper_pid: redirector.helperInfo().pid }); event({ event: 'helper-ok', reason: 'the capability helper is installed now and started; capture can be switched on' }) }
-    }
-    try { await startHelper() } catch (e) { if (!e || e.code !== 'ENOENT') throw e }
+      if (lock) lock.name({ helper_pid: redirector.helperInfo().pid }) // the standalone off reads it (helperGone)
+      if (was) { sw.clearDown(); event({ event: 'helper-ok', reason: 'the capability helper is installed now and started; capture can be switched on' }) }
+    })
+    // No harness left on and the engine drained: the helper goes, and its links, maps and programs with its fds. A deliberate stop is no death —
+    // the client is dropped before it closes, so its 'down' never reaches us (no helper-down, not degraded); the next `on` starts a new one.
+    const stopHelper = () => chained(async () => {
+      if (!helperLive() || sw.anyOn()) return
+      helperUp = false
+      await redirector.close()
+      tracker.clear('off') // what the table would say from here on nobody tells it: the next `on`'s rescan rebuilds it
+      if (lock) lock.name({ helper_pid: null })
+    })
+    // with nothing on at start no helper is spawned: the first `on` does it (4.6 「助手还没装」, D61)
+    if (sw.anyOn()) { try { await startHelper() } catch (e) { if (!e || e.code !== 'ENOENT') throw e } }
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
     // mtime is refreshed every second, so a stuck daemon shows as unresponsive within 5 s — read from disk alone
     const me = identity(process.pid)
@@ -629,13 +688,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const loopWatch = createLoopWatch({ everyMs: lockRefreshMs, write: failure.event }) // failure.event for its fold; the record's own event wins, so it stays a state event
     const lockTimer = setInterval(() => { loopWatch.tick(); bumpLock() }, lockRefreshMs)
     lockTimer.unref()
-    // lifecycle (D-24): readers fold conditions from the last daemon-start; upstream_ca = the daemon's own
-    // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon
-    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: code, foreground: !!foreground,
-      upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
     syncTracker() // before the first rescan: a harness that is off at start is never judged
     tracker.start()
-    await tracker.rescan()
+    if (sw.anyOn()) await tracker.rescan() // with nothing on no helper follows exec / exit, so a table built now could not be kept true; the first `on` scans
     await sw.restore()
 
     // The 5 s check (D-26, 4.6 §开关语义): nobody has to run status for these to reach flows/ —
@@ -703,7 +758,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // processes of this user whose exe cannot be read and whose command line fits no harness: seen, not judged (4.6 exe-unreadable)
       const unjudged = (typeof redirector.unreadable === 'function' ? redirector.unreadable() : []).filter((u) => !registry.couldMatch({ os: A.os, exe: null, env: null, argv: u.argv, comm: u.comm }).length)
       return {
-        code, // D67⑤: which code this daemon runs, as `trocar --version` says it — `trocar update` compares the two
+        code: await codeOf(code), // D67⑤: which code this daemon runs, as `trocar --version` says it — `trocar update` compares the two
         ...(await sw.report()),
         engine: { port, v6: v6Error ? null : port, v6_error: v6Error, ...engine.stats() },
         negatives: engine.negatives(), // (pid, host) pairs no longer decrypted until the process exits (D-12)
@@ -712,7 +767,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         relayed: relayedOf(engine, new Set(Object.entries(sw.state().harnesses).filter(([, h]) => h.desired === 'off').map(([id]) => id)), leaving),
         ca: caState, // {ok, not_after} or {ok:false, which, file, reason}: "CA unusable", never "not installed" (D-4)
         unmatched: tracker.unmatched(), // processes two descriptors claim (D-19)
-        helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
+        helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: pid == null ? null : proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
         agents, running_untrusted: agents.filter((a) => !a.trusted && !a.off).length,
         unjudged: { count: unjudged.length, sample: unjudged.slice(0, 10).map((u) => ({ pid: u.pid, comm: u.comm, errno: u.errno })) },
         health: healthOnDisk(P.dir, harnessList.map((d) => d.name)),
@@ -738,7 +793,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // capture on again cancels a pending `off {exit}` (exitWhenDrained): the daemon that was going away is the one now serving it
       // The manifest is read again first (1.6 §1.1, R9): `trocar on` writes the entries, and their `installed_at`, before it asks, so a harness turned on
       // again after `off` is judged against when trocar wrote the entry NOW — a process that started while it was off is config-after-start, and says so
-      on: async ({ body }) => { reloadManifest(); leaving = false; const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}), retried: retryNow(engine, failure, namesOf(body)) } },
+      on: async ({ body }) => { reloadManifest(); leaving = false; const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; releaseAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}), retried: retryNow(engine, failure, namesOf(body)) } },
       // → {…status, unwatched: [pid], confirmed, relayed: {closing, waiting, cut}, pid}: the pids taken out of the kernel watch table, and whether the kernel
       // confirms the state asked for (every unwatch answered; with no harness left on, the links gone). With the helper dead its table is gone with it: every pid
       // counts as taken out and `confirmed` does not wait on an unwatch nobody can answer. After the switch the engine closes the connections of those harnesses
@@ -758,13 +813,19 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         const r = swap ? { unwatched: [], unwatch_failed: [] } : await sw.off({ harnesses: names })
         const relayed = engine.drain({ agents: names ? new Set(names) : null, now: b.now === true, ...drainBy(by) })
         const st = await status()
-        if (b.exit === true) exitWhenDrained(b.now === true, by)
+        if (b.exit === true) exitWhenDrained(b.now === true, by, sealsLast(b, by))
+        else if (!swap && !sw.anyOn()) releaseWhenDrained(b.now === true)
         return { ...st, ...(swap ? { actual: 'off' } : {}), ...(r.noop ? { noop: true } : {}), unwatched: r.unwatched, confirmed: r.unwatch_failed.length === 0 && (swap || sw.anyOn() || st.actual === 'off'), relayed, pid: process.pid }
       },
     })
     markReady()
     board.start() // never fails the start: a board that cannot listen is a state and a record
     query.svc.sweep() // the read route is up: a tier-0 head for every session without one (4.4 §答案文件, 3.5 §谁执行它)
+    // lifecycle (D-24): readers fold conditions from the last daemon-start (and keep what came up to 60 s before it); upstream_ca = the daemon's own
+    // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon. Written once the daemon answers, as the
+    // model daemon writes it: it carries the code, and `on`'s first question never waits for that hash (D62①)
+    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: await codeOf(code), foreground: !!foreground,
+      upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
 
     // stop({signal}) — signal: what stopped it (SIGTERM, SIGINT, SIGHUP = the terminal closed or the user logged out,
     // SIGQUIT), else `reason`. Returns {failed: [where…]}: a step that failed makes `collector start` exit non-zero. It
@@ -780,20 +841,27 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // meanwhile talks to this daemon (`on` starts one only when none is running). `exitAsked` counts the requests; /on and a newer /off {exit} both
     // bump it, so only the latest request may stop the daemon, and never while some harness is on — an exit would leave state.json saying on with
     // nothing attached and, being a clean exit, no supervisor to restart it.
-    function exitWhenDrained(now, by = null) {
-      const mine = ++exitAsked
+    function whenDrained(now) { // a declaration: a reload during the start's awaits may already ask for a release
       const left = engine.drained({ agents: null })
-      const ready = now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left
-      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && (leaving || !sw.anyOn())) return stop({ reason: by || 'off', who: by }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
+      return (now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left).then(() => new Promise((r) => setTimeout(r, 50)))
     }
-    async function doStop({ signal = null, reason = null, who = null } = {}) {
-      seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off
+    function exitWhenDrained(now, by = null, seal = false) {
+      const mine = ++exitAsked
+      whenDrained(now).then(() => { if (mine === exitAsked && (leaving || !sw.anyOn())) return stop({ reason: by || 'off', who: by, seal }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
+    }
+    // the helper's release once no harness is on (4.6 §开关语义): after the drain, so a connection still relayed keeps its redirect; the latest request only
+    function releaseWhenDrained(now) {
+      const mine = ++releaseAsked
+      whenDrained(now).then(() => { if (mine === releaseAsked && !sw.anyOn() && helperLive()) return stopHelper() }).catch((e) => failure('helper', coded(e, 'helper-error')))
+    }
+    async function doStop({ signal = null, reason = null, who = null, seal: sealLast = false } = {}) {
+      seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off — or, by uninstall, by seal.last() in stopTail
       board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer); clearTimeout(bundleRetry)
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
       failure.flush() // folded counts are written, not lost
-      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who,
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who, sealLast, lockRefreshMs,
         before: async (step) => {
           await step('control', () => control.close())
           clearInterval(bundleTimer)
@@ -840,10 +908,11 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     isRecording: (meta) => collector.isOn(meta && meta.agent), // the in-memory switch decryption uses too: no file read per request, no silent off on a read error (4.6 §开关)
     retention: classesHook({ home: path.dirname(P.dir), failure }), describe: wsTerminalHook(list), // D60③ and the WebSocket turn edge, as on Linux (engine-data.mjs)
     onFailure: (rec) => failure.event(rec), onHeld: (who) => collector.noteHeld(who), onError: (e) => log('engine', e),
+    alive: async (pid) => { if (pidAlive(pid)) return true; const t = await parts.procTable(); return !Array.isArray(t) || t.some((r) => r.pid === pid) }, // a held close (4.6 §引擎 5): gone = the OS has no such pid and nor has the process table
   })
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
-    record: event, event, proxyOf: parts.proxyOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
+    record: event, event, proxyOf: parts.proxyOf, bypassOf: parts.bypassOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
     drain: ({ harnesses: hs, now, by }) => engine.drain({ agents: hs ? new Set(hs) : null, now, ...drainBy(by) }), // null: every connection (an off that stops the daemon)
     upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }),
     // the process of a negative-cache key exited, or its door closed: its entries go, as runDaemon's onGone does (4.8 §5.5; the fold clears by neg_key)
@@ -859,13 +928,16 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
     // carry the connection counts)" on every model-mode machine — a reason about trocar's own IPC (a macOS test machine 2026-10-18).
     const off = new Set(list.filter((x) => !collector.isOn(x.name)).map((x) => x.name))
-    return { code, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: relayedOf(engine, off, collector.leaving()), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    return { code: await codeOf(code), pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: relayedOf(engine, off, collector.leaving()), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is
   // what proves which process the lock names — so `status` does not ask the OS about that pid (4.8 §7; D62). null until the lock is written.
   let selfId = null
-  let stop = null, markReady
+  let stop = null, markReady, markStoppable
+  // markReady releases the control requests before the daemon has read its own identity (an async OS read, up to a second): an `off {exit}` in
+  // that window waits here for the stop to exist rather than calling a stop that is not there yet (off comes first: it is not refused meanwhile)
+  const stoppable = new Promise((r) => { markStoppable = r })
   // restore() first (runDaemon's `ready` gate): a request that arrives while it reopens the recorded doors waits for it, so an `on` racing a restart
   // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
   const ready = new Promise((r) => { markReady = r })
@@ -880,13 +952,13 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     'POST /helper': gate(async (q) => {
       const { verb, args } = body(q)
       const self = selfId ? { pid: process.pid, start_time: selfId.start_time ?? null, boot_id: selfId.boot_id ?? null } : null
-      const no = (error) => ({ ok: false, error, ...(self ? { self } : {}) })
+      const no = (error, code = null) => ({ ok: false, error, ...(code ? { error_code: code } : {}), ...(self ? { self } : {}) }) // the code apart, so the reader says it in words
       if (!DAEMON_READ_VERBS.includes(verb)) return no(`${JSON.stringify(verb ?? null)} is not one of the daemon's read verbs`)
       if (!parts.helper) return no('this daemon reads the OS without a resident helper, so it has none to ask')
       // `reg-read` names a registry key, so the ARGUMENTS are checked here too, against the one allow-list the helper itself checks against
       // (4.8 §7, W26: the daemon refuses an out-of-list key before its helper is asked). No checker, no reg-read.
       if (verb === 'reg-read' && !(typeof parts.regReadAllowed === 'function' && parts.regReadAllowed(args && typeof args === 'object' ? args : {}))) return no(`reg-read outside the allow-list: ${JSON.stringify(args ?? null)}`)
-      try { return { ok: true, data: await parts.helper.call(verb, args && typeof args === 'object' ? args : {}, { timeoutMs: verb === 'ps' ? 10000 : 2000 }), ...(self ? { self } : {}) } } catch (e) { return no(`${verb}: ${String((e && (e.code || e.message)) || e)}`) }
+      try { return { ok: true, data: await parts.helper.call(verb, args && typeof args === 'object' ? args : {}, { timeoutMs: verb === 'ps' ? 10000 : 2000 }), ...(self ? { self } : {}) } } catch (e) { return no(`${verb}: ${String((e && e.message) || e)}`, (e && e.code) || null) }
     }),
     'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); const b = body(q); return { ...(await collector.on(b)), retried: retryNow(engine, failure, Array.isArray(b.harnesses) ? b.harnesses : []) } }),
     // `exit` stops the daemon once it may (no harness on, no holder, no connection); with `now` its connections were just cut and it stops at
@@ -897,7 +969,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       const r = await collector.off({ ...b, by })
       if (b.exit === true) {
         const mine = ++exitAsked; clearInterval(exitTimer)
-        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stop({ reason: by || 'off', who: by }) } }
+        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stoppable.then((s) => { if (mine === exitAsked) s({ reason: by || 'off', who: by, seal: sealsLast(b, by) }) }) } }
         if (b.now === true) Promise.race([engine.drained({ agents: null }), new Promise((res) => setTimeout(res, 500))]).then(() => new Promise((res) => setTimeout(res, 50))).then(go)
         else exitTimer = setInterval(() => { if (collector.mayExit()) go() }, 250)
       }
@@ -922,18 +994,19 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     const loopWatch = createLoopWatch({ everyMs: lockRefreshMs, write: failure.event }) // see runDaemon's copy
     const lockTimer = setInterval(() => { loopWatch.tick(); bumpLock() }, lockRefreshMs); lockTimer.unref()
     const listTimer = setInterval(() => { const l = nextAgentList(); if (l) { agents = l.entries; registry.replaceAgentList(agents) } }, 5000); listTimer.unref()
-    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: code, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
+    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: await codeOf(code), foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
     let stopping = null, markExited
     const exited = new Promise((r) => { markExited = r })
-    const doStop = async ({ signal = null, reason = null, who = null } = {}) => {
-      seal.stop() // as in runDaemon: the last segment is left to the next start's scan
+    const doStop = async ({ signal = null, reason = null, who = null, seal: sealLast = false } = {}) => {
+      seal.stop() // as in runDaemon: the last segment is left to the next start's scan (uninstall's: seal.last() in stopTail)
       board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
-      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who,
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who, sealLast, lockRefreshMs,
         before: (step) => step('control', () => control.close()),
         after: async (step) => { collector.close(); await step('helper', () => parts.close && parts.close()) } })
     }
     stop = (o) => { if (!stopping) { stopping = doStop(o); stopping.then(markExited, () => markExited({ failed: ['stop'] })) } return stopping }
+    markStoppable(stop)
     return { port: null, socketPath: sock, paths: P, stop, exited, status, engine, collector }
   } catch (e) {
     failure.flush(); await control.close(); collector.close(); if (parts.close) parts.close()

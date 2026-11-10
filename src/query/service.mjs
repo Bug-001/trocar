@@ -4,8 +4,11 @@
 // bytes flow to the response. This event loop forwards agent traffic, so it MUST NOT parse or stringify the
 // document (1.6 §4.1 「守护进程的负担」 ≤ 5 ms per query whatever the size) and MUST NOT compute an answer.
 // Requests are serialized: one worker, one query at a time, which is also what bounds its memory. Those waiting are served by
-// class (SERVE_ORDER: block, lane, session, then every other name), first come first served within a class, and one whose caller
-// left before its turn is skipped, never written to the worker (3.5 §服务队列).
+// class (SERVE_ORDER: block, status, sessions, lane, session, then every other name), first come first served within a class, and one whose caller
+// left before its turn is skipped, never written to the worker (3.5 §服务队列). A worker that cannot answer yet says `102`: the request waits AGAIN_MS
+// off the queue, so what is behind it goes first, and is asked again (3.5 §行表先读), until AGAIN_LIMIT_MS after its first `102`: then it ends, a caller getting 503.
+// `handsOff` (the light and control roles, src/query/router.mjs): a `102` is not parked, the job fails flagged `again`; the router hands a light job to the
+// main role, and never a control one (a verb is not run twice).
 // A worker that crashes or says nothing within DEADLINE_MS is a D38 failure (`where:'daemon'`, `query-failed`) and
 // is dropped; the next request forks a new one, and a caller whose request died gets a 500 and answers locally.
 // Failures are kept per SUBJECT (the name and its parameters without client.mjs WINDOW_PARAMS): the first one opens an
@@ -20,12 +23,16 @@
 // the worker: it alone knows whether a request is in flight or queued (a worker's own timer was off for as long as one of
 // its answers was unfinished, so a stuck answer kept it, and its warm heap, for good), and the clock starts only when
 // nothing is, so an idle exit never cuts a query and is not a failure. The board's `relay` (4.4, D66) has no local path, so it is the one caller that waits for a fork,
-// except where the daemon hands out a stored answer (4.4 §存下的答案): `refresh` then queues the fresh one behind it.
+// except where the daemon hands out a stored answer (4.4 §存下的答案): `refresh` then queues the fresh one behind it. A worker counts as warm for that
+// only once it has said `{rows: true}`: until its rows are read it would answer `102`, so the file answers and one refresh waits parked. A warm worker
+// with a request in flight leaves the list to the file too, or it would wait out that request: the one refresh goes behind it.
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { QUERY_PATH, QUERY_NAMES, WINDOW_PARAMS, paramsOf } from './client.mjs'
-import { heapFlags, workerEnv } from './warm.mjs'
+import { ROLES, heapFlags, workerEnv } from './warm.mjs'
 import { lowFork } from '../low-priority.mjs'
+import { QUERY_WAIT_PROBLEMS } from '../health/codes.mjs'
+import { SCHEMA_VERSION } from '../off/schema.mjs'
 import { OS_PROMPT_MS } from '../off/root-store.mjs'
 
 const WORKER = fileURLToPath(new URL('./worker.mjs', import.meta.url))
@@ -50,12 +57,25 @@ const keyOf = (name, params = {}, skip = []) => `${name} ${JSON.stringify(Object
 const subjectOf = (name, params = {}) => keyOf(name, params, WINDOW_PARAMS)
 /** A worker asked nothing this long leaves and gives its memory back: the board polls every 1.5 s while it is open, so it stays
  *  warm while anyone is looking; the next query after an idle exit forks a new one (3.5 谁执行它). */
-export const QUERY_IDLE_MS = 120_000
-const STDERR_HEAD = 4000, STDERR_TAIL = 1000 // V8 prints its FATAL ERROR line after a few GC lines, then the native stack
+const QUERY_IDLE_MS = 120_000
+// A dying worker's stderr (D38): its cause is read off the lines as they stream, never off a bounded head or tail (V8 prints its FATAL ERROR line
+// after a few GC lines and before kilobytes of native stack, and a long-lived worker's earlier output can fill any head); the last
+// STDERR_LINES lines go to the daemon's log with the record. A worker's own report of work it handled ('trocar query worker: …', worker.mjs say)
+// is never a cause: it did not end the process.
+const STDERR_LINES = 40, LINE_MAX = 600
+// case as V8 and node print them: V8's '# Fatal error in …' banner is not the cause, the 'Check failed' line under it is; a `[cause]:` line is an
+// inner error of the one thrown; every line of trocar's own ('trocar: …', 'trocar query worker: …') is a report, never a cause
+const FATAL = /FATAL ERROR|Check failed|heap limit|out of memory/, THROWN = /\b\w*Error:/, CAUSE = /^\[cause\]:/, HANDLED = /^trocar[\w ]*:/
 /** A control verb may run install's root steps (the board's Set up, 4.4 §控制面): the OS's root prompt, then its read-back, each up to OS_PROMPT_MS,
  *  and the rest of install. A worker killed while the dialog is open would leave no receipt and the carriers unplaced. */
 const CONTROL_DEADLINE_MS = 2 * OS_PROMPT_MS + DEADLINE_MS
 const NL = 0x0a
+/** How long a request the worker answered `102` stays off the queue before it is asked again (3.5 §行表先读). */
+const AGAIN_MS = 250
+/** How long a request may go on being answered `102`, from the first (3.5 §行表先读), from the measured 70 s INDEX_V rebuild on a busy machine: `sessions` under the
+ *  board's 5-minute first read (it also waits for titles a slice at a time), the rest under its 60 s READ_DEADLINE_MS. */
+const AGAIN_LIMIT_MS = Object.freeze({ sessions: 240_000, other: 50_000 })
+const AGAIN = Symbol('ask again') // what a run ends with on a `102`: it answered nobody, so the job is not over
 /** A response no socket gets. `keep(res, max)`: one that keeps a document of at most `max` bytes for its caller to send
  *  itself (4.4 §答案文件), with `res`'s close passed on, so a caller who leaves still lets the queue skip the job. SINK
  *  (`keep()`): where the bytes of a document nobody waits for go: the warm-up query's answer, and the rest of a document
@@ -75,20 +95,29 @@ const SINK = keep()
 const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon yet: it is being started, read this one locally' })
 
 /** The serving order of what waits (3.5 §服务队列): these names first, in this order; every other name (and a control verb) after them.
- *  A `block` then waits at most for the request in flight, never behind a run of `session` reads. */
-const SERVE_ORDER = Object.freeze(['block', 'lane', 'session'])
+ *  A `block` then waits at most for the request in flight, never behind a run of `session` reads, and `status` and the session list
+ *  never wait behind a big session's reads. */
+const SERVE_ORDER = Object.freeze(['block', 'status', 'sessions', 'lane', 'session'])
 const rank = (name) => { const i = SERVE_ORDER.indexOf(name); return i < 0 ? SERVE_ORDER.length : i }
 
-const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], ...lowFork(heapFlags()), env: workerEnv() })
+/** forkOptions(role) → how a worker of `role` starts. Its heap cap comes from `ROLES[role]` (warm.mjs), the one place that sizes a role. An absent
+ *  role is the main role (as in `worker.mjs`); an unknown role throws, the same on both sides. The light role follows the daemon, so `status`
+ *  answers under load; the main and control roles stay low (`lowFork`, 4.9 §4; 3.5 §谁执行它). */
+export const forkOptions = (role, o) => { const cap = heapFlags(ROLES[role || 'main'].capMb); return role === 'light' ? { execArgv: cap } : lowFork(cap, o) }
+/** `argv` after the home is the worker's own: the deps path ('' for none) and the role. */
+export const forkWorker = (home, ...argv) => fork(WORKER, [home, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], ...forkOptions(argv[1]), env: workerEnv() })
 
 const logLine = (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`) // the daemon's stdout is its log
 const mb = (n) => `${(n / 1048576).toFixed(1)} MB`
 
-export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker, deadlineMs = DEADLINE_MS, controlDeadlineMs = CONTROL_DEADLINE_MS, idleMs = QUERY_IDLE_MS, pauseMs = PAUSE_MS, say = logLine, now = Date.now }) {
+export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker, deadlineMs = DEADLINE_MS, controlDeadlineMs = CONTROL_DEADLINE_MS, idleMs = QUERY_IDLE_MS, againMs = AGAIN_MS, againLimitMs = AGAIN_LIMIT_MS, handsOff = false, pauseMs = PAUSE_MS, say = logLine, now = Date.now }) {
   let asked = 0, idle = null // requests queued or in flight; the idle clock, running only while there are none
-  let child = null, pending = null, head = '', left = 0, errHead = '', errTail = '', paused = false, pauseTimer = null
+  let child = null, pending = null, head = '', left = 0, paused = false, pauseTimer = null
+  let err = null // the current worker's stderr as read so far: {part, lines, fatal, thrown, open} (stderrLine)
+  let rows = false // this child said `{rows: true}`: its pass over the rows has ended (3.5 §服务队列)
   let stats = new Map(), statsTimer = null // per name: {reads, bytes, cpu, slowest} since the last line
   const waiting = [] // {name, go, gone, resolve, reject} in arrival order; pump() takes the first of the lowest rank
+  const parked = new Map() // job → its timer: answered `102`, off the queue until the timer puts it back. Still counted in `asked`.
   let busy = false // a request is in flight
   const episodes = new Map() // subject → {reason, at, n}: failures since that subject was last answered
 
@@ -102,11 +131,11 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   }
 
   /** A failure of `subject`: the first of an episode writes the D38 record, the rest only lengthen its cool-down. */
-  function fault(subject, reason) {
+  function fault(subject, reason, detail = null) {
     cooling() // forget the stale ones first: a failure long after the last one is a new episode
     const ep = subject && episodes.get(subject)
     if (ep) { ep.n++; ep.at = now(); return }
-    failWorker(reason)
+    failWorker(reason, detail)
     if (subject) episodes.set(subject, { reason, at: now(), n: 1 })
   }
 
@@ -124,6 +153,13 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     if (child) child.stdout.resume()
   }
 
+  /** What a silent worker was asked, for the D38 record (3.5 读不全不静默): the query and its parameters by name, no value. A name is only shape-checked: the query core refuses an undeclared one, unless the worker hung before it read the line. */
+  const askedOf = ({ name, line }) => {
+    let asked = {}
+    try { const q = JSON.parse(line); asked = q.params || q.body || {} } catch { /* the name alone says enough */ }
+    const names = Object.keys(asked).filter((k) => /^[\w-]{1,32}$/.test(k))
+    return `${name}${names.length ? ` (${names.join(', ')})` : ''}`
+  }
   /** The deadline measures the worker's SILENCE: armed while it owes bytes, re-armed by every byte and every progress message
    *  (a fold still reading records), and off while the response is full and the worker is paused for it — a slow reader of a
    *  large body is not a wedged worker, nor is a long fold. */
@@ -132,7 +168,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     p.timer = setTimeout(() => {
       // Still the deadline when the caller is gone (a silent worker must not hold the queue), but then it is not a
       // failure anyone asked about: no D38 record.
-      const why = `the query worker did not answer within ${p.ms} ms`
+      const why = `the query worker did not answer ${askedOf(p)} within ${p.ms} ms`
       if (!p.quiet) fault(p.subject, why)
       drop(why)
     }, p.ms)
@@ -145,7 +181,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   function drop(why) {
     const c = child, p = pending
     clearTimeout(idle); clearTimeout(pauseTimer)
-    child = null; pending = null; head = ''; left = 0; errHead = ''; errTail = ''; paused = false
+    child = null; pending = null; head = ''; left = 0; err = null; paused = false; rows = false
     if (c) { c.removeAllListeners(); try { c.kill() } catch { /* already gone */ } }
     if (p) {
       clearTimeout(p.timer)
@@ -154,54 +190,66 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     }
   }
 
-  /** What stderr says about a crash, in one line: the cause (V8's `FATAL ERROR: …` / `Check failed` / heap limit, a thrown
-   *  `…Error: …`) and the first JavaScript frame after it — never V8's native stack, which is kilobytes of addresses the board would
-   *  print (2026-10-21). With no cause line: the head and the tail. Only the dying request's stderr: run() starts it afresh. */
-  function stderrReason() {
-    const lines = errHead.split('\n').map((l) => l.trim()).filter(Boolean)
-    const at = lines.findIndex((l) => /FATAL ERROR|Check failed|heap limit|\b\w*Error:/.test(l))
-    if (at >= 0) return [lines[at], lines.slice(at + 1).find((l) => /^at\s/.test(l))].filter(Boolean).join(' · ')
-    const first = errHead.slice(0, 600).trim(), tail = errTail.trim()
-    return [first, tail && !first.includes(tail) ? `… ${tail}` : ''].filter(Boolean).join(' ')
+  /** What stderr says about a crash, in one line: the first fatal line V8 or node printed (`FATAL ERROR: …`, `Check failed`, heap limit,
+   *  out of memory), else the last error the worker threw and did not handle (`…Error: …`, not its own report of a handled one), each with
+   *  the first JavaScript frame after it; null when neither was printed — the record then says so, never another line in their place. */
+  const stderrReason = () => (err && (err.fatal || err.thrown) ? [err.fatal || err.thrown].map((x) => [x.line, x.at].filter(Boolean).join(' · '))[0] : null)
+  function stderrLine(l) {
+    const t = l.replace(/\r/g, '').trim().slice(0, LINE_MAX)
+    if (!t) return
+    err.lines.push(t); if (err.lines.length > STDERR_LINES) err.lines.shift()
+    if (/^at\s/.test(t)) { if (err.open && !err.open.at) err.open.at = t; return } // the first frame of the cause line just read
+    err.open = null
+    if (HANDLED.test(t) || CAUSE.test(t)) return
+    if (FATAL.test(t)) { if (!err.fatal) err.open = err.fatal = { line: t, at: null } } else if (THROWN.test(t)) err.open = err.thrown = { line: t, at: null }
   }
 
   function start() {
     const c = spawn(home)
-    child = c
+    child = c; rows = false
     c.stdout.on('data', (b) => { if (child === c) onData(b) })
     // A worker the OS killed (SIGKILL, a heap OOM) breaks the pipe under the next write: EPIPE arrives here, and unheard it would be
     // an uncaught exception that takes this process down. The 'close' that follows fails the query with the exit's reason.
     c.stdin.on('error', () => {})
-    c.stderr.on('data', (b) => { // the reason a crash gives, for the D38 record: its head (bounded) and its tail
-      const t = String(b)
-      if (errHead.length < STDERR_HEAD) errHead += t.slice(0, STDERR_HEAD - errHead.length)
-      errTail = (errTail + t).slice(-STDERR_TAIL)
+    err = { part: '', lines: [], fatal: null, thrown: null, open: null }
+    c.stderr.setEncoding?.('utf8') // a character split between two chunks stays whole
+    const mine = err
+    c.stderr.on('data', (b) => { // the reason a crash gives, for the D38 record, line by line (stderrReason)
+      if (err !== mine) return
+      const ls = (mine.part + String(b)).split('\n')
+      mine.part = ls.pop().slice(0, LINE_MAX) // a line's head: where its cause is said
+      for (const l of ls) stderrLine(l)
     })
     // a worker still working says so (worker.mjs PROGRESS_MS): its silence clock starts again (3.5:42), and so does the idle
     // clock when no request is queued or in flight: a background slice is work, so a long kicked fold is not cut (3.5 后台抽取与归约)
     c.on('message', (m) => {
       if (child !== c || !m) return
       if (m.progress === true) { if (pending && !paused) arm(pending); idleClock() }
+      if (m.rows === true) rows = true
       // a D38 record the worker owes (4.3 盘满 `projection-write-failed`): written here, where the daemon's records are
       if (m.failure && typeof m.failure.code === 'string') failure('daemon', Object.assign(new Error(String(m.failure.reason)), { code: m.failure.code }))
     })
     c.on('error', (e) => { if (child === c) { const why = `the query worker could not be started: ${e.message}`; fault(pending ? pending.subject : KICK, why); drop(why) } })
     c.on('close', (code, signal) => { // 'close', not 'exit': every byte it wrote to stdout and stderr has been read by then
       if (child !== c) return
-      const said = stderrReason()
-      const reason = `the query worker exited (${signal ? `signal ${signal}` : `code ${code}`})${said ? `: ${said}` : ''}`
+      if (err && err.part) { stderrLine(err.part); err.part = '' }
+      const said = stderrReason(), how = signal ? `signal ${signal}` : `code ${code}`
+      const reason = said ? `the query worker exited (${how}): ${said}` : `the query worker exited (${how}); no fatal message was captured (the last lines of its stderr are in the daemon's log)`
+      const detail = err && err.lines.length ? err.lines : null
       // with no request in flight it died on what a kick gave it: that episode is the kick's, so a crashing fold is not re-forked by every kick
-      fault(pending ? pending.subject : KICK, reason)
+      fault(pending ? pending.subject : KICK, reason, detail)
       drop(reason)
     })
     return c
   }
 
-  const failWorker = (reason) => failure('daemon', Object.assign(new Error(reason), { code: 'query-failed' }))
+  // `detail`: the dying worker's last stderr lines, for the daemon's log beside the record (cli/daemon.mjs), never in the record's reason
+  const failWorker = (reason, detail = null) => failure('daemon', Object.assign(new Error(reason), { code: 'query-failed' }, detail ? { detail } : null))
 
   // The frame reader: `<status> <len> <enc> <cpu_ms> <tag>\n` then exactly `len` bytes, straight into the response. Nothing is parsed.
   // `enc` is `gzip` when the worker compressed the bytes (the request asked it: 4.4 §服务形状) and `-` otherwise; `tag` is the
   // answer's version tag (answers.mjs), handed to the response as its `etag` header, or `-` for none (4.4 §条件 GET).
+  // Status 102 has no bytes and nothing of it reaches the response: the request is asked again (3.5 §行表先读).
   function onData(b) {
     while (b.length) {
       if (!left) {
@@ -212,6 +260,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
         const [status, len, enc = '-', cpu = '0', tag = '-'] = head.split(' ')
         head = ''
         if (!pending) return // a frame nobody waits for (its request died): the worker is out of step
+        if (status === '102') { const p = pending; pending = null; clearTimeout(p.timer); p.done(AGAIN); continue }
         pending.bytes = Number(len); pending.cpu = Number(cpu) || 0
         pending.res.writeHead(Number(status), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': len,
           ...(enc === 'gzip' ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {}), ...(tag !== '-' && !pending.file ? { etag: `"${tag}"` } : {}) })
@@ -277,7 +326,6 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     const ep = cooling(subject)
     if (ep) { fail(new Error(ep.reason)); return }
     const c = child || start()
-    errHead = ''; errTail = '' // a crash's reason is THIS request's stderr: a long-lived worker's earlier noise filled the head
     const p = { res, done, fail, quiet: false, line, ms, headed: false, name, subject, file, t0: now() }
     arm(p)
     pending = p
@@ -291,10 +339,11 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   }
 
   /** `etag`: the version part of the tag the caller holds; the worker answers 304 when its version is that one (4.4 §条件 GET). */
-  const lineOf = (name, params, indent = 0, gzip = false, etag = null) => JSON.stringify({ name, params, indent, ...(gzip ? { gzip } : {}), ...(etag ? { etag } : {}) }) + '\n'
+  /** `rows`: this answer waits for the rows even of a name that needs none (3.5 §行表先读: a request the light role handed over). */
+  const lineOf = (name, params, indent = 0, gzip = false, etag = null, rows = false) => JSON.stringify({ name, params, indent, ...(gzip ? { gzip } : {}), ...(etag ? { etag } : {}), ...(rows ? { rows } : {}) }) + '\n'
 
-  /** Queue `go` (counted from now until it settles) and serve the queue. `gone()` true at its turn: skipped, never run. */
-  const enqueue = (name, go, gone = () => false) => counted(new Promise((resolve, reject) => { waiting.push({ name, go, gone, resolve, reject }); pump() }))
+  /** Queue `go` (counted from now until it settles) and serve the queue. `gone()` true at its turn: skipped, never run. `res`: its caller's response, when it has one. */
+  const enqueue = (name, go, gone = () => false, res = null) => counted(new Promise((resolve, reject) => { waiting.push({ name, go, gone, res, resolve, reject }); pump() }))
   function pump() {
     while (!busy && waiting.length) {
       let at = 0
@@ -302,8 +351,29 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
       const [j] = waiting.splice(at, 1)
       if (j.gone()) { j.resolve(); continue }
       busy = true
-      j.go().then(j.resolve, j.reject).finally(() => { busy = false; pump() })
+      j.go().then((r) => (r === AGAIN ? park(j) : j.resolve(r)), j.reject).finally(() => { busy = false; pump() })
     }
+  }
+  /** The worker said `102`: `j` goes back to the queue after againMs, and until then what waits behind it is served. Past its bound it ends here. */
+  function park(j) {
+    if (handsOff) { j.reject(Object.assign(new Error('the light query worker cannot answer this'), { again: true })); return }
+    j.since ??= now()
+    if (now() - j.since >= (againLimitMs[j.name] ?? againLimitMs.other)) { unread(j); return }
+    const t = setTimeout(() => { parked.delete(j); waiting.push(j); pump() }, againMs)
+    t.unref?.()
+    parked.set(j, t)
+  }
+
+  /** `j` waited out its bound: a caller gets 503 (a CLI then reads locally, and the board never takes it for an empty list), a job with none just ends. */
+  function unread(j) {
+    if (j.res && !j.gone()) {
+      const reason = `the query worker was still reading the index rows or this page's titles after ${Math.round((now() - j.since) / 1000)} s`
+      const body = Buffer.from(JSON.stringify({ schema: SCHEMA_VERSION, command: j.name, ok: false, errors: [{ where: 'daemon', code: QUERY_WAIT_PROBLEMS[0], reason }], error: reason }))
+      j.res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': body.length })
+      j.res.write(body)
+      j.res.end()
+    }
+    j.resolve()
   }
 
   /** The idle clock, (re)started when nothing is queued or in flight: the worker leaves idleMs after the last request, kick or
@@ -354,7 +424,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     // The handler answers `res` itself, so the server sends nothing: nothing of this document is held in this
     // process's memory as a JavaScript value. A request that failed does not hold the next one up, and its
     // rejection reaches the server, which answers 500.
-    const task = enqueue(name, () => run(line, res, ms, name, subject, file), () => gone)
+    const task = enqueue(name, () => run(line, res, ms, name, subject, file), () => gone, res)
     // Answered as soon as EITHER the document is through or the caller is gone; a failure is raised only while there
     // is someone to raise it to (writing a 500 into a closed socket is nobody's answer).
     task.then(() => finish(), (e) => (gone ? finish() : failRoute(e)))
@@ -362,14 +432,14 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   }
 
   /** GET /query?name=<name>&indent=<n>&<param>=<value> — the control plane's read route (4.6 §控制面). */
-  const route = async ({ query, res }) => {
+  const route = async ({ query, res, rows = false }) => {
     const name = query.get('name')
     if (!name) throw Object.assign(new Error('GET /query: ?name=<query name> is required'), { status: 400 })
     // The closed name set (client.mjs QUERY_NAMES), checked here: an arbitrary name used to fork a worker before the
     // query core refused it.
     if (!QUERY_NAMES.includes(name)) throw Object.assign(new Error(`trocar query: no query called ${JSON.stringify(name)} (names: ${QUERY_NAMES.join(', ')})`), { status: 400 })
     const params = paramsOf(query, ['name', 'indent'])
-    const line = lineOf(name, params, query.get('indent') || 0)
+    const line = lineOf(name, params, query.get('indent') || 0, false, null, rows)
     const subject = subjectOf(name, params)
     // A cooling subject is answered 500 with its episode's reason, worker or not (3.5 #12, #20): a 503 would make the
     // caller wait on a worker that the cool-down never forks.
@@ -388,23 +458,26 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
    *  so with no worker it forks one and waits its turn instead of the cold 503. The caller checked the name. `gzip`: the
    *  reader takes gzip, so the worker compresses (the daemon never encodes a document, D63 ①). `file`: an answer file's relay
    *  (4.4 §答案文件), sent with no ETag: the worker's version tag is not the file's tag. */
-  const relay = ({ name, params = {}, res, gzip = false, etag = null, file = null }) => answer(lineOf(name, params, 0, gzip, etag), res, deadlineMs, name, subjectOf(name, params), file)
+  const relay = ({ name, params = {}, res, gzip = false, etag = null, file = null, rows = false }) => answer(lineOf(name, params, 0, gzip, etag, rows), res, deadlineMs, name, subjectOf(name, params), file)
 
-  /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, so a control verb waits its turn behind a query and the
-   *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */
+  /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, on the control role (src/query/router.mjs), so a verb
+   *  waits only behind another control verb, and the worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and
+   *  parsed the small request body. A worker that exits or falls silent may have run part of the verb: it is reported, never run again. */
   const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res, controlDeadlineMs, `control/${verb}`, subjectOf(`control/${verb}`, body))
+    .catch((e) => { throw new Error(`control verb ${verb} did not finish (${e.message}); it may have partly run and is not run again`, { cause: e }) })
 
   /** The daemon is about to hand out the stored answer of (name, params) (4.4 §存下的答案「刷新」): true while a refresh of `name` is
-   *  queued or running (nothing more is queued), or when there is no worker (one refresh of these params is queued; run() forks
-   *  the worker); false when stopped, when the subject is cooling (the relay answers 500 with its reason, D38), or when the worker is
-   *  warm with no refresh of `name` pending (the relay answers fresh). One refresh per name, not per page: per page, a many-page list
+   *  queued or running (nothing more is queued), or when there is no worker, its rows are unread or a request is in flight on it (one refresh of
+   *  these params is queued; run() forks the worker or uses the live one, a `102` parks it with `name` still held, `busy` puts it behind that request);
+   *  false when stopped, when the subject is cooling (the relay answers 500 with its reason, D38), or when the worker has said `{rows: true}`, is idle
+   *  and no refresh of `name` is pending (the relay answers fresh). One refresh per name, not per page: per page, a many-page list
    *  polled every 1.5 s always had some page pending again and never went fresh. */
   const refreshing = new Set() // names with a refresh queued or running
   const refresh = ({ name, params = {} }) => {
     const subject = subjectOf(name, params)
     if (stopped || cooling(subject)) return false
     if (refreshing.has(name)) return true
-    if (child) return false
+    if (child && rows && !busy) return false
     refreshing.add(name)
     enqueue(name, () => run(lineOf(name, params), SINK, deadlineMs, name, subject)).catch(() => {}).finally(() => refreshing.delete(name))
     return true
@@ -413,5 +486,18 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   /** The board's page load (4.4, D64①): a refresh of the list, so a cold worker is forked and warming before the page asks. */
   const warm = (a) => { refresh(a) }
 
-  return { route, relay, control, warm, refresh, kick, sweep, follow, path: QUERY_PATH, stop: () => { stopped = true; clearInterval(statsTimer); statsTimer = null; drop('the daemon is stopping') } }
+  /** The daemon is stopping: nothing queued or parked gets a turn (a turn would fork a worker nobody stops), so each is told now. */
+  const stop = () => {
+    const why = 'the daemon is stopping'
+    stopped = true; clearInterval(statsTimer); statsTimer = null
+    for (const [j, t] of parked) { clearTimeout(t); j.reject(new Error(why)) }
+    parked.clear()
+    for (const j of waiting.splice(0)) j.reject(new Error(why))
+    drop(why)
+  }
+
+  /** A worker died with nothing in flight and its cool-down runs. */
+  const down = () => !!cooling(KICK)
+
+  return { route, relay, control, warm, refresh, kick, sweep, follow, down, path: QUERY_PATH, stop }
 }

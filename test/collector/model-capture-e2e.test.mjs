@@ -27,6 +27,7 @@ import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
 import { PID, BODY, reqOf, REPLY, agentOf, darwinExec, win32Io, flowsOf, freePort, doorOpen, through, statusDoc } from '../helpers/model-io.mjs'
 import { listenLocalhost } from '../helpers/localhost.mjs'
+import { TRUSTED_THRESHOLD } from '../../src/collector/core/engine/negcache.mjs'
 
 
 for (const platform of ['darwin', 'win32']) {
@@ -54,7 +55,7 @@ for (const platform of ['darwin', 'win32']) {
     await withScratchCwd(platform, async () => {
       try {
         const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-        const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        const deps = { getuid: () => 501, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0)
         const url = /^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))
         assert.ok(url, 'the CLI wrote the door URL into codex\'s .env')
@@ -84,10 +85,10 @@ for (const platform of ['darwin', 'win32']) {
         await kept.end()
         fs.writeFileSync(stateF, stateWas)
 
-        // D51④ / 4.8 §5.5: a client of this process that refuses the leaf twice (the threshold, 4.6 #9) → trust-rejected keyed by the process life
+        // D51④ / 4.8 §5.5: a client of this process, which has sent data here, that refuses the leaf in a row up to the threshold (4.6 §引擎 5) → trust-rejected keyed by the process life
         // "<pid>@<start>", and status reads the process as not captured (1.6 negative-cache); the key is cleared (negative-cache-cleared, same
         // neg_key) once the process leaves the table — below, after off
-        for (let i = 0; i < 2; i++) {
+        for (let i = 0; i < TRUSTED_THRESHOLD; i++) {
           a.ports.add(await freePort()); win?.write()
           await assert.rejects(through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [upCa.certPem], req: REQ, open }))
         }
@@ -179,7 +180,7 @@ for (const platform of ['darwin', 'win32']) {
     await withScratchCwd(platform, async () => {
       try {
         const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-        const onDeps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        const onDeps = { getuid: () => 501, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         const offDeps = { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: () => ({ status: 0, stdout: '', stderr: '' }) }
         const pause = () => new Promise((r) => setTimeout(r, 30))
         assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps: onDeps }), 0)
@@ -208,10 +209,11 @@ for (const platform of ['darwin', 'win32']) {
         const status = (live) => statusDoc({ w, platform, box, a, all: three, live })
         const doc = await status([PID, inWin.pid, offStart.pid])
         const rows = Object.fromEntries(doc.harnesses.codex.processes.map((r) => [r.pid, [r.captured, r.reason]]))
-        assert.deepEqual(rows, { [PID]: [true, null], [inWin.pid]: [true, null], [offStart.pid]: [false, 'config-after-start'] }, JSON.stringify(doc.harnesses.codex))
+        // codex reads its entry under CODEX_HOME, a place the macOS / Windows table cannot read from another process: one that never connected is not seen yet (4.11 P11 step 4)
+        assert.deepEqual(rows, { [PID]: [true, null], [inWin.pid]: [null, 'not-seen'], [offStart.pid]: [false, 'config-after-start'] }, JSON.stringify(doc.harnesses.codex))
         // the topology (and the doctor's findings on it) carries the same verdicts: without the off-start process nothing there needs a restart
         const t = (await status([PID, inWin.pid])).topology.codex
-        assert.deepEqual([t.captured, t.reason, t.branches.map((b) => b.captured), t.findings.includes('config-after-start')], [true, null, t.branches.map(() => true), false], JSON.stringify(t))
+        assert.deepEqual([t.captured, t.reason, t.branches.map((b) => b.captured), t.findings.includes('config-after-start')], [true, 'not-seen', t.branches.map(() => true), false], JSON.stringify(t)) // captured, with one not seen yet (1.6 §2)
       } finally {
         for (const s of open) s.destroy()
         await box.stop()

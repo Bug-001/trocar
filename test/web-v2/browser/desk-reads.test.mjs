@@ -5,7 +5,7 @@
 // keeps the drawn window (2.3 §读失败); the anchor lane's ledger chain (3.5 §手里车道的页). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld } from './harness.mjs'
+import { probe, withBoard, serveWorld, settle } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { QUERIES } from '../../../src/query/named/index.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
@@ -41,11 +41,11 @@ test('2.3 #25: scrubbing the desk reads nothing before a 100 ms rest, keeps ≤ 
     await page.waitForFunction(() => !document.querySelector('#ctxwin [aria-busy="true"]'))
     for (const t0 = Date.now(); !historyIn && Date.now() - t0 < 15000;) await page.waitForTimeout(50) // the drag runs over a history all in hand
     assert.ok(files >= 4 && historyIn, `every pack came in (${got.size} of ${files})`)
-    await page.waitForLoadState('networkidle')
+    await settle(page)
     // from here the page's time moves only when the test moves it
     await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
-    await page.waitForLoadState('networkidle')
-    const n = await page.evaluate(() => +((document.querySelector('#stepbar .sb-no').textContent.match(/\/\s*(\d+)/) || [])[1]))
+    await settle(page)
+    const n = await page.evaluate(() => window.__stepNo().m)
     assert.ok(n >= 6, `the world's main lane has steps to scrub (${n})`)
 
     const mark = log.length
@@ -88,11 +88,11 @@ test('4.4 live-poll: a following desk shows each new call after it lands, read b
     assert.ok(main && steps(from) < steps(w.marks.length - 1), 'the world grows its main lane after the start mark')
     const growth = await serveWorld(page, w, { from, grow: 1 })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
-    const total = () => page.evaluate(() => +((document.querySelector('#stepbar .sb-no')?.textContent.match(/\/\s*(\d+)/) || [])[1] || 0))
+    const total = () => page.evaluate(() => window.__stepNo()?.m || 0)
     await page.waitForSelector('#stepbar .sb-no')
     const first = await total()
     for (const t0 = Date.now(); growth.left() > 0 && Date.now() - t0 < 30000;) await page.waitForTimeout(100)
-    await page.waitForFunction((n) => +((document.querySelector('#stepbar .sb-no')?.textContent.match(/(\d+)\s*\/\s*(\d+)/) || [])[1] || 0) === n, steps(w.marks.length - 1), { timeout: 10000 })
+    await page.waitForFunction((n) => (window.__stepNo()?.n || 0) === n, steps(w.marks.length - 1), { timeout: 10000 })
     const shown = await page.evaluate(() => document.querySelector('#stepbar .sb-no').textContent)
     assert.ok(first < (await total()), `the step count grew from ${first} (${shown})`)
     assert.equal(await page.evaluate(() => new URLSearchParams(location.hash.split('?')[1] || '').get('step')), null, 'still following')
@@ -177,6 +177,32 @@ test('2.3 §读失败: a poll round whose tail reads fail keeps the drawn window
   } finally { await b.stop() }
 })
 
+// 2.4 还在读: a ledger answered behind the fold is not whole; a head without `pending` ends that, and the poll round reads it again from
+// `to`, once: the answer without `pending` closes it
+test('2.4 还在读: a lane answered with pending is walked again when the head has none, and only until an answer has none', { skip }, async () => {
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  try {
+    const { page } = b, w = world(7, { calls: 60 })
+    const main = w.full().lanes.find((h) => h.kind === 'main').lane
+    await serveWorld(page, w)
+    let tos = 0
+    await page.route('**/api/lane?**', async (route) => {
+      const q = new URL(route.request().url()).searchParams
+      if (q.get('lane') !== main) return route.fallback()
+      if (q.has('to')) tos++
+      const doc = w.lane(main, { to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }) // the first walk, its chain too, stands behind the fold
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(tos === 1 ? { ...doc, pending: { done: 1, total: 2, calls: 0 } } : doc) })
+    })
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
+    for (const t0 = Date.now(); tos < 2 && Date.now() - t0 < 6 * INTERVAL.session;) await page.waitForTimeout(100)
+    assert.equal(tos, 2, 'the pending answer is followed by a whole read')
+    for (let i = 0; i < 2; i++) await page.waitForResponse((r) => new URL(r.url()).pathname === '/api/d/head', { timeout: 4 * INTERVAL.session })
+    assert.equal(tos, 2, 'an answer without pending ends it')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
 // 3.5 §手里车道的页: once the anchor lane is in hand its ledger is read — a `lane --to <its first step>` page (no step, the
 // ledger at mark in its room), then along its `ledger_next` chain; each read names the previous answer's cursor, none is read twice, and
 // once the counts are exact no 2.4 count goes back to the busy box
@@ -216,6 +242,8 @@ test('3.5 §手里车道的页: the anchor lane reads its ledger chain to the en
     })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
+    // the desk draws the explorer only while Resources is the sidebar's current tab (1.2 §回放台布局: 不是当前标签时不画)
+    await page.locator('.deskside [role=tab]').nth(1).click()
     const mine = () => log.filter((q) => q.get('lane') === main)
     await page.waitForFunction(() => window.__chainEnd === true, null, { timeout: 30000 }).catch(() => {})
     const exact = await page.waitForFunction(() => window.__exact === true, null, { timeout: 10000 }).then(() => true, () => false)

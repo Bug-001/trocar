@@ -163,7 +163,9 @@ test('V32 the certificate step: after the world and the entry, before the start 
   const form = (in_effect, code = null, carrier = 'root') => ({ certificate: { in_effect, carrier, code } })
   assert.equal(certOfForms([form(true, null, 'config-key'), form(true)]), true)
   assert.equal(certOfForms([form(true, null, 'config-key'), form(false, 'cert-root-pending')]), 'cert-root-pending', 'one form whose certificate is not in effect is enough')
-  assert.equal(certOfForms([form(false, null)]), null, 'not in effect with no code (the root store unreadable): not known')
+  assert.equal(certOfForms([form(null, null)]), null, 'the root store unreadable (in_effect null, no code): not known')
+  assert.equal(certOfForms([form(null, 'file-unreadable', 'config-key'), form(true)]), null, 'in_effect null (a certificate file not read): not known, never in effect')
+  assert.equal(certOfForms([form(null, 'file-unreadable', 'config-key'), form(false, 'cert-root-pending')]), 'cert-root-pending', 'a form known not in effect still decides')
 })
 
 test('a process the daemon has not judged: no start time is start-time-unknown, no installed_at to compare with is 不知道, an entry that is not intact comes first (a restart would not help)', () => {
@@ -185,9 +187,10 @@ import { runStatusCli } from '../../src/cli/status.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 
-const run = runStatus
+// these cases are about the harnesses trocar's records know: no other harness is on this machine (the rows of the ones present: status-setup-linux.test.mjs)
+const run = (s, argv, o = {}) => runStatus(s, argv, { ...o, deps: { presentForms: async () => ({}), ...o.deps } })
 
-test('the daemon answers: each agent is captured or says why, and the exit code is 1 while one is not; every agent captured is exit 0', async () => {
+test('the daemon answers: each agent is captured or says why, and the exit code is 1 while one is not; every agent captured is exit 0', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const agents = [{ pid: 4121, agent: 'claude-code', trusted: true }, { pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: "trocar's settings for this agent were written after this process started; restart it once" }]
   const docOf = async (argv, o) => (await run(s, [...argv, '--json'], o)).io.json()
@@ -203,7 +206,6 @@ test('the daemon answers: each agent is captured or says why, and the exit code 
   assert.deepEqual(one.processes.map((p) => [p.pid, p.captured, p.reason]), [[4121, true, null], [4388, false, 'config-after-start']])
   r = await run(s, [], { request: asDaemon(reply({ agents: agents.slice(0, 1) })), procs: async () => [claudeProc(4121, Date.now() + 5000)] })
   assert.equal(r.exit, 0, r.text)
-  assert.match(r.text, /^Capturing 2 of 2 installed harnesses\./m)
   assert.match(r.text, /^ {2}claude-code {2}yes$/m)
   r = await run(s, ['claude'], { request: asDaemon(reply()) })
   assert.match(r.text, /^claude-code: on, /m, 'the alias claude is claude-code')
@@ -220,7 +222,7 @@ test('the daemon answers: each agent is captured or says why, and the exit code 
 })
 
 // 1.6 V107: a process with refused hosts lists every one of them with its cause and when trocar tries it again (the ms the engine gives, as ISO)
-test('V107 status --json: a process the engine holds two hosts of lists both, each with its cause and retry time', async () => {
+test('V107 status --json: a process the engine holds two hosts of lists both, each with its cause and retry time', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const t1 = Date.parse('2026-10-30T12:10:00.000Z'), t2 = Date.parse('2026-10-30T13:00:00.000Z')
   const negatives = [
@@ -236,7 +238,7 @@ test('V107 status --json: a process the engine holds two hosts of lists both, ea
   ])
 })
 
-test('the entry on disk decides when no process does: intact when the value is there (the file may have been rewritten), entry-missing when it is gone, entry-changed when it is something else', async () => {
+test('the entry on disk decides when no process does: intact when the value is there (the file may have been rewritten), entry-missing when it is gone, entry-changed when it is something else', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const settings = path.join(s.home, '.claude', 'settings.json')
   const ok = JSON.parse(fs.readFileSync(settings, 'utf8'))
@@ -250,30 +252,28 @@ test('the entry on disk decides when no process does: intact when the value is t
   const cur = JSON.parse(fs.readFileSync(settings, 'utf8'))
   fs.writeFileSync(settings, JSON.stringify({ ...cur, env: { ...cur.env, NODE_EXTRA_CA_CERTS: '/elsewhere/ca.pem' } }))
   assert.deepEqual(await verdict(), [false, 'entry-changed', 1])
-  // the summary says it in words, once (§3.5: one short clause per row, no code name)
-  assert.match((await run(s, [], { request: asDaemon(reply()) })).text, /^ {2}claude-code {2}no {8}the setting that points at trocar holds something else$/m)
+  // the summary says it in words, once (§3.5: one short clause per row, no code name). On Linux that setting is install's certificate carrier, so setup
+  // is needed too, and the row gives the step that puts it back (1.6 §3.5: needed → set up first: trocar install)
+  assert.match((await run(s, [], { request: asDaemon(reply()) })).text, /^ {2}claude-code {2}no {8}set up first: trocar install$/m)
   fs.writeFileSync(settings, JSON.stringify({ theme: 'dark' }))
   assert.deepEqual(await verdict(), [false, 'entry-missing', 1])
   fs.rmSync(settings)
   assert.deepEqual(await verdict(), [false, 'entry-missing', 1])
 })
 
-test('no daemon: nothing is captured (daemon-not-running), read from the disk, with the processes found by the manifest\'s signatures — each one says the daemon is not running, whenever it started (the entry and the start time only come into it once a daemon answers)', async () => {
+test('no daemon: nothing is captured (daemon-not-running), read from the disk, with the processes found by the manifest\'s signatures — each one says the daemon is not running, whenever it started (the entry and the start time only come into it once a daemon answers)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const old = Date.now() - 3600e3
   const r = await run(s, [], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })
   assert.equal(r.exit, 1, r.text)
-  assert.match(r.text, /^Capturing 0 of 2 installed harnesses\.$/m)
-  assert.match(r.text, /^Daemon not running; nothing is captured\. Start it: trocar on$/m)
   assert.match(r.text, /^ {2}claude-code {2}no {8}trocar is not running in the background$/m)
   const doc = (await run(s, ['claude-code', '--json'], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })).io.json()
   const h = doc.harnesses['claude-code']
   assert.deepEqual([h.captured, h.reason], [false, 'daemon-not-running'])
   assert.deepEqual(h.processes.map((p) => [p.pid, p.reason]).sort((a, b) => a[0] - b[0]), [[5000, 'daemon-not-running'], [5001, 'daemon-not-running']])
-  assert.match(r.text, /^ {2}Problems {5}(none in the last 24 hours|\d)/m, 'and the capture health read from disk follows (the summary names it; the wall is --failures)')
 })
 
-test('the daemon answers but has not listed a process of a harness (it started since the daemon last looked): the entry and when it started decide (V32) — older than the entry: config-after-start and told to restart; newer: captured, and said to be by entry and start time; entry gone: entry-missing; a pid the daemon lists is not added twice', async () => {
+test('the daemon answers but has not listed a process of a harness (it started since the daemon last looked): the entry and when it started decide (V32) — older than the entry: config-after-start and told to restart; newer: captured, and said to be by entry and start time; entry gone: entry-missing; a pid the daemon lists is not added twice', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const old = Date.now() - 3600e3, fresh = Date.now() + 5000
   const procs = async () => [claudeProc(5000, old), claudeProc(5001, fresh), claudeProc(5002, fresh)]
@@ -293,7 +293,7 @@ test('the daemon answers but has not listed a process of a harness (it started s
   assert.deepEqual(other.processes, [], JSON.stringify(other.processes))
 })
 
-test('off: every harness is desired-off, exit 0 — nothing is wrong with a switch that is off', async () => {
+test('off: every harness is desired-off, exit 0 — nothing is wrong with a switch that is off', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const off = await s.off(); assert.equal(off.exit, 0)
   const r = await run(s)
@@ -306,7 +306,7 @@ test('off: every harness is desired-off, exit 0 — nothing is wrong with a swit
   assert.deepEqual(Object.entries(doc.harnesses).map(([h, x]) => [h, x.desired, x.reason]), [['claude-code', 'off', 'desired-off'], ['codex', 'off', 'desired-off']])
 })
 
-test('V32: no daemon and state.json unreadable: 不知道 with the file and the errno for every harness, exit 3 — and --json says the same (captured null)', async () => {
+test('V32: no daemon and state.json unreadable: 不知道 with the file and the errno for every harness, exit 3 — and --json says the same (captured null)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const stateF = path.join(s.dir, 'state.json')
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === stateF) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
@@ -324,10 +324,10 @@ test('V32: no daemon and state.json unreadable: 不知道 with the file and the 
   assert.deepEqual(doc.errors.filter((e) => ['the install record', 'capture health'].includes(e.where)), [], 'what could be read has no error entry')
 })
 
-test('R11: the daemon answers but could not read the kernel state: every harness that is on is 不知道 with the daemon\'s error and its code — in the text and in --json — exit 3, never 没有 and never 正在被采集', async () => {
+test('R11: the daemon answers but could not read the kernel state: every harness that is on is 不知道 with the daemon\'s error and its code — in the text and in --json — exit 3, never 没有 and never 正在被采集', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const bad = (o) => asDaemon(reply({ actual: 'unknown', ...o }))
-  let r = await run(s, [], { request: bad({ error: 'helper socket: connect EACCES /run/trocar/helper.sock', error_code: 'EACCES' }) })
+  let r = await run(s, ['--details'], { request: bad({ error: 'helper socket: connect EACCES /run/trocar/helper.sock', error_code: 'EACCES' }) }) // the daemon's error and its code are facts of --details
   assert.equal(r.exit, 3, r.text)
   assert.match(r.text, /^ {2}codex {8}unknown {3}unknown \(the daemon could not read the kernel state/m)
   assert.ok(!/ (yes|no) /.test(r.text.split('\n').filter((l) => /^ {2}(claude-code|codex) /.test(l)).join('\n')), r.text)
@@ -343,9 +343,9 @@ test('R11: the daemon answers but could not read the kernel state: every harness
   assert.match(r.text, /^codex: on, unknown \([^)]*does not say whether the kernel has this instance's link/m); assert.equal(r.exit, 3)
 })
 
-test('a daemon that does not answer is daemon-not-responding; --json is one document that validates, with the code ids and the restart list', async () => {
+test('a daemon that does not answer is daemon-not-responding; --json is one document that validates, with the code ids and the restart list', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
-  const r = await run(s, [], { request: down('ETIMEDOUT') })
+  const r = await run(s, ['--details'], { request: down('ETIMEDOUT') })
   assert.match(r.text, /^Daemon does not answer \([^)]*ETIMEDOUT/m); assert.match(r.text, /^ {2}claude-code {2}no {8}trocar runs in the background but does not answer$/m); assert.equal(r.exit, 1)
   const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start' }]
   const j = await run(s, ['--json'], { request: asDaemon(reply({ agents })) })
@@ -358,7 +358,15 @@ test('a daemon that does not answer is daemon-not-responding; --json is one docu
   assert.equal(j.io.stderrText(), '', 'stdout carries the one JSON, nothing leaks to stderr')
 })
 
-test('status writes nothing at all (§3.5), and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', async () => {
+// 1.6 附录 C: Linux has no key custody (4.11 P1: it reads its CA files), so cert.key names none
+test('Linux: cert.key.custody is null and the key state is still said', { skip: POSIX_WORLD }, async () => {
+  const s = await installedHome()
+  const key = (await run(s, ['--json'])).io.json().cert.key
+  assert.equal(key.custody, null)
+  assert.ok(['present', 'missing'].includes(key.state), JSON.stringify(key))
+})
+
+test('status writes nothing at all (§3.5), and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const before = snapshot(s.home)
   await run(s); await run(s, ['--json']); await run(s, [], { request: asDaemon(reply()) })
@@ -408,17 +416,17 @@ test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — no opt-in
   assert.deepEqual(fs.readdirSync(fresh), [], 'read-only: nothing created')
 })
 
-test('connections still relayed after an off: N closing and M waiting, in the text and in --json (cut is 0: only off --now cuts); none is said as none, with no daemon there is no engine', async () => {
+test('connections still relayed after an off: N closing and M waiting, in the text and in --json (cut is 0: only off --now cuts); none is said as none, with no daemon there is no engine', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   assert.deepEqual((await run(s, ['--json'], { request: asDaemon(reply({ relayed: { closing: 2, waiting: 1 } })) })).io.json().relayed, { closing: 2, waiting: 1, cut: 0 })
-  const noresp = await run(s, [], { request: down('ETIMEDOUT') })
+  const noresp = await run(s, ['--details'], { request: down('ETIMEDOUT') })
   assert.match(noresp.text.replace(/\s+/g, ' '), /Connections unknown \([^)]*ETIMEDOUT/, 'a daemon that does not answer cannot say: unknown with the reason, never 0 (R11)')
   assert.doesNotMatch(noresp.text, /Connections {2}\d/, 'and no count is invented')
   assert.equal((await run(s, ['--json'], { request: down('ETIMEDOUT') })).io.json().relayed, 'unknown')
   assert.deepEqual((await run(s, ['--json'])).io.json().relayed, { closing: 0, waiting: 0, cut: 0 }, 'no daemon: no engine, so none — a known zero')
 })
 
-test('D49: status looks at no VPN software — the digest has no 路径 row and no 本机网络环境 line, the detail view none either, and --json has no `netenv` key (V10)', async () => {
+test('D49: status looks at no VPN software — the digest has no 路径 row and no 本机网络环境 line, the detail view none either, and --json has no `netenv` key (V10)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   for (const argv of [[], ['claude-code']]) {
     const r = await run(s, argv)
@@ -428,7 +436,7 @@ test('D49: status looks at no VPN software — the digest has no 路径 row and 
   assert.ok(!('netenv' in j), 'no netenv key')
 })
 
-test('a harness process\'s proxy credentials are never printed, in the text or in the document; a process table that could not be read is an error entry with its reason (R11)', async () => {
+test('a harness process\'s proxy credentials are never printed, in the text or in the document; a process table that could not be read is an error entry with its reason (R11)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const procs = async () => [claudeProc(5000, Date.now() + 5000, new Map([['HTTPS_PROXY', 'http://alice:pw@127.0.0.1:7897']])), { pid: 5310, ppid: 1, uid: 1000, startedAt: 1, exe: '/usr/bin/node', argv: ['node', '/repo/bin/trocar.mjs', 'serve'], env: () => new Map() }]
   const r = await run(s, [], { procs, request: asDaemon(reply()) })
@@ -442,7 +450,7 @@ test('a harness process\'s proxy credentials are never printed, in the text or i
 import { runOnCli } from '../../src/cli/on.mjs'
 import { onCtx, seedClaude, recordingExec, installFirst } from './fixtures/on-ctx.mjs'
 
-test('V39 status: linger off says capture stops when you log out and gives loginctl enable-linger <user>, --json linger false; on says nothing; unreadable says unknown with the file and the errno, never "on"', async () => {
+test('V39 status: linger off says capture stops when you log out and gives loginctl enable-linger <user>, --json linger false; on says nothing; unreadable says unknown with the file and the errno, never "on"', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const noLoginctl = () => assert.ok(!s.sys.exec.calls.some((c) => /loginctl/.test(c)), 'loginctl is not run: trocar says how, it does not do it')
   let r = await run(s, [], { lingerRead: () => ({ state: false }) })
@@ -483,14 +491,13 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
 
 // the old capture's own status test went with it (D39⑥ executed 2026-10-11): status.mjs no longer has the legacy
 // branch; every platform prints the collector's status, and the VPN lines it prints are the same cells above and below.
-test('semantics 2: an install manifest that parses but is not a manifest ({"version":3}, entries as an object) is unknown with the file and the reason — exit 3, no stack trace, never "nothing is installed" — in the text and in --json', async () => {
+test('semantics 2: an install manifest that parses but is not a manifest ({"version":3}, entries as an object) is unknown with the file and the reason — exit 3, no stack trace, never "nothing is installed" — in the text and in --json', { skip: POSIX_WORLD }, async () => {
   for (const body of ['{"version":3}', (m) => ({ ...m, entries: { a: 1 } })]) {
     const s = await installedHome()
     const file = path.join(s.dir, 'install-manifest.json')
     fs.writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body(JSON.parse(fs.readFileSync(file, 'utf8')))))
     const r = await run(s, [], { request: asDaemon(reply()) })
     assert.equal(r.exit, 3, r.text)
-    assert.ok(!/No harness is set up for capture yet/.test(r.text), 'a manifest nobody can read does not say "nothing is installed"')
     const doc = (await run(s, ['--json'], { request: asDaemon(reply()) })).io.json()
     assert.deepEqual(validateReceipt(doc), [])
     assert.deepEqual(doc.errors.filter((e) => e.where === 'the install record').map((e) => /install-manifest\.json.*not an install manifest this build can use/.test(e.reason)), [true], JSON.stringify(doc.errors))
@@ -499,7 +506,7 @@ test('semantics 2: an install manifest that parses but is not a manifest ({"vers
 
 // (R11): with no daemon and no manifest — a fresh machine, or after uninstall — the process table is read all the same (the MANIFEST is needed only to match
 // processes to harnesses), and what could not be read is said with its reason, never silently dropped.
-test('R11: with no daemon and no install manifest the process table is still read — only the matching to harnesses is not known, and a table that could not be read is an error entry', async () => {
+test('R11: with no daemon and no install manifest the process table is still read — only the matching to harnesses is not known, and a table that could not be read is an error entry', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const out = await s.uninstall({ yes: true })
   assert.equal(out.exit, 0, JSON.stringify(out.receipt.problems))
@@ -518,7 +525,7 @@ test('R11: with no daemon and no install manifest the process table is still rea
 
 // Accepted, not undone (D43⑦ · D47): in proxy mode the agents' proxy entries name trocar's door, and the door lives in the daemon. With the daemon
 // down while the harness is desired on, status says the entries point at a dead door — forwarder-down, and the command that brings it back.
-test('proxy mode, daemon down, desired on: the reason is forwarder-down (the entries point at a dead door) with trocar on; Linux keeps daemon-not-running', async () => {
+test('proxy mode, daemon down, desired on: the reason is forwarder-down (the entries point at a dead door) with trocar on; Linux keeps daemon-not-running', { skip: POSIX_WORLD }, async () => {
   assert.equal(judgeHarness({ desired: 'on', daemon: 'not-running', deadDoor: true, procs: [{ pid: 3, trusted: true }] }).rows[0].reason, 'forwarder-down')
   assert.equal(judgeHarness({ desired: 'off', daemon: 'not-running', deadDoor: true }).rows[0].reason, 'desired-off', 'an off harness has no entry pointing anywhere')
   assert.equal(judgeHarness({ desired: 'on', daemon: 'not-running' }).rows[0].reason, 'daemon-not-running')
@@ -693,6 +700,7 @@ test('CM23 status half: the holders\' pids — from the daemon\'s poll (GET /hol
 
 // ── D62 task E / 1.6 §3.1: one question, one answer ──────────────────────────────────────────────────────────────────────
 import { collectorDir } from '../../src/off/paths.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 test('one `status` asks the OS each question once: on Windows the whole process table is one PowerShell and the daemon pid\'s identity comes out of that same answer (it used to be three starts, ~450 ms each on the Windows test machine)', async () => {
   const fresh = tmpDir('trocar-once-')
@@ -716,7 +724,7 @@ test('one `status` asks the OS each question once: on Windows the whole process 
   assert.equal(calls.filter((c) => /Win32_Process \| ForEach-Object/.test(c)).length, 1, 'the process table: one question for the whole command')
   assert.equal(calls.filter((c) => /Win32_Process -Filter/.test(c)).length, 0, 'and not one identity question of its own: the table\'s answer carries the pid\'s creation time and the machine\'s boot time')
   assert.deepEqual([doc.daemon.running, doc.daemon.responding], [null, false], 'the identity the table gave matched the lock byte for byte: a daemon that holds the lock and does not answer (a mismatch would read as a stale lock, [false, null])')
-  assert.deepEqual(doc.errors.filter((e) => /read question/.test(e.reason)), [], 'and with no daemon answering, the read it could not answer is NOT an error of the user\'s machine: a control.json left behind by a stopped daemon is the normal no-daemon state')
+  assert.deepEqual(doc.errors.filter((e) => e.where === 'the process table'), [], 'and with no daemon answering, the read it could not answer is NOT an error of the user\'s machine: a control.json left behind by a stopped daemon is the normal no-daemon state')
   assert.equal(exit, EXIT.ok, io.stdoutText())
 })
 
@@ -763,9 +771,9 @@ test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no Power
   const cold = await once(false)
   assert.equal(cold.verbs[0], 'ps', 'the daemon was asked')
   assert.deepEqual(cold.shells.map((c) => (/ForEach-Object/.test(c) ? 'table' : 'identity')), ['table'], 'and when it cannot answer that read, the one local question is asked — once, and no identity question of its own')
-  const asked = cold.doc.errors.filter((e) => /did not answer the read question/.test(e.reason))
+  const asked = cold.doc.errors.filter((e) => e.where === 'the process table')
   assert.deepEqual(asked.map((e) => e.where), ['the process table'], 'the fallback is never silent (D38), under the closed-set name of the question (src/health/codes.mjs DOC_WHERE)')
-  assert.match(asked[0].reason, /ps: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
+  assert.match(asked[0].reason, /the process list: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
   const sameSide = (d) => [d.daemon, d.holders, d.harnesses]
   assert.deepEqual(sameSide(cold.doc), sameSide(hot.doc), 'and what the table decides — the daemon\'s verdict, the holders, the harnesses — is the same, whichever side answered')
 

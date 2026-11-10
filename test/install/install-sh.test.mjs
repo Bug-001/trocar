@@ -12,6 +12,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { mockUpstream } from '../helpers/mock-upstream.mjs'
+import { identityStubs } from '../helpers/lock-probe.mjs'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const SCRIPT = path.join(REPO, 'install', 'install.sh')
@@ -57,7 +58,7 @@ test.after(() => up?.close())
 
 /** Runs the installer with a fresh (or given) HOME; `input` pipes that text to `sh -s` instead of passing the file. */
 function install(args, { home = tmpDir('trocar-install-home-'), shell = 'sh', input, path: PATH = process.env.PATH } = {}) {
-  const env = { ...process.env, HOME: home, PATH, TROCAR_REGISTRY: `${up.base}/r1 ${up.base}/r2`, TROCAR_NODE_MIRROR: `${up.base}/n1 ${up.base}/n2` }
+  const env = { ...process.env, HOME: home, PATH: `${identityStubs(path.join(work, 'id-bin'))}${path.delimiter}${PATH}`, TROCAR_REGISTRY: `${up.base}/r1 ${up.base}/r2`, TROCAR_NODE_MIRROR: `${up.base}/n1 ${up.base}/n2` }
   for (const k of ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']) delete env[k]
   const asked = up.requests.length
   return new Promise((done) => {
@@ -89,9 +90,26 @@ test('a staged install verifies, gates and places one version; a re-run asks for
     const done = await install([], { home: r.home, shell })
     assert.equal(done.code, 0, done.err)
     assert.ok(metaOnly(done.asked))
-    assert.ok(done.err.includes(`${path.join(r.home, '.trocar', 'bin', 'trocar')} update`), 'an up-to-date re-run still names the next command')
+    const bin = path.join(r.home, '.trocar', 'bin', 'trocar')
+    assert.ok(done.err.includes(`Next: ${bin} install`), 'no install record (a first install cancelled, or an uninstall that kept the code): the re-run hands to install')
+    fs.mkdirSync(path.join(r.home, '.trocar', 'collector'), { recursive: true })
+    fs.writeFileSync(path.join(r.home, '.trocar', 'collector', 'install-manifest.json'), '{}') // installed: only whether the record is there counts
+    const kept = await install([], { home: r.home, shell })
+    assert.equal(kept.code, 0, kept.err)
+    assert.ok(kept.err.includes(`Next: ${bin} update`) && metaOnly(kept.asked), 'an installed, up-to-date machine hands to update and downloads nothing')
     assert.equal(last((await install(['--stage'], { home: r.home, shell })).out), `trocar-installer: up-to-date ${V}`)
   }
+})
+
+test('a newer version over an uninstalled copy (the code kept, no install record) hands to install, not update', { skip }, async () => {
+  const home = tmpDir('trocar-install-home-')
+  const app = path.join(home, '.trocar', 'app')
+  fs.mkdirSync(app, { recursive: true })
+  fs.writeFileSync(path.join(app, 'current'), `0.0.1 0.0.0-${process.platform}-${process.arch}\n`) // an older version's pointer, as uninstall leaves it beside a machine-wide helper
+  const r = await install([], { home })
+  assert.equal(r.code, 0, r.err)
+  assert.equal(fs.readFileSync(path.join(app, 'current'), 'utf8').split(' ')[0], V, 'the new version is placed')
+  assert.ok(r.err.includes(`Next: ${path.join(home, '.trocar', 'bin', 'trocar')} install`), r.err)
 })
 
 test('a truncated script runs nothing: no request, nothing written', { skip }, async () => {

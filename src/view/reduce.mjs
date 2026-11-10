@@ -14,16 +14,18 @@
 import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg, laneMeta, replayLedger } from './analyze.mjs';
 import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
-import { compactionVerdict } from '../identity/session-identity.mjs';
-import { boardDissectorOf } from '../dissect/registry.mjs';
-import { COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
+import { FLAG, opensPart } from './head-cols.mjs';
+import { compactionVerdict, compactionBaseline } from '../identity/session-identity.mjs';
+import { boardDissectorOf as dOf } from '../dissect/registry.mjs';
+import { unsupportedOf } from '../dissect/endpoints.mjs';
+import { askOf, COMP_KEYS, sharedLines, taskOf, HEAD, TASK_HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { materializeAttrs } from './extract.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
 
 // Ground-truth from PROVEN byte-identity (not the structural proxy). Strict wording per 3.3:73 — the
 // claim is only "MY outbound prefix is byte-identical", never "the provider is wrong".
-export function realGroundTruth(prefixByteIdentical, read, create) {
+function realGroundTruth(prefixByteIdentical, read, create) {
   if (!prefixByteIdentical) return null;             // no proven byte-identical reusable prefix
   if (read > 0) return null;                          // genuinely reused → normal
   return create > 0 ? 'ttl-rebuild' : 'provider-contradiction';
@@ -38,10 +40,13 @@ export function realGroundTruth(prefixByteIdentical, read, create) {
 // records ARE rendered (a mixed session); otherwise the whole session is unrecognized.
 export function unknownSummary(recs, partial) {
   const uniq = (xs) => [...new Set(xs.filter(Boolean))];
-  const models = uniq(recs.map((r) => r.model));
+  const models = uniq(recs.map((r) => r.model)), wires = uniq(recs.map((r) => unsupportedOf(r.endpoint)));
   return {
     partial,
-    reason: partial
+    // every one a call on a wire this version records and does not read (D37 ⑥): that wire is named
+    reason: recs.length && recs.every((r) => unsupportedOf(r.endpoint)) ? `${partial ? 'Some records in this session are' : 'These records are'} calls on a wire this version `
+      + `records and does not read (${wires.join(', ')}): they are kept byte for byte and NOT rendered.`
+      : partial
       ? 'Some records in this session are read as a call by no registered dissector (src/dissect/registry.mjs): '
         + 'an unknown wire, or a record of a known wire that is no call (e.g. a message the server pushed with no '
         + 'call open). They are counted here and NOT rendered; the rest of the session is.'
@@ -57,12 +62,18 @@ export function unknownSummary(recs, partial) {
 
 // Lanes a flat-lane wire can be split into by the harness table's hints (3.4). Labels are server-side
 // (invariant 3); the board renders them as it renders analyze()'s lanes.
-export const FLAT_LANES = {
+const FLAT_LANES = {
   main: { kind: 'main', icon: '💬', label: 'conversation' },
   subagent: { kind: 'subagent', icon: '🧬', label: 'subagent' },
-  aux: { kind: 'aux', icon: '⚙', label: 'other util' },
+  aux: { kind: 'aux', icon: '⚙', label: 'unnamed background call' },
   probe: { kind: 'probe', icon: '👁', label: 'warm-up / probe requests',
     note: 'A request the harness itself marks as a warm-up or probe (a request-kind hint, or a request that asks for no output): it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
+};
+// A wire's reduction by its dissector's `fold` (3.1): the fold itself, a lane header's kind meta, and whether its lanes count once
+// per kind in the stats (a flat wire's lanes of one kind are one stream) or each on its own (a tree's lanes).
+const FOLDS = {
+  tree: { fold: anthropicFold, lane: (kind) => ({ kind, ...laneMeta(kind) }), perKind: false },
+  flat: { fold: flatFold, lane: (kind) => FLAT_LANES[kind], perKind: true },
 };
 
 const CPS = 256; // the lane states a reduction keeps of its last takes, for a late call to go back to (pushOf)
@@ -71,7 +82,7 @@ const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base 
 // its figure (src/query/projection.mjs lru)
 const LIST_BYTES = 2 << 20, FACTS_BYTES = 2 << 20;
 /** The shape of reduction().snapshot(): one more whenever what it holds changes. */
-export const REDUCE_V = 1;
+export const REDUCE_V = 3;
 /** What a store's reduction caches hold at most beside its block columns (src/query/named/session.mjs counts it with the store's). */
 export const REDUCE_HEAP = 2 * (LIST_BYTES + FACTS_BYTES);
 
@@ -254,7 +265,8 @@ export function reduce(store, members, { mark = undefined, resolve = null, error
  * input), what it did to its lane's ledger (analyze.mjs replayLedger), its record's facts. A line is appended only when its bytes
  * differ from the rid's latest (an 8-byte digest per rid). After each add, in order: the lines of calls whose lane key or spawned
  * lane changed, lane header lines that changed (3.5 lane-header closed set), lane-gone lines, item lines (members that are no call),
- * failed lines, and one frontier line `{f: the last rid in write order, n: members folded, pb: the projection's bytes, st: stats}`.
+ * failed lines, and one frontier line `{f: the last rid in write order, n: members folded, pb: the projection's bytes, h: 1 while it
+ * holds `t` rows, st: stats}`.
  *   The heap keeps per member, by its row's slot in the store, its step-order ts and its latest line's digest; per lane its calls'
  * slots in step order, its base and last call (their lists through the bounded list cache), last composition, first prompt, the
  * sums its header and the stats read, and the analyzer's state (its lane ledgers among it); the spawns' 60-character prompt
@@ -275,8 +287,8 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   // are equal), the digest of its latest line (NaN: none yet; 0: an item); failed rid → its line's offset; the item lines' offsets;
   // lane key → its header line's digest; spawn → the child lane its call line names
   const st = from || { ts: [], cts: [], dig: new Float64Array(1024).fill(NaN), failed: new Map(), items: [], heads: new Map(), written: new Map(),
-    inStep: false, last: -1, top: null, n: 0, F: null };
-  const { ts, cts, failed, items, heads, written } = st;
+    inStep: false, last: -1, top: null, n: 0, F: null, chains: { max: new Map(), main: null } };
+  const { ts, cts, failed, items, heads, written, chains } = st;
   let { dig, inStep, last, top, n } = st;
   const ridAt = (k) => store.rows.keyAt(k), slotOf = (rid) => store.rows.slotOf(rid);
   const found = new Map(); // break details worked out by this reduction, written as `brk` lines once an add is done
@@ -289,16 +301,17 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   // the latest line of a call, changed by `edit` (false: unchanged), written again
   const rewrite = (k, edit) => { flush(); const at = log.latest(ridAt(k)); if (!at) return; const { p, ...o } = log.read(...at); const line = structuredClone(o); if (edit(line) !== false) put(k, line); };
 
-  // a lane's sums for the stats and its header (its calls' peak context, compactions, tokens in and out, monitor flags)
-  const sums = () => ({ peak: 0, cmp: 0, tin: 0, tout: 0, flags: 0 });
+  // a lane's sums for the stats and its header (its calls' peak context, compactions, tokens in and out, monitor flags, the steps that
+  // opened a chapter, the last step's compaction bits)
+  const sums = () => ({ peak: 0, cmp: 0, tin: 0, tout: 0, flags: 0, opens: 0, lastF: 0 });
   // ── one pass of the fold: its lanes, from scratch on again()
   const fold = () => ({ subs: new Map(), flat: new Map(), dls: new Map(), an: null, spawns: [], links: new Map(), uid: 0, relink: false, fresh: [], subsNew: [], inc: marks() });
   // what settle() redoes after an add: the doc lanes an add touched (`dirty`), or every lane (`all`: a fold begun or resumed, a lane
   // whose first call or spawn links moved, a wire's first call earlier: `ff`); the headers last made by lane (`h`), each lane's place in
-  // F.dls (`ord`), the first prompts that are told apart (`dep`, `open`: lane → its prompt, `of`: prompt → its lanes), the stats as
+  // F.dls (`ord`), the lines sub-agent lanes share (`lines`, `open`: lane → its text in them), the stats as
   // the calls since the last full count left them (`st`, `kinds`), the lane states of the last takes (`cps`, pushOf). Not in a
   // snapshot: what only saves work; a resumed fold redoes every lane once.
-  const marks = () => ({ all: true, dirty: new Set(), cps: [], st: null, kinds: null, ff: new Map(), h: new WeakMap(), ord: new WeakMap(), n: 0, dep: null, open: new WeakMap(), of: new Map() });
+  const marks = () => ({ all: true, dirty: new Set(), cps: [], st: null, kinds: null, ff: new Map(), h: new WeakMap(), ord: new WeakMap(), n: 0, lines: null, open: new WeakMap() });
   F = fold();
   let rowOf = (rid) => store.rows.get(rid);
   // a doc lane (what the document shows as one lane: a sub-agent's analyzer lane, else a kind) and the sub-lanes it holds
@@ -321,6 +334,9 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   // a call folded: its columns, its place in its lane, its line
   function emit(k, S, call, ev, ld, usage) {
     S.peak = Math.max(S.peak, call.ctx || 0); S.cmp += call.compaction ? 1 : 0; S.tin += usage.input_tokens || 0; S.tout += usage.output_tokens || 0;
+    const f = (call.compaction ? FLAG.compaction : 0) | (call.compactionInferred ? FLAG.inferred : 0);
+    if (S.rids.length && opensPart(S.lastF, f)) S.opens++;
+    S.lastF = f;
     S.rids.push(k);
     count(S, call, usage);
     const d = F.dls.get(S.dl);
@@ -343,7 +359,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     const it = (store.rows.get(rid) || {}).x;
     put(k, { c: rid, r: callRow(call, key), e, d: ld, rc: recFacts(it && it.item) });
   }
-  const K = { B, cacheOf, pushOf, emit, newSub, at: (rid, row) => L.at(rid, rowOf, row), baseOf, lastOf, int: slotOf };
+  const K = { B, cacheOf, pushOf, emit, newSub, at: (rid, row) => L.at(rid, rowOf, row), baseOf, lastOf, int: slotOf, main: () => chains.main };
   function push(rid, row, reader) {
     rowOf = reader;
     const k = slotOf(rid), x = row.x || {};
@@ -352,7 +368,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     F.flat.get(x.format).push(rid, row);
   }
   // a wire's fold, from its state in a snapshot or anew
-  const foldOf = (fmt, s = null) => (fmt === 'anthropic' ? anthropicFold(K, F, s) : flatFold(boardDissectorOf(fmt), K, F, s));
+  const foldOf = (fmt, s = null) => { const d = dOf(fmt); return FOLDS[d.fold].fold(d, K, F, s); };
   if (st.F) { const { flat, ...rest } = st.F; Object.assign(F, rest); for (const [fmt, s] of flat) F.flat.set(fmt, foldOf(fmt, s)); }
   // the break detail of a pair of blocks: from the projection, else from both blocks' texts (once)
   const blockOf = (bid) => {
@@ -391,13 +407,14 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
       same = a != null && a === (C.vol(i) ? null : B.vh(list[i]));
     }
     brk.prefixByteIdentical = same;
-    brk.gt = realGroundTruth(same, usage.read, usage.create);
-    brk.gtReal = true;
+    // nothing was measured on a failed call or one with no usage (1.3 服务端补充): its zeros say nothing about the provider (invariant 4)
+    const raw = x.facts ? x.facts.usage : x.nu;
+    brk.gt = x.error || !raw || !Object.keys(raw).length ? null : realGroundTruth(same, usage.read, usage.create);
     if (base) brk.refRid = base.rid; // the 缓存对比步 (2.3): the call this one's break is taken against
     return brk;
   }
   // a lane's own state, as a take leaves it (its calls but their number, F.inc.cps)
-  const laneState = (S) => ({ base: S.base, last: S.last, comp: S.comp, ask: S.ask, info: S.info, peak: S.peak, cmp: S.cmp, tin: S.tin, tout: S.tout, flags: S.flags });
+  const laneState = (S) => ({ base: S.base, last: S.last, comp: S.comp, ask: S.ask, info: S.info, peak: S.peak, cmp: S.cmp, tin: S.tin, tout: S.tout, flags: S.flags, opens: S.opens, lastF: S.lastF });
   // a fold's push: a call that sorts before its lane's last call puts the lane in again from the first call it sorts before, its rows
   // in step order with this one in place: from the state the lane had just before that call when one of the last CPS takes left it
   // (the takes after it undone: `back`, the fold's own part of a lane), else from the lane's start. `mark()`: the fold's own part
@@ -462,15 +479,33 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
       return null;
     }
     n++;
+    if (x.chain && isCall(row)) noteChain(rid, x.chain.hash, x.msgCount || 0);
     ts[k] = x.item ? x.item.ts_request : null;
-    const c = !isCall(row) ? ts[k] : x.format === 'anthropic' ? (x.facts || {}).ts_request : x.ts; // the call's own ts (its step order)
+    const d = isCall(row) ? dOf(x.format) : null;
+    const c = !isCall(row) ? ts[k] : d && d.tsOf ? d.tsOf(x) : x.ts; // the call's own ts (its step order)
     cts[k] = c === ts[k] ? ts[k] : c;
     return row;
+  }
+  // a keyed session split by chains (3.4 带键会话里的消息链): the main system text is that of the call with the most messages so far
+  // (a tie keeps it); when it moves, what was folded under the one before is folded again (`redo`). Per text its largest count and the
+  // first call (posCmp) that has it, so the main text is the one whose count is largest, a tie to the one that got there first: the same
+  // whatever order the calls arrive in. A call that fails after it was counted is taken out by counting the rest again (`recount`).
+  let redo = false;
+  function noteChain(rid, hash, count) {
+    const e = chains.max.get(hash);
+    if (e && (count < e.m || (count === e.m && posCmp(rid, e.at) >= 0))) return;
+    chains.max.set(hash, { m: count, at: rid });
+    const M = chains.main == null ? null : chains.max.get(chains.main);
+    if (hash !== chains.main && (!M || count > M.m || (count === M.m && posCmp(rid, M.at) < 0))) { chains.main = hash; if (last >= 0) redo = true; }
+  }
+  function recount() {
+    chains.max.clear(); chains.main = null;
+    for (const rid of folded()) { const row = store.rows.get(rid), x = row.x || {}; if (x.chain && isCall(row)) noteChain(rid, x.chain.hash, x.msgCount || 0); }
   }
   const folded = () => { const out = []; ts.forEach((t, k) => { const rid = ridAt(k); if (!failed.has(rid)) out.push(rid); }); return out; };
   // from scratch over everything added, each row read again
   function again() {
-    F = fold(); last = -1; reader = (rid) => store.rows.get(rid);
+    F = fold(); last = -1; redo = false; reader = (rid) => store.rows.get(rid);
     const all = folded().sort(posCmp);
     for (const rid of inStep ? all.sort(byStep) : all) step(rid, store.rows.get(rid));
   }
@@ -496,11 +531,13 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
         if (!next.length) { /* only failures */ } else if (inStep && last >= 0 && byStep(next[0], ridAt(last)) > 0) for (const rid of next) step(rid, held.get(rid));
         else again();
       }
+      if (redo) again();
       break;
     } catch (e) {
       if (e instanceof BlockUnread && e.rid != null && !failed.has(e.rid)) {
         const k = slotOf(e.rid);
         failed.set(e.rid, -1); n--; newFailed.push({ x: e.rid, reason: e.message, code: e.code });
+        if (((store.rows.get(e.rid) || {}).x || {}).chain) recount();
         if (dig[k] > 0 || dig[k] < 0) put(k, { g: e.rid }); // it had a call line: it is no call now
       } else if (!(e instanceof OrderBound) || inStep) throw e;
       else inStep = true; // sub-agents told apart only by order: from scratch, in step order
@@ -536,7 +573,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     if (all) { const keys = new Set(now.map((h) => h.lane)); for (const key of [...heads.keys()]) if (!keys.has(key)) { heads.delete(key); lines.push({ lg: key }); } }
     for (const k of newItems) { const x = store.rows.get(ridAt(k)).x || {}; lines.push({ i: ridAt(k), it: x.item || null, ...(x.unknown ? { u: x.unknown } : null) }); }
     lines.push(...newFailed);
-    if (top != null) lines.push({ f: top, n, pb: store.bytes, st: stats() });
+    if (top != null) lines.push({ f: top, n, pb: store.bytes, ...(store.held ? { h: 1 } : null), st: stats() });
     flush();
     if (lines.length) {
       const offs = log.append(lines, { errors });
@@ -551,7 +588,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     if (!F.relink && !F.fresh.length && !F.subsNew.length) return false;
     const order = (a, b) => before(a.S.rids[0], b.S.rids[0]) || before(a.k, b.k) || a.i - b.i;
     const matches = (S, sp) => { const p = sp.head; return p && F.firstText(S).includes(p.slice(0, 40)); };
-    const subs = [...F.subs.values()].filter((S) => S.fmt === 'anthropic' && S.kind === 'subagent' && S.rids.length);
+    const subs = [...F.subs.values()].filter((S) => dOf(S.fmt).spawns && S.kind === 'subagent' && S.rids.length);
     const best = F.best || (F.best = new Map());
     const scan = (S, list) => {
       const was = best.get(S) || null;
@@ -571,7 +608,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     return true;
   }
   // the lane headers (3.5 lane-header closed set) of the doc lanes whose header may have changed (every lane on F.inc.all), in the
-  // order of F.dls; a lane's first prompt (HEAD) is kept on its header, for the next time a sibling's comes or goes
+  // order of F.dls; a sub-agent's first text and its spawn's description (HEAD) are kept on its header, for when a line of it becomes shared
   function headers() {
     const I = F.inc, best = F.best || new Map();
     if (I.all) {
@@ -582,43 +619,39 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     const head = (d) => {
       const parts = [...d.parts].filter((S) => S.rids.length);
       if (!parts.length) return null;
-      let count = 0, lastK = -1, peak = 1, flagged = 0;
+      let count = 0, lastK = -1, peak = 1, flagged = 0, chapters = 1;
       for (const S of parts) {
-        count += S.rids.length; flagged += S.flags; peak = Math.max(peak, S.peak);
+        count += S.rids.length; flagged += S.flags; peak = Math.max(peak, S.peak); chapters += S.opens;
         const l = S.rids[S.rids.length - 1];
         if (lastK < 0 || before(l, lastK) > 0) lastK = l;
       }
       const lead = parts.slice().sort((a, b) => before(I.ff.get(a.fmt), I.ff.get(b.fmt)))[0], firstS = parts.find((S) => S.rids[0] === d.first);
-      const meta = lead.fmt === 'anthropic' ? { kind: lead.kind, ...laneMeta(lead.kind) } : FLAT_LANES[lead.kind];
-      const sp = lead.fmt === 'anthropic' && lead.kind === 'subagent' ? best.get(lead) : null;
-      const h = { lane: ridAt(d.first), kind: meta.kind, icon: meta.icon, label: meta.label, task: sp ? sp.arg || taskOf(lead.ask) : null,
+      const meta = FOLDS[dOf(lead.fmt).fold].lane(lead.kind);
+      const sp = dOf(lead.fmt).spawns && lead.kind === 'subagent' ? best.get(lead) : null;
+      const h = { lane: ridAt(d.first), kind: meta.kind, icon: meta.icon, label: meta.label, task: meta.kind === 'subagent' ? null : taskOf(firstS.ask),
         ...(meta.note ? { note: meta.note } : null), count, first: ridAt(d.first), last: ridAt(lastK), peakCtx: peak,
-        spawnRid: sp ? ridAt(sp.k) : null, parent: sp ? keyOf(sp.S) : null, flagged };
-      if (!sp) h[HEAD] = firstS.ask ?? null;
+        spawnRid: sp ? ridAt(sp.k) : null, parent: sp ? keyOf(sp.S) : null, flagged, parts: chapters };
+      // a streamed lane's first text, past the wrappers it opens with (askOf), as every wire's question is
+      // the sub-agent rule reads the first TASK_HEAD characters (4.4): a flat wire's text is its question, read ASK_HEAD deep
+      if (meta.kind === 'subagent') h[HEAD] = { text: ((firstS.stream ? askOf([F.firstText(firstS)]) : firstS.ask) || '').slice(0, TASK_HEAD), arg: sp && sp.arg };
       return h;
     };
     const ds = I.all ? [...F.dls.values()] : [...I.dirty];
     for (const d of ds) I.h.set(d, head(d));
-    // the first prompts told apart: all of them anew, else each lane's that changed in and out, the lanes of every prompt whose
-    // offset that moved redone too
-    const more = new Set(ds), tell = (d, h) => { const o = I.of.get(h) || I.of.set(h, new Set()).get(h); o.add(d); I.open.set(d, h); };
-    if (I.all) {
-      I.open = new WeakMap(); I.of = new Map();
-      for (const d of ds) { const h = I.h.get(d); if (h && departs(h)) tell(d, h[HEAD]); }
-      I.dep = departer([...I.of].flatMap(([h, o]) => Array(o.size).fill(h)));
-    } else for (const d of ds) {
-      const h = I.h.get(d), was = I.open.get(d) ?? null, now = h && departs(h) ? h[HEAD] : null;
-      if (was === now) continue;
-      const moved = [];
-      if (was != null) { I.of.get(was).delete(d); if (!I.of.get(was).size) I.of.delete(was); I.open.delete(d); moved.push(...I.dep.remove(was)); }
-      if (now != null) { tell(d, now); moved.push(...I.dep.add(now)); }
-      for (const p of moved) for (const e of I.of.get(p) || []) more.add(e);
-    }
+    // the lines the sub-agents share: all of them anew, else each lane new to them, the lanes whose words that moved redone too. A
+    // spawn's description hides no text: a lane it names still counts toward what is shared
+    const more = new Set(ds);
+    const enter = (d) => { const h = I.h.get(d), t = h && HEAD in h ? h[HEAD].text : ''; if (!t) return []; I.open.set(d, t); return I.lines.add(t, d); };
+    const anew = () => { I.lines = sharedLines(); I.open = new WeakMap(); for (const d of F.dls.values()) enter(d); };
+    const left = (d) => { const was = I.open.get(d), h = I.h.get(d); return was != null && was !== (h && HEAD in h ? h[HEAD].text : ''); };
+    if (I.all) anew();
+    else if (ds.some(left)) { anew(); for (const d of F.dls.values()) more.add(d); }
+    else for (const d of ds) if (!I.open.has(d)) for (const e of enter(d)) more.add(e);
     const out = [];
     for (const d of [...more].sort((a, b) => I.ord.get(a) - I.ord.get(b))) {
       const h = I.h.get(d);
       if (!h) continue;
-      if (HEAD in h) h.task = taskOf(h[HEAD] && h[HEAD].slice(I.open.has(d) ? I.dep.offset(h[HEAD]) : 0));
+      if (HEAD in h) h.task = h[HEAD].arg || taskOf(I.lines.words(h[HEAD].text));
       out.push(h);
     }
     return out;
@@ -633,10 +666,11 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     for (const S of F.subs.values()) {
       if (!S.rids.length) continue;
       s.calls += S.rids.length; s.compactions += S.cmp; s.totalIn += S.tin; s.totalOut += S.tout; if (S.peak > s.peakCtx) s.peakCtx = S.peak;
-      if (S.fmt !== 'anthropic') { const kk = `${S.fmt}\n${S.kind}`; if (kinds.has(kk)) continue; kinds.add(kk); }
+      const d = dOf(S.fmt);
+      if (FOLDS[d.fold].perKind) { const kk = `${S.fmt}\n${S.kind}`; if (kinds.has(kk)) continue; kinds.add(kk); }
       s.streams++;
       if (S.kind === 'subagent') s.subagents++;
-      if (S.fmt === 'anthropic' && S.kind === 'monitor') s.monitors += S.rids.length;
+      if (d.monitors && S.kind === 'monitor') s.monitors += S.rids.length;
     }
     I.st = s; I.kinds = kinds;
     return { ...s };
@@ -648,16 +682,17 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     T.calls++; T.compactions += call.compaction ? 1 : 0; T.totalIn += usage.input_tokens || 0; T.totalOut += usage.output_tokens || 0; if (S.peak > T.peakCtx) T.peakCtx = S.peak;
     if (S.rids.length === 1) {
       const kk = `${S.fmt}\n${S.kind}`;
-      if (S.fmt === 'anthropic' || !F.inc.kinds.has(kk)) { if (S.fmt !== 'anthropic') F.inc.kinds.add(kk); T.streams++; if (S.kind === 'subagent') T.subagents++; }
+      const per = FOLDS[dOf(S.fmt).fold].perKind;
+      if (!per || !F.inc.kinds.has(kk)) { if (per) F.inc.kinds.add(kk); T.streams++; if (S.kind === 'subagent') T.subagents++; }
     }
-    if (S.fmt === 'anthropic' && S.kind === 'monitor') T.monitors++;
+    if (dOf(S.fmt).monitors && S.kind === 'monitor') T.monitors++;
   }
   const R = {
     add, has, log,
     snapshot() {
       if (pend.length || found.size) throw new Error('a reduction is snapshotted between adds only');
       const { flat, firstText, an, inc, ...rest } = F;
-      return { v: REDUCE_V, store: store.id, rows: store.rows.size, ts, cts, dig, failed, items, heads, written, inStep, last, top, n,
+      return { v: REDUCE_V, store: store.id, rows: store.rows.size, ts, cts, dig, failed, items, heads, written, inStep, last, top, n, chains,
         F: { ...rest, flat: [...flat].map(([fmt, f]) => [fmt, f.snapshot()]) } };
     },
     members: () => [...folded(), ...failed.keys()],
@@ -705,7 +740,7 @@ function skeletonOf(R) {
 /** The heap one entry of a kept ledger takes (a resource, a segment or load of it, a seen path; replayLedger's `units`): the most
  *  measured over ledgers of 3,040 resources (1–4 segments, 1–8 loads each) and 0–13,738 seen paths of ~50 characters, after a forced
  *  GC (232 B, all resources of one segment and load), × 1.25. */
-export const LEDGER_UNIT_BYTES = 300;
+const LEDGER_UNIT_BYTES = 300;
 /** The heap the kept lane ledgers may take (src/query/named/lane.mjs): a K term of the reduction's bound (3.5 §内存有界), each weighed
  *  by ledgerWeight; room for a lane of the generated 6,598-call session in test/query/big-session.mjs. */
 export const LEDGER_BYTES = 8 << 20;
@@ -715,7 +750,7 @@ export const LEDGER_BYTES = 8 << 20;
  *  every entry in the ledger's order. With `base` (a step's place): only the entries new after it or whose bytes differ from the
  *  ledger's at it (3.5 §会话读 `lane`). `kept: {maps, step}`: the replay's maps at `step` of these same steps (its rids up to it
  *  unchanged), with `base` -1 or `step`: only the steps after it are replayed, its maps going on in place. The `kept` returned: the
- *  maps at the last step (null for a lane of no step). */
+ *  maps at the last step (null for a lane of no step). `note`: null, or `no-ledger` when every step's delta is null (a wire that keeps no ledger), `partial-ledger` when some are. */
 export function laneLedger(rids, deltaOf, base = -1, kept = null) {
   const at = (n) => (n == null ? n : rids[n]);
   const res = ({ segments, loads, ...r }) => ({ ...r, segments: segments.map((g) => ({ enter: at(g.enter), evict: at(g.evict) })),
@@ -726,14 +761,16 @@ export function laneLedger(rids, deltaOf, base = -1, kept = null) {
   let was = null;
   const touched = kept && base >= 0 ? (was = { r: new Map(), s: new Map() }) : null;
   const snap = (m, wire) => new Map([...m].map(([k, v]) => [k, JSON.stringify(wire(v))]));
-  const steps = function* () { for (let i = from; i < rids.length; i++) yield [i, deltaOf(i) || []]; };
+  // a step whose delta is null is of a wire that keeps no ledger; what the steps were is kept with the maps, so a page that goes on
+  // from them knows it too (`note`: every step such → no-ledger, some → partial-ledger: the list is not the lane's whole)
+  const steps = function* () { for (let i = from; i < rids.length; i++) { const d = deltaOf(i); if (d === null) maps.unkept = true; else maps.kept = true; yield [i, d || []]; } };
   replayLedger(steps(), touched ? null : (n, r, s) => { if (n === base) was = { r: snap(r, res), s: snap(s, see) }; }, maps,
     touched && ((kind, key, e) => { if (!touched[kind].has(key)) touched[kind].set(key, e ? JSON.stringify(kind === 'r' ? res(e) : see(e)) : null); }));
   const out = { kept: rids.length ? { maps, step: rids.length - 1 } : null };
   const resources = [], seen = [];
   for (const [k, r] of maps.resources) { const w = res(r); if (!was || (touched ? touched.r.has(k) : true) && was.r.get(k) !== JSON.stringify(w)) resources.push(w); }
   for (const [k, f] of maps.seen) { const w = see(f); if (!was || (touched ? touched.s.has(k) : true) && was.s.get(k) !== JSON.stringify(w)) seen.push(w); }
-  return { ...out, resources, seen };
+  return { ...out, resources, seen, note: !maps.unkept ? null : maps.kept ? 'partial-ledger' : 'no-ledger' };
 }
 /** ledgerWeight(kept) → the heap a kept ledger (laneLedger's `kept`) is weighed at: its entries (counted as the replay changes them)
  *  × LEDGER_UNIT_BYTES. */
@@ -751,7 +788,7 @@ const recFacts = (it) => (it ? { ts_request: it.ts_request, is_llm_call: !!it.is
 
 // The Anthropic wire's fold: the analyzer's lanes (createAnalyzer, fed call views, keeping nothing), each call baked against its
 // lane's base and written out.
-function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F, from) {
+function anthropicFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F, from) {
   const an = createAnalyzer({ keep: false, from: from && from.an });
   F.firstText = (S) => an.firstText(S.stream);
   // a call's view: its messages' roles from the columns, their tool uses and block facts read when the analyzer asks (the messages
@@ -775,12 +812,12 @@ function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, i
     const call = an.pushView(view(row, list, e.mb));
     const lane = an.laneOf(call);
     let S = F.subs.get(lane);
-    if (!S) { S = newSub('anthropic', lane.kind, lane.kind === 'subagent' ? `\0${F.uid}` : lane.kind); S.stream = lane; F.subs.set(lane, S); }
+    if (!S) { S = newSub(d.id, lane.kind, lane.kind === 'subagent' ? `\0${F.uid}` : lane.kind); S.stream = lane; F.subs.set(lane, S); }
     if (!S.rids.length) S.ask = firstHumanOf(list, B);
     call.wire = x.wire;
     call.respRefs = x.respRefs;
     call.usage = x.usage;
-    call.cacheBreak = cacheOf(baseOf(S.base), list, attrs, x, !!call.compaction, call.usage);
+    call.cacheBreak = cacheOf(baseOf(S.base), list, attrs, x, !!(call.compaction || call.lands), call.usage);
     call.gt = call.cacheBreak.gt;
     call.comp = compOf(lastOf(S), list, B);
     if (call.chainsPrefix !== false) S.base = k;
@@ -795,14 +832,17 @@ function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, i
     snapshot: () => ({ an: an.snapshot() }) };
 }
 
-// A flat-lane wire's fold over rows: a lane per agent (a subagent named by the harness's agent id or the
-// wire's own, the rest by lane kind), each call's compaction verdict on the dissector's message count, its cache break against its
+// A flat-lane wire's fold over rows: a lane per agent (a subagent named by the harness's agent id or the wire's own; in a keyed
+// session split by chains, a chain of a system text other than the main one, `K.main`), the rest by lane kind; each call's
+// compaction verdict on the dissector's message count, its cache break against its
 // lane's last call that did not fail; the document names lanes by kind: one doc lane per kind.
-function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F, from) {
+function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int, main }, F, from) {
   const lanes = from ? from.lanes : new Map();
   function take(rid, row) {
     const x = row.x, e = at(rid, row), list = e.list, attrs = e.attrs, h = x.hints || {}, k = int(rid);
-    const kind = x.lane, agent = kind === 'subagent' ? h.laneKey ?? x.agent ?? null : null;
+    // a call with a chain in a keyed session: main when its system text is the session's main one, else its row's lane, one per chain
+    const ch = x.chain, kind = ch ? (ch.hash === main() ? 'main' : ch.lane) : x.lane;
+    const agent = ch ? (kind === 'main' ? null : ch.key) : kind === 'subagent' ? h.laneKey ?? x.agent ?? null : null;
     const lk = agent == null ? kind : `${kind}\n${agent}`;
     let S = lanes.get(lk);
     if (!S) { S = newSub(d.id, kind, kind); lanes.set(lk, S); F.subs.set(`${d.id}\n${lk}`, S); }
@@ -810,10 +850,11 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
     // 3.4: a call whose context is unknown (a body that does not parse; a partial context, an unstored WebSocket request included) has
     // no observed message count: no compaction verdict, and not the next one's predecessor
     const noContext = !!x.unparsed || x.wire.contextState === 'partial';
-    const comp = noContext ? { compaction: false } : compactionMeta(compactionVerdict(S.info,
-      { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: x.msgCount || 0 }));
-    if (!noContext) S.info = { msgCount: x.msgCount || 0, marker: h.compactionMarker === true };
-    const brk = cacheOf(baseOf(S.base), list, attrs, x, comp.compaction, x.usage);
+    const cur = { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: x.msgCount || 0, failed: !!x.error };
+    const verdict = noContext ? null : compactionVerdict(S.info, cur);
+    const comp = compactionMeta(verdict);
+    if (verdict) S.info = compactionBaseline(S.info, cur, verdict);
+    const brk = cacheOf(baseOf(S.base), list, attrs, x, comp.compaction || comp.lands, x.usage);
     const rq = requestOf(x, list, B);
     const call = {
       gi: null, id: x.item.id, streamId: kind, rec: { id: x.item.id, request: rq }, norm: { usage: x.nu || {} }, wireFormat: d.id, ctx: x.ctx || 0,
@@ -828,18 +869,17 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
     if (!x.error) S.base = k;
     // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
     const ev = call.compaction ? [{ type: 'compaction', step: null, streamId: kind, from: call.evictedFrom, to: call.evictedTo,
-      inferred: call.compactionInferred, confidence: call.compactionConfidence, basis: call.compactionBasis }] : [];
-    emit(k, S, call, ev, [], x.nu || {});
+      inferred: call.compactionInferred, confidence: call.compactionConfidence, basis: call.compactionBasis }]
+      : call.lands ? [{ type: 'compaction-landed', step: null, streamId: kind, from: call.evictedFrom, to: call.evictedTo }] : [];
+    emit(k, S, call, ev, null, x.nu || {}); // a flat wire keeps no resource ledger: null, never an empty one (2.4 · invariant 4)
     return S;
   }
   return { push: pushOf(take, () => {}), snapshot: () => ({ lanes }) };
 }
 
-// The first human prompt of a list (blockmeta firstHuman, from each user text's `human` fact).
-function firstHumanOf(list, B) {
-  for (const k of list) { const f = B.f(k); if (f && f.human) return f.human; }
-  return null;
-}
+// A list's question (blockmeta askOf, over each user text's `human` fact, read only as far as the rule needs).
+function* humansOf(list, B) { for (const k of list) { const f = B.f(k); if (f && f.human) yield f.human; } }
+function firstHumanOf(list, B) { return askOf(humansOf(list, B)); }
 // The composition: the lane's previous call's, minus its blocks after the shared prefix, plus this call's.
 function compOf(last, list, B) {
   const c = {};

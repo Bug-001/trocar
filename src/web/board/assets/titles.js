@@ -1,0 +1,1 @@
+import{ct as e,ft as t,mt as n}from"./router.js";var r=e=>e.title==null?e.title_source===`unread`?`unread`:e.title_source===null?`none`:`pending`:`title`,i=i=>({title:()=>String(i.title),unread:()=>e,none:()=>n,pending:()=>t})[r(i)]();export{i as n,r as t};

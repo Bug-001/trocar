@@ -13,6 +13,8 @@ import { COMMANDS, helpText, commandNamed, usageLine } from '../../src/cli/comma
 import { WIDTH } from '../../src/cli/text.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { presentEnvNames } from '../../src/off/user-path.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
@@ -180,7 +182,17 @@ test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cann
   assert.equal((await s.run(['daemon'], { deps: { startDaemon: async () => { throw new Error('the port is taken') } } })).exit, 1)
 })
 
-test('the real bin: --version, help, help off, an unknown command and `daemon --bogus` (sandbox HOME, no OS tool)', () => {
+test('D38: the daemon log carries a dying query worker\'s last stderr lines under its record line', async () => {
+  const s = await installedViaCli()
+  const died = Object.assign(new Error('the query worker exited (signal SIGABRT): FATAL ERROR: heap out of memory'), { code: 'query-failed', detail: ['<--- Last few GCs --->', 'FATAL ERROR: heap out of memory'] })
+  const r = await s.run(['daemon'], { deps: { startDaemon: async ({ log }) => { log('daemon', died); throw new Error('the port is taken') } } })
+  const lines = r.io.text().split('\n')
+  const at = lines.findIndex((l) => l.includes('[daemon] the query worker exited (signal SIGABRT)'))
+  assert.ok(at >= 0, r.io.text())
+  assert.deepEqual(lines.slice(at + 1, at + 3).map((l) => l.replace(/^.*\|\s?/, '')), died.detail)
+})
+
+test('the real bin: --version, help, help off, an unknown command, `daemon --bogus` and `classes set` of an unknown class (sandbox HOME, no OS tool)', () => {
   const home = tmpDir('trocar-bin-')
   const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', TROCAR_TEST_SANDBOX: '1' }
   const run = (...args) => spawnSync(process.execPath, [BIN, ...args], { env, encoding: 'utf8' })
@@ -189,7 +201,18 @@ test('the real bin: --version, help, help off, an unknown command and `daemon --
   const o = run('help', 'off'); assert.equal(o.status, 0); assert.match(o.stdout, /trocar off \[<harness>\.\.\.\]/); assert.ok(!/trocar serve/.test(o.stdout))
   const n = run('nope'); assert.equal(n.status, 2); assert.equal(n.stdout, ''); assert.match(n.stderr, /unknown command 'nope'/)
   const d = run('daemon', '--bogus'); assert.deepEqual([d.status, d.stdout], [2, '']); assert.match(d.stderr, /trocar daemon: unknown option '--bogus'/)
+  const c = run('classes', 'set', 'nope', 'log'); assert.deepEqual([c.status, c.stdout], [2, '']); assert.ok(c.stderr.trim()) // 4.6 classes #5
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written')
+})
+
+// 4.6 present: a command typed in a terminal records, with the PATH, the value of every variable that moves a footprint place (null when unset)
+test('4.6 present: install records the footprint variables of the terminal it ran in', async () => {
+  const names = presentEnvNames(await loadHarnesses())
+  const s = sandbox(), env = { ...s.ctx().env, [names[0]]: path.join(s.home, 'elsewhere') }
+  for (const k of names.slice(1)) delete env[k]
+  assert.equal((await s.run(['install', '--yes'], { env })).exit, 0)
+  const vars = JSON.parse(fs.readFileSync(path.join(s.dir, 'user-path.json'), 'utf8')).vars
+  assert.deepEqual(vars, Object.fromEntries(names.map((k, i) => [k, i === 0 ? env[k] : null])))
 })
 
 // 4.11 present / 1.6 V7: uninstall records no PATH — it deletes that file, so recording it first made a second uninstall report removing what it
@@ -203,4 +226,21 @@ test('4.11 present: uninstall records no PATH of the user; its --dry-run leaves 
   const before = snapshot(s.home)
   await s.run(['uninstall', '--dry-run'], { env: { ...s.ctx().env, PATH: '/a/path/this/run/has' } })
   assert.deepEqual(snapshot(s.home), before, 'the dry run wrote nothing, user-path.json included')
+})
+
+// 1.6 §1.4: a dry run writes nothing — the PATH record main.mjs makes around a command included; a real `on` still records it.
+// The one exception: Node's compile cache under ~/.trocar/compile-cache (D62) is not state; every command of an installed trocar writes it.
+test('1.6 §1.4: on --dry-run and off --dry-run leave ~/.trocar byte for byte and mtime for mtime; a plain on records the PATH', async () => {
+  const s = sandbox()
+  assert.equal((await s.run(['install', '--yes'])).exit, 0)
+  const trocar = path.join(s.home, '.trocar'), recorded = path.join(s.dir, 'user-path.json')
+  const stamp = () => Object.fromEntries(Object.entries(snapshot(trocar)).filter(([p]) => p.split(/[\\/]/)[0] !== 'compile-cache').map(([p, h]) => [p, h === 'dir' ? h : `${h}:${fs.statSync(path.join(trocar, p)).mtimeMs}`]))
+  const env = { ...s.ctx().env, PATH: '/a/path/this/run/has' }
+  for (const argv of [['on', '--dry-run'], ['off', '--dry-run']]) {
+    const before = stamp()
+    await s.run(argv, { env })
+    assert.deepEqual(stamp(), before, `${argv.join(' ')} wrote nothing`)
+  }
+  assert.equal((await s.run(['on', '--yes'], { env })).exit, 0)
+  assert.match(fs.readFileSync(recorded, 'utf8'), /\/a\/path\/this\/run\/has/, 'a real on records the PATH it ran with')
 })

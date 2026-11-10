@@ -9,6 +9,7 @@
 // or post() answers {ok:false, status:403} without a request, and the onForbidden callbacks run once. Keyed on the status, never the body:
 // the latch closes the moment the 403's head arrives, so nothing the page asks while that body is on its way (or after it broke off) is sent.
 import { CONTROL_TOKEN_HEADER } from '../../../src/off/token-header.mjs' // a src/ module the build bundles (4.4 静态面)
+import { QUERY_WAIT_PROBLEMS } from '../../../src/health/codes.mjs'
 const TOKEN_KEY = 'trocar.token' // the localStorage slot of the per-user token (4.4 §每用户口令: read from #t=, kept for the board's origin)
 const HELD_MAX = 100 // conditional-GET entries kept, oldest dropped first
 
@@ -44,10 +45,12 @@ function qs(params) {
 // | { cut:true } (the body never fully arrived: the connection broke after the head — a transient failure, 1.5 K-29)
 export const CUT_OFF = 'the answer did not arrive in full'
 const CUT = Object.freeze({ ok: false, status: 0, error: CUT_OFF })
-// K-29 (1.5): a read not fully answered (head and body) within the deadline is a failure like a cut answer; a read the caller
+// K-29 (1.5): a read not fully answered (head and body) within the deadline is a failure like a cut answer (a caller whose read can
+// rightly take longer passes deadlineMs, 1.8 §数据与刷新); a read the caller
 // cancels (a screen change, web/src/LegacyScreen.tsx) ends as ABORTED, which no screen shows or retries
 export const READ_DEADLINE_MS = 60_000
-export const TIMED_OUT = `no answer within ${READ_DEADLINE_MS / 1000} s`
+// a read the deadline ended: status 0 like any read with no full answer, and `timedOut`, its own cause class (labels READ_FAIL)
+const timedOutAfter = (ms) => ({ ok: false, status: 0, timedOut: true, error: `no answer within ${ms / 1000} s` })
 export const ABORTED = 'cancelled'
 async function readBody(r) {
   let b
@@ -66,6 +69,10 @@ function latched(r) {
   // the token this page sent is wrong: drop the kept copy, unless another tab has since kept a newer one (4.4 §每用户口令)
   try { if (token != null && kept && kept.getItem(TOKEN_KEY) === token) kept.removeItem(TOKEN_KEY) } catch { /* storage blocked: nothing kept */ }
   for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) }
+  // a latched page reopens when a link with a token lands in its tab (1.5 K-30): pasting `trocar board`'s link only changes the
+  // fragment, which the browser does not reload for, and the latch is this page's state — so a #t= fragment reloads the page, which
+  // boots with it (bootToken)
+  if (typeof globalThis.addEventListener === 'function') globalThis.addEventListener('hashchange', () => { if (String(globalThis.location.hash || '').startsWith('#t=')) globalThis.location.reload() })
   return true
 }
 
@@ -74,10 +81,21 @@ function latched(r) {
 const earlyReads = new Map()
 export function early(path, params, opts) { earlyReads.set(path + qs(params), get(path, params, opts)) }
 
+// the worker's boot pass (3.5 §行表先读): until it has read the index rows, a read that needs them waits and, past its bound, is answered
+// 503 still-reading. The last such answer says the pass runs; a worker's answer from a name that needs the rows says it has ended
+// (1.2 §读取状态). Not a 304 (the daemon's stamp match, 4.4 §条件 GET) nor a stored answer (`stored`, 4.4 §存下的答案): no worker made them
+const ROW_NAMES = new Set(['/api/overview', '/api/sessions', '/api/session', '/api/lane'])
+let bootSeen = false
+export const bootPass = () => bootSeen
+function noteBoot(path, status, body) {
+  if (status === 503 && QUERY_WAIT_PROBLEMS.includes(body?.errors?.[0]?.code)) bootSeen = true
+  else if (status >= 200 && status < 300 && ROW_NAMES.has(path) && !(body && body.stored)) bootSeen = false
+}
+
 // `hold:false` keeps only the ETag of the URL, and a 304 answers {ok:true, status:304, data:null}: the caller has the document;
 // `cond:false` asks without If-None-Match (a caller that holds no document of that URL yet)
 const tipOf = (r) => { const t = r.headers.get('x-trocar-tip'); return t ? { tip: t } : {} }
-export async function get(path, params, { signal, hold = true, cond = true } = {}) {
+export async function get(path, params, { signal, hold = true, cond = true, deadlineMs = READ_DEADLINE_MS } = {}) {
   if (forbidden) return FORBIDDEN
   if (signal && signal.aborted) return { ok: false, status: 0, error: ABORTED }
   const url = path + qs(params)
@@ -93,10 +111,10 @@ export async function get(path, params, { signal, hold = true, cond = true } = {
   if (was) headers['if-none-match'] = was.etag
   const ac = new AbortController()
   let timedOut = false
-  const timer = setTimeout(() => { timedOut = true; ac.abort() }, READ_DEADLINE_MS)
+  const timer = setTimeout(() => { timedOut = true; ac.abort() }, deadlineMs)
   const cancel = () => ac.abort()
   if (signal) signal.addEventListener('abort', cancel, { once: true })
-  const ended = (fallback) => (timedOut ? { ok: false, status: 0, error: TIMED_OUT } : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
+  const ended = (fallback) => (timedOut ? timedOutAfter(deadlineMs) : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
   let r, b
   try {
     try { r = await fetch(url, { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
@@ -109,7 +127,9 @@ export async function get(path, params, { signal, hold = true, cond = true } = {
   }
   if (b.cut) return ended(CUT)
   const body = 'json' in b ? b.json : null
-  if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status }
+  // `code`: the answer's first error code (a 503 `still-reading` is a wait, not a failure: 1.5 K-29)
+  noteBoot(path, r.status, body)
+  if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status, code: body?.errors?.[0]?.code }
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
   if (etag) { if (hold) remember(held, url, { etag, data: body }); else remember(tags, url, etag) }
@@ -131,7 +151,7 @@ export async function getText(path, params, { range = null, tag = null, signal }
   const timer = setTimeout(() => { timedOut = true; ac.abort() }, READ_DEADLINE_MS)
   const cancel = () => ac.abort()
   if (signal) signal.addEventListener('abort', cancel, { once: true })
-  const ended = (fallback) => (timedOut ? { ok: false, status: 0, error: TIMED_OUT } : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
+  const ended = (fallback) => (timedOut ? timedOutAfter(READ_DEADLINE_MS) : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
   let r, text
   try {
     try { r = await fetch(path + qs(params), { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }

@@ -1,10 +1,11 @@
 // body.mjs — turn a response's decoded bytes into a recordable shape (RFC 4.6 §记录). SSE is kept
 // VERBATIM (the full decoded text in `raw`, so event: / id: / comment lines survive — invariant 2)
 // alongside the Anthropic reconstruction; JSON is parsed (and keeps its wire text in `raw` when re-serializing would change it);
-// other text is UTF-8 or raw_b64. Decoding
-// failures and truncation are labeled in place (invariant 4), never silently dropped.
+// other text is UTF-8 or raw_b64. A reply sent with a content-encoding other than identity also keeps its wire bytes once
+// (invariant 2: the decoded text is derived): wire_b64 when it decoded, raw_b64 when it did not, with the header as sent in
+// content_encoding. Decoding failures and truncation are labeled in place (invariant 4), never silently dropped.
 import { makeSseReconstructor } from '../../../capture/sse-reconstruct.mjs'
-import { decodeContent, utf8Strict, responseDecodeLimit, decodedOverLimit, parseJsonReply } from '../../../capture/request-body.mjs'
+import { decodeContent, utf8Strict, responseDecodeLimit, decodedOverLimit, parseJsonReply, nonIdentityEncoding } from '../../../capture/request-body.mjs'
 
 // decodeContent moved to src/capture/request-body.mjs when the request-body rule became one rule for every call (D40);
 // re-exported here because the response side below still uses it.
@@ -20,6 +21,8 @@ const tryUtf8 = utf8Strict
  * body_bytes; a decoding failure adds encoding_error and keeps the raw bytes in raw_b64. A body that decodes past the limit
  * (responseDecodeLimit: 1 MiB when the call is not inference, 64 MiB when it is) is not expanded: it is a decoding failure of
  * the same shape, with the reason said (a compression bomb must not cost the daemon its memory and its event loop).
+ * A non-empty body whose content-encoding names a coding other than identity adds content_encoding (the header as sent) and,
+ * when it decoded, wire_b64 (the de-chunked bytes before content decoding; a truncated body's prefix).
  */
 export function shapeResponse({ status, headers = [], body, truncated = false, llm = true }) {
   const hobj = {}
@@ -33,6 +36,10 @@ export function shapeResponse({ status, headers = [], body, truncated = false, l
   } else {
     const maxBytes = responseDecodeLimit(llm)
     const dec = decodeContent(body, cenc, { maxBytes })
+    if (nonIdentityEncoding(String(cenc))) {
+      resp.content_encoding = cenc
+      if (dec.decoded) resp.wire_b64 = body.toString('base64')
+    }
     if (!dec.decoded) {
       resp.kind = ctype.includes('text/event-stream') ? 'sse' : ctype.includes('json') ? 'json' : 'text'
       resp.encoding_error = decodedOverLimit(dec) ? `decoded size over ${maxBytes} bytes${llm ? '' : ' for a call that is not inference'}; the wire bytes are in raw_b64` : dec.error

@@ -35,6 +35,7 @@ export function setLeaf(w, src, value) {
   if ('env' in src) { w.env[src.env] = value; return }
   if ('policy' in src) { w.policy[policyKey(src, w.os)] = value; return }
   const loc = locOf(src, w.os)
+  if (!loc) return // a place with nothing on this OS (perOs without it)
   const file = loc.glob ? path.posix.join(resolveLoc({ ...loc, glob: undefined }, rctx(w))[0], loc.glob.replace('*', 'x')) : resolveLoc(src.file, rctx(w))[0]
   let o = (w.docs[file] ||= {})
   for (const k of src.keys.slice(0, -1)) o = o[k] ||= {}

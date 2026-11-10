@@ -32,7 +32,7 @@ for (const platform of ['darwin', 'win32']) {
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')
     const box = await liveUnit({ w, platform })
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+    const deps = { getuid: () => 501, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
     const offDeps = { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: () => ({ status: 0, stdout: '', stderr: '' }) }
     const doors = async () => { const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env }); return (await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status' })).doors }
     let held = null
@@ -50,9 +50,10 @@ for (const platform of ['darwin', 'win32']) {
         await within((async () => { for (;;) { if (!(await canConnect(port))) return true; await new Promise((r) => setTimeout(r, 100)) } })(), 10_000, 'the door closed, so the port can be taken')
         held = await squat(port)
         const io3 = fakeIo()
-        assert.equal(await runOnCli(['--yes'], { io: io3, env: w.env, home: w.home, platform, deps }), 0, io3.text())
-        assert.match(io3.text(), /engine-port-taken/, 'on says the code')
-        assertEnglish(io3.text().split('\n').filter((l) => /engine-port-taken/.test(l)).join('\n'), 'the engine-port-taken note (D58)')
+        assert.equal(await runOnCli(['--yes', '--details'], { io: io3, env: w.env, home: w.home, platform, deps }), 0, io3.text())
+        const said = io3.text().split('\n').filter((l) => l.includes(String(port)))
+        assert.ok(said.length && !/engine-port-taken/.test(io3.text()), `on names the taken port in words, not the code (1.6 \u00a71.1): ${io3.text()}`)
+        assertEnglish(said.join('\n'), 'the engine-port-taken note (D58)')
         const moved = (await doors())[g]
         assert.ok(moved && moved !== port, `the door moved off the taken port ${port}: ${moved}`)
         assert.equal(await canConnect(moved), true, 'the new door listens')

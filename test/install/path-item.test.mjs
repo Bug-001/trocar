@@ -12,7 +12,9 @@ import { readManifest } from '../../src/off/manifest.mjs'
 import { pathItemTarget, psScript, WIN_ELEMENT } from '../../src/off/path-item.mjs'
 import { appDir, launcherPath } from '../../src/off/paths.mjs'
 import { orphanBackups } from '../../src/off/backup.mjs'
-import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
+import { fakeIo, onCtx, seedClaude, snapshot, changedFiles } from '../cli/fixtures/on-ctx.mjs'
+import { setupHelperCommand } from '../../src/version.mjs'
+import { unitPath } from '../../src/collector/arch/linux/unit.mjs'
 import { COMMANDS } from '../../src/cli/commands.mjs'
 import { DEFAULT_REDIRECTOR_BIN } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { flowEvents } from '../off/fixtures/off-ctx.mjs'
@@ -51,7 +53,7 @@ test('V112 V113: a script-channel install adds the PATH item once; uninstall tak
   fs.mkdirSync(path.dirname(launcherPath(home, 'linux')), { recursive: true }); fs.writeFileSync(launcherPath(home, 'linux'), '#!/bin/sh\n')
   const rc = path.join(home, '.bashrc'); const mine = 'alias ll="ls -l"\n'; fs.writeFileSync(rc, mine)
   const raw = path.join(home, '.trocar', 'raw', 'r.ndjson'); fs.mkdirSync(path.dirname(raw), { recursive: true }); fs.writeFileSync(raw, '{"keep":1}\n')
-  const ctx = (io) => { const c = onCtx(home, io); return { ...c, platform: 'linux', env: { ...c.env, SHELL: '/bin/bash' }, deps: { ...c.deps, root } } }
+  const ctx = (io) => { const c = onCtx(home, io); return { ...c, platform: 'linux', env: { ...c.env, SHELL: '/bin/bash' }, deps: { ...c.deps, root, fs: helperFs(false) } } }
 
   const io = fakeIo()
   assert.equal(await runInstallCli(['--yes', '--json'], ctx(io)), 0, io.text())
@@ -100,6 +102,8 @@ test('D74⑤: the Windows PATH script finds and takes out the element with or wi
   }
 })
 
+// the helper is there or not as the test says, whatever the machine running it has (a Linux host with trocar's helper installed)
+const helperFs = (on) => ({ ...fs, existsSync: (p) => (p === DEFAULT_REDIRECTOR_BIN ? on : fs.existsSync(p)) })
 // a script install on Linux with records on disk; `helper`: the capability helper is installed (its fixed path exists)
 function scriptLinux({ helper = false } = {}) {
   const home = tmpDir('trocar-path-helper-')
@@ -111,35 +115,90 @@ function scriptLinux({ helper = false } = {}) {
   fs.mkdirSync(path.dirname(launcherPath(home, 'linux')), { recursive: true }); fs.writeFileSync(launcherPath(home, 'linux'), '#!/bin/sh\n')
   const rc = path.join(home, '.bashrc'); fs.writeFileSync(rc, 'alias ll="ls -l"\n')
   const raw = path.join(home, '.trocar', 'raw', 'r.ndjson'); fs.mkdirSync(path.dirname(raw), { recursive: true }); fs.writeFileSync(raw, '{"keep":1}\n')
-  const withHelper = { ...fs, existsSync: (p) => p === DEFAULT_REDIRECTOR_BIN || fs.existsSync(p) }
-  const ctx = (io, h = helper) => { const c = onCtx(home, io); return { ...c, platform: 'linux', env: { ...c.env, SHELL: '/bin/bash' }, deps: { ...c.deps, root, ...(h ? { fs: withHelper } : {}) } } }
-  return { home, rc, raw, ctx }
+  const ctx = (io, h = helper) => { const c = onCtx(home, io); return { ...c, platform: 'linux', env: { ...c.env, SHELL: '/bin/bash' }, deps: { ...c.deps, root, fs: helperFs(h) } } }
+  return { home, rc, raw, ctx, root }
 }
 
-test('1.6 §3.6: a helper still installed keeps the code, the PATH item and every record, even with --purge-data; it is a left row in flows/; once it is gone the next run removes the rest', async () => {
+// 1.6 §3.6: the helper is machine-wide; a user's uninstall undoes everything of this user's and keeps only the code and the PATH item the removal line needs
+test('1.6 §3.6: a helper still installed: exit 0, one shared left row with the removal line; only the code and the PATH item stay; once it is gone the next run removes them', async () => {
   const s = scriptLinux({ helper: true })
+  const before = snapshot(s.home)
   assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
+  const item = readManifest(path.join(s.home, '.trocar', 'collector')).path_item
   const placed = fs.readFileSync(s.rc, 'utf8')
-  // plan = act: the dry run names the helper row and does not plan the code, the launcher or the PATH item away
+  // plan = act: the dry run names the shared row and does not plan the code, the launcher or the PATH item away
   const dry = fakeIo()
   assert.equal(await runUninstallCli(['--dry-run', '--json'], s.ctx(dry)), 0, dry.text())
   const plan = JSON.parse(dry.text())
-  assert.ok((plan.left || []).some((l) => l.path === DEFAULT_REDIRECTOR_BIN && typeof l.command === 'string'), JSON.stringify(plan.left))
+  assert.deepEqual((plan.left || []).map((l) => [l.shared, typeof l.command]), [[true, 'string']], JSON.stringify(plan.left))
   assert.deepEqual(plan.planned.filter((p) => [appDir(s.home), launcherPath(s.home, 'linux'), s.rc].includes(p.path)), [], 'the plan keeps what the run keeps')
   const io = fakeIo()
-  assert.equal(await runUninstallCli(['--purge-data', '--yes', '--json'], s.ctx(io)), 1, io.text())
+  assert.equal(await runUninstallCli(['--purge-data', '--yes', '--json'], s.ctx(io)), 0, io.text())
   const r = JSON.parse(io.text())
-  assert.equal(r.purge_data, false)
-  assert.ok(r.left.some((l) => l.path === DEFAULT_REDIRECTOR_BIN && typeof l.command === 'string'), 'the helper row, with its command')
-  assert.deepEqual(r.problems, [], 'a left row with its own command is the next step, not also a problem (1.6 §3.6)')
-  assert.deepEqual([fs.readFileSync(s.raw, 'utf8'), fs.readFileSync(s.rc, 'utf8'), fs.existsSync(appDir(s.home)), fs.existsSync(launcherPath(s.home, 'linux'))], ['{"keep":1}\n', placed, true, true], 'records, PATH item, code and launcher all stay')
-  const ev = flowEvents(path.join(s.home, '.trocar', 'collector')).filter((e) => e.event === 'uninstall-note' || e.where === 'uninstall')
-  assert.ok(ev.some((e) => e.event === 'failure' && e.code === 'entry-not-undone' && e.path === DEFAULT_REDIRECTOR_BIN), 'D38: the left row is in flows/')
-  assert.equal(ev.filter((e) => e.kind === 'result').at(-1).outcome, 'left')
+  assert.deepEqual([r.ok, r.purge_data, r.problems, r.left.map((l) => [l.shared, l.command])], [true, true, [], [[true, setupHelperCommand(['--remove'], { root: s.root })]]], io.text())
+  // of trocar's, exactly the code (unchanged), the PATH line and what takes it out again (its backup, its record) remain: no unit, no manifest, no state, no proxy entry
+  const rest = changedFiles(before, snapshot(s.home)).filter((f) => f !== '.bashrc' && f !== path.relative(s.home, s.raw))
+  assert.equal(fs.readFileSync(s.rc, 'utf8'), placed)
+  assert.ok(rest.length <= 2 && rest.every((f) => path.join(s.home, f) === item.backup || (() => { try { return JSON.stringify(JSON.parse(fs.readFileSync(path.join(s.home, f), 'utf8'))) === JSON.stringify(item) } catch { return false } })()), JSON.stringify(rest))
+  assert.deepEqual([fs.existsSync(appDir(s.home)), fs.existsSync(launcherPath(s.home, 'linux')), fs.existsSync(s.raw), fs.existsSync(unitPath(s.home))], [true, true, false, false])
 
   const again = fakeIo()
   assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(again, false)), 0, again.text())
-  assert.deepEqual([fs.readFileSync(s.rc, 'utf8'), fs.existsSync(appDir(s.home)), fs.readFileSync(s.raw, 'utf8')], ['alias ll="ls -l"\n', false, '{"keep":1}\n'], 'the second run takes out the PATH item and the code')
+  const r2 = JSON.parse(again.text())
+  // 1.6 §3.6: --purge-data asked that nothing of trocar's stay, and the second run is clean: it starts no new record of its own (a clean result line never creates
+  // the records dir; D38 asks for failures, which always write): no ~/.trocar entry stays
+  assert.deepEqual([fs.readFileSync(s.rc, 'utf8'), r2.left, r2.kept, fs.existsSync(path.join(s.home, '.trocar'))], ['alias ll="ls -l"\n', [], [], false], 'nothing of trocar stays')
+  assert.equal(r2.log, null, 'the receipt names no record it did not write')
+  assert.deepEqual([fs.existsSync(appDir(s.home)), fs.existsSync(launcherPath(s.home, 'linux'))], [false, false])
+})
+
+// D38: the same second run, failing (its PATH item record cannot be read), still writes its record, the records dir made for it
+test('1.6 §3.6 · D38: after --purge-data a second uninstall that fails writes its record, the records dir made for it', async () => {
+  const s = scriptLinux({ helper: true })
+  assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
+  assert.equal(await runUninstallCli(['--purge-data', '--yes', '--json'], s.ctx(fakeIo())), 0)
+  const dir = path.join(s.home, '.trocar', 'collector')
+  assert.equal(fs.existsSync(path.join(dir, 'flows')), false, 'the purge took the records')
+  fs.writeFileSync(path.join(dir, 'path-item.json'), '{ not json')
+  const io = fakeIo()
+  assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(io, false)), 1, io.text())
+  assert.ok(flowEvents(dir).some((e) => e.kind === 'result' && e.outcome !== 'uninstalled'), 'the failed run is recorded')
+})
+
+// D38 (4.6 §卸载 5): a warning is of the failure class: a run that is otherwise clean (outcome `uninstalled`) still writes it, the records dir made for it
+test('1.6 §3.6 · D38: after --purge-data a clean second uninstall with a warning writes it, the records dir made for it', async () => {
+  const s = scriptLinux({ helper: true })
+  assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
+  assert.equal(await runUninstallCli(['--purge-data', '--yes', '--json'], s.ctx(fakeIo())), 0)
+  const dir = path.join(s.home, '.trocar', 'collector'), ingress = path.join(dir, 'ingress.json')
+  fs.writeFileSync(ingress, '{}\n')
+  const ctx = s.ctx(fakeIo(), false), io = fakeIo()
+  const stuck = { ...fs, rmSync: (p, o) => { if (p === ingress) throw Object.assign(new Error('busy'), { code: 'EBUSY' }); return fs.rmSync(p, o) } }
+  assert.equal(await runUninstallCli(['--yes', '--json'], { ...ctx, io, deps: { ...ctx.deps, fs: stuck } }), 0, io.text())
+  const r = JSON.parse(io.text())
+  assert.deepEqual([r.log, flowEvents(dir).filter((e) => e.code === 'residue-not-removed').map((e) => e.path)], [path.join(dir, 'flows'), [ingress]], 'the warning is recorded')
+})
+
+test('D38: a PATH item record that cannot be read is said, never taken as no PATH item', async () => {
+  const s = scriptLinux({ helper: true })
+  assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
+  // the flows result counts every left row the receipt has: a shared one apart from one left undone (one document never contradicts itself)
+  const counted = (io) => { const r = JSON.parse(io.text()), c = flowEvents(path.join(s.home, '.trocar', 'collector')).filter((e) => e.kind === 'result').at(-1).counts
+    return [c.left, c.shared ?? 0, r.left.filter((l) => !l.shared).length, r.left.filter((l) => l.shared).length] }
+  const first = fakeIo()
+  assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(first)), 0)
+  assert.deepEqual(counted(first), [0, 1, 0, 1])
+  const rec = path.join(s.home, '.trocar', 'collector', 'path-item.json')
+  fs.writeFileSync(rec, '{ not json')
+  const dry = fakeIo()
+  assert.equal(await runUninstallCli(['--dry-run', '--json'], s.ctx(dry, false)), 0, dry.text())
+  assert.deepEqual((JSON.parse(dry.text()).left || []).map((l) => l.path), [rec], 'the plan says it too')
+  const io = fakeIo()
+  assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(io, false)), 1, io.text())
+  const r = JSON.parse(io.text())
+  assert.deepEqual(r.left.map((l) => [l.path, l.shared ?? false]), [[rec, false]], 'the record is a left row that names it, not a crash')
+  assert.deepEqual(counted(io), [1, 0, 1, 0])
+  assert.ok(fs.readFileSync(s.rc, 'utf8').includes('.trocar/bin'), 'the PATH item is not quietly left behind as if gone')
 })
 
 test('D58: once a script uninstall removed trocar itself, its receipt names no trocar command; the kept records are named by path', async () => {

@@ -11,10 +11,10 @@
 // bytes (ws.tail_raw, proxy preludes, bodies) ever reach the board.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { isFailure, notCapturedClass, expectedKey, LEVELS } from './codes.mjs'
+import { isFailure, notCapturedClass, expectedKey, LEVELS, NOTHING_LOST } from './codes.mjs'
 
 export const WINDOW_MS = 24 * 3600e3
-export const MAX_BYTES = 4 << 20
+const MAX_BYTES = 4 << 20
 const DAY = /^(\d{4}-\d{2}-\d{2})\.ndjson$/
 const errText = (e) => String((e && e.message) || e)
 export class HealthUnreadable extends Error { constructor(m) { super(m); this.name = 'HealthUnreadable' } }
@@ -240,6 +240,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
   // the last 24 h: failure groups, expected counts, per agent
   const cutoff = now - windowMs
   const groups = new Map(), agents = new Map()
+  const live = new Set() // pids judged untrusted and not seen to go since (agent-exit, daemon-start): who an agent-trusted may resolve
   const agentRow = (a) => { if (!agents.has(a)) agents.set(a, { agent: a, last_captured: null, last_failure: null, last_failure_key: null }); return agents.get(a) }
   for (let i = 0; i < records.length; i++) {
     const r = records[i]
@@ -251,15 +252,23 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     if (later(out.last_ts, iso)) out.last_ts = iso
     if (!(t >= cutoff)) continue
     const agent = r.agent || r.harness || (r.proc && r.proc.agent) || null
+    if (r.event === 'agent-untrusted' && r.pid != null) live.add(r.pid)
+    else if (r.event === 'daemon-start') live.clear()
+    else if (r.event === 'agent-exit' && r.pid != null) live.delete(r.pid)
     if (isFailure(r)) {
-      const key = groupKey(r)
-      const g = groups.get(key) || { key, count: 0, first_ts: null, last_ts: null, last: null }
+      const key = groupKey(r), slot = `${key}\u0000${agent}` // C.3: one group is one harness, so a count and a name belong together
+      const g = groups.get(slot) || { key, count: 0, first_ts: null, last_ts: null, last: null }
       // `last` stays the newest record written (the resolution rules above read it); the times are a span over the records' times
       g.count += weight(r); widen(g, iso); g.last = pick(r); delete g.resolved
-      groups.delete(key); groups.set(key, g) // the Map's order is the order of each group's newest record written
+      if (NOTHING_LOST.includes(r.code)) g.resolved = true // only a wait was recorded, nothing lost: a note from its first record (C.3)
+      groups.delete(slot); groups.set(slot, g) // the Map's order is the order of each group's newest record written
       if (agent) { const a = agentRow(agent); if (later(a.last_failure, iso)) { a.last_failure = iso; a.last_failure_key = key } }
     } else if (ENDS[r.event]) {
       for (const g of groups.values()) if (ENDS[r.event].includes(g.last.event) || ENDS[r.event].includes(g.last.code)) g.resolved = true
+    } else if (r.event === 'agent-trusted' && r.pid != null && live.has(r.pid)) {
+      // a process judged untrusted that reports trust after all (a plugin's marker after the grace) ended that failure: the same process only (C.3):
+      // its pid, not seen to exit or a daemon restart since, and the group's newest record is that process
+      for (const g of groups.values()) if (g.last.event === 'agent-untrusted' && g.last.pid === r.pid) g.resolved = true
     } else if (isRow(r)) {
       if (notCapturedClass(r.not_captured, r.reason) === 'expected') {
         const k = expectedKey(r) // a by-design reason counts under its own name ('not-an-agent'), not under 'untracked'

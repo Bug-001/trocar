@@ -9,6 +9,7 @@ import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { runStatus, asDaemon, reply, claudeProc } from './fixtures/status-ctx.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { foldFlows } from '../../src/health/flows.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const writeList = (home, doc) => fs.writeFileSync(path.join(home, '.trocar', 'agents.json'), JSON.stringify(doc))
 function writeFlows(home, recs) {
@@ -29,7 +30,7 @@ async function identityOf(s, deps = {}) {
   return { j, by: Object.fromEntries(Object.entries(j.harnesses).map(([h, v]) => [h, v.identity])), r }
 }
 
-test('V65 status --json: the identity block — a good custom item (source custom), a bad one in problems, an ignored preset, the processes on no list — the same with and without a daemon', async () => {
+test('V65 status --json: the identity block — a good custom item (source custom), a bad one in problems, an ignored preset, the processes on no list — the same with and without a daemon', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   writeList(s.home, { version: 1, agents: [{ harness: 'claude-code', name: 'claude-nightly' }, { harness: 'claude-code', name: 'node' }, { harness: 'codex', name: 'codex', ignore: true }] })
   writeFlows(s.home, [{ event: 'daemon-start', pid: 1 }, unknownEvent('claude-canary', 7001), unknownEvent('claude-canary', 7002), unknownEvent('python', 7003, { wide: true })])
@@ -55,7 +56,7 @@ test('V65 status --json: the identity block — a good custom item (source custo
   assert.ok(!/agents\.json/.test(t), t)
 })
 
-test('V65 a name the user has since put on the list is no longer said to be on no list; a broken file is said with its state; no file is state absent and no problems', async () => {
+test('V65 a name the user has since put on the list is no longer said to be on no list; a broken file is said with its state; no file is state absent and no problems', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   writeFlows(s.home, [{ event: 'daemon-start', pid: 1 }, unknownEvent('claude-canary', 7002)])
   let { by, j } = await identityOf(s)
@@ -70,7 +71,7 @@ test('V65 a name the user has since put on the list is no longer said to be on n
   assert.deepEqual(j.agent_list.problems.map((p) => [p.index, p.code]), [[null, 'unparsable']])
 })
 
-test('R18 V65 status puts a process under a harness by the name list in effect NOW (presets + agents.json, `ignore` applied, as the daemon identifies), not by the manifest\'s ever-growing liveness snapshot — with and without a daemon', async () => {
+test('R18 V65 status puts a process under a harness by the name list in effect NOW (presets + agents.json, `ignore` applied, as the daemon identifies), not by the manifest\'s ever-growing liveness snapshot — with and without a daemon', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const procs = async () => [claudeProc(5000, Date.now() + 5000)]
   const pidsOf = (j) => j.harnesses['claude-code'].processes.map((x) => x.pid)

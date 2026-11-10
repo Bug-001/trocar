@@ -10,10 +10,11 @@ import { once, EventEmitter } from 'node:events'
 import { createQueryService, CRASH_COOLDOWN_MS, FAILURE_BACKOFF_MAX_MS } from '../../src/query/service.mjs'
 import { createServer } from '../../src/server.mjs'
 import { TOKEN, withToken } from '../server/face.mjs'
-import { isCode, isWhere } from '../../src/health/codes.mjs'
+import { isCode, isWhere, FOLD_STOPS } from '../../src/health/codes.mjs'
 import { rawHome } from './raw-home.mjs'
+import { handWorld, recorder } from './hand-world.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { whileMoving, within } from '../helpers/bounded.mjs'
 import fs from 'node:fs'
 import { PassThrough, Writable } from 'node:stream'
 import zlib from 'node:zlib'
@@ -23,10 +24,12 @@ import { bigSession } from './big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
+import { sessionDir } from '../../src/query/projection.mjs'
 import { HEAD_FILES } from '../../src/query/ctx-key.mjs'
 import { lineFile, loadSidecar } from '../../src/query/line-file.mjs'
 import { REDUCE_V } from '../../src/view/reduce.mjs'
 import { heapFlags, workerEnv } from '../../src/query/warm.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 // A worker that answers one query (the warm-up's) and then dies on the next, which is how a caller WAITING for a
@@ -37,18 +40,6 @@ process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(
   const b = Buffer.from(JSON.stringify({ segments: [] })); process.stdout.write(\`200 \${b.length}\\n\`); process.stdout.write(b)
 } })`], { stdio: ['pipe', 'pipe', 'pipe'] })
 const alive = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] })
-
-/** A response that records what was written to it. */
-const recorder = () => {
-  const r = { status: null, chunks: [], ended: false, headersSent: false }
-  return Object.assign(r, {
-    writeHead: (s) => { r.status = s; r.headersSent = true },
-    write: (b) => { r.chunks.push(b); return true },
-    end: () => { r.ended = true },
-    once: () => {},
-    text: () => Buffer.concat(r.chunks).toString('utf8'),
-  })
-}
 
 /** The service answers a cold caller 503 and warms a worker behind it (D63, the cold path): drive that until a
  *  worker is there, and hand back what the warm-up answered to. */
@@ -365,6 +356,20 @@ test(`the deadline measures silence: a worker that ${what} (3.5:42)`, async () =
   } finally { svc.stop() }
 })
 
+test('a silent worker\'s D38 record says which query it was, its parameters by name, none of their values', async () => {
+  const said = [], secret = 'do-not-repeat-this-value'
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs: 300, failure: (w, e) => said.push(e.message), fork: ipcFake('', []) })
+  try {
+    await within(svc.relay({ name: 'segments', params: {}, res: recorder() }).catch(() => {}), 5000, 'the first read settles')
+    said.length = 0
+    await within(svc.relay({ name: 'block', params: { ref: secret, [`${secret} y`]: '1' }, res: recorder() }).catch(() => {}), 5000, 'the read settles')
+    assert.equal(said.length, 1)
+    assert.match(said[0], /\bblock\b/)
+    assert.match(said[0], /\bref\b/)
+    assert.equal(said[0].includes(secret), false, said[0])
+  } finally { svc.stop() }
+})
+
 test('the real worker reports progress while it folds a session, and the fold is answered whole (3.5:42)', { timeout: 120_000 }, async () => {
   const home = path.join(tmpDir('trocar-qsvc-prog-'), '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
@@ -374,13 +379,19 @@ test('the real worker reports progress while it folds a session, and the fold is
   const svc = createQueryService({ home, fork: (h) => { const c = workerFork(h); c.on('message', (m) => { if (m && m.progress === true) ticks.push(Date.now()) }); return c } })
   try {
     await within(svc.relay({ name: 'segments', params: {}, res: recorder() }), 60_000, 'the worker is up')
+    const ask = async () => {
+      const res = recorder()
+      await within(svc.relay({ name: 'session', params: { id: s.id }, res }), 60_000, 'the session is answered')
+      assert.equal(res.status, 200)
+      return JSON.parse(res.text())
+    }
+    const first = await ask()
+    assert.equal(first.command, 'session')
+    assert.ok(first.pending, 'a request answers one slice of a fold of 16 MB, and the fold goes on behind it')
+    // A slice of a request is shorter than the worker's report interval, and the tick before it can hold its one report back: what must
+    // report is the fold, so ticks count from its first answer, and on a channel of their own they may land after the last answer.
     ticks.length = 0
-    const res = recorder()
-    await within(svc.relay({ name: 'session', params: { id: s.id }, res }), 60_000, 'the session is answered')
-    assert.equal(res.status, 200)
-    const doc = JSON.parse(res.text())
-    assert.equal(doc.command, 'session')
-    assert.ok(ticks.length >= 1, 'a fold of 16 MB said it was still working')
+    await whileMoving(async () => !(await ask()).pending && ticks.length >= 1, () => ticks.length, 'the fold')
   } finally { svc.stop() }
 })
 
@@ -511,13 +522,56 @@ test('a projection the worker cannot write: both answers whole, one persisted pr
   } finally { svc.stop(); fs.chmodSync(ctxDir, 0o700) }
 })
 
-// 3.5 #27 服务队列: one request in flight; the rest are served block, lane, session, then the others, first come first served
-// within a class; a caller gone before its turn is never written to the worker. The stub answers each line 100 ms after it arrives
-// and the fork records every line the service writes to it.
-const queueWorld = () => {
+test('a session whose answer files cannot be saved: its head says why the read stopped and the step that fixes it, as the one record does; files that can be written again clear it (4.3 §4 盘满, 3.5 #37, D38)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-qsvc-unsaved-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home })
+  s.append(40)
+  const ctxDir = path.join(home, 'index', 'ctx')
+  fs.mkdirSync(ctxDir, { recursive: true, mode: 0o700 })
+  fs.chmodSync(ctxDir, 0o500)
+  const said = []
+  let lock = null
+  const svc = createQueryService({ home, failure: (where, e) => said.push({ where, code: e.code, reason: e.message }), fork: workerFork })
+  const head = async () => {
+    const res = recorder()
+    await within(svc.relay({ name: 'session', params: { id: s.id, head: true }, res }), 60_000, 'the head is answered')
+    assert.equal(res.status, 200)
+    return JSON.parse(res.text())
+  }
+  try {
+    let h = null
+    for (let i = 0; i < 300 && !(h = await head()).pending?.stopped; i++) await new Promise((r) => setTimeout(r, 100)) // its first answer may come before a write is tried
+    const stop = h.pending?.stopped
+    assert.ok(stop && FOLD_STOPS.includes(stop.code), 'the head says the read stopped, with a FOLD_STOPS code')
+    assert.match(stop.reason, /^[^\n]+ Next: [^\n]+$/, 'one line: the cause, then the one step that fixes it')
+    assert.ok(stop.reason.includes(path.join(home, 'index')), 'it names where trocar could not save')
+    // a record comes on the worker's IPC channel, an answer on its stdout: either may come first
+    const records = async (n) => { for (let i = 0; i < 50 && said.filter((x) => x.code === 'projection-write-failed').length < n; i++) await new Promise((r) => setTimeout(r, 100)); return said.filter((x) => x.code === 'projection-write-failed') }
+    const got = await records(1)
+    assert.equal(got.length, 1, 'one record for the episode')
+    assert.equal(got[0].reason, stop.reason, 'the record says what the head says')
+    fs.chmodSync(ctxDir, 0o700)
+    for (let i = 0; i < 300 && (h = await head()).pending?.stopped; i++) await new Promise((r) => setTimeout(r, 100))
+    assert.equal(h.pending?.stopped, undefined, 'saved again: no stop')
+    assert.equal(h.tier, 1, 'the fold\'s head')
+    // that write ended the episode: the next refusal is a record of its own and a stop again
+    lock = (d, f) => { const dir = sessionDir(home, s.id); fs.chmodSync(dir, 0o700); for (const n of fs.readdirSync(dir)) try { fs.chmodSync(path.join(dir, n), f) } catch (e) { if (e.code !== 'ENOENT') throw e } fs.chmodSync(dir, d) } // a temp file renamed meanwhile
+    lock(0o500, 0o400)
+    s.append(4)
+    for (let i = 0; i < 300 && !(h = await head()).pending?.stopped; i++) await new Promise((r) => setTimeout(r, 100))
+    assert.ok(h.pending?.stopped, 'stopped again')
+    assert.equal((await records(2)).length, 2, 'a record for each episode')
+  } finally { svc.stop(); fs.chmodSync(ctxDir, 0o700); lock?.(0o700, 0o600) }
+})
+
+// 3.5 #27 服务队列: one request in flight; the rest are served block, status, sessions, lane, session, then the others, first come
+// first served within a class; a caller gone before its turn is never written to the worker. The stub answers each line 100 ms after
+// it arrives (`worker`: what it does with a line instead) and the fork records every line the service writes to it.
+const queueWorld = ({ worker = `setTimeout(() => process.stdout.write('200 2\\n{}'), 100)`, ...opts } = {}) => {
   const got = []
-  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: () => {}, fork: () => {
-    const c = spawn(process.execPath, ['-e', `process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(Boolean)) setTimeout(() => process.stdout.write('200 2\\n{}'), 100) })`], { stdio: ['pipe', 'pipe', 'pipe'] })
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: () => {}, ...opts, fork: () => {
+    const c = spawn(process.execPath, ['-e', `let n = 0; process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(Boolean)) { n++; ${worker} } })`], { stdio: ['pipe', 'pipe', 'pipe'] })
     const w = c.stdin.write.bind(c.stdin)
     c.stdin.write = (l, ...a) => (got.push(JSON.parse(l).params.tag), w(l, ...a))
     return c
@@ -526,12 +580,107 @@ const queueWorld = () => {
   return { svc, got, ask }
 }
 
-test('#27: with one request in flight, the queue is served block, lane, session, then the rest', async () => {
+test('#27: with one request in flight, the queue is served block, status, sessions, lane, session, then the rest', async () => {
   const { svc, got, ask } = queueWorld()
   try {
-    const all = [ask('segments', 'first'), ask('sessions', 'sessions'), ask('session', 'session'), ask('lane', 'lane'), ask('block', 'block')]
+    const all = [ask('segments', 'first'), ask('segments', 'rest'), ask('session', 'session'), ask('lane', 'lane'), ask('sessions', 'sessions'), ask('status', 'status'), ask('block', 'block')]
     await within(Promise.all(all), 10_000, 'every queued request')
-    assert.deepEqual(got, ['first', 'block', 'lane', 'session', 'sessions'])
+    assert.deepEqual(got, ['first', 'block', 'status', 'sessions', 'lane', 'session', 'rest'])
+  } finally { svc.stop() }
+})
+
+// 3.5 §行表先读: the worker may answer `102`, meaning ask again. Through a real pipe: the line is written again and the caller sees only
+// the answer that followed it.
+test('3.5 102: the line is written again, and the caller gets the real status and body under one head', async () => {
+  const { svc, got, ask } = queueWorld({ againMs: 5, worker: `process.stdout.write(n === 1 ? '102 0 - 0 -\\n' : '404 2\\n{}')` })
+  const res = recorder(), heads = [], head = res.writeHead
+  res.writeHead = (s) => { heads.push(s); head(s) }
+  try {
+    await within(ask('sessions', 'a', res), 10_000, 'the answer after the 102')
+    assert.deepEqual(got, ['a', 'a'])
+    assert.deepEqual(heads, [404])
+    assert.equal(res.text(), '{}')
+    assert.equal(res.ended, true)
+  } finally { svc.stop() }
+})
+
+test('3.5 102: a request queued while another is parked is written in between, whatever their ranks', async () => {
+  for (const [parks, passes] of [['sessions', 'status'], ['status', 'sessions']]) {
+    const { svc, got, frame, parked, ask, sent } = handWorld({ againMs: 30 })
+    try {
+      const first = ask(parks, 'parked')
+      await parked()
+      const second = ask(passes, 'passing')
+      assert.deepEqual(got, ['parked', 'passing'])
+      frame('200 2\n{}')
+      await within(second, 10_000, 'the one that passed')
+      await sent(3)
+      assert.deepEqual(got, ['parked', 'passing', 'parked'])
+      frame('200 2\n{}')
+      await within(first, 10_000, 'the parked one')
+    } finally { svc.stop() }
+  }
+})
+
+test('3.5 102: a caller gone while parked is not asked for again, and its promise settles', async () => {
+  const { svc, got, parked, ask } = handWorld({ againMs: 5 })
+  const gone = Object.assign(new EventEmitter(), { writeHead() {}, write: () => true, end() {} })
+  try {
+    const left = ask('sessions', 'left', gone)
+    await parked()
+    gone.emit('close')
+    await within(left, 10_000, 'the promise of the one who left')
+    await new Promise((d) => setTimeout(d, 30)) // a timer that outlasts the park's: its turn came and went
+    assert.deepEqual(got, ['left'])
+  } finally { svc.stop() }
+})
+
+test('3.5 102: stop() while parked rejects the caller and nothing is written after it', async () => {
+  const { svc, got, parked, ask, forks } = handWorld({ againMs: 5 })
+  const caller = ask('sessions', 'a')
+  await parked()
+  svc.stop()
+  await assert.rejects(within(caller, 10_000, 'the parked caller'))
+  await new Promise((d) => setTimeout(d, 30))
+  assert.deepEqual(got, ['a'])
+  assert.equal(forks(), 1)
+})
+
+test('3.5 102: stop() with a request queued behind one in flight rejects both and forks nothing', async () => {
+  const { svc, got, ask, forks } = handWorld()
+  const flight = ask('sessions', 'a'), queued = ask('lane', 'b')
+  svc.stop()
+  await assert.rejects(within(flight, 10_000, 'the one in flight'))
+  await assert.rejects(within(queued, 10_000, 'the queued one'))
+  assert.deepEqual(got, ['a'])
+  assert.equal(forks(), 1)
+})
+
+test('3.5 102: a parked request keeps the worker: the idle clock stays off', async () => {
+  const { svc, got, frame, parked, ask, sent, forks } = handWorld({ againMs: 40, idleMs: 5 })
+  try {
+    const caller = ask('sessions', 'a')
+    await parked()
+    await sent(2)
+    frame('200 2\n{}')
+    await within(caller, 10_000, 'the answer')
+    assert.deepEqual(got, ['a', 'a'])
+    assert.equal(forks(), 1, 'the second send went to the same worker')
+  } finally { svc.stop() }
+})
+
+// #42, its wedged part (the rest is on a real worker in test/query/worker-rows.test.mjs): the park itself is not silence, the re-send
+// is a request of its own and a worker that says nothing to it is the failure it always was.
+test('#42: a worker that answers 102 and then stays silent fails the re-sent request, one query-failed', async () => {
+  const { svc, got, said, parked, ask, sent } = handWorld({ againMs: 40, deadlineMs: 10 })
+  try {
+    const caller = ask('sessions', 'a')
+    await parked()
+    await sent(2)
+    await assert.rejects(within(caller, 10_000, 'the wedged worker\'s caller'))
+    assert.deepEqual(got, ['a', 'a'])
+    assert.equal(said.length, 1)
+    assert.ok(said.every((c) => c === 'query-failed' && isCode(c)))
   } finally { svc.stop() }
 })
 
@@ -712,7 +861,7 @@ test('kick: a kicked cold fold is folded to its frontier by the one worker it fo
 // from its start by a kick of its last record id alone, with no read: its head is tier 1 at its last member, nothing pending. The
 // worker's idle period (worker.mjs IDLE_SLICE_MS) writes the head the last slice left behind.
 test('kick: a never-folded session kicked by its last record id alone is folded to its end with no read (head tier 1, pending null)', { timeout: 180_000 }, async () => {
-  const atEnd = (head, last) => head != null && head.tier === 1 && head.pending === null && head.mark === last
+  const atEnd = (head, last) => head != null && head.tier === 1 && head.pending === null && listed(head) && head.mark === last
   const { members, log } = await kickedFold({ calls: 600, wire: 'http', kicked: (ms) => [String(ms.at(-1).id)], done: ({ log, last }) => atEnd(headOf(log), last) })
   assert.equal(lastFrontier(log)?.f, String(members.at(-1).id), 'the fold log stands at the last member')
   const head = headOf(log)
@@ -839,18 +988,19 @@ test('relay: a request reading a cold segment index sends progress on the IPC ch
 })
 
 // 4.4 §存下的答案「刷新」: refresh({name, params}) is true while a refresh of that name is queued or running (queueing nothing more),
-// or when there is no worker (queueing one refresh of these params); false when the worker is warm with no refresh of the name
-// pending, or the subject is cooling (the relay then answers 500 with its reason, D38). The stub records every line written to it and answers each
-// `hold` ms after it arrives.
+// or when there is no worker, a worker whose rows are unread or a request in flight (queueing one refresh of these params); false when the worker is warm and idle with no
+// refresh of the name pending, or the subject is cooling (the relay then answers 500 with its reason, D38). The stub records every line written
+// to it and answers each `hold` ms after it arrives; it has no IPC and no rows pass, so a test says `{rows: true}` by emitting it on the child.
 const refreshWorld = ({ hold = 0, script } = {}) => {
-  const lines = []
+  const lines = [], kids = []
   const svc = createQueryService({ home: rawHome('trocar-qsvc-'), now: () => 0, failure: () => {}, fork: () => {
     const c = spawn(process.execPath, ['-e', script ?? `process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(Boolean)) setTimeout(() => process.stdout.write('200 2\\n{}'), ${hold}) })`], { stdio: ['pipe', 'pipe', 'pipe'] })
     const w = c.stdin.write.bind(c.stdin)
     c.stdin.write = (l, ...a) => (lines.push(JSON.parse(l)), w(l, ...a))
+    kids.push(c)
     return c
   } })
-  return { svc, lines }
+  return { svc, lines, kids }
 }
 
 test('refresh: with no worker it is true, and a second refresh of the same params while the first is pending queues nothing', async () => {
@@ -864,12 +1014,69 @@ test('refresh: with no worker it is true, and a second refresh of the same param
 })
 
 test('refresh: a warm, idle worker is false (the relay answers fresh), and it queues nothing', async () => {
-  const { svc, lines } = refreshWorld()
+  const { svc, lines, kids } = refreshWorld()
   try {
     await svc.relay({ name: 'segments', params: {}, res: recorder() })
+    kids[0].emit('message', { rows: true })
     assert.equal(svc.refresh({ name: 'sessions', params: {} }), false)
     await new Promise((d) => setTimeout(d, 50))
     assert.deepEqual(lines.map((l) => l.name), ['segments'])
+  } finally { svc.stop() }
+})
+
+test('refresh: a live worker with its rows unread is true and gets one refresh; with `{rows: true}` said and that refresh landed it is false (4.4 #18)', async () => {
+  const { svc, lines, kids } = refreshWorld({ hold: 100 })
+  const sessions = { name: 'sessions', params: { limit: '500' } }
+  try {
+    await svc.relay({ name: 'segments', params: {}, res: recorder() })
+    assert.equal(svc.refresh(sessions), true)
+    assert.equal(svc.refresh(sessions), true)
+    await new Promise((d) => setTimeout(d, 50))
+    assert.deepEqual(lines.map((l) => l.name), ['segments', 'sessions'], 'one refresh reached the worker it already has')
+    assert.equal(kids.length, 1)
+    kids[0].emit('message', { rows: true })
+    await within((async () => { while (svc.refresh(sessions)) await new Promise((d) => setTimeout(d, 20)) })(), 10_000, 'false once the refresh landed')
+    await new Promise((d) => setTimeout(d, 50))
+    assert.deepEqual(lines.map((l) => l.name), ['segments', 'sessions'], 'nothing more queued')
+  } finally { svc.stop() }
+})
+
+test('refresh: with a request in flight on a warm worker it is true, and the one refresh goes to the worker behind that request (4.4 #18)', async () => {
+  const lines = []
+  let c = null
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: () => {}, fork: () => (c = Object.assign(new EventEmitter(), { stdout: Object.assign(new EventEmitter(), { pause() {}, resume() {} }), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { write: (l) => lines.push(JSON.parse(l).name) }), kill() {} })) })
+  const sent = (n) => within((async () => { while (lines.length < n) await new Promise((d) => setTimeout(d, 2)) })(), 10_000, `line ${n} to the worker`)
+  const answers = () => { c.stdout.emit('data', Buffer.from('200 2\n{}')); return new Promise((d) => setTimeout(d, 20)) }
+  const sessions = { name: 'sessions', params: { limit: '500' } }
+  try {
+    const lane = svc.relay({ name: 'lane', params: { id: 'x' }, res: recorder() })
+    await sent(1)
+    c.emit('message', { rows: true })
+    assert.equal(svc.refresh(sessions), true)
+    assert.equal(svc.refresh(sessions), true)
+    assert.deepEqual(lines, ['lane'], 'nothing goes to the worker while the lane runs')
+    await answers()
+    await lane
+    await sent(2)
+    assert.deepEqual(lines, ['lane', 'sessions'])
+    await answers()
+    assert.equal(svc.refresh(sessions), false)
+    assert.deepEqual(lines, ['lane', 'sessions'])
+  } finally { svc.stop() }
+})
+
+test('refresh: a new fork starts with its rows unread, whatever the worker before it said', async () => {
+  const { svc, kids } = refreshWorld()
+  const sessions = { name: 'sessions', params: {} }
+  try {
+    await svc.relay({ name: 'segments', params: {}, res: recorder() })
+    kids[0].emit('message', { rows: true })
+    assert.equal(svc.refresh(sessions), false)
+    kids[0].kill()
+    await within(once(kids[0], 'close'), 30_000, 'the stand-in closes')
+    await svc.relay({ name: 'segments', params: {}, res: recorder() })
+    assert.equal(kids.length, 2)
+    assert.equal(svc.refresh(sessions), true)
   } finally { svc.stop() }
 })
 
@@ -882,7 +1089,7 @@ test('refresh: a cooling subject is false, so its failure is never hidden behind
 })
 
 test('refresh: one refresh per name while it is pending, so a many-page list polled again and again reaches the worker once and then goes fresh', async () => {
-  const { svc, lines } = refreshWorld({ hold: 400 })
+  const { svc, lines, kids } = refreshWorld({ hold: 400 })
   try {
     svc.warm({ name: 'sessions', params: {} })
     const pages = [{ limit: '500' }, { limit: '500', after: 'a' }, { limit: '500', after: 'b' }, { limit: '500', after: 'c' }]
@@ -890,6 +1097,7 @@ test('refresh: one refresh per name while it is pending, so a many-page list pol
       for (const params of pages) assert.equal(svc.refresh({ name: 'sessions', params }), true, 'a refresh of the name is pending: answered from the stored file')
       await new Promise((d) => setTimeout(d, 20))
     }
+    kids[0].emit('message', { rows: true })
     await within((async () => { while (pages.some((params) => svc.refresh({ name: 'sessions', params }))) await new Promise((d) => setTimeout(d, 20)) })(), 10_000, 'every page goes fresh once the refresh lands')
     assert.deepEqual(lines.map((l) => [l.name, l.params]), [['sessions', {}]], 'exactly one line reached the worker')
   } finally { svc.stop() }

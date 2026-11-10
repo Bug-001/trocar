@@ -7,7 +7,7 @@
 //
 // Per record it holds exactly what the list queries print (1.6 §4.1 「段索引每条记录存什么」): id, time,
 // harness, class, host, path, status, stored and wire bytes, session key, and whether it is a model call.
-// No body, no headers — those are read back from the segment itself (src/query/records.mjs readRecord).
+// No body, no headers — those are read back from the segment itself (src/query/records.mjs recordReader).
 //
 // INVALIDATION is the identity rule of src/query/source.mjs (size, mtime, ctime + the first and last 4 KB
 // before the last indexed line), not a rule of its own: a segment that only GREW is resumed from the
@@ -29,14 +29,14 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { parseSegment, recordId } from '../collector/core/record/segments.mjs';
-import { harnessOf, sessionKeyOf, headerOf } from '../dissect/harnesses.mjs';
+import { harnessOf, sessionKeyOf, headerOf, entrypointOf } from '../dissect/harnesses.mjs';
 import { synthFactsOf } from '../dissect/synth-key.mjs';
 import { isLogOnly } from '../dissect/capture-labels.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { fpRanges, readRangeSync } from './source.mjs';
 import { openSealed } from '../raw/reader.mjs';
-import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
+import { R, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 import { trocarHome, collectorHome } from '../paths.mjs';
 import { readDaemonLock } from '../off/daemon-stop.mjs';
 import { statKey, warmCache, fsTag } from './warm.mjs';
@@ -44,35 +44,59 @@ import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
-const INDEX_V = 7;
+const INDEX_V = 12;
+// FACTS_V: the version of BODY_FACTS and of every rule they are computed by: src/dissect/synth-key.mjs, the harness rows of
+// src/dissect/harnesses.mjs (session keys, user-agent rules, `synth`, hints, compaction) and the reply readers synth-key calls (the
+// dissectors' normResp, analyze.mjs's). A change to any of those bumps FACTS_V, not INDEX_V alone: an INDEX_V-only bump copies these
+// facts as they were. INDEX_V: the envelope's fields and the file's shape. A mark carries both (4.2 §段索引 两个版本键); one with no
+// `fv` is FACTS_V 1's when its v is 12 (the facts as INDEX_V 12 is released with them), and of no known facts before it.
+const FACTS_V = 2; // 2: a Gemini reply is read (kin_reply)
+const fvOf = (o) => o.fv ?? (o.v === 12 ? 1 : null);
+// What a reader's `v` asks of a mark: SEGMENT (the default), the segment index's two keys; a number, that `v` alone (the usage sidecar's, usage.mjs)
+const SEGMENT = Symbol('the segment index');
+const fits = (o, v) => (v === SEGMENT ? o.v === INDEX_V && fvOf(o) === FACTS_V : o.v === v);
+/** The entry's fields taken from the request body: an envelope-only INDEX_V change copies them from the old index (4.2 §段索引). */
+export const BODY_FACTS = Object.freeze(['session_key', 'synth_hash', 'kin_fp', 'kin_probe', 'kin_chain', 'kin_items', 'kin_late', 'kin_mark', 'kin_reply']);
 const CHUNK = 1 << 20;
+/** How long a scan that was given `ease` holds the event loop at most, give or take a chunk or EASE_EVERY records (3.5 §行表先读). */
+const EASE_MS = 50, EASE_EVERY = 64;
+/** easing(ease) → an async check a scan awaits at its checkpoints: it awaits `ease` once EASE_MS passed since the last time. Null with
+ *  no `ease`, and a scan then never awaits at all: the keeper and the seal worker run as one piece, as they always did. */
+const easing = (ease) => {
+  if (!ease) return null;
+  let last = performance.now();
+  return async () => { if (performance.now() - last >= EASE_MS) { await ease(); last = performance.now(); } };
+};
 // How many appended bytes one catch-up of the daemon's keeper takes (src/collector/index-keeper.mjs imports it): the
 // unit of "a chunk of index work". A READER that had to read more than this from a segment is the honest definition of
 // a cold index (D62 · D38): the keeper never leaves that much behind, so nothing was keeping this index current.
 export const KEEPER_CHUNK_BYTES = 4 << 20;
+/** A `warmOnly` read met a segment whose index it may not build (segmentIndex): the light worker answers `102`, and the main role reads it. */
+export class IndexPending extends Error {}
 const NL = 0x0a;
 // One direction's wire bytes: the number when it is one, else null — not recorded is never 0 (4.2 §段索引, invariant 4).
 const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
 // What a session is made of, per record, so `sessions` never reads a record back (1.6 §4.1 速度目标 ≤ 1 s).
 // Each is a fact of THIS record; the grouping and the counting are the read side's (src/query/rows.mjs), and
 // the session key is the ONE table's answer (3.4, body keys included), not a header list of this file's own.
-const entrypointOf = (e) => {
-  const app = String(headerOf(e, 'x-app') || '').toLowerCase(), ua = String(headerOf(e, 'user-agent') || headerOf(e, 'originator') || '').toLowerCase();
-  if (app === 'desktop' || /desktop/.test(ua)) return 'desktop';
-  if (app === 'cli' || /cli|sdk-cli/.test(ua)) return 'cli';
-  return null;
-};
 
 // ── one line → one index record ───────────────────────────────────────────
 // A line that is not JSON can never be indexed (its bytes are still on disk and `raw cat` still prints
 // them): it is reported, and it keeps its line number so every later record's id stays what it was.
-function recordOf(lineBuf, segment, lineNo, problems, offset = null) {
+function recordOf(lineBuf, segment, lineNo, problems, offset = null, memo = null, prior = null) {
   let e;
   try { e = JSON.parse(lineBuf.toString('utf8')); } catch (err) {
     problems.push({ code: 'record-unparseable', reason: `${recordId(segment, lineNo)} is not JSON (${err.message}); it is left out of the index` });
     return null;
   }
-  return indexEntryOf(e, { segment, lineNo, storedBytes: lineBuf.length, offset });
+  return indexEntryOf(e, { segment, lineNo, storedBytes: lineBuf.length, offset, memo, facts: prior && priorFacts(prior, segment, lineNo, lineBuf.length, offset) });
+}
+// This line's body facts from the old index (`prior`: its entries by id), when its entry is this line's: the same id, stored bytes and
+// offset (null in a sealed segment's); else null, and they are computed.
+function priorFacts(prior, segment, lineNo, storedBytes, offset) {
+  const old = prior.get(recordId(segment, lineNo));
+  if (!old || old.stored_bytes !== storedBytes || (old.offset ?? null) !== offset) return null;
+  return old;
 }
 
 /**
@@ -83,13 +107,13 @@ function recordOf(lineBuf, segment, lineNo, problems, offset = null) {
  * holds that, and test/collector/index-keeper-entries.test.mjs holds it for the keeper's path specifically.
  *   storedBytes: the line's bytes WITHOUT its newline (what `lineBuf.length` is above).
  *   offset: where the line starts in the plaintext segment (null: sealed).
+ *   memo: a scan's synthFactsOf memo (one per scan of one segment, dropped with it); the entry is the same without it.
  */
-export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null }) {
-  // the body as the board reads it: a request body stored compressed (req_body null + req_body_b64) still carries its session key
-  const e = expandRequestBody(env);
+export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null, memo = null, facts = null }) {
+  // `facts`: an entry whose BODY_FACTS are this record's (the old index's, 4.2 §段索引): then the body is never read
+  const f = facts || bodyFactsOf(env, memo), e = env;
   const wire = e.body_wire_bytes || {};
   const h = harnessOf(e);
-  const synth = synthFactsOf(e);
   return {
     id: recordId(segment, lineNo),
     ts: e.ts_request ?? e.ts ?? null,
@@ -101,7 +125,7 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
     stored_bytes: storedBytes,
     sent_bytes: finite(wire.req),
     received_bytes: finite(wire.resp),
-    session_key: sessionKeyOf(e).key ?? null,
+    session_key: f.session_key,
     is_llm: !!e.is_llm_call,
     ws: e.transport === 'ws',  // a WebSocket logical call: no HTTP status, so the index row's failed rule never counts it (failedOf)
     // the session facts: harness_id is the harness the BOARD decides (proc, else the UA — and it says which)
@@ -112,12 +136,40 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
     entrypoint: entrypointOf(e),
     log_only: isLogOnly(e),
     subagent: !!String(headerOf(e, 'x-claude-code-agent-id') || '').trim(),
+    synth_hash: f.synth_hash,
+    // kinship and chains (3.4 按内容认亲 · 合成键): what bodyFactsOf says
+    kin_fp: f.kin_fp,
+    kin_probe: f.kin_probe,
+    kin_chain: f.kin_chain,
+    kin_items: f.kin_items,
+    kin_late: f.kin_late,
+    kin_mark: f.kin_mark,
+    kin_reply: f.kin_reply,
+    offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
+  };
+}
+
+/** bodyFactsOf(env, memo) → the BODY_FACTS of one record, read from its request body (expanded when stored compressed). */
+function bodyFactsOf(env, memo = null) {
+  // the body as the board reads it: a request body stored compressed (req_body null + req_body_b64) still carries its session key
+  const e = expandRequestBody(env);
+  const synth = synthFactsOf(e, memo);
+  return {
+    session_key: sessionKeyOf(e).key ?? null,
     synth_hash: synth && synth.hash != null ? synth.hash : null,
     // kinship (3.4 按内容认亲): any call of a `synth: true` harness → the user-text fingerprints its session is recognized by; a
     // keyless call that is its harness's compaction request → the ones it looks with. Space-joined strings ('' when none): a scalar row.
     kin_fp: synth && synth.fp ? synth.fp.join(' ') : null,
     kin_probe: synth && synth.probe ? synth.probe.join(' ') : null,
-    offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
+    // a keyless call's message chain (3.4 合成键), or a keyed one's where its row splits a keyed session by chains (`synth_hash` too):
+    // its history's last cumulative hashes, space-joined ('' when it has none), and
+    // whether it carries its harness's compaction marker: hashes and a flag, never message text
+    kin_chain: synth && synth.chain ? synth.chain.join(' ') : null,
+    kin_items: synth && synth.items ? synth.items.join(' ') : null,
+    kin_late: synth && synth.late != null ? synth.late : null, // how many of kin_fp come from user texts after the first
+    kin_mark: !!(synth && synth.mark),
+    // a reply as kinship evidence (3.4 按内容认亲): its sampled windows as one item (count, first, last, digest), base64: hashes, never text
+    kin_reply: (synth && synth.reply) ?? null,
   };
 }
 
@@ -126,16 +178,17 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
 // `maxBytes` stops the scan at the first line boundary past that many bytes (`done: false`); it always takes at least
 // one whole line, so a caller that loops until `done` always makes progress, however long a single line is.
 // `progress` is called after every chunk read: a scan of a cold segment is background work the query worker reports (3.5 后台抽取与归约).
-function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity, progress = null) {
+// `ease`: see `easing`; the fd stays open across it, and the scan reads only as far as the size it saw when it began.
+async function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity, progress = null, ease = null, prior = null) {
   const fd = fs.openSync(file, 'r');
   try {
     const st = fs.fstatSync(fd);
     const buf = Buffer.allocUnsafe(CHUNK);
-    const records = [];
+    const records = [], breathe = easing(ease), memo = new Map();
     let pos = from, lineStart = from, lineNo = firstLine - 1, pending = Buffer.alloc(0);
     const take = (lineBuf) => {
       lineNo++;
-      if (lineBuf.length) { const r = recordOf(lineBuf, segment, lineNo, problems, lineStart); if (r) records.push(r); }
+      if (lineBuf.length) { const r = recordOf(lineBuf, segment, lineNo, problems, lineStart, memo, prior); if (r) records.push(r); }
       lineStart += lineBuf.length + 1;
     };
     while (pos < st.size && (lineStart === from || pos - from < maxBytes)) {
@@ -154,6 +207,7 @@ function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Inf
       if (seg < n) pending = Buffer.concat([pending, buf.subarray(seg, n)]);
       pos += n;
       if (progress) progress();
+      if (breathe) await breathe();
     }
     const end = lineStart;
     const done = pos >= st.size;
@@ -169,38 +223,39 @@ function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Inf
 // A sealed segment: its own index already knows every line's number and length, so the records come
 // out with the ids they had before sealing (V88). A file that cannot be read is reported, never
 // silently empty.
-function scanSealed(fs, file, segment, problems) {
+async function scanSealed(fs, file, segment, problems, ease = null, prior = null) {
   let sf;
   try { sf = openSealed(file, { fs }); } catch (e) {
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(file)}: ${String((e && e.message) || e)}` });
     return { records: [], mark: { size: fs.statSync(file).size, sealed: true }, bytesRead: 0, done: true };
   }
   try {
-    const records = [];
+    const records = [], breathe = easing(ease), memo = new Map();
     for (let i = 0; i < sf.count; i++) {
+      if (breathe && i % EASE_EVERY === 0) await breathe();
       const r = sf.records[i], lineNo = Number(r[R.lineNo]) + 1;
       if (r[R.flags] & FLAG_UNPARSEABLE) { problems.push({ code: 'record-unparseable', reason: `${recordId(segment, lineNo)} was not JSON when it was sealed; it is left out of the index` }); continue; }
       let line;
       try { line = sf.lineAt(i); } catch (e) { problems.push({ code: 'record-unreadable', reason: `${recordId(segment, lineNo)}: ${String((e && e.message) || e)}` }); continue; }
       if (line.length && line[line.length - 1] === NL) line = line.subarray(0, line.length - 1);
       if (!line.length) continue;
-      const rec = recordOf(line, segment, lineNo, problems);
+      const rec = recordOf(line, segment, lineNo, problems, null, memo, prior);
       if (rec) records.push(rec);
     }
     return { records, mark: sealedMark(fs, file), bytesRead: fs.statSync(file).size, done: true };
   } finally { sf.close(); }
 }
 
-// ── the index document: append-only NDJSON (INDEX_V 7; 4.2 §段索引) ────────
+// ── the index document: append-only NDJSON (INDEX_V 8; 4.2 §段索引) ────────
 // One file per segment, one line per fact: an entry (a record, bare), a problem (`{"p":…}`), or a mark
-// (`{"m":…,"v":7}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
+// (`{"m":…,"v":8}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
 // then one mark; a reader takes everything up to the LAST complete mark and ignores what follows it (a torn batch).
 // That is what makes keeping the index current cost the NEW records, never the whole segment: the whole-document
 // format this replaces (v3) rewrote ≈ e·N²/2 bytes per segment, and real traffic gives nearly every record a pass of
 // its own. A v3 document has no mark line, so it is simply stale and is rebuilt like any stale index.
 const entryLine = (r) => `${JSON.stringify(r)}\n`;
 const problemLine = (p) => `${JSON.stringify({ p })}\n`;
-const markLine = (m) => `${JSON.stringify({ m, v: INDEX_V })}\n`;
+const markLine = (m) => `${JSON.stringify({ m, v: INDEX_V, fv: FACTS_V })}\n`;
 const fpDigest = (read, end) => { const h = createHash('sha256'); for (const [a, b] of fpRanges(end)) h.update(read(a, b)); return h.digest('base64'); };
 
 // The whole document, for a READER: everything up to the last complete mark line.
@@ -209,7 +264,7 @@ const fpDigest = (read, end) => { const h = createHash('sha256'); for (const [a,
 // reads only the bytes past that mark while the file is still that one (same ino: a whole rewrite is a rename, a new file) and
 // the mark line's bytes at its offset are unchanged (the keeper cuts a torn batch back to a mark, never before the last one it
 // wrote); else whole. The entries are the whole read's either way (4.2:49): keeping them current costs the new lines (D62).
-export function readIndex(fs, file, v = INDEX_V, past = null) {
+export function readIndex(fs, file, v = SEGMENT, past = null) {
   if (past && past.read) { const got = readPast(fs, file, v, past); if (got !== undefined) return got; }
   let ino = null, buf;
   try { ino = fs.statSync(file).ino } catch { /* read below says whether it is there */ }
@@ -238,10 +293,24 @@ function lastMark(lines, v, got) {
     const o = lines[i];
     if (!o || typeof o !== 'object') break;
     if (!o.m) continue;
-    if (o.v !== v) return null;
+    if (!fits(o, v)) return null;
     got.mark = o.m; upTo = i;
   }
   return upTo;
+}
+// The entries of an index whose INDEX_V is past but whose facts are current (4.2 §段索引 两个版本键), by id, for a rebuild that copies their
+// BODY_FACTS: only while that index's mark says `source` is still the file it indexed, or that file appended to, so no line moved; else null.
+function priorIndex(fs, file, source) {
+  let buf;
+  try { buf = fs.readFileSync(file) } catch { return null; }
+  let lines;
+  try { lines = JSON.parse(asArray(buf)); } catch { lines = completeLines(buf); }
+  let upTo = -1, last = null;
+  for (let i = 0; i < lines.length; i++) { const o = lines[i]; if (!o || typeof o !== 'object') break; if (o.m) { upTo = i; last = o; } }
+  if (!last || fvOf(last) !== FACTS_V || usability(fs, source, { mark: last.m }) === 'rebuild') return null;
+  const byId = new Map();
+  for (let i = 0; i < upTo; i++) { const o = lines[i]; if (!o.m && !o.p && typeof o.id === 'string') byId.set(o.id, o); }
+  return byId;
 }
 // Where a read of `buf` (the file's bytes from `base`) that ends with line `upTo` stopped: { ino, at, line }.
 function readTo(buf, base, upTo, ino) {
@@ -303,7 +372,7 @@ let tmpSeq = 0; // see storeIndex: the temp name is unique per call, not only pe
 const TAIL = 64 << 10; // a mark line is a few hundred bytes: room for it plus a torn batch, and widened if not
 // The last complete mark line WITHOUT the entries, for the keeper: all it needs is where its last pass ended (and
 // what to cut back), so its CPU per pass does not grow with the segment's record count either (D62).
-export function tailMark(fs, file, v = INDEX_V) {
+export function tailMark(fs, file, v = SEGMENT) {
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch { return null; }
   try {
@@ -323,7 +392,7 @@ export function tailMark(fs, file, v = INDEX_V) {
         let o;
         try { o = JSON.parse(body.subarray(at, nl)); } catch { break; }
         at = nl + 1;
-        if (o && o.m) { if (o.v !== v) return null; found = { mark: o.m, covered: from + at }; }
+        if (o && o.m) { if (!fits(o, v)) return null; found = { mark: o.m, covered: from + at }; }
       }
       if (found) return found;
       if (from === 0) return null;
@@ -362,6 +431,10 @@ export function segmentSource(home, segment, fs = nodeFs) {
   const plainPath = path.join(rawDir(home), `${segment}.ndjson`);
   return fs.existsSync(plainPath) ? plainPath : path.join(rawDir(home), `${segment}.sealed`);
 }
+
+/** Whether a read of plaintext `file` failed because the seal worker unlinked it after the look: it does so only with the sealed copy in
+ *  place (4.2 读者与封存并发), so that copy holds the bytes. A plaintext still there and unreadable is a failure: it wins while it exists. */
+export const plainWentSealed = (home, segment, fs, file) => !file.endsWith('.sealed') && !fs.existsSync(file) && fs.existsSync(path.join(rawDir(home), `${segment}.sealed`));
 
 // The mark of a plaintext segment covered up to byte `end` (just past line `lines`), the way a scan builds it: `size`
 // claims only what was covered, so a file that is longer reads as GROWN and resumes from `end` (usability below).
@@ -471,15 +544,19 @@ export const problemEntry = (where, p) => ({ where, code: p.code, ...(p.level ? 
  *     entry}], in line order; see fromEntries). Taken ONLY when they account for the segment exactly from the stored
  *     mark to its current size, so the answer is the scan's answer; anything else falls back to the scan.
  *   progress: called after every chunk the scan reads (a reader's; scanNdjson).
+ *   ease: an async function a scan awaits at least every EASE_MS or so, so a long one leaves the event loop to others (a reader's;
+ *     `easing`). The answer and any index written are the same with it or without.
+ *   warmOnly: the light worker's read (3.5 §行表先读): a stored index it cannot use (to rebuild, or a tail longer than the `index-cold` line) throws
+ *     IndexPending before any scan or write. A shorter tail is read as ever, or the newest step's block would never answer.
  * Never throws for a segment it cannot read: the reason is in `problems` and the caller lists it in `errors`.
  */
-export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null, progress = null } = {}) {
+export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null, progress = null, ease = null, warmOnly = false } = {}) {
   const problems = [];
   const source = segmentSource(home, segment, fs);
   const sealed = /\.sealed$/.test(source);
   const idxFile = path.join(indexDir(home), `${segment}.json`);
   // the keeper needs the stored mark and where it ended (only it appends); a reader needs the entries behind it
-  const stored = owner && !sealed ? tailMark(fs, idxFile) : readIndex(fs, idxFile, INDEX_V, past);
+  const stored = owner && !sealed ? tailMark(fs, idxFile) : readIndex(fs, idxFile, SEGMENT, past);
   const how = usability(fs, source, stored);
   // A stored index remembers what it could NOT read, and says it again on every later read: a problem
   // that only the read which BUILT the index reports would go silent the second time (D38).
@@ -488,14 +565,20 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
   const grown = !owner && !!past && (stored === past || continued.has(stored)) && how !== 'rebuild';
   const kept = owner ? null : stored;
   if (how === 'reuse') return { segment, source, records: stored.records || [], problems: stored.problems || [], bytesRead: 0, done: true, stored: kept, grown };
+  if (warmOnly && (how === 'rebuild' || fs.statSync(source).size - stored.mark.end > KEEPER_CHUNK_BYTES)) throw new IndexPending(`the index of ${segment} is not usable yet`);
   const prior = how === 'resume' && stored.problems ? stored.problems : []; // stored by an earlier pass, said again
+  // no index of this version: one whose facts are still current gives them, so the scan reads envelopes only (4.2 §段索引 两个版本键)
+  const old = !stored ? priorIndex(fs, idxFile, source) : null;
+  // shortcut: a keeper's rebuild in chunks (maxBytes) copies for its first chunk only, since that chunk's write replaces the old index and
+  // the next chunks resume with nothing to copy from; upgrade if the live segment's rebuild after an INDEX_V-only bump shows on the daemon's loop
   let got;
   try {
     got = sealed
-      ? scanSealed(fs, source, segment, problems)
+      ? await scanSealed(fs, source, segment, problems, ease, old)
       : (owner && fromEntries(fs, source, stored, how, entries))
-        || scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes, progress);
+        || await scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes, progress, ease, old);
   } catch (e) {
+    if (plainWentSealed(home, segment, fs, source)) return segmentIndex({ home, segment, fs, maxBytes, owner, entries, past, progress });
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(source)}: ${String((e && e.message) || e)}` });
     return { segment, source, records: stored && how === 'resume' ? stored.records || [] : [], problems: [...prior, ...problems], bytesRead: 0, done: true, stored: kept, grown: false };
   }
@@ -544,16 +627,16 @@ export const segStamp = (home, segment, fs, at = null) => {
   if (!f) stampFiles.set(k, (f = [path.join(rawDir(home), `${segment}.ndjson`), path.join(rawDir(home), `${segment}.sealed`)]));
   return `${!at || at.plain ? statKey(f[0], fs) : null}|${!at || at.sealed ? statKey(f[1], fs) : null}`;
 };
-/** warmSegmentIndex({home, segment, fs, at}) → the same `segmentIndex()` answer, read from disk only when that segment's
+/** warmSegmentIndex({home, segment, fs, at, progress, ease, warmOnly}) → the same `segmentIndex()` answer, read from disk only when that segment's
  *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory.
  *  A note (`level`, e.g. `index-cold`) is about the read that RAN segmentIndex, so it is never kept: a later read
  *  served from memory did none of that work, and an index write does not move the stamp (3.5 读不全 #17). */
-export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null, progress = null } = {}) => {
+export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null, progress = null, ease = null, warmOnly = false } = {}) => {
   let notes = [];
   const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs, at), async (old) => {
     // the answer this segment had: its index read goes on from where that one stopped (4.2:49)
     const prev = old ? await Promise.resolve(old).catch(() => null) : null; // kept as the promise it was computed as
-    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored, progress }), segment);
+    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored, progress, ease, warmOnly }), segment);
     if (got.grown && got.records !== prev.records && got.records.length >= prev.records.length) grew.set(got.records, recordsId(prev.records));
     notes = got.problems.filter((p) => p.level);
     return notes.length ? { ...got, problems: got.problems.filter((p) => !p.level) } : got;

@@ -19,7 +19,7 @@ const STATES = ['not-running', 'not-responding', 'failing', 'unknown', 'off', 'o
 function healthOver(recs) {
   const h = tmpDir('trocar-health-'), c = path.join(h, 'collector')
   fs.mkdirSync(path.join(c, 'flows'), { recursive: true })
-  fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: at(9999), entries: [], files: [] }))
+  fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: at(99999), entries: [], files: [] }))
   fs.writeFileSync(path.join(c, 'lock'), JSON.stringify({ pid: 4242, start_time: '900', boot_id: 'b1' }))
   fs.writeFileSync(path.join(c, 'flows', `${at(0).slice(0, 10)}.ndjson`), [{ ts: at(600), event: 'daemon-start', pid: 4242 }, ...recs].map((r) => JSON.stringify(r) + '\n').join(''))
   return captureHealth({ harnesses: HARNESS_IDS, home: h, now: NOW, alive: () => true, identity: () => ({ start_time: '900', boot_id: 'b1' }) })
@@ -79,7 +79,7 @@ test('C.3 · a failure group whose newest record names its process carries proce
   assert.ok(failureBrief(g).includes('codex') && failureBrief(g).includes('4321'), failureBrief(g))
   assert.equal(failureBrief(plain).includes('pid'), false)
   const one = (t) => t.replace(/\s+/g, ' ') // a row folds inside 80 columns
-  assert.ok(one((await s.run(['status', '--failures'], { deps })).io.stdoutText()).includes(one(failureBrief(g))), 'the --failures row carries the sentence that names the program')
+  assert.ok(one((await s.run(['status', '--failures', '--details'], { deps })).io.stdoutText()).includes(one(failureBrief(g))), 'the --failures row carries the sentence that names the program')
 })
 
 test('4.6 F9: a capture health that cannot be read is no `health`, an `errors` entry with the reason, and exit 3 — never empty, never "0 failures"', async () => {
@@ -108,4 +108,31 @@ test('C.3 failures: each count is the sum of its level\'s group counts, a resolv
   for (const level of ['problem', 'note']) assert.equal(f[level], f.groups.filter((g) => g.level === level).reduce((n, g) => n + g.count, 0), `${level}: ${JSON.stringify(f)}`)
   assert.ok(f.note >= 1, 'the helper-down condition is a note group')
   assert.equal(Date.parse(f.since), Date.parse(health.generated_at) - 24 * 3600e3)
+})
+
+// C.3: `latest` is the newest of what `problem` counts; a newer note (a resolved group, an upstream wait) is not "the latest problem"
+test('C.3 failures: latest is the newest problem record, never a newer note group', async () => {
+  const health = healthOver([
+    { ts: at(500), event: 'failure', where: 'engine', code: 'tls-client-error', reason: 'c' },
+    { ts: at(100), event: 'failure', where: 'engine', code: 'upstream-slow', reason: 'w' },
+  ])
+  const f = (await sandbox().run(['status', '--json'], { deps: { captureHealth: () => health } })).io.json().failures
+  const newest = (level) => f.groups.filter((g) => g.level === level).map((g) => g.last_ts).sort().at(-1)
+  assert.ok(newest('note') > newest('problem'), `the shape: a note newer than the problem: ${JSON.stringify(f.groups)}`)
+  assert.equal(f.latest, newest('problem'))
+})
+
+test('D38: doctor counts the capture failures status counts, from the same read: one failure fed, both documents carry it', async () => {
+  const s = sandbox()
+  for (const [recs, n] of [[[{ ts: at(60), event: 'failure', where: 'engine', code: 'upstream-cert', reason: 'r' }], 1], [[], 0]]) {
+    const deps = { captureHealth: () => healthOver(recs) }
+    const st = (await s.run(['status', '--json'], { deps })).io.json()
+    const run = await s.run(['doctor', '--json'], { deps })
+    const dr = run.io.json()
+    assert.equal(st.failures.problem, n)
+    assert.equal(dr.status.failures.problem, n)
+    const mine = (dr.findings || []).filter((x) => x.code === 'capture-failures')
+    assert.deepEqual(mine.map((x) => [x.class, x.count]), n ? [['problem', n]] : [])
+    if (n) { assert.ok(dr.summary && dr.summary.problem >= 1, JSON.stringify(dr.summary)); assert.notEqual(run.exit, EXIT.ok) }
+  }
 })

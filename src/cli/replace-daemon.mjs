@@ -7,22 +7,24 @@ import path from 'node:path'
 import { codeId } from '../version.mjs'
 import { controlEndpointFor } from '../off/control-client.mjs'
 import { autostartProgram } from '../collector/arch/autostart-node.mjs'
+import { appendEvent } from '../collector/core/events.mjs'
 
-export const CUT = 'Connections the collector still holds are cut when it is replaced.'
+export const CUT = "Open connections through trocar are cut once while trocar's service restarts; they reconnect." // 1.6 §1.1 ④ rule 3
 
 /** The daemon on this code: one that runs another (or answers no `code`) is taken out of the way the way `uninstall` takes it — the same
  *  drain-then-stop path (`drainDaemon`: `POST /off {exit:true}`, then the wait, §5.2) and the same `stopDaemon` — and pulled up again
  *  through the login entry install registered (a stopped LaunchAgent is booted out, so this bootstraps it, 4.9 §4).
- *  `by` is the command that runs it ('update' | 'install'): the drain names it, and the remedy says to run it again.
- *  → `{ restarted, stopped?, notes, elsewhere?, from }` (`from`: the code the old daemon answered, null when none; `stopped`: whether the old
- *  daemon was stopped, absent when it already ran this code — so a caller knows a collector still runs after a failure); what went wrong is pushed on
+ *  `by` is the command that runs it ('update' | 'install'): the drain names it, and the remedy says to run it again. `sameCode`: replaced on this code too
+ *  (install rewrote the login entry it was started from).
+ *  → `{ restarted, stopped?, pid?, notes, elsewhere?, from }` (`from`: the code the old daemon answered, null when none; `stopped`: whether the old
+ *  daemon was stopped (`pid`: the one that was not, when known), absent when it already ran this code — so a caller knows a collector still runs after a failure); what went wrong is pushed on
  *  `problems`. The three modules of this step are the running code's: they are loaded here, in the process that finishes, never in one
  *  that merged. */
-export async function replaceDaemon({ by, env, home, platform, deps, dir, root, fs, problems }) {
+export async function replaceDaemon({ by, env, home, platform, deps, dir, root, fs, problems, sameCode = false }) {
   const again = `Fix that, then run trocar ${by} again`
   const notes = []
   const running = await daemonCode({ platform, dir, env, fs, deps })
-  if (running === codeId(root)) return { restarted: false, notes, from: running }
+  if (running === codeId(root) && !sameCode) return { restarted: false, notes, from: running } // `sameCode`: install's own call when the login entry it was started from changed
   const { offWorld, drainDaemon } = await import('../off/orchestrate.mjs')
   const w = offWorld({ home, env, deps: { ...deps, platform } })
   let { routing } = await drainDaemon(w, { drainMs: deps.drainMs, by })
@@ -34,11 +36,12 @@ export async function replaceDaemon({ by, env, home, platform, deps, dir, root, 
   notes.push(...routing.notes)
   const stopped = routing.stop || (routing.confirmed ? await w.stopDaemon({ unitManaged: w.unitManaged() }) : null)
   const pid = (stopped && Number.isInteger(stopped.pid) ? stopped.pid : null) ?? (Number.isInteger(routing.daemon.pid) ? routing.daemon.pid : null)
-  if (!stopped || (!stopped.stopped && stopped.pid != null)) { problems.push(`the collector${pid == null ? '' : ` (pid ${pid})`} could not be stopped${stopped && stopped.error ? ` (${stopped.error})` : routing.problems[0] ? ` (${routing.problems[0]})` : ''}, so it still runs ${running || 'code of its own'}. ${again}`); return { restarted: false, stopped: false, notes, from: running } }
+  if (!stopped || (!stopped.stopped && stopped.pid != null)) { problems.push(`the collector${pid == null ? '' : ` (pid ${pid})`} could not be stopped${stopped && stopped.error ? ` (${stopped.error})` : routing.problems[0] ? ` (${routing.problems[0]})` : ''}, so it still runs ${running || 'code of its own'}. ${again}`); return { restarted: false, stopped: false, pid, notes, from: running } }
   const { ensureDaemonUp } = await import('../collector/install.mjs')
   const unit = deps.unit !== undefined ? deps.unit : await loginUnit({ home, env, platform, deps })
   if (!unit) { problems.push('this platform has no login entry to start the collector through, so it was not replaced'); return { restarted: false, stopped: true, notes, from: running } }
-  const up = await ensureDaemonUp({ osName: platform, dir, env, fs, unit, register: true, put: (e) => { if (e && e.reason) notes.push(e.reason) }, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath ? { socketPath: deps.socketPath } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) })
+  // a failure record it cannot write is a problem (D38)
+  const up = await ensureDaemonUp({ osName: platform, dir, env, fs, exec: deps.exec || null, unit, register: true, put: (e) => { try { appendEvent(dir, e) } catch (err) { problems.push(`a failure record could not be written (${err.message}): ${e.reason}`) } }, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath ? { socketPath: deps.socketPath } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) })
   notes.push(...up.notes)
   if (!up.up) { problems.push(`the collector did not come back up (${up.problems[0] || 'it does not answer'}). ${again}`); return { restarted: false, stopped: true, notes, from: running } }
   // a collector that answers is not yet one on THIS code: the login entry starts the copy install registered, and with npm another copy
@@ -72,10 +75,17 @@ export async function entryStartsThisCopy({ home, env, platform, deps, fs }) {
  *  resolved the one way every caller resolves it (the 2026-10-11 incident): nothing platform-specific here. */
 export async function daemonCode({ platform, dir, env, fs, deps }) {
   if (deps.daemonCode) return await deps.daemonCode()
+  const answer = await statusOf({ platform, dir, env, fs })
+  return (answer && typeof answer.code === 'string' && answer.code) || null
+}
+/** When the answering collector started (its GET /status `since`, 1.6 C.3), as ms since the epoch; NaN when it does not say. */
+export async function daemonSince({ platform, dir, env, fs, deps }) {
+  if (deps.daemonSince) return Date.parse(await deps.daemonSince())
+  const answer = await statusOf({ platform, dir, env, fs })
+  return Date.parse(answer && answer.since)
+}
+const statusOf = async ({ platform, dir, env, fs }) => {
   const ep = controlEndpointFor({ platform, dir, env, fs })
   if (!ep.socketPath) return null
-  try {
-    const answer = await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 5000 })
-    return (answer && typeof answer.code === 'string' && answer.code) || null
-  } catch { return null }
+  try { return await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 5000 }) } catch { return null }
 }

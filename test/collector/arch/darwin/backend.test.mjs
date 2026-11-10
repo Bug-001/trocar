@@ -31,7 +31,7 @@ test('CM7: the darwin root store adds to the LOGIN keychain with trustRoot and n
   const add = calls.find((x) => x.args[0] === 'add-trusted-cert')
   assert.deepEqual(add.args.slice(0, 4), ['add-trusted-cert', '-r', 'trustRoot', '-k'])
   assert.equal(add.args[4], path.join(home, 'Library', 'Keychains', 'login.keychain-db'))
-  assert.ok(!add.args.includes('-p'), 'no -p: the trust is unrestricted (M7, M8)')
+  assert.ok(!add.args.includes('-p'), 'no -p: the trust is unrestricted')
   assert.ok(!add.args.includes('-d'), 'never the admin (system) trust domain')
   assert.ok(calls.every((x) => !x.args.some((a) => /System\.keychain/.test(a))), 'never the System keychain')
 })
@@ -89,6 +89,10 @@ test('proc readers: parentOf → the parent pid and the PARENT\'s start time (th
   assert.equal(calls.length, 2, 'one ps for the pid, one for its parent; the second ask is a cache hit')
   assert.deepEqual(calls[0].args, ['-p', '42', '-o', 'ppid=,lstart='])
   assert.equal(parentOf(5, { exec: run, cache }), null, 'a gone pid')
+  assert.equal(parentOf(100, { exec: run, cache }), null, 'the root: no parent')
+  for (const [why, answer] of [['a ps that did not answer', { status: null, stdout: '', error: new Error('spawnSync ps ETIMEDOUT') }], ['a row of another shape', { status: 0, stdout: 'not a row\n' }]]) {
+    assert.throws(() => parentOf(42, { exec: () => answer, cache: new Map() }), Error, `${why}: unread, not the chain's end (D38)`)
+  }
 })
 
 test('policy: the per-user plist first, then the computer-wide one; only the declared key, via plutil -extract <key> json', () => {
@@ -115,10 +119,15 @@ test('policy: the per-user plist first, then the computer-wide one; only the dec
   assert.ok(read({ domain: '../etc', key: 'k' }).error, 'a domain is a name, not a path')
 })
 
-test('policy: platform facts and dirs (ruling ⑤: macOS has no persistent environment)', () => {
-  assert.equal(platformFacts.envCaseInsensitive, false)
-  assert.deepEqual(platformFacts.persistentEnv(['HTTPS_PROXY']), {})
+test('policy: platform facts and dirs; the persistent environment is launchd\'s, each name read by itself (4.11 ⑤)', () => {
+  const launchd = { NO_PROXY: 'corp.example\n', no_proxy: '.wq.internal\n' }
+  const r = runner({ launchctl: (args) => (args[0] === 'getenv' && launchd[args[1]] ? { out: launchd[args[1]] } : { code: 1 }) })
+  const facts = platformFacts({ run: r.run })
+  assert.equal(facts.envCaseInsensitive, false)
+  assert.deepEqual(facts.persistentEnv(['NO_PROXY']), { NO_PROXY: 'corp.example', no_proxy: '.wq.internal' })
+  assert.deepEqual(facts.persistentEnv(['HTTPS_PROXY']), {}, 'a name launchd does not hold adds nothing')
+  assert.ok(r.calls.every((c) => c.tool === 'launchctl' && c.args[0] === 'getenv' && c.args.length === 2), 'by name only, never the whole environment')
   const home = tmpDir('trocar-pf-')
-  assert.equal(platformFacts.pathKey(path.join(home, 'a', '..', 'b')), path.join(fs.realpathSync(home), 'b').toLowerCase(), 'the real path, resolved, folded (the default APFS volume is case-insensitive)')
+  assert.equal(facts.pathKey(path.join(home, 'a', '..', 'b')), path.join(fs.realpathSync(home), 'b').toLowerCase(), 'the real path, resolved, folded (the default APFS volume is case-insensitive)')
   assert.deepEqual(dirsOf('/Users/u'), { appSupport: '/Users/u/Library/Application Support' })
 })

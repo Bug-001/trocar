@@ -1,4 +1,4 @@
-// web/src/screens/replay/DeskHead.tsx — the session head (1.2 §会话头 · §会话保真行 · §信息弹出层) in the new desk: it renders
+// web/src/screens/replay/DeskHead.tsx — the session head (1.2 §会话头 · §会话保真行 · §信息弹出层) in the desk: it renders
 // sessionHeadModel (models.mjs), read on each `head` paint. One row (back · title · chip · project · start · entry · follow · ⓘ), then
 // the read-state line (words only, never a control), the fidelity row (only when a fact exists) and the not-refreshed line. The ⓘ's
 // rows are worked out when it opens (model.info(), 2.3 归约前沿). The head carries no statistic: every number is behind the ⓘ.
@@ -11,19 +11,21 @@ import { CopyButton } from '../../ui/CopyButton'
 import { HarnessIcon } from '../../ui/HarnessIcon'
 import { InfoButton } from '../../ui/InfoButton'
 import { TechDetails } from '../../ui/TechDetails'
-import { sessionHeadModel } from './models.mjs'
+import { backOf, sessionHeadModel } from './models.mjs'
 import { useDeskModel } from './useDesk'
 import type { DeskState, DeskView } from './view'
 
 type Head = NonNullable<ReturnType<typeof sessionHeadModel>>
-const headOf = (s: DeskState) => sessionHeadModel(s, { libraryHash: s.ctx && s.ctx.store ? s.ctx.store.get().libraryHash : '' })
+const libraryHashOf = (s: DeskState) => (s.ctx && s.ctx.store ? s.ctx.store.get().libraryHash : '')
+const headOf = (s: DeskState) => sessionHeadModel(s, { libraryHash: libraryHashOf(s) })
 const html = (h: string) => ({ __html: h })
 const pairsOf = (tech: string[][]) => tech.map(([k, v]) => [k, { text: v }] as [string, { text: string }])
 const copyOf = (tech: string[][]) => tech.map(([k, v]) => `${k}: ${v}`).join('\n')
 
 export function DeskHead({ desk }: { desk: DeskView }) {
   const m = useDeskModel(desk, 'head', headOf)
-  if (!m) return <div id="deskhead" />
+  // before the session answer: the way back alone, so the frame is never without words (1.2 不留空白屏) and the row keeps its place
+  if (!m) { const b = backOf(libraryHashOf(desk.s)); return <div id="deskhead"><div className="sesshead"><a className="sh-back" href={b.href}>{b.text}</a></div></div> }
   return (
     <div id="deskhead">
       <Row m={m} s={desk.s} />
@@ -39,7 +41,7 @@ function Row({ m, s }: { m: Head, s: DeskState }) {
   return (
     <div className="sesshead">
       <a className="sh-back" href={m.back.href}>{m.back.text}</a>
-      <span className="sh-name" title={`${t.sourceTip}\n${W.SESSION_ID} ${t.id}`}>{t.text ?? t.fallback}</span>
+      <span className="sh-name" title={[t.text, t.sourceTip, `${W.SESSION_ID} ${t.id}`].filter(Boolean).join('\n')}>{t.text ?? t.fallback}</span>
       <a className="sh-chip" href={c.href} title={c.name}>
         <HarnessIcon id={c.key} />
         <span className="chipname" title={c.raw || undefined}>{c.name}</span>
@@ -103,7 +105,8 @@ function Info({ m, s }: { m: Head, s: DeskState }) {
   return <div className="sipb">{rows.map((r) => (
     <div key={r.key} className={r.key === 'truncated' ? 'sir trunc' : r.narrow ? 'sir sir-narrow' : 'sir'} data-row={r.key}>
       {r.key === 'failed' && r.jump ? <button type="button" className="sijump" onClick={() => jump(r.jump)}>{r.text}</button>
-        : r.key === 'id' ? <>{r.text} <span className="sirmono">{r.id}</span> <CopyButton text={r.id} label={r.copy} /></> : r.text}
+        : r.key === 'id' ? <>{r.text} <span className="sirmono">{r.id}</span> <CopyButton text={r.id} label={r.copy} /></>
+        : r.href ? <>{r.text} <a className="sirmono" href={r.href} aria-label={`${r.text} ${r.id}`}>{r.id}</a></> : r.text}
       {r.buckets && <span className="sirsub">{r.buckets.map((b: any) => `${b.word} ${b.usd != null ? usd(b.usd) : '—'}`).join(' · ')}</span>}
       {(r.notes || []).map((n: string) => <span key={n} className="sirsub">{n}</span>)}
       {r.prices && <a href={r.prices.href}>{r.prices.text}</a>}

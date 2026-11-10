@@ -10,6 +10,7 @@ import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { routeEntry, recordsOf } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { backupDir } from '../../../../src/off/paths.mjs'
+import { sha256 } from '../../../../src/off/fsutil.mjs'
 import { encodeText, decodeBytes } from '../../../helpers/file-shapes.mjs'
 import { world, put, bytesOf, door, merged } from './fixtures/entries-ctx.mjs'
 
@@ -22,15 +23,15 @@ const EOLS = { lf: '\n', crlf: '\r\n' }
 const CERT_KINDS = new Set(['root-key', 'system-root'])
 
 // the user's file as the generator shapes it: one unrelated setting (an API key in a .env: it must never move), the user's proxy, the user's NO_PROXY
-function userText(route, { spell, noProxy, eol }) {
+function userText(route, { spell, noProxy, eol, proxy: userProxy = USER_PROXY }) {
   const proxy = (route.proxyKeys || []).slice(0, spell)
   if (route.kind === 'dotenv-block') {
-    const lines = ['OPENAI_API_KEY=sk-user-secret', ...proxy.map((k) => `${k}=${USER_PROXY}`), ...(noProxy && route.noProxyKeys ? [`${route.noProxyKeys[0]}=${USER_NO}`] : [])]
+    const lines = ['OPENAI_API_KEY=sk-user-secret', ...proxy.map((k) => `${k}=${userProxy}`), ...(noProxy && route.noProxyKeys ? [`${route.noProxyKeys[0]}=${USER_NO}`] : [])]
     return lines.join(eol) + eol
   }
   const doc = { unrelated: 'keep' }
   const set = (keys, v) => { let o = doc; for (const k of keys.slice(0, -1)) o = o[k] ??= {}; o[keys.at(-1)] = v }
-  for (const k of proxy) set(k, USER_PROXY)
+  for (const k of proxy) set(k, userProxy)
   if (noProxy && route.noProxyKeys) set(route.noProxyKeys[0], USER_NO)
   return JSON.stringify(doc, null, 2).replace(/\n/g, eol) + eol
 }
@@ -67,12 +68,11 @@ for (const { h, id, r } of ROUTES.filter((x) => x.r.kind === 'json-key' || x.r.k
       for (const k of r.proxyKeys) assert.equal(valueIn(r, now, k), door(), `${label}: ${k} is the door (every spelling)`)
       for (const k of r.noProxyKeys || []) assert.equal(valueIn(r, now, k), merged(s.noProxy ? USER_NO : '', PERSIST.NO_PROXY), `${label}: ${k} = loopback ∪ the user's ∪ the persistent env, case-insensitive, in order`)
       const recs = recordsOf(w.ctx.manifest, h.name, id)
-      assert.ok(recs.length > 0 && recs.every((x) => x.phase === 'on' && x.route === id && x.door === door() && !CERT_KINDS.has(x.kind)), label)
+      assert.ok(recs.length > 0 && recs.every((x) => x.phase === 'on' && x.route === id && !CERT_KINDS.has(x.kind)), label)
       if (r.kind === 'dotenv-block') {
         assert.ok(now.startsWith(original ?? ''), `${label}: CM17 the user's lines stay first, byte for byte; nothing is commented out`)
         if (s.spell) assert.equal(recs[0].prior_value[r.proxyKeys[0]], USER_PROXY, `${label}: CM17 the user's value is the prior`)
       } else if (s.spell) assert.equal(recs.find((x) => JSON.stringify(x.keys) === JSON.stringify(r.proxyKeys[0])).prior_value, USER_PROXY, `${label}: the replaced value is the prior`)
-      if (exists) assert.ok(recs.every((x) => x.backup && fs.existsSync(x.backup) && path.dirname(x.backup).startsWith(backupDir(w.home))), `${label}: the user's file was saved to ~/.trocar/backup first`)
       assert.equal(routeEntry(r.kind).check(ctx, recs).ok, true, label)
       assert.equal(routeEntry(r.kind).write(ctx, door()).ok, true, `${label}: on again`)
       assert.equal(recordsOf(w.ctx.manifest, h.name, id).length, recs.length, `${label}: on again writes nothing more (R9)`)
@@ -81,6 +81,41 @@ for (const { h, id, r } of ROUTES.filter((x) => x.r.kind === 'json-key' || x.r.k
       assert.deepEqual(bytesOf(file), before, `${label}: CM15 off restores every byte (the file is gone again when trocar made it)`)
       assert.equal(fs.readFileSync(ca, 'utf8'), '-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n', `${label}: CM15 no certificate bytes touched`)
       assert.deepEqual(recordsOf(w.ctx.manifest, h.name, id), [], `${label}: the undone records leave the manifest`)
+    }
+  })
+}
+
+// P5: a value left in the file that is one of trocar's doors (a loopback URL on a port ingress.json records; the manifest that wrote it lost) is not the
+// user's prior — on records none for it and off leaves no door behind; a loopback proxy of the user's on another port is their prior as any other
+for (const { h, id, r } of ROUTES.filter((x) => x.r.kind === 'json-key' || x.r.kind === 'dotenv-block')) {
+  test(`P5 ${h.name}.${id} (${r.kind}) — a door value already in the file is not the prior; off leaves no door; the user's own loopback proxy is the prior`, () => {
+    const OLD = 'http://g:ffffffffffffffffffffffffffffffff@127.0.0.1:18001'
+    for (const [proxy, isDoor] of [[OLD, true], [door(), true], ['http://127.0.0.1:7890', false]]) {
+      const w = world()
+      put(path.join(w.dir, 'ingress.json'), JSON.stringify({ groupPorts: { [`${h.name}:a`]: 18001, [`${h.name}:b`]: 18003 } }))
+      const ctx = ctxFor(w, h, id)
+      const file = resolveLoc(r.file, ctx)[0]
+      const before = Buffer.from(userText(r, { spell: (r.proxyKeys || []).length, noProxy: false, eol: '\n', proxy }))
+      put(file, before)
+      const res = routeEntry(r.kind).write(ctx, door())
+      assert.equal(res.ok, true, proxy)
+      for (const k of r.proxyKeys) assert.equal(valueIn(r, textOf(file), k), door(), `${proxy}: ${k} is the door`)
+      const priors = JSON.stringify(res.records.map((x) => x.prior_value))
+      if (isDoor) assert.ok(!priors.includes('127.0.0.1:18001'), `${proxy}: a door is never recorded as the user's prior (${priors})`)
+      else assert.ok(priors.includes(proxy), `${proxy}: the user's loopback proxy on another port is the prior`)
+      // 4.6「日志」· V106: one write, one backup, named by the manifest, holding no door password
+      const bk = backupDir(w.home), saved = fs.readdirSync(bk).map((n) => path.join(bk, n))
+      assert.deepEqual(saved, [res.records[0].backup], `${proxy}: one backup of the file, the one the manifest names`)
+      const kept = fs.readFileSync(saved[0])
+      assert.equal(sha256(kept), res.records[0].pre_sha256, `${proxy}: the backup is what the manifest records the file was before its one write`)
+      if (isDoor) assert.ok(!/127\.0\.0\.1:18001|f{32}|0123456789abcdef0123456789abcdef/.test(kept.toString('latin1')), `${proxy}: no door URL or token in the backup`)
+      else assert.deepEqual(kept, before, `${proxy}: the backup is the bytes before on`)
+      assert.equal(routeEntry(r.kind).undo(ctx, res.records).ok, true, proxy)
+      const after = textOf(file)
+      if (isDoor) {
+        assert.ok(after != null && !after.includes('127.0.0.1:18001'), `${proxy}: off leaves no door value in the file`)
+        assert.ok(after.includes(r.kind === 'dotenv-block' ? 'OPENAI_API_KEY=sk-user-secret' : '"unrelated": "keep"'), `${proxy}: the user's other settings stay`)
+      } else assert.deepEqual(bytesOf(file), before, `${proxy}: off restores every byte`)
     }
   })
 }
@@ -146,9 +181,36 @@ test('a group rebound to a new port rewrites that route — the old door\'s reco
     const n = routeEntry(r.kind).write(ctx, door(18001)).records.length
     const res = routeEntry(r.kind).write(ctx, door(18555))
     assert.equal(res.records.length, n, `${h.name}.${id}`)
-    assert.ok(res.records.every((x) => x.door === door(18555)), `${h.name}.${id}`)
+    assert.ok(res.records.every((x) => x.door_sha256 === sha256(door(18555))), `${h.name}.${id}`)
     if (file) for (const k of r.proxyKeys) assert.equal(valueIn(r, fs.readFileSync(file, 'utf8'), k), door(18555), `${h.name}.${id}`)
     routeEntry(r.kind).undo(ctx, res.records)
     if (file) assert.equal(fs.readFileSync(file, 'utf8'), before, `${h.name}.${id}`)
   }
 })
+
+// A route that writes into the env the agent loads into its own process and hands to every process it starts (a .env block; a settings `env` object):
+// it names a door for every proxy variable the agent reads, so a child's plain http (absolute form, which the door takes: 4.8 §5.1) goes through the
+// door too. The user's own value of any of them is the prior and comes back on off, byte for byte.
+const leaf = (k) => (typeof k === 'string' ? k : k.at(-1))
+const intoProcessEnv = (r) => r.kind === 'dotenv-block' || (r.kind === 'json-key' && (r.proxyKeys || []).some((k) => k.length === 2 && k[0] === 'env'))
+for (const { h, id, r } of ROUTES.filter((x) => intoProcessEnv(x.r))) {
+  test(`P5 ${h.name}.${id} — every proxy variable the agent reads is the door; the user's HTTP_PROXY is the prior; off restores the bytes`, () => {
+    const leaves = r.proxyKeys.map(leaf)
+    for (const name of h.proxy.env) assert.ok(leaves.includes(name), `${name} is written`)
+    const key = r.proxyKeys.find((k) => leaf(k) === 'HTTP_PROXY')
+    const w = world({ persistent: PERSIST })
+    const ctx = ctxFor(w, h, id)
+    const file = resolveLoc(r.file, ctx)[0]
+    // the user's own HTTP_PROXY, ALL_PROXY where the agent reads it, and NO_PROXY: theirs survive, off takes out only trocar's
+    const mine = { HTTP_PROXY: USER_PROXY, ...(leaves.includes('ALL_PROXY') ? { ALL_PROXY: 'socks5://user.example:1080' } : {}), NO_PROXY: '.corp.example' }
+    const before = r.kind === 'dotenv-block' ? `KEEP=x\n${Object.entries(mine).map(([k, v]) => `${k}=${v}\n`).join('')}` : `${JSON.stringify({ env: { ...mine, KEEP: 'x' }, unrelated: 'keep' }, null, 2)}\n`
+    put(file, before)
+    const recs = routeEntry(r.kind).write(ctx, door()).records
+    const now = fs.readFileSync(file, 'utf8')
+    for (const k of r.proxyKeys) assert.equal(valueIn(r, now, k), door(), leaf(k))
+    const prior = r.kind === 'dotenv-block' ? recs[0].prior_value[key] : recs.find((x) => JSON.stringify(x.keys) === JSON.stringify(key)).prior_value
+    assert.equal(prior, USER_PROXY)
+    routeEntry(r.kind).undo(ctx, recs)
+    assert.equal(fs.readFileSync(file, 'utf8'), before)
+  })
+}

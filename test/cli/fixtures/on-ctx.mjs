@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream'
 import { makeIo } from '../../../src/off/io.mjs'
 import * as unit from '../../../src/collector/arch/linux/unit.mjs'
 import cc from '../../../src/collector/harness/claude-code.mjs'
+import { seedFootprint } from '../../helpers/footprint.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 
 const ROOT = createCa({ commonName: 'on-ctx root' })
@@ -44,6 +45,7 @@ export function snapshot(home) {
 export const changedFiles = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k] && a[k] !== 'dir' && b[k] !== 'dir').sort()
 
 export function seedClaude(home, text = '{"model":"x"}\n') {
+  seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint), and has its settings
   const f = path.join(home, '.claude', 'settings.json')
   fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text)
   return f

@@ -5,7 +5,7 @@
 // imports hermes_bootstrap and then hermes_cli.main (hermes-acp: acp_adapter.entry); a relaunch puts interpreter flags
 // first and the script inside exec(…). In TUI mode Node starts
 // `python3 -m tui_gateway.entry`, which starts `-m tui_gateway.slash_worker`; both run the agent. Dependency helpers
-// (`-I -B -c`) and probes (no bootstrap, or no -I) are not the agent. Long-lived: gateway / cron / dashboard / serve.
+// (`-I -B -c`) and probes (code that does not load the entry module) are not the agent. Long-lived: gateway / cron / dashboard / serve.
 // Env: the active home's .env (override; the root .env is not under a profile's), .op.env (fill, unless
 // OP_SERVICE_ACCOUNT_TOKEN), the checkout's .env (fill when the home .env exists, else override), the managed .env
 // ($HERMES_MANAGED_DIR, else /etc/hermes) last, override; all after exec. Every one is judged as read at start: the
@@ -22,7 +22,8 @@ import path from 'node:path'
 import { hostOf, expandHome, parseDotenv } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { envProxies, argAfter, dotenvLayer, perOs } from './_common.mjs'
-import { ROUTE_PLACES } from '../../off/marker.mjs'
+import { ROUTE_PLACES, HOME_PLACES } from '../../off/marker.mjs'
+import { homeRoot } from '../../off/loc.mjs'
 
 const MANAGED = { linux: '/etc/hermes' }
 const FALSEY = /^(false|0|no|off)$/i
@@ -35,11 +36,7 @@ const CUTOFF = releaseDay(LAST_CA_BUNDLE_RELEASE)
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what trocar's block sets over the launch env and the user's lines
 
 // The root of the Hermes data dirs (HERMES_HOME may name a profile under it) and the active home of this process.
-function hermesRoot(env, home) {
-  const h = expandHome(env.get('HERMES_HOME') || '', home)
-  if (!h) return path.join(home, '.hermes')
-  return path.basename(path.dirname(h)) === 'profiles' ? path.dirname(path.dirname(h)) : h
-}
+const hermesRoot = (env, home) => homeRoot(HOME_PLACES.hermes, { home, env }) // the place the marker undo looks too
 function hermesHome(ctx) {
   const envHome = expandHome(ctx.environ.get('HERMES_HOME') || '', ctx.home)
   const root = hermesRoot(ctx.environ, ctx.home)
@@ -100,7 +97,7 @@ function configHosts(ctx) {
 
 function inject(ctx) {
   const root = hermesRoot(ctx.env, ctx.home)
-  if (!ctx.listDir(root).length) return { notes: [{ code: CODE.harnessNote, text: `${root} does not exist (Hermes is not installed for this user), so no trust entry is written; after installing Hermes, run trocar uninstall, then trocar install` }] }
+  if (!ctx.listDir(root).length) return { notes: [{ code: CODE.harnessNote, text: `${root} does not exist (Hermes is not installed for this user), so no trust entry is written; after installing Hermes, run trocar install (or Set up on the board)` }] }
   const profiles = path.join(root, 'profiles')
   const homes = [root, ...ctx.listDir(profiles).sort().filter((n) => ctx.listDir(path.join(profiles, n)).length).map((n) => path.join(profiles, n))]
   const files = homes.map((h) => path.join(h, '.env'))
@@ -155,29 +152,36 @@ const proxyMode = {
     form('hermes.gateway', []),
     form('hermes.dashboard', []),
     form('hermes.desktop', []), // the source build (D51② names above); the prebuilt DMG and MSIX are the next form
-    form('hermes.desktop-prebuilt', [], { darwin: { reason: 'not-measured' }, win32: { reason: 'not-measured' } }),
+    form('hermes.desktop-prebuilt', [], { darwin: true, win32: { reason: 'not-measured' } }),
   ],
   routes: {
-    env: { kind: 'dotenv-block', file: HOME('.env'), proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'not-routed', takesEffect: 'takes effect once you restart Hermes; restart its gateway and dashboard too' },
+    env: { kind: 'dotenv-block', file: HOME('.env'), proxyKeys: proxy.env, noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'not-routed', takesEffect: 'takes effect once you restart Hermes; restart its gateway and dashboard too' },
   },
   certs: {},
   trusts: {},
   // rule U: a CA file the user already named (a route's own ssl_ca_cert replaces the roots for that route: the providers map, the custom_providers
-  // list and the inline model block, as the Linux reader above; SSL_CERT_FILE for the rest)
-  userCertFiles: [...[['providers', '*', 'ssl_ca_cert'], ['custom_providers', '*', 'ssl_ca_cert'], ['model', 'ssl_ca_cert']].map((keys) => ({ file: HOME('config.yaml'), format: 'yaml', keys })), { file: HOME('.env'), format: 'dotenv', keys: ['SSL_CERT_FILE'] }, { env: 'SSL_CERT_FILE' }],
+  // list and the inline model block, as the Linux reader above; SSL_CERT_FILE for the rest). SSL_CERT_FILE is not marked replace: the main build
+  // appends it and a release build replaces with it (the Linux chain above), and the door cannot tell the build here
+  userCertFiles: [...[['providers', '*', 'ssl_ca_cert'], ['custom_providers', '*', 'ssl_ca_cert'], ['model', 'ssl_ca_cert']].map((keys) => ({ file: HOME('config.yaml'), format: 'yaml', keys, semantics: 'replace', expand: 'env' })), { file: HOME('.env'), format: 'dotenv', keys: ['SSL_CERT_FILE'] }, { env: 'SSL_CERT_FILE' }],
   blockers: [],
 }
+
+const ENTRY = '(hermes_cli\\.main|acp_adapter\\.entry)'
 
 export default {
   name: 'hermes',
   runtime: 'python',
-  // Which processes are Hermes (D51 preset, every OS): python (any version: the normalizer folds python3.N into python) running its bootstrap
-  // isolated (`-I … -c "import hermes_bootstrap; … hermes_cli.main | acp_adapter.entry"`, the code may span lines), the Windows launcher's
+  // Which processes are Hermes (D51 preset, every OS): python (any version: the normalizer folds python3.N into python) whose `-c` code
+  // loads the entry module `hermes_cli.main` / `acp_adapter.entry` (after `import hermes_bootstrap`, as `from <module> import`, or through
+  // `runpy.run_module('<module>'`), whatever interpreter flags come first (the installer's bootstrap runs `-I`, the prebuilt desktop app's backend
+  // and its bundled launcher `-P`; measured macOS 2026-11-06); the code may span lines (darwin's `ps` prints a line break as a literal \\012, which reads /012 here); a bare `import hermes_cli.main` probe or a string that only
+  // names the module is not Hermes, a `from <module> import` inside a string is (the matcher reads text, not Python). The Windows launcher's
   // script (`hermes.exe` / `hermes-acp.exe` exec `python.exe -I <that exe> …`, which runs the zip appended to it, and that may run itself
-  // again as `-I -c "import sys, runpy; …; runpy.run_path('<that exe>', …)"`; measured win 2026-10-14), or its TUI gateway module. Other
+  // again as `-I -c "import sys, runpy; …; runpy.run_path('<that exe>', …)"`; measured win 2026-10-14), the console script a pip install
+  // puts on PATH (`#!<venv>/bin/python`, so the kernel runs `python <…>/hermes …`; measured Linux 2026-11-06), or its TUI gateway module. Other
   // python is not Hermes, its package-manager workers (`hermes-agent/pm/worker.py`) included: they are forwarded.
   processes: {
-    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', entry: '/hermes(-acp)?\\.exe$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe(?![\\w.-])' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' },
+    names: [{ name: 'python', args: `(^| )-[a-z]*c [\\s\\S]*(\\bhermes_bootstrap\\b[\\s\\S]*\\b${ENTRY}\\b|(\\b|/012)from\\s+${ENTRY}\\s+import\\b|\\brun_module\\(\\s*'?${ENTRY}\\b)` }, { name: 'python', entry: '/hermes(-acp)?(\\.exe)?$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe(?![\\w.-])' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' },
       // the measured shapes only: the gateway service runs the CLI module with `gateway run` (the same
       // agent on every OS: a Linux one in this shape turns from args-mismatch into hermes, Linux run UNT); the desktop source build's backend is a
       // base64 bootstrap that hermes.cmd starts with `serve --host 127.0.0.1` (a loopback web service: any 127.x, so the guard reads no version; another b64 one-liner is not Hermes)
@@ -190,6 +194,7 @@ export default {
   layers,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']),
+  present: [{ base: 'home', path: '.local/bin/hermes' }, { command: 'hermes' }, { base: 'home', dir: '.hermes', env: 'HERMES_HOME' }],
   inject,
   trust: {
     chain: [{ var: 'SSL_CERT_FILE', semantic: 'append' }], // main build on Linux

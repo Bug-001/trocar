@@ -12,18 +12,21 @@
 // (harness WS terminal patterns, the process's own proxies), merged into the flow's meta. Core knows no
 // harness; it only reads that data.
 import net from 'node:net'
-import { handleFlow, writeRefusal } from './flow.mjs'
+import { handleFlow, writeRefusal, HOLD_CLOSE_MS } from './flow.mjs'
+
+// Is this pid still running? EPERM = it is (another user's): only ESRCH says it is gone. Same on every OS.
+export const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code !== 'ESRCH' } }
 import { createIngress } from './ingress.mjs'
 import { createNegativeCache } from './negcache.mjs'
 import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
-// (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
+// (tests; undefined = read it): PEM text / array, a systemRoots()-shaped {certs, errors}, or a function returning either. The upstream trust set is built once, at the first handshake that needs it (RFC 4.6 §引擎 5, tls/roots.mjs).
 // timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default; rejectWindowMs — the leaf
 // rejection window (flow.mjs REJECT_WINDOW_MS, 10 s); slowEngineMs — past it from accepting a connection to our TLS server, a zero-data close before our
 // handshake completes is recorded as engine-slow and counts toward the entry without trust-rejected (flow.mjs SLOW_ENGINE_MS, 2 s); now — the negative cache's clock (negcache.mjs retry_at).
 // ingressToken: the install's ingress token (4.8 §3), required for listen({ingress}).
-export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, onHeld = () => {}, timing = {}, drainTimeoutMs, ingressToken = null }) {
+export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, onHeld = () => {}, timing = {}, drainTimeoutMs, ingressToken = null, alive = pidAlive }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
@@ -46,7 +49,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   const defaultConnect = (dst) => net.connect(dst.port, dst.address)
   // A capture failure is never silent (D38, 4.6 §记录): one shaped record {event:'failure', where:'engine', code,
   // reason, …} the moment it happens, handed to onFailure — the daemon's failure recorder, which writes it to flows/
-  // with its own descriptor, folded per where + code (core/events.mjs). The WebSocket recorder's go the same way
+  // with its own descriptor, folded per where + code + harness (core/events.mjs). The WebSocket recorder's go the same way
   // (where:'ws'). No sink wired is a wiring fault, reported through onError (stderr) instead of being dropped.
   function failure(rec) {
     const r = { event: 'failure', where: 'engine', ...rec }
@@ -55,18 +58,26 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       onFailure(r)
     } catch (e) { onError(e) }
   }
-  const upstreamTrust = createUpstreamTrust({
-    system: systemCa === undefined ? systemRoots()
-      : Array.isArray(systemCa.certs) ? { sources: ['option:systemCa'], errors: [], ...systemCa }
-        : { certs: [].concat(systemCa).map(String).filter((p) => p.includes('BEGIN CERTIFICATE')), sources: ['option:systemCa'], errors: [] },
-    extra: upstreamCa,
-  })
-  // a trust-store source that is there but unreadable, or no OS store at all: the engine still verifies
-  // against what it has, but upstreams signed by a CA only the missing part holds will step aside (D38)
-  for (const error of upstreamTrust.errors) { onError(new Error(error)); failure({ code: 'trust-store-error', reason: error }) }
-  if (upstreamTrust.missingSystem) {
-    const error = 'no OS trust store found: upstreams signed by a system-only CA will step aside'
-    onError(new Error(error)); failure({ code: 'system-roots-unavailable', reason: error })
+  // The upstream trust set, read at the first handshake that needs it and reused (4.6 §引擎 5): reading the OS store is slow and the
+  // doors do not wait for it. Its failures are recorded the moment it is read.
+  let trustSet = null
+  function upstreamTrust() {
+    if (trustSet) return trustSet
+    const sys = typeof systemCa === 'function' ? systemCa() : systemCa
+    trustSet = createUpstreamTrust({
+      system: sys === undefined ? systemRoots()
+        : Array.isArray(sys.certs) ? { sources: ['option:systemCa'], errors: [], ...sys }
+          : { certs: [].concat(sys).map(String).filter((p) => p.includes('BEGIN CERTIFICATE')), sources: ['option:systemCa'], errors: [] },
+      extra: upstreamCa,
+    })
+    // a trust-store source that is there but unreadable, or no OS store at all: the engine still verifies
+    // against what it has, but upstreams signed by a CA only the missing part holds will step aside (D38)
+    for (const error of trustSet.errors) { onError(new Error(error)); failure({ code: 'trust-store-error', reason: error }) }
+    if (trustSet.missingSystem) {
+      const error = 'no OS trust store found: upstreams signed by a system-only CA will step aside'
+      onError(new Error(error)); failure({ code: 'system-roots-unavailable', reason: error })
+    }
+    return trustSet
   }
 
   // accepted sockets still in their redirector lookup (not flows yet): drained() waits for them too, and the stop destroys the ones its grace leaves
@@ -83,6 +94,15 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     // fail-open). handleFlow then sees the socket already destroyed and finalizes the flow.
     const duringLookup = () => {}
     socket.on('error', duringLookup)
+    // RFC 4.6 §引擎 1: no envelope, no connection row — but the connection is closed, so it is not silent (D38)
+    const miss = (peer, reason) => {
+      counters.lookupMisses++
+      failure({ code: 'lookup-miss', peer, reason })
+      socket.destroy()
+      onError(Object.assign(new Error(reason), { code: 'lookup-miss' }))
+    }
+    // a client already gone leaves no address to ask about: not looked up, peer null
+    if (!socket.remoteAddress || !Number.isInteger(socket.remotePort)) return miss(null, 'a connection closed by its client before trocar could read its address; nothing was forwarded')
     const peer = { address: socket.remoteAddress, port: socket.remotePort }
     let meta = null
     try { meta = await redirector.lookup(peer) }
@@ -95,15 +115,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       onError(Object.assign(new Error(reason), { code }))
       return
     }
-    // RFC 4.6 §引擎 1: no envelope, no connection row — but the connection is closed, so it is not silent (D38)
-    if (!meta) {
-      counters.lookupMisses++
-      const reason = `no original destination for ${peer.address}:${peer.port}; the steered connection was closed`
-      failure({ code: 'lookup-miss', peer, reason })
-      socket.destroy()
-      onError(Object.assign(new Error(reason), { code: 'lookup-miss' }))
-      return
-    }
+    if (!meta) return miss(peer, `no original destination for ${peer.address}:${peer.port}; the steered connection was closed`)
     runFlow(socket, { ...meta, acceptedAt }, connectUpstream || defaultConnect, duringLookup)
   }
 
@@ -116,9 +128,22 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       return meta
     }
   }
+  // closes held until it is known whether their process exits (flow.mjs HOLD_CLOSE_MS): settle(gone); the engine stopping settles each as alive.
+  // `alive(pid)` → boolean or a promise of one: the daemon's own process table; the OS (kill 0) when none is given
+  const holds = new Set()
+  const HOLDS_MAX = 256 // more closes than this held at once: the next is judged at once, never queued without bound
+  function holdClose(pid, settle) {
+    if (holds.size >= HOLDS_MAX) return false
+    let done = false
+    const h = { settle: (gone) => { if (done) return; done = true; holds.delete(h); clearTimeout(h.timer); settle(gone) } }
+    // an unknown answer (a throw, anything but false) is alive; the hold stays in the set until settled, so a stop settles it even mid-question
+    h.timer = setTimeout(() => { Promise.resolve().then(() => alive(pid)).then((yes) => h.settle(yes === false), () => h.settle(false)) }, timing.holdCloseMs ?? HOLD_CLOSE_MS)
+    holds.add(h)
+    return true
+  }
   const flowCtx = (connect) => ({
     ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, retention, negCache, counters, failure,
-    connectUpstream: connect,
+    connectUpstream: connect, holdClose,
     newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
   })
   // The one flow starter both doors use. `connect(dst)` is how this flow reaches its upstream (the transparent door: the
@@ -246,6 +271,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // every connection still there — one in its lookup, one whose gate failed or threw — so none outlives the cut. Then wait for every cut flow's row and
   // envelopes, so what the stop writes after it (daemon-stop) comes after them; a flow that has still not ended `boundMs` later rejects close() with   // `stop-failed` (the stop records it and goes on: the stop is bounded, V99). closing / waiting: what the first ask found; cut: what the grace left.
   async function close({ graceMs = 2000, boundMs = 2000, who = null } = {}) { // who: the command stopping the daemon (update / uninstall), named in the cut rows
+    for (const h of [...holds]) h.settle(false) // never dropped by a stop: judged as any other close
     let open = servers.length
     const closing = Promise.all(servers.map((s) => new Promise((res) => s.close(() => { open--; res() }))))
     if (ingress) ingress.closeIdle() // handshakes and health tunnels are not flows: nothing of an agent's is lost, and they would hold close() for their idle timeout

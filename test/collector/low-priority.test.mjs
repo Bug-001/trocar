@@ -43,6 +43,16 @@ test('an OS that refuses to lower this process says so and goes on at its parent
   assert.deepEqual(asked, [[0, NICE]], 'this process (0), at the one nice')
 })
 
+// 4.2 §自动封存: the uninstall stop's sealer runs at normal priority, and a child of a BelowNormal daemon (Windows) inherits BelowNormal, so it asks
+// for normal through the same one place — best effort, and said when refused.
+test('the same one place sets a child back to normal priority when asked, and says so when refused', () => {
+  const NORMAL = os.constants.priority.PRIORITY_NORMAL, asked = [], said = []
+  assert.equal(lowerPriority({ nice: NORMAL, os: { setPriority: (pid, n) => asked.push([pid, n]), getPriority: () => NORMAL } }), NORMAL)
+  assert.deepEqual(asked, [[0, NORMAL]])
+  assert.equal(lowerPriority({ nice: NORMAL, os: { setPriority: () => { throw new Error('EACCES') }, getPriority: () => 10 }, say: (m) => said.push(m) }), null)
+  assert.match(said[0], new RegExp(`nice ${NORMAL}\\b`))
+})
+
 // The real thing on this OS, not the seam: a child forked exactly as the daemon forks it is at the nice while it runs.
 // The query worker is the one that stays alive by itself (it waits for a request), so it is the one that can be read.
 test('a real forked child runs at the nice it asked for', async (t) => {

@@ -3,14 +3,17 @@
 // which variables the agent reads, in its order, and whether it follows the system proxy). Readers are injected: the process facts and the parent walk
 // come from the OS backend (cached there by pid + start), the system proxy from the OS reader, already in the shape below. Nothing here does I/O.
 //
-// upstreamFor({ desc, form, facts, recordedPrior, systemProxy, header, headerAllowed, isTrocarDoor, transport, proxyFile }) →
+// upstreamFor({ desc, form, facts, recordedPrior, systemProxy, header, headerAllowed, isTrocarDoor, transport, proxyFile, bypassOf }) →
 //   { url: string | null, source, bypass: [row], code?, pac?, wpad?, unreadable?, notes? }
 //   source ∈ 'hook' | 'config-prior' | 'process-env' | 'system-proxy' | 'direct' | 'unknown'
 //
 //   desc          the harness descriptor (its `proxy.env`, `proxy.systemProxy`) · form the identified process's form (the caller judges headerAllowed by it)
 //   facts         { pid, start, env, parentOf } of the identified process, or null when identity failed: then only steps 2, 4 and 5 run (decision #12).
 //                 `{ pid, start, env, hookOnly: true }`: a process the door cannot identify that presented its credentials (a tool subprocess that
-//                 inherited an in-process hook's env): step 1 reads its env, step 3 never runs; its env unread with no recorded prior is `unknown` (D38).
+//                 inherited an in-process hook's env): step 1 reads its env; its env unread with no recorded prior is `unknown` (D38). Its `ancestor()`
+//                 → the facts of its nearest named ancestor on the way (its harness on, or the door's own; the caller's bounded walk), facts with no env when a
+//                 parent or an ancestor did not read (then `unknown`), or null: step 3 runs for that process, and
+//                 a value found there carries the found process's NO_PROXY (both spellings) as its bypass — what the child inherited without trocar (⑥).
 //                 `env` is an object or a Map (null / undefined = could not be read); `parentOf()` → the parent's facts, or null when it is gone.
 //   recordedPrior the `prior_value` recorded by `on` for this form's entry (null: the user had none)
 //   systemProxy   null (none, or off) · { url, bypass, wpad? } · { pac: true, wpad? } (a PAC, or WPAD alone: reported, never executed) · { ok: false }
@@ -21,6 +24,7 @@
 //   transport     'http' | 'ws': which half of `proxy.systemProxy` says whether the agent follows the system proxy
 //   proxyFile     (env) → what the agent's own files (`proxy.files`, paths resolved with this env) set: { values: [{ name, value, applies }] } (adopt.mjs
 //                 proxyFileValues) | { unknown: { reason, detail } }; called at most once per answer, and only when a file can change it
+//   bypassOf      (NO_PROXY text) → bypass rows: the arch's reading (translateBypass 'no-proxy'); asked only for an ancestor's value (⑥)
 //
 // Steps: 1 hook (the header when allowed, then TROCAR_PRIOR_PROXY; 'none' = no proxy) · 2 config-prior · 3 process-env (the agent's order, name by name:
 // an `override` file's value, else the environment's, else a `fill` file's — the agent applies its files at start, in process, where a reader of the
@@ -29,22 +33,20 @@
 // needs unreadable, the parent gone after a door) is `unknown`: the system proxy if there is one (follower or not), else direct, with code
 // `prior-proxy-unknown` (and the unread file's `detail`).
 import { CODE } from '../codes.mjs'
+import { isLoopbackHost } from '../../../off/door-value.mjs'
 
 export const HOOK_ENV = 'TROCAR_PRIOR_PROXY'
 export const HOOK_PID_ENV = 'TROCAR_HOOK_PID' // an in-process plugin hook's own pid, written once it added the root and pointed the env at the door (P11 rule 4)
 export const HOOK_HEADER = 'x-trocar-upstream'
 export const SOURCES = Object.freeze(['hook', 'config-prior', 'process-env', 'system-proxy', 'direct', 'unknown'])
 const NONE = 'none'
-const MAX_DEPTH = 64 // a parent chain longer than this is a loop in the reader, not a process tree
+export const MAX_DEPTH = 64 // a parent chain longer than this is a loop in the reader, not a process tree (the collector's ancestor walk too)
+const NO_PROXY = ['NO_PROXY', 'no_proxy']
 
 const textOf = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
 const envGet = (env, name) => (env instanceof Map ? env.get(name) : env[name])
-/** Loopback, as the door and the PAC judge it (4.11 P10): `localhost` and every `*.localhost` name, 127.0.0.0/8, `::1`; case, IPv6 brackets and a
- *  trailing dot as a host may carry them. pac.mjs writes this same test as PAC text, so what the PAC sends DIRECT is what the door calls loopback. */
-export const isLoopbackHost = (host) => {
-  const h = String(host).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-  return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)
-}
+// isLoopbackHost: one copy, in src/off (the marker undo judges a door value by it too); pac.mjs writes the same test as PAC text
+export { isLoopbackHost }
 
 /** Is a proxy text one of trocar's doors? A loopback address with trocar's credentials (a user and a hex token: the door URL `on` writes, and the
  *  steer value of an older trocar), or a loopback address on one of `ports` (an open door, e.g. a PAC-served one, carries no credentials). */
@@ -70,7 +72,7 @@ function systemOf(sp) {
   return url === null ? null : { url, bypass: Array.isArray(sp.bypass) ? sp.bypass : [], ...wpad }
 }
 
-export async function upstreamFor({ desc, form = null, facts = null, recordedPrior = null, systemProxy = null, header = null, headerAllowed = false, isTrocarDoor = isTrocarDoorUrl, transport = 'http', proxyFile = null } = {}) {
+export async function upstreamFor({ desc, form = null, facts = null, recordedPrior = null, systemProxy = null, header = null, headerAllowed = false, isTrocarDoor = isTrocarDoorUrl, transport = 'http', proxyFile = null, bypassOf = () => [] } = {}) {
   if (!desc || !desc.proxy || !Array.isArray(desc.proxy.env)) throw new TypeError('upstreamFor needs the harness descriptor (its proxy.env)')
   void form // the caller judges headerAllowed by the form; the chain itself treats every form alike
   const notes = []
@@ -107,11 +109,19 @@ export async function upstreamFor({ desc, form = null, facts = null, recordedPri
   if (facts && facts.hookOnly && facts.env == null) return unknown() // the hook value of an unidentified process could not be read
 
   // 3. process-env: the first name the agent reads that has a value once its own files are applied; a door in the environment walks up to the process that started it
-  if (facts && !facts.hookOnly) {
-    let p = facts
+  // an unidentified process: its nearest routed agent ancestor's step 3, with the NO_PROXY of the process the value came from (⑥)
+  let agent = facts && !facts.hookOnly ? facts : null
+  if (facts && facts.hookOnly && typeof facts.ancestor === 'function') { try { agent = await facts.ancestor() } catch { agent = null } }
+  if (agent) {
+    let p = agent
     for (let depth = 0; ; depth++) {
       if (!p || p.env == null) return unknown()
       let files, walk = false
+      const inherited = (r) => {
+        if (!r || !facts.hookOnly || r.source !== 'process-env' || r.url == null) return r
+        const list = NO_PROXY.map((n) => textOf(envGet(p.env, n))).filter((v) => v !== null)
+        return list.length ? { ...r, bypass: bypassOf(list.join(',')) } : r
+      }
       /** The first non-door value `applies` files give `name` (a door: the next file), an unknown when a file is unread (it may hold the value that wins, D38), else null. */
       const fromFiles = (name, applies) => {
         if (depth > 0 || !proxyFile || !(desc.proxy.files || []).some((f) => f.applies === applies)) return null
@@ -122,11 +132,11 @@ export async function upstreamFor({ desc, form = null, facts = null, recordedPri
       }
       for (const name of desc.proxy.env) {
         const o = fromFiles(name, 'override')
-        if (o) return o
+        if (o) return inherited(o)
         const v = textOf(envGet(p.env, name))
-        if (v !== null) { const r = take('process-env', v); if (r) return r; walk = true; break }
+        if (v !== null) { const r = take('process-env', v); if (r) return inherited(r); walk = true; break }
         const f = fromFiles(name, 'fill')
-        if (f) return f
+        if (f) return inherited(f)
       }
       if (!walk) break // no name has a value: the user had none
       if (depth >= MAX_DEPTH || typeof p.parentOf !== 'function') return unknown()

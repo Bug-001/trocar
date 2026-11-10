@@ -12,15 +12,18 @@ import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { undoSide, offWorld, runOff } from '../../src/off/orchestrate.mjs'
-import { formatOffReceipt } from '../../src/off/receipt.mjs'
+import { formatOffReceipt, formatOffText, isCommandLine, COMMAND_INDENT } from '../../src/off/receipt.mjs'
+import { applyJsonKey } from '../../src/collector/core/trust/journal.mjs'
 import { certBlocks, SYSTEM_BUNDLES } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { sevenHomes, USER_CA } from './fixtures/seven-homes.mjs'
 import { readStateFile } from '../../src/off/state.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
-import { installedHome, writeDaemonLock, flowEvents, ALL_HARNESSES, ROOTS, procTable, fakeClock, DAEMON_ROWS, hangsOnStatus } from './fixtures/off-ctx.mjs'
+import { installedHome, onSwitch, writeDaemonLock, flowEvents, ALL_HARNESSES, ROOTS, procTable, fakeClock, DAEMON_ROWS, hangsOnStatus } from './fixtures/off-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const ROOT = createCa({ commonName: 'off root' })
 const roots = { node: [ROOT.certPem], osText: '' }
@@ -33,9 +36,11 @@ const proc = (pid, exe, argv, { startedAt = Date.now() + 5000, env = {} } = {}) 
 async function sevenInstalled() {
   const home = tmpDir('trocar-off-')
   const sh = sevenHomes(home)
+  const harnesses = await loadHarnesses()
+  seedFootprint(home, harnesses.filter((d) => HARNESS_IDS.includes(d.name)), sh.env) // the seven are installed (4.6: presence is each one's own footprint)
   const before = snapshot(home)
   const beforeDirs = new Set(dirsOf(home))
-  await installCollector({ home, env: sh.env, osName: 'linux', harnesses: await loadHarnesses(), freePort: async () => 47011, scan: async () => [], roots })
+  await installCollector({ home, env: sh.env, osName: 'linux', harnesses, freePort: async () => 47011, scan: async () => [], roots })
   const dir = path.join(home, '.trocar', 'collector')
   const ca = (n) => path.join(dir, 'ca', n)
   // install wrote every item here (phase install), which off spares (D55①): V15 / V25 drive the undo rules over both phases, as uninstall runs them
@@ -43,7 +48,7 @@ async function sevenInstalled() {
   return { home, sh, before, beforeDirs, dir, ca, run }
 }
 
-test('V15: seven harnesses have an entry after install, and the undo (uninstall\'s, both phases) takes each by 4.6: the user files byte for byte; a bundle a live process loaded is kept without the CA, a missing one a rereading process uses is rebuilt, an unused one is removed; extra files; plugins, shims and rc lines are gone', async () => {
+test('V15: seven harnesses have an entry after install, and the undo (uninstall\'s, both phases) takes each by 4.6: the user files byte for byte; a bundle a live process loaded is kept without the CA, a missing one a rereading process uses is rebuilt, an unused one is removed; extra files; plugins, shims and rc lines are gone', { skip: POSIX_WORLD }, async () => {
   const s = await sevenInstalled()
   const m = readManifest(s.dir)
   assert.deepEqual([...new Set([...m.entries, ...m.files].map((e) => e.harness).filter(Boolean))].sort(), [...HARNESS_IDS].sort(), 'every harness has an entry — OpenCode\'s is its plugin file, a file trocar owns')
@@ -83,7 +88,7 @@ test('V15: seven harnesses have an entry after install, and the undo (uninstall\
   assert.deepEqual(r.still_trusting.map((x) => [x.pid, x.harness, x.until]).sort(), [[4242, 'codex', 'next-connection'], [4343, 'z-code', 'session-end'], [4545, 'kimi-code', 'restart']], 'a kimi by its absolute path (4546) never trusted trocar: not reported')
 })
 
-test('V25: the undo of codex alone (both phases) takes ~/.codex/.env and its bundle and nothing else — trocar-ca.pem, every other entry and bundle byte for byte; a live codex keeps combined-codex.pem, without the CA', async () => {
+test('V25: the undo of codex alone (both phases) takes ~/.codex/.env and its bundle and nothing else — trocar-ca.pem, every other entry and bundle byte for byte; a live codex keeps combined-codex.pem, without the CA', { skip: POSIX_WORLD }, async () => {
   const s = await sevenInstalled()
   const everything = () => snapshot(s.home, ['.trocar/collector/install-manifest.json', '.trocar/collector/flows']) // the manifest is rewritten by design
   const before = everything()
@@ -111,7 +116,7 @@ test('V25: the undo of codex alone (both phases) takes ~/.codex/.env and its bun
 const shaOf = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex')
 const execFrom = (s, from) => s.sys.exec.calls.slice(from)
 
-test('V1: off with the daemon gone (its lock left, its helper dead): every certificate item install wrote for all seven harnesses stays byte for byte (D55①), exit 0, and nothing starts a daemon', async () => {
+test('V1: off with the daemon gone (its lock left, its helper dead): every certificate item install wrote for all seven harnesses stays byte for byte (D55①), exit 0, and nothing starts a daemon', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ALL_HARNESSES })
   const entries = s.manifest().entries, installed = s.installItems()
   assert.ok(entries.length >= 5, 'seven harnesses have install entries off must spare')
@@ -124,7 +129,7 @@ test('V1: off with the daemon gone (its lock left, its helper dead): every certi
   assert.deepEqual(s.installItems(), installed, 'every phase-install item: still in the manifest, its file byte for byte')
   assert.deepEqual(receipt.routing, { confirmed: true, state: 'stale', how: 'no-daemon' })
   assert.deepEqual([receipt.daemon, receipt.relayed], [{ pid: null, state: 'none' }, { closing: 0, waiting: 0, cut: 0 }], 'no daemon: nothing is relayed, said as a fact')
-  assert.deepEqual(execFrom(s, calls), ['systemctl --user is-active trocar-collector.service'], 'D61: the only OS tool run is the question whether systemd is about to restart the daemon — off never disables the login entry (it says inactive here): no start, no stop, no restart')
+  assert.deepEqual(execFrom(s, calls), [], 'D61 · D62 ⑥: off runs no OS tool here: it never stops, starts or disables the daemon or its login entry')
   assert.deepEqual(s.sys.daemon.calls.slice(asked).filter((c) => c.startsWith('POST')), [], 'and no daemon was asked for anything, let alone started')
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ALL_HARNESSES.map(() => 'off'), 'every harness is off in state.json')
   assert.deepEqual(readManifest(s.dir).entries, entries, 'and the manifest keeps them for uninstall')
@@ -142,44 +147,16 @@ function restartingSystemd(s, { stubborn = false } = {}) {
   return { run, state }
 }
 
-test('semantics 4 / 1.6 §1.4: a killed daemon that systemd is about to restart (Restart=on-failure) is stopped by an off with no names — stop, reset-failed, is-active, so no daemon comes back; nothing is relayed, exit 0', async () => {
-  const s = await installedHome({ names: ['claude-code', 'codex'] }), installed = s.installItems()
-  s.sys.daemon.state.up = false
-  writeDaemonLock(s)
-  const sd = restartingSystemd(s)
-  const from = s.sys.exec.calls.length
-  const { receipt, exit } = await s.off({ deps: { alive: () => false, exec: sd.run } })
-  assert.equal(exit, 0, JSON.stringify(receipt.problems))
-  const cmds = execFrom(s, from)
-  assert.deepEqual(cmds.filter((c) => !/ is-active /.test(c)), ['systemctl --user stop trocar-collector.service', 'systemctl --user reset-failed trocar-collector.service'], 'D61: the unit is stopped and its failure reset, and NEVER disabled — the next login must bring the daemon back. The unit is stopped and its failed state cleared; the registration is untouched')
-  assert.ok(cmds.every((c) => !/ disable /.test(c)), 'D61: no off disables the autostart — on and off are the same across a reboot')
-  assert.deepEqual(receipt.relayed, { closing: 0, waiting: 0, cut: 0 }, 'there was no engine: nothing was relayed')
-  assert.deepEqual(receipt.daemon, { pid: null, state: 'none' })
-  assert.equal(receipt.routing.confirmed, true)
-  assert.deepEqual(validateReceipt(receipt), [])
-  assert.deepEqual(s.installItems(), installed, 'and every certificate item stays (D55①)')
-  const events = flowEvents(s.dir)
-  assert.ok(events.some((e) => e.kind === 'daemon-stop' && e.stopped === true && /about to restart/.test(e.reason)), 'the stop is on the record')
-})
-
-test('semantics 4: a unit systemd keeps up after the stop is not "off": exit 1 with the command to run, and the certificate items stay all the same', async () => {
-  const s = await installedHome({ names: ['claude-code'] }), installed = s.installItems()
-  s.sys.daemon.state.up = false
-  const sd = restartingSystemd(s, { stubborn: true })
-  const { receipt, exit } = await s.off({ deps: { alive: () => false, exec: sd.run } })
-  assert.equal(exit, 1)
-  assert.match(receipt.problems.join('\n'), /systemctl --user stop trocar-collector\.service/)
-  assert.deepEqual(s.installItems(), installed, 'off never touches a certificate item (D55①); desired is off, so a daemon that comes back attaches nothing')
-})
-
-test('semantics 4: off with names does not touch the unit — only an off with no names takes the daemon away', async () => {
-  const s = await installedHome({ names: ['claude-code', 'codex'] })
-  s.sys.daemon.state.up = false
-  const sd = restartingSystemd(s)
-  const from = s.sys.exec.calls.length
-  const { exit } = await s.off({ ids: ['codex'], deps: { alive: () => false, exec: sd.run } })
-  assert.equal(exit, 0)
-  assert.deepEqual(execFrom(s, from).filter((c) => / (stop|disable|reset-failed|is-active) /.test(c)), [], 'no systemctl question or command for a named off')
+test('semantics 4 · D62 ⑥: no off touches the unit — a killed daemon systemd is about to restart is left to it, since desired is off; only uninstall stops the unit', { skip: POSIX_WORLD }, async () => {
+  for (const ids of [null, ['codex']]) {
+    const s = await installedHome({ names: ['claude-code', 'codex'] })
+    s.sys.daemon.state.up = false
+    const sd = restartingSystemd(s)
+    const from = s.sys.exec.calls.length
+    const { exit } = await s.off({ ids, deps: { alive: () => false, exec: sd.run } })
+    assert.equal(exit, 0)
+    assert.deepEqual(execFrom(s, from).filter((c) => / (stop|disable|reset-failed|is-active) /.test(c)), [], `${ids}: no systemctl question or command`)
+  }
 })
 
 test('semantics 5: with no autostart unit managing it the way out names the pid to kill (the daemon\'s own reply, else the lock\'s); with none on record, how to find it', async () => {
@@ -187,11 +164,9 @@ test('semantics 5: with no autostart unit managing it the way out names the pid 
   fs.rmSync(path.join(s.home, '.config', 'systemd', 'user', 'trocar-collector.service'))
   const r = await s.off({ deps: { request: async (q) => (q.path === '/off' ? { actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 5151 } : s.sys.daemon.request(q)) } })
   assert.equal(r.exit, 1)
-  assert.match(r.receipt.problems[0], /To go on, stop the daemon \(kill 5151\), which takes its links off with it/)
   const t = await installedHome({ names: ['claude-code'] })
   fs.rmSync(path.join(t.home, '.config', 'systemd', 'user', 'trocar-collector.service'))
   const none = await t.off({ deps: { request: async (q) => (q.path === '/off' ? { actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 } } : t.sys.daemon.request(q)) } })
-  assert.match(none.receipt.problems[0], /no pid is on record: find it with pgrep -f 'trocar\.\* \(daemon\|collector start\)'/)
 })
 
 // a manifest that names a file trocar never made (damaged, hand-edited, or from a bug) must not take the user's data with it: what `off` / `uninstall` remove, rewrite or
@@ -203,7 +178,7 @@ function victims(s) {
   return { dirV, fileV, keyV, intact: () => [fs.readFileSync(path.join(dirV, 'thesis.txt'), 'utf8'), fs.readFileSync(fileV, 'utf8'), fs.readFileSync(keyV, 'utf8')] }
 }
 
-test('semantics 6: a manifest that names a path outside ~/.trocar as a bundle, the CA certificate or the CA key is not followed — off never reads those items, uninstall leaves that path alone, says why, exit 1', async () => {
+test('semantics 6: a manifest that names a path outside ~/.trocar as a bundle, the CA certificate or the CA key is not followed — off never reads those items, uninstall leaves that path alone, says why, exit 1', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['codex'] })
   const v = victims(s), before = v.intact()
   const m = s.manifest()
@@ -221,7 +196,7 @@ test('semantics 6: a manifest that names a path outside ~/.trocar as a bundle, t
   assert.match(un.receipt.left.concat(un.receipt.problems.map((reason) => ({ reason }))).map((l) => l.reason).join('\n'), /is not inside .*\.trocar/s)
 })
 
-test('semantics 6: a path inside ~/.trocar is still removed — the fence is for what is outside it', async () => {
+test('semantics 6: a path inside ~/.trocar is still removed — the fence is for what is outside it', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['codex'] })
   const un = await s.uninstall({ yes: true })
   assert.equal(un.exit, 0, JSON.stringify(un.receipt.problems))
@@ -254,7 +229,7 @@ test('semantics 7: off on a machine trocar was never installed on says so first 
   assert.equal(again.receipt.nothing_installed, undefined)
 })
 
-test('V5: off claude-code takes only Claude Code\'s routing: no certificate item of either harness moves (D55①), it stays on in state.json and attached in the daemon, /off was posted with the name only and no exit', async () => {
+test('V5: off claude-code takes only Claude Code\'s routing: no certificate item of either harness moves (D55①), it stays on in state.json and attached in the daemon, /off was posted with the name only and no exit', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const codexEnv = path.join(s.home, '.codex', '.env'), settings = path.join(s.home, '.claude', 'settings.json')
   const codexBefore = shaOf(codexEnv), settingsBefore = shaOf(settings)
@@ -268,12 +243,24 @@ test('V5: off claude-code takes only Claude Code\'s routing: no certificate item
   assert.deepEqual([s.state().harnesses['claude-code'].desired, s.state().harnesses.codex.desired], ['off', 'on'])
   assert.deepEqual([s.sys.daemon.isRecording('claude-code'), s.sys.daemon.isRecording('codex')], [false, true], 'the daemon still has codex attached')
   assert.deepEqual([receipt.harnesses, receipt.all, receipt.daemon.state], [[{ harness: 'claude-code', ok: true, reason: null, undone: [], kept_backups: [] }], false, 'running'], 'appendix C.2: one object per harness named')
+  assert.deepEqual(receipt.still_on, ['codex'], 'appendix C.2: the harnesses still on after this off')
   assert.deepEqual(receipt.changed, [], 'off changed no file of the user')
   assert.ok(s.sys.exec.calls.every((c) => !/disable/.test(c)), 'a named off leaves the autostart alone')
   assert.ok(['codex', 'claude-code'].every((h) => readManifest(s.dir).entries.some((e) => e.harness === h)), 'both are still installed')
 })
 
-test('V21: off,off changes nothing — the second run leaves state.json, the manifest and every user file as they were; per-harness: the bundle install wrote stays, CA and all, and so does the .env naming it', async () => {
+test('appendix C.2: still_on names the harnesses left on after a named off, and is empty once the last one is off', { skip: POSIX_WORLD }, async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const a = await s.off({ ids: ['codex'], dryRun: true })
+  assert.deepEqual(a.receipt.still_on, ['claude-code'], 'a dry run says which would stay on')
+  assert.deepEqual((await s.off({ ids: ['codex'] })).receipt.still_on, ['claude-code'])
+  const { receipt, exit } = await s.off({ ids: ['claude-code'] })
+  assert.equal(exit, 0, JSON.stringify(receipt.problems))
+  assert.deepEqual(validateReceipt(receipt), [])
+  assert.deepEqual(receipt.still_on, [], 'no harness is left on')
+})
+
+test('V21: off,off changes nothing — the second run leaves state.json, the manifest and every user file as they were; per-harness: the bundle install wrote stays, CA and all, and so does the .env naming it', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   const caFp = certBlocks(fs.readFileSync(path.join(s.dir, 'ca', 'trocar-ca.pem'), 'utf8'))[0].fp
@@ -296,14 +283,13 @@ test('V21: off,off changes nothing — the second run leaves state.json, the man
   assert.deepEqual([second.exit, second.receipt.changed, second.receipt.removed], [0, [], []], 'off codex again: nothing to do (its certificate items are install\'s, D55①)')
 })
 
-test('1.6 §1.5: the routing is confirmed BEFORE one entry is touched — a daemon that does not confirm leaves every entry and bundle as it is, exit 1, and a state.json that already says off', async () => {
+test('1.6 §1.5: the routing is confirmed BEFORE one entry is touched — a daemon that does not confirm leaves every entry and bundle as it is, exit 1, and a state.json that already says off', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const before = s.userFiles(), bundle = shaOf(path.join(s.dir, 'ca', 'combined-codex.pem'))
   const r = await s.off({ deps: { request: async (q) => (q.path === '/off' ? { actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 4242 } : s.sys.daemon.request(q)) } })
   assert.equal(r.exit, 1)
   assert.deepEqual(r.receipt.routing, { confirmed: false, state: 'running', how: 'daemon-reply' })
   assert.match(r.receipt.problems[0], /did not confirm that the kernel's watch table and links are off/)
-  assert.match(r.receipt.problems[0], /To go on, stop the daemon \(systemctl --user stop trocar-collector\.service\), which takes its links off with it, then run the command again/, 'semantics 5: the way out is said, not only the refusal')
   assert.deepEqual(s.userFiles(), before, 'no user file moved')
   assert.equal(shaOf(path.join(s.dir, 'ca', 'combined-codex.pem')), bundle)
   assert.ok(readManifest(s.dir).entries.length >= 2, 'and the manifest still lists the entries')
@@ -313,26 +299,25 @@ test('1.6 §1.5: the routing is confirmed BEFORE one entry is touched — a daem
   assert.deepEqual(flowEvents(s.dir).at(-1).kind, 'result')
 })
 
-test('1.6 §1.4 第 2 步: an off with no names asks the daemon to exit once drained and reports what is left of the connections; --now is passed on; an error answer (a 400) is a failure, not a stuck daemon', async () => {
+test('1.6 §1.4 第 2 步: an off with no names switches the daemon off without asking it to exit and reports what is left of the connections; --now is passed on; an error answer (a 400) is a failure, not a stuck daemon', async () => {
   const s = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
   const r = await s.off({ now: false })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
-  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'])
-  assert.deepEqual([r.receipt.relayed, r.receipt.daemon], [{ closing: 2, waiting: 1, cut: 0 }, { pid: 4242, state: 'draining', exits_after: 2 }], 'appendix C.2: the daemon says what it exits after')
+  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {}'])
+  assert.deepEqual([r.receipt.relayed, r.receipt.daemon], [{ closing: 2, waiting: 1, cut: 0 }, { pid: 4242, state: 'running' }], 'appendix C.2: the daemon keeps running (D62 ⑥)')
   const t = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 0, waiting: 0, cut: 3 }, exitOnOff: false } })
   const cut = await t.off({ now: true })
-  assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true,"exit":true}'])
+  assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true}'])
   assert.equal(cut.receipt.relayed.cut, 3)
   const u = await installedHome({ names: ['claude-code'] }); const before = u.userFiles()
   const bad = await u.off({ deps: { request: async (q) => { if (q.path === '/off') throw Object.assign(new Error('400: unknown harness: nope'), { status: 400 }); return u.sys.daemon.request(q) } } })
   assert.equal(bad.exit, 1); assert.match(bad.receipt.problems[0], /refused the off request/)
-  assert.match(bad.receipt.problems[0], /To go on, stop the daemon \(systemctl --user stop trocar-collector\.service\)/, 'semantics 5: and what to do about it')
   assert.deepEqual(u.userFiles(), before)
   assert.ok(u.sys.exec.calls.every((c) => !/stop|kill/.test(c)), 'an answering daemon is never stopped')
 })
 
 // a fake process table: pid → identity; `ignore`: signals a pid survives (a stopped or wedged process); every signal is recorded
-test('1.6 §1.4 第 2 / 5 步 · 「守护进程卡死」: a stuck daemon is stopped FIRST (systemctl stop, then SIGTERM), its helper with it, and the certificate entry stays throughout; the receipt says so', async () => {
+test('1.6 §1.4 第 2 / 5 步 · 「守护进程卡死」: a stuck daemon is stopped FIRST (systemctl stop, then SIGTERM), its helper with it, and the certificate entry stays throughout; the receipt says so', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   writeDaemonLock(s)
   const t = procTable(DAEMON_ROWS, { survives: { 4242: ['SIGTERM'] } }); const c = fakeClock()
@@ -349,7 +334,7 @@ test('1.6 §1.4 第 2 / 5 步 · 「守护进程卡死」: a stuck daemon is sto
   assert.deepEqual([stop.event, stop.where, stop.signals], ['off-note', 'off', ['systemctl-stop', 'SIGTERM', 'SIGKILL', 'SIGTERM']], 'the stop is on record (V30\'s stop event)')
 })
 
-test('a stuck daemon and `off codex`: it is stopped all the same (the others were not being captured by a stuck daemon), codex is undone, claude-code stays installed, exit 0 (V30 unit half, named form)', async () => {
+test('a stuck daemon and `off codex`: it is stopped all the same (the others were not being captured by a stuck daemon), codex is undone, claude-code stays installed, exit 0 (V30 unit half, named form)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   writeDaemonLock(s)
   const t = procTable(DAEMON_ROWS); const c = fakeClock(); const claudeBefore = shaOf(path.join(s.home, '.claude', 'settings.json'))
@@ -367,7 +352,8 @@ test('a daemon that cannot be stopped: the certificate items stay as they are, e
   const t = procTable(DAEMON_ROWS, { survives: { 4242: ['SIGTERM', 'SIGKILL'] } }); const c = fakeClock()
   const r = await s.off({ deps: { request: hangsOnStatus(s), alive: t.alive, identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...c } })
   assert.equal(r.exit, 1)
-  assert.match(r.receipt.problems.join('\n'), /pid 4242.*could not be stopped.*kill -9 4242/)
+  assert.match(r.receipt.problems.join('\n'), /pid 4242.*could not be stopped/)
+  assert.ok(r.receipt.problems.join('\n').split('\n').includes('    kill -9 4242'), 'the stop command, a line of its own')
   assert.deepEqual([r.receipt.daemon.state, r.receipt.routing.confirmed], ['unresponsive', false])
   assert.ok(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'the certificate entry stays (D55①)')
   assert.deepEqual(flowEvents(s.dir).filter((e) => e.event === 'failure').map((e) => [e.where, e.code]), [['off', 'stop-failed']])
@@ -427,7 +413,7 @@ test('R12: an off that cannot get the op lock in time has written desired off fi
   assert.equal(fs.readFileSync(path.join(s.dir, 'op.lock'), 'utf8').includes('5555'), true, 'the holder\'s lock is not ours to remove')
 })
 
-test('V27: over on, off and a daemon that has to be stopped, nothing restarts an agent — no signal goes to a pid that is not the daemon or its helper, no systemctl restart; off takes no certificate, so it lists no one as still trusting it', async () => {
+test('V27: over on, off and a daemon that has to be stopped, nothing restarts an agent — no signal goes to a pid that is not the daemon or its helper, no systemctl restart; off takes no certificate, so it lists no one as still trusting it', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); writeDaemonLock(s)
   const t = procTable({ ...DAEMON_ROWS, 5000: { start_time: '5', boot_id: 'boot-1' }, 5001: { start_time: '6', boot_id: 'boot-1' } }, { survives: { 4242: ['SIGTERM'] } })
   const agents = [
@@ -449,7 +435,7 @@ test('V27: over on, off and a daemon that has to be stopped, nothing restarts an
   assert.deepEqual(r.receipt.user_processes, [{ pid: 7001, command: 'trocar serve', note: 'a read-only dashboard, not on any agent path' }, { pid: 7002, command: 'trocar capture', note: 'capturing in the foreground, it may be relaying agent traffic' }], 'what the user started themselves is listed, never killed')
 })
 
-test('D38: every line off writes to flows/ is in the closed sets, every run of off ends with a result line, and a clean off writes the desired state, the routing and the autostart — and no line about a certificate item, which uninstall writes', async () => {
+test('D38: every line off writes to flows/ is in the closed sets, every run of off ends with a result line, and a clean off writes the desired state, the routing and the autostart — and no line about a certificate item, which uninstall writes', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EXTRA=1\n') // an edit after install: a note with a code
   const procs = async () => [{ pid: 5001, ppid: 1, uid: 1000, startedAt: Date.now() + 5000, exe: '/home/u/.local/bin/codex', argv: ['codex'], env: () => new Map() }]
@@ -471,32 +457,36 @@ test('D38: every line off writes to flows/ is in the closed sets, every run of o
   assert.ok(un.some((e) => e.code === 'reverted-not-identical') && un.some((e) => e.code === 'still-trusting'), JSON.stringify(un.map((e) => [e.where, e.kind, e.code])))
 })
 
-test('V24: with the install manifest gone and no terminal, off takes the routing off, stops the daemon and leaves the files alone, lists what it found by trocar\'s marks, exits 1 with outcome partial; with --yes it undoes them by those marks (undone-by-marker): the commented user line is back, the JSON value comes back from the backup', async () => {
+test('V24: with the install manifest gone and no terminal, off takes the routing off, stops the daemon and leaves the files alone, lists what it found by trocar\'s marks, exits 1 with outcome partial; with --yes it undoes them by those marks (undone-by-marker), and what install wrote stays (D55①): the commented user line and the certificate key are uninstall\'s', async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
-  const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
+  let rcOriginal
+  const s = await installedHome({ names: ['claude-code', 'codex', 'kimi-code'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    rcOriginal = fs.readFileSync(sh.files['kimi-code'][0], 'utf8')
   } })
-  const settings = path.join(s.home, '.claude', 'settings.json'), codexEnv = path.join(s.home, '.codex', '.env')
-  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  const settings = path.join(s.home, '.claude', 'settings.json'), codexEnv = path.join(s.home, '.codex', '.env'), rc = s.sh.files['kimi-code'][0], shim = path.join(s.dir, 'bin', 'kimi')
+  const sw = onSwitch(s, 'kimi-code')
   assert.match(fs.readFileSync(codexEnv, 'utf8'), /#trocar-collector-off# SSL_CERT_FILE=\/corp\/ca\.pem/, 'install put the user line out of effect with the sentinel prefix')
   fs.rmSync(path.join(s.dir, 'install-manifest.json'))
   const installed = s.userFiles()
+  const carriers = [settings, codexEnv, rc, shim].map((f) => fs.readFileSync(f, 'utf8'))
+  assert.notEqual(carriers[2], rcOriginal, 'install put the PATH line in')
   const first = await s.off({ yes: false, interactive: false })
   assert.equal(first.exit, 1)
   assert.deepEqual(validateReceipt(first.receipt), [])
   assert.deepEqual(s.userFiles(), installed, 'the files are byte for byte what they were: nothing is changed without a yes')
-  assert.deepEqual(first.receipt.pending.map((p) => [path.relative(s.home, p.path), p.how]).sort(), [['.claude/settings.json', 'json-value'], ['.codex/.env', 'block']])
+  assert.deepEqual(first.receipt.pending.map((p) => [p.path, p.how]), [[sw, 'owned-file']], 'what on wrote; the Kimi shim and rc line are install\'s')
   assert.match(first.receipt.problems.join('\n'), /record of what it wrote is missing[\s\S]*trocar off --yes/)
-  assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'desired off for every harness')
-  assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart], [true, ['POST /off {"exit":true}'], undefined], 'the routing is off, the daemon was asked to exit, and the receipt carries no autostart key (D61: off touches no registration) — none of it needs the manifest')
+  assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off', 'off'], 'desired off for every harness')
+  assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart], [true, ['POST /off {}'], undefined], 'the routing is off, the daemon was asked to switch off (D62 ⑥: never to exit), and the receipt carries no autostart key (D61: off touches no registration) — none of it needs the manifest')
   assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'partial'])
   const second = await s.off({ yes: true })
   assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
   assert.equal(second.receipt.undone_by_marker, true)
-  assert.equal(fs.readFileSync(codexEnv, 'utf8'), codexOriginal, 'the block is out and the commented user line is back')
-  assert.equal(fs.readFileSync(settings, 'utf8'), settingsOriginal, 'the JSON value is back, taken from the backup, this key only')
-  assert.deepEqual(flowEvents(s.dir).filter((e) => e.code === 'undone-by-marker').length, 2, 'one note per file, each with the code')
+  assert.ok(!fs.existsSync(sw), 'the switch file is out')
+  assert.deepEqual([settings, codexEnv, rc, shim].map((f) => fs.readFileSync(f, 'utf8')), carriers, 'the certificate key and block, the Kimi rc line and shim are install\'s: byte for byte')
+  assert.deepEqual(flowEvents(s.dir).filter((e) => e.code === 'undone-by-marker').length, 1, 'one note per file, each with the code')
   assert.equal(flowEvents(s.dir).at(-1).outcome, 'undone-by-marker')
   const asked = fakeAsk(); const third = await s.off({ interactive: true, io: asked.io, say: asked.say }) // nothing left to find: no question
   assert.deepEqual([third.exit, asked.said.length], [0, 0])
@@ -512,18 +502,18 @@ function fakeAsk(answer = 'y') {
 }
 
 test('V24 (terminal): the list is printed and ONE question asked; yes undoes by the marks, no leaves every file as it is (exit 1, partial)', async () => {
-  const make = async () => { const s = await installedHome({ names: ['codex'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json')); return s }
+  const make = async () => { const s = await installedHome({ names: ['kimi-code'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json')); s.sw = onSwitch(s, 'kimi-code'); return s }
   const no = await make(); const before = no.userFiles(); const asked = fakeAsk('n')
   const declined = await no.off({ interactive: true, io: asked.io, say: asked.say })
-  assert.deepEqual([declined.exit, no.userFiles(), asked.printed.filter((t) => /\[y\/N\]/.test(t)).length], [1, before, 1])
-  assert.match(asked.said.join('\n'), /\.codex\/\.env|\.codex[\\/]\.env/)
-  const yes = await make(); const asked2 = fakeAsk('y')
+  assert.deepEqual([declined.exit, no.userFiles(), fs.existsSync(no.sw), asked.printed.filter((t) => /\[y\/N\]/.test(t)).length], [1, before, true, 1])
+  const yes = await make(); const kept = yes.userFiles(); const asked2 = fakeAsk('y')
   const done = await yes.off({ interactive: true, io: asked2.io, say: asked2.say })
-  assert.deepEqual([done.exit, done.receipt.undone_by_marker, /trocar collector/.test(fs.readFileSync(path.join(yes.home, '.codex', '.env'), 'utf8'))], [0, true, false])
+  assert.deepEqual([done.exit, done.receipt.undone_by_marker, fs.existsSync(yes.sw), yes.userFiles()], [0, true, false, kept], 'the switch file goes; the Kimi rc line is install\'s and stays')
 })
 
 test('R3: a manifest this build does not read (a newer version) leaves every entry alone, says so, exits 1 — the routing is still taken off; an unreadable manifest falls back to the marks', async () => {
-  const s = await installedHome({ names: ['claude-code'] })
+  const s = await installedHome({ names: ['claude-code', 'kimi-code'] })
+  const sw = onSwitch(s, 'kimi-code')
   const manifestFile = path.join(s.dir, 'install-manifest.json')
   const m = JSON.parse(fs.readFileSync(manifestFile, 'utf8')); m.version = 99
   fs.writeFileSync(manifestFile, JSON.stringify(m)); const before = s.userFiles()
@@ -534,10 +524,11 @@ test('R3: a manifest this build does not read (a newer version) leaves every ent
   fs.writeFileSync(manifestFile, '{ not json')
   const garbled = await s.off({ yes: true })
   assert.equal(garbled.exit, 0, JSON.stringify(garbled.receipt.problems)); assert.match(garbled.receipt.notes.join('\n'), /manifest cannot be read/)
-  assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('trocar'), 'undone by the marks')
+  assert.ok(!fs.existsSync(sw), 'undone by the marks')
+  assert.deepEqual([path.join(s.home, '.claude', 'settings.json'), s.sh.files['kimi-code'][0]].map((f) => fs.readFileSync(f, 'utf8').includes('trocar')), [true, true], 'the certificate key and the Kimi rc line are install\'s')
 })
 
-test('V34: an off that lands while `on` is writing wins — `on` exits 1, saying it was turned off; at the end desired is off, only the items install wrote are left, the files are as they were, and the daemon is told to switch off', async () => {
+test('V34: an off that lands while `on` is writing wins — `on` exits 1, saying it was turned off; at the end desired is off, only the items install wrote are left, the files are as they were, and the daemon is told to switch off', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   await s.off() // off spares what install wrote (D55①): the on below is a re-on with no install between, and it is the race
   const before = s.userFiles(), installed = s.installItems()
@@ -556,7 +547,7 @@ test('V34: an off that lands while `on` is writing wins — `on` exits 1, saying
   assert.ok(!fs.existsSync(path.join(s.dir, 'op.lock')), 'both released the lock')
 })
 
-test('V34: whichever write of `on` the off lands in, the end is the same — off wins: desired off, the items install wrote as they were, user files as before, no lock left', async () => {
+test('V34: whichever write of `on` the off lands in, the end is the same — off wins: desired off, the items install wrote as they were, user files as before, no lock left', { skip: POSIX_WORLD }, async () => {
   const count = await installedHome({ names: ['claude-code', 'codex'] })
   await count.off()
   let writes = 0
@@ -575,7 +566,7 @@ test('V34: whichever write of `on` the off lands in, the end is the same — off
   }
 })
 
-test('V8: backups — 0700 / 0600; off leaves every entry and its backup as they are (D55①: the entries are install\'s), whatever the user edited; uninstall takes trocar\'s part out of the edited file and keeps the user\'s line (the kept / dropped rule itself: undo.test.mjs「backups (R2)」)', async () => {
+test('V8: backups — 0700 / 0600; off leaves every entry and its backup as they are (D55①: the entries are install\'s), whatever the user edited; uninstall takes trocar\'s part out of the edited file and keeps the user\'s line (the kept / dropped rule itself: undo.test.mjs「backups (R2)」)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const backupDir = path.join(s.home, '.trocar', 'backup')
   assert.equal(fs.statSync(backupDir).mode & 0o777, 0o700)
@@ -610,6 +601,7 @@ test('R12: while `on` holds the op lock (it waits for its daemon to come up) an 
   const on = await s.on({ request: never, sleep })
   assert.deepEqual(meanwhile, { entry: true, desired: 'off', lock: true }, 'the entry install wrote is there and on holds the lock; off had already written desired off')
   assert.equal(on.exit, 1); assert.match(on.receipt.notes.join('\n'), /turned off while this on ran/)
+  assert.equal(on.receipt.error && on.receipt.error.code, 'stopped-by-off', '1.6 §3.1: the code of an on an off stopped, on Linux as on macOS / Windows')
   assert.ok(pauses < 8, `on stopped at its next poll (${pauses} pauses), not after 60`)
   const off = await offRun
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
@@ -619,7 +611,7 @@ test('R12: while `on` holds the op lock (it waits for its daemon to come up) an 
 // The audit's HIGH finding (semantics 1), through the real `on` and the real `off`: Codex and Hermes read ONE trust bundle through their .env (4.6 §身份与信任, "replace"
 // semantics). A .env that still names `combined-<h>.pem` when the file is gone leaves the agent with no CA at all — it cannot reach its real upstream either.
 for (const [harness, rel] of [['codex', '.codex/.env'], ['hermes', '.hermes/.env']]) {
-  test(`V15 (semantics 1): on, then the user's editor makes ${rel} CRLF, then uninstall (off spares it, D55①) — the entry is undone, the bundle is removed with it, exit 0; an entry that survives (a form the removal cannot read) keeps the bundle, exit 1, nothing dangles`, async () => {
+  test(`V15 (semantics 1): on, then the user's editor makes ${rel} CRLF, then uninstall (off spares it, D55①) — the entry is undone, the bundle is removed with it, exit 0; an entry that survives (a form the removal cannot read) keeps the bundle, exit 1, nothing dangles`, { skip: POSIX_WORLD }, async () => {
     const s = await installedHome({ names: ['claude-code', harness] })
     s.sys.daemon.state.up = false
     const env = path.join(s.home, rel), bundle = path.join(s.dir, 'ca', `combined-${harness}.pem`)
@@ -651,9 +643,10 @@ for (const [harness, rel] of [['codex', '.codex/.env'], ['hermes', '.hermes/.env
 // The audit's MEDIUM finding (semantics 2): a manifest that parses but has another shape used to crash `off` before it did anything (routing still on, nothing undone) or half-way
 // (routing off, no receipt). Now it is as unreadable as one that does not parse: the routing is taken off, the entries are found by trocar's marks after a yes (R3), and a receipt is printed.
 for (const [what, doc] of [['{"version":3}', () => ({ version: 3 })], ['entries is an object', (m) => ({ ...m, entries: { a: 1 } })], ['entries holds null', (m) => ({ ...m, entries: [...m.entries, null] })], ['files is null', (m) => ({ ...m, files: null })]]) {
-  test(`R3 / semantics 2: an install manifest of the wrong shape (${what}) — off takes the routing off, touches no file without a yes, says why and exits 1; with --yes it undoes by the marks; a receipt either way`, async () => {
-    const s = await installedHome({ names: ['claude-code', 'codex'] })
+  test(`R3 / semantics 2: an install manifest of the wrong shape (${what}) — off takes the routing off, touches no file without a yes, says why and exits 1; with --yes it undoes by the marks; a receipt either way`, { skip: POSIX_WORLD }, async () => {
+    const s = await installedHome({ names: ['claude-code', 'codex', 'kimi-code'] })
     s.sys.daemon.state.up = false
+    const sw = onSwitch(s, 'kimi-code')
     const manifestFile = path.join(s.dir, 'install-manifest.json')
     fs.writeFileSync(manifestFile, JSON.stringify(doc(JSON.parse(fs.readFileSync(manifestFile, 'utf8')))))
     const installed = s.userFiles()
@@ -663,13 +656,13 @@ for (const [what, doc] of [['{"version":3}', () => ({ version: 3 })], ['entries 
     assert.deepEqual(s.userFiles(), installed, 'no file is touched without a yes')
     assert.match(first.receipt.notes.join('\n'), /the install manifest cannot be read .*not an install manifest this build can use/)
     assert.match(first.receipt.problems.join('\n'), /record of what it wrote cannot be read[\s\S]*trocar off --yes/)
-    assert.deepEqual([first.receipt.routing.confirmed, Object.values(s.state().harnesses).map((h) => h.desired)], [true, ['off', 'off']], 'the routing is off and desired is off, with no manifest to say what is installed')
-    assert.deepEqual(first.receipt.pending.map((p) => path.relative(s.home, p.path)).sort(), ['.claude/settings.json', '.codex/.env'])
+    assert.deepEqual([first.receipt.routing.confirmed, Object.values(s.state().harnesses).map((h) => h.desired)], [true, ['off', 'off', 'off']], 'the routing is off and desired is off, with no manifest to say what is installed')
+    assert.deepEqual(first.receipt.pending.map((p) => p.path), [sw])
     assert.equal(flowEvents(s.dir).at(-1).kind, 'result')
     const second = await s.off({ yes: true })
     assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
     assert.equal(second.receipt.undone_by_marker, true)
-    assert.ok(!/trocar/.test(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8')) && !/trocar collector/.test(fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8')))
+    assert.deepEqual([fs.existsSync(sw), s.userFiles()], [false, installed], 'the switch file goes; every user file, the Kimi rc line in it, as install left it')
   })
 }
 
@@ -699,7 +692,7 @@ test('semantics 2: whatever throws while the entries are undone costs no receipt
 // 4.6 撤销顺序 第 2 步 with the one list of OS bundles (pem.mjs SYSTEM_BUNDLES, the collector's too — off once had three of its six paths): a gone bundle a live
 // codex may use is rebuilt from Node's roots and the first OS bundle this machine has. None here: the bundle is still made (no bundle, no network), and its note
 // says it carries Node's roots only (D38), never a bundle quietly without the OS roots.
-test('uninstall: a gone bundle rebuilt on a machine with no OS bundle says it carries Node\'s roots only (4.6 撤销顺序 第 2 步, D38)', async () => {
+test('uninstall: a gone bundle rebuilt on a machine with no OS bundle says it carries Node\'s roots only (4.6 撤销顺序 第 2 步, D38)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['codex'] })
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   fs.rmSync(bundle)
@@ -724,7 +717,7 @@ const enoentOf = (f) => Object.assign(new Error(`ENOENT: no such file or directo
 const stockMacFs = (marker, opened) => ({ ...fs, readFileSync: (f, ...a) => { if (!String(f).startsWith('/etc/')) return fs.readFileSync(f, ...a); opened.push(f); if (f === '/etc/ssl/cert.pem') return marker.certPem; throw enoentOf(f) } })
 const macRoots = { bundled: createCa({ commonName: 'node bundled root' }), anchor: createCa({ commonName: 'corporate proxy CA (keychain anchor)' }), apple: createCa({ commonName: 'apple system root' }) }
 const securityOf = (s, pems, calls = []) => (file, args, opts) => { if (file !== 'security') return s.sys.exec.run(file, args, opts); calls.push(args); return pems ? { status: 0, stdout: pems.join('\n'), stderr: '' } : { status: 1, stdout: '', stderr: 'SecKeychainOpen: I/O error' } }
-test('uninstall on darwin: a gone bundle is rebuilt without opening a static OS bundle file such as /etc/ssl/cert.pem — from the keychain\'s anchors, Node\'s set and Apple\'s export, the install\'s own reader (4.9 §6.2, 4.6 撤销顺序 第 2 步)', async () => {
+test('uninstall on darwin: a gone bundle is rebuilt without opening a static OS bundle file such as /etc/ssl/cert.pem — from the keychain\'s anchors, Node\'s set and Apple\'s export, the install\'s own reader (4.9 §6.2, 4.6 撤销顺序 第 2 步)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['codex'] })
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   const trocarFp = certBlocks(fs.readFileSync(path.join(s.dir, 'ca', 'trocar-ca.pem'), 'utf8'))[0].fp
@@ -743,7 +736,7 @@ test('uninstall on darwin: a gone bundle is rebuilt without opening a static OS 
 
 // D38 on a Mac: a source that could not be read is said, the rebuild still made from the rest (no bundle = no network). Node 20 has no getCACertificates —
 // the keychain's anchors, where a corporate proxy's CA lives, are then missing; the security export alone still gives Apple's standard roots.
-test('uninstall on darwin: a gone bundle rebuilt while a source cannot be read says which (Node < 22.15: the keychain\'s anchors), in flows/ and on the receipt (D38)', async () => {
+test('uninstall on darwin: a gone bundle rebuilt while a source cannot be read says which (Node < 22.15: the keychain\'s anchors), in flows/ and on the receipt (D38)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['codex'] })
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   fs.rmSync(bundle)
@@ -764,9 +757,10 @@ test('uninstall on darwin: a gone bundle rebuilt while a source cannot be read s
   assert.ok(certBlocks(fs.readFileSync(path.join(t.dir, 'ca', 'combined-codex.pem'), 'utf8')).length > 0, 'still rebuilt: Node\'s roots are in it')
 })
 
+// (skipped on a Windows host: its world is a Linux-shaped install, which Windows never has; the win32 store read is injected, so a Windows host adds no coverage)
 // 4.8 §6.2 in `off`: the system store through Node's own read; no helper here (the standalone undo starts none, the daemon may be gone), so a Node without
 // getCACertificates rebuilds with Node's roots and says why. Driven through undoSide: the Windows half of runOff (task kill, the run key) is not this test's.
-test('the bundle undo on win32: a gone bundle is rebuilt from the Windows system store; with no getCACertificates (Node < 22.15) and no helper, from Node\'s roots, said (4.8 §6.2, D38)', async () => {
+test('the bundle undo on win32: a gone bundle is rebuilt from the Windows system store; with no getCACertificates (Node < 22.15) and no helper, from Node\'s roots, said (4.8 §6.2, D38)', { skip: POSIX_WORLD }, async () => {
   const winRoot = createCa({ commonName: 'windows store root' })
   for (const [tls, want] of [[{ getCACertificates: (k) => (k === 'system' ? [winRoot.certPem] : []) }, null], [{}, /^the Windows root certificates could not be read \(getCACertificates: not available \(Node ≥ 22\.15 has it\)\)$/]]) {
     const s = await installedHome({ names: ['codex'] })
@@ -790,7 +784,7 @@ test('the bundle undo on win32: a gone bundle is rebuilt from the Windows system
 
 // Read only for a bundle that is rebuilt: the darwin read runs `security` (up to 10 s). A bundle in place is stripped, a gone one nobody uses is removed —
 // neither needs roots; two rebuilt bundles share one read.
-test('the bundle undo reads the OS roots only for a bundle it rebuilds, once: in place → stripped, gone and unused → removed, neither reads; two rebuilt share one read', async () => {
+test('the bundle undo reads the OS roots only for a bundle it rebuilds, once: in place → stripped, gone and unused → removed, neither reads; two rebuilt share one read', { skip: POSIX_WORLD }, async () => {
   const run = async (names, { gone = [], procs = [] }) => {
     const s = await installedHome({ names })
     for (const n of gone) fs.rmSync(path.join(s.dir, 'ca', `combined-${n}.pem`))
@@ -809,7 +803,7 @@ test('the bundle undo reads the OS roots only for a bundle it rebuilds, once: in
 
 // The Linux reader's own rule in `off` too (4.6 「合并包」: an OS bundle there but unreadable before the one found is not guessed about): the rebuild is
 // made from Node's roots and says why, as `on` stops and the daemon keeps its bundles — never a bundle quietly built from a later file.
-test('uninstall on Linux: an OS bundle that is there but unreadable ahead of a good one → the gone bundle is rebuilt from Node\'s roots, and the reason names the errno', async () => {
+test('uninstall on Linux: an OS bundle that is there but unreadable ahead of a good one → the gone bundle is rebuilt from Node\'s roots, and the reason names the errno', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['codex'] })
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   fs.rmSync(bundle)
@@ -827,7 +821,7 @@ test('uninstall on Linux: an OS bundle that is there but unreadable ahead of a g
 // with no routing change, no daemon asked, no OS tool run (no bootout), no file of the agents' touched, state.json as it was.
 // D57 (4.11 ⑱): the Windows opt-in kinds (optin-*) are no longer known either; one in a v3 manifest is refused like any other unknown kind (V35).
 for (const [where, kind] of [['entries', 'from-the-future'], ['files', 'from-the-future'], ['entries', 'optin-user-path']]) {
-  test(`an unknown kind (${kind}) in ${where}: the whole off is refused before the routing — nothing asked of the daemon, no OS tool, no file touched`, async () => {
+  test(`an unknown kind (${kind}) in ${where}: the whole off is refused before the routing — nothing asked of the daemon, no OS tool, no file touched`, { skip: POSIX_WORLD }, async () => {
     const s = await installedHome({ names: ['claude-code', 'codex'] })
     const file = path.join(s.dir, 'install-manifest.json')
     const m = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -866,7 +860,7 @@ test('P13 uninstall: the root key is removed after the trust store\'s root; off 
 // the review of T20, item 1 (D55①, 1.6 §1.1 「证书一项不碰」): over every way off is run — all, --now, and each harness by name — every item install wrote
 // is still on record and byte for byte after it, the user's files with it, and the next on turns capture back on with no install between (exit 0)
 for (const [what, o] of [['off', () => ({})], ['off --now', () => ({ now: true })], ...ALL_HARNESSES.map((h) => [`off ${h}`, () => ({ ids: [h] })])]) {
-  test(`D55① · Linux: install → on → ${what} → on — every phase-install item and every user file is as install left it, and the second on needs no install`, async () => {
+  test(`D55① · Linux: install → on → ${what} → on — every phase-install item and every user file is as install left it, and the second on needs no install`, { skip: POSIX_WORLD }, async () => {
     const s = await installedHome({ names: ALL_HARNESSES })
     const installed = s.installItems(), files = s.userFiles()
     assert.ok(installed.length >= 10, 'install wrote the certificate items of seven harnesses')
@@ -898,7 +892,7 @@ test('a file trocar created is said once among the removed, however many of its 
 // whether the daemon was asked to exit, so in proxy mode — where it no longer is — `confirmed` fell back to the daemon's own `confirmed` flag, which
 // the collector hardcodes to true once its unwatches answered: a daemon still routing would have been reported as off. The key is the scope: with no
 // names, nothing may be left on.
-test('1.6 §3.1 · D62 ⑥: a nameless off in proxy mode reads the routing back — a daemon that answers actual: on is a mismatch, said with a way out, exit 1', async () => {
+test('1.6 §3.1 · D62 ⑥: a nameless off in proxy mode reads the routing back — a daemon that answers actual: on is a mismatch, said with a way out, exit 1', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'], daemon: { pid: 4242 } })
   const asked = []
   const bad = await s.off({ deps: { platform: 'darwin', request: async (q) => { if (q.path !== '/off') return s.sys.daemon.request(q); asked.push(q.body); return { actual: 'on', confirmed: true, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 4242 } } } })
@@ -914,10 +908,148 @@ test('1.6 §3.1 · D62 ⑥: a nameless off in proxy mode reads the routing back 
   assert.deepEqual([good.receipt.routing.confirmed, good.receipt.daemon], [true, { pid: 4242, state: 'running' }])
 })
 
-test('the text receipt says a changed file once, as it says a removed file once: two entries of one file that ended the same way are one row; two that ended differently are two', () => {
+test('1.6 §1.1 --now: in proxy mode, off --now after a plain off still asks the running daemon to cut, and the receipt carries what it cut', async () => {
+  const s = await installedHome({ names: ['claude-code'], daemon: { pid: 4242 } })
+  const asked = []
+  const deps = { platform: 'darwin', request: async (q) => { if (q.path !== '/off') return s.sys.daemon.request(q); asked.push(q.body); return { actual: 'off', confirmed: true, relayed: q.body.now ? { closing: 0, waiting: 0, cut: 1 } : { closing: 1, waiting: 0, cut: 0 }, pid: 4242 } } }
+  assert.equal((await s.off({ deps })).exit, 0)
+  const cut = await s.off({ now: true, deps })
+  assert.equal(cut.exit, 0, JSON.stringify(cut.receipt.problems))
+  assert.deepEqual(asked, [{}, { now: true }], 'everything already off: the daemon is still asked, with now')
+  assert.equal(cut.receipt.relayed.cut, 1)
+})
+
+test('the text receipt says a changed file once, as it says a removed file once: the entries of one file are one row, however each ended', () => {
   const file = path.join('/h', 'Library', 'Application Support', 'Code', 'User', 'settings.json') // one file, two json entries (a proxy key and an array item)
   const rows = (changed) => formatOffReceipt({ command: 'off', ok: true, outcome: 'done', changed, removed: [] }, { home: '/h' }).split('\n').filter((l) => l.includes('settings.json')).length
   const restored = { harness: 'kimi-code', path: file, result: 'restored' }
   assert.equal(rows([restored, { ...restored }]), 1)
-  assert.equal(rows([restored, { ...restored, result: 'old-command' }]), 2)
+  assert.equal(rows([restored, { ...restored, result: 'old-command' }]), 1)
+  assert.equal(rows([restored, { ...restored, backup: '/h/.trocar/backup/settings.json', backup_dropped: true }]), 1, 'the backup goes with the last entry of the file (a macOS test machine: two restored rows)')
+})
+
+test('the text receipt says what it says about files an agent wrote because of trocar\'s plugin once, then lists each of them once', () => {
+  const paths = ['/h/.config/opencode/node_modules', '/h/.config/opencode/package.json']
+  const text = formatOffReceipt({ command: 'off', ok: true, outcome: 'done', changed: [], removed: [], residue: paths.map((p) => ({ harness: 'opencode', path: p, why: 'opencode installs its SDK on first run' })) }, { home: '/h' })
+  const lines = text.split('\n')
+  for (const p of paths) assert.equal(lines.filter((l) => l.includes(p.replace('/h', '~'))).length, 1, p)
+  const bare = lines.map((l) => paths.reduce((s, p) => s.replace(p.replace('/h', '~'), ''), l)).filter((l) => l.trim())
+  assert.deepEqual(bare.filter((l, i) => bare.indexOf(l) !== i), [], 'no sentence is said twice')
+})
+
+test('off by trocar\'s marks keeps the backups no record names, and its receipt names them under ~ (1.6 §1.1⑤)', { skip: POSIX_WORLD }, async () => {
+  const s = await installedHome({ names: ['codex'], seed: (home) => fs.writeFileSync(path.join(home, '.codex', '.env'), 'SSL_CERT_FILE=/corp/ca.pem\n') })
+  onSwitch(s, 'codex')
+  fs.rmSync(path.join(s.dir, 'install-manifest.json'))
+  const { receipt } = await s.off({ yes: true })
+  assert.ok(receipt.orphan_backups.length > 0 && receipt.orphan_backups.every((b) => fs.existsSync(b)), JSON.stringify(receipt.orphan_backups))
+  const text = formatOffReceipt(receipt, { home: s.home })
+  assert.ok(receipt.orphan_backups.every((b) => text.includes(`~${b.slice(s.home.length)}`)), text)
+  assert.ok(!text.includes(s.home), text)
+})
+
+// 1.6 §1.1⑤: a file off cannot undo is named with its backup and the line that puts it back; the text and --details show HOME as ~ in the
+// words and in that line (sh, zsh and bash expand an unquoted ~/), never the absolute HOME
+test('a file off leaves: its backup and the line that puts it back show HOME as ~, in the text and in --details', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const file = path.join(s.home, '.claude', 'settings.json')
+  const m = readManifest(s.dir)
+  applyJsonKey({ dir: s.dir, manifest: m, harness: 'claude-code', phase: 'on', file, keys: ['env', 'HTTPS_PROXY'], value: 'http://127.0.0.1:1', home: s.home })
+  saveManifest(s.dir, m)
+  fs.appendFileSync(file, '\n{ not json') // a file trocar can no longer read: left, with its backup
+  const r = await s.off({ yes: true })
+  const left = r.receipt.left.find((l) => l.path === file)
+  assert.ok(left && left.backup && left.restore, JSON.stringify(r.receipt.left))
+  for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+    const out = f(r.receipt, { home: s.home })
+    assert.ok(!out.includes(s.home), `${name}:\n${out}`)
+    assert.ok(out.replace(/\s+/g, ' ').includes(`cp ~${left.backup.slice(s.home.length)} ~${file.slice(s.home.length)}`), `${name}: the line that puts it back, with ~:\n${out}`)
+  }
+})
+
+// 1.6 §1.1⑤: HOME as ~ in the words of every row, also a HOME with a space in it (macOS and Windows account names may have one); a quoted path
+// keeps HOME as it is (the shell expands no ~ in quotes)
+test('a HOME with a space, or in another case where file names are case-blind, is ~ in the words of off\'s text and --details', async () => {
+  const { pathKey } = await import('../../src/off/fsutil.mjs')
+  const FOLDS = pathKey('/a', { realpath: null }) === pathKey('/A', { realpath: null }) // as off compares paths on this host
+  for (const [home, sep] of [['/Users/Ann Lee', '/'], ['C:\\Users\\Ann Lee', '\\']]) {
+    const file = [home, '.claude', 'settings.json'].join(sep), backup = [home, '.trocar', 'backup', 'ab12-20261109T000000Z'].join(sep)
+    const q = (p) => (sep === '/' ? `'${p}'` : `"${p}"`)
+    const receipt = { command: 'off', ok: false, outcome: 'left', all: true, harnesses: [], routing: { confirmed: true }, changed: [], removed: [],
+      left: [{ path: file, harness: 'claude-code', result: 'left-unparsable', reason: `${file}: trocar cannot read it. The file as it was before trocar is kept at ${backup}; by hand: cp ${q(backup)} ${q(file)} (puts the whole file back)`, backup, restore: `cp ${q(backup)} ${q(file)}` }],
+      problems: [`${file} could not be read (${backup} is kept)`],
+      relayed: 'unknown', relayed_reason: `${backup} could not be read`, // a reason in another row
+      still_trusting: [{ what: 'root', reason: `the store at ${[home, 'Library'].join(sep)} could not be opened.`, command: 'true' }] }
+    if (FOLDS) receipt.problems.push(`${[home.toLowerCase(), 'x'].join(sep)} is named in another case`) // matched as off compares paths: case-blind there
+    for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+      const words = f(receipt, { home }).split('\n').filter((l) => !isCommandLine(l))
+      const unquoted = words.join(' ').replace(/(^|\s)('[^']*'|"[^"]*")/g, '$1') // a quoted path (a quote that opens a word, not trocar's) is a command's, kept as the shell needs it
+      assert.ok(!unquoted.includes(home) && !(FOLDS && unquoted.toLowerCase().includes(home.toLowerCase())), `${name}, ${home}: no words hold the HOME:\n${words.join('\n')}`)
+    }
+  }
+})
+
+// §1.1⑤ in a line to copy: the command that takes trocar's root out names HOME as ~ where the shell expands it, in the text and --details
+test('the line that takes trocar\'s root out names an unquoted HOME as ~', () => {
+  const home = '/Users/al'
+  const receipt = { command: 'off', ok: true, outcome: 'done', all: true, harnesses: [], routing: { confirmed: true }, changed: [], removed: [],
+    still_trusting: [{ what: 'root', reason: 'it could not be removed', command: `security remove-trusted-cert ${home}/.trocar/collector/ca/ca.pem` }] }
+  for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+    const out = f(receipt, { home }).split('\n')
+    assert.ok(out.includes(`${COMMAND_INDENT}security remove-trusted-cert ~/.trocar/collector/ca/ca.pem`), `${name}:\n${out.join('\n')}`)
+  }
+})
+
+// §1.1⑤ never a wrong line to copy: HOME in another case is HOME only where its volume is case-blind (pathKey asks the volume; the test answers for it)
+test('HOME in another case is ~ only on a case-blind volume: on a case-sensitive one the line to copy and the words keep the path', async () => {
+  const { pathKey } = await import('../../src/off/fsutil.mjs')
+  const home = '/Users/al', there = ['/', '/Users', '/Users/al']
+  const enoent = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
+  const caseSensitive = (d) => (there.includes(d) ? d : enoent())
+  const caseBlind = (d) => there.find((e) => e.toLowerCase() === d.toLowerCase()) || enoent()
+  const cmd = 'security remove-trusted-cert /users/AL/.trocar/ca.pem'
+  const receipt = { command: 'off', ok: true, outcome: 'done', all: true, harnesses: [], routing: { confirmed: true }, changed: [], removed: [],
+    still_trusting: [{ what: 'root', reason: 'it could not be removed', command: cmd }], problems: ['/users/AL/x could not be read'] }
+  const platformFolds = pathKey('/a', { realpath: null }) === pathKey('/A', { realpath: null })
+  for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+    const kept = f(receipt, { home, realpath: caseSensitive }).split('\n')
+    assert.ok(kept.includes(`${COMMAND_INDENT}${cmd}`) && kept.some((l) => l.includes('/users/AL/x')), `${name}, case-sensitive volume: another case is another directory:\n${kept.join('\n')}`)
+    if (!platformFolds) continue // file names keep case on this platform whatever the volume
+    const blind = f(receipt, { home, realpath: caseBlind }).split('\n')
+    assert.ok(blind.includes(`${COMMAND_INDENT}security remove-trusted-cert ~/.trocar/ca.pem`) && blind.some((l) => l.includes('~/x')), `${name}, case-blind volume:\n${blind.join('\n')}`)
+  }
+})
+
+// the supervisor supervisor.lock names (pid 4040) still runs: the one powershell question stopByHand asks, answered
+const supervisorRuns = (file, args) => (file === 'powershell' && args.join(' ').includes('Get-Process -Id 4040 ') ? { status: 0, stdout: '1000000000001', stderr: '' } : { status: 1, stdout: '', stderr: 'not this question' })
+
+test('semantics 5 on win32: the way out finds and stops the daemon with Windows\' own commands, never pgrep or kill', async () => {
+  const { switchRoutingOff } = await import('../../src/off/orchestrate.mjs')
+  // supervisor.lock beside the daemon's lock names the supervisor, which goes first (it restarts a killed daemon)
+  const fs = { readFileSync: (f) => { if (/supervisor\.lock$/.test(f)) return JSON.stringify({ pid: 4040, startedAt: 1000000000001 }); throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
+  const w = (state, pid) => ({ platform: 'win32', fs, exec: supervisorRuns, unitManaged: () => false, lockFile: 'C:\\t\\lock', daemonState: async () => ({ state, socket: '\\\\.\\pipe\\t', lock: pid ? { pid } : null, reason: state === 'unknown' ? 'unreadable lock' : undefined }),
+    request: async () => ({ actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 } }) })
+  const texts = [(await switchRoutingOff(w('running', 5151))).problems.join('\n'), (await switchRoutingOff(w('running', null))).problems.join('\n'), (await switchRoutingOff(w('unknown', null))).problems.join('\n')]
+  for (const t of texts) assert.doesNotMatch(t, /\bpgrep\b|\bkill \d/, t)
+  assert.match(texts[0], /taskkill \/PID 4040\b[^]*taskkill \/PID 5151\b/, 'the supervisor is stopped before the daemon')
+  for (const t of texts.slice(1)) assert.match(t, /Get-CimInstance Win32_Process/)
+})
+
+test('semantics 5 on every platform: a way out\'s commands are lines of their own, and the receipt prints each whole, unfolded, within 80 columns', async () => {
+  const { switchRoutingOff } = await import('../../src/off/orchestrate.mjs')
+  const { formatOffReceipt, isCommandLine } = await import('../../src/off/receipt.mjs')
+  const fs = { readFileSync: (f) => { if (/supervisor\.lock$/.test(f)) return JSON.stringify({ pid: 4040, startedAt: 1000000000001 }); throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
+  for (const platform of ['win32', 'darwin', 'linux']) {
+    for (const unit of [false, true]) {
+      if (unit && platform === 'win32') continue
+      const w = (state, pid) => ({ platform, fs, exec: supervisorRuns, unitManaged: () => unit, lockFile: '/t/lock', daemonState: async () => ({ state, socket: '/t/sock', lock: pid ? { pid } : null, reason: state === 'unknown' ? 'unreadable lock' : undefined }),
+        request: async () => ({ actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 } }) })
+      for (const r of [await switchRoutingOff(w('running', 5151)), await switchRoutingOff(w('running', null)), await switchRoutingOff(w('unknown', null))]) {
+        const cmds = r.problems.flatMap((p) => p.split('\n').filter(isCommandLine)).map((l) => l.trim())
+        assert.ok(cmds.length > 0, `${platform}: the way out names a command on a line of its own: ${r.problems}`)
+        const text = formatOffReceipt({ ...r, harnesses: ['codex'], ok: false }).split('\n')
+        for (const c of cmds) assert.ok(text.some((l) => l.trim() === c && l.length <= 80), `${platform}: printed whole on its own line, within 80 columns: ${c}\n${text.join('\n')}`)
+      }
+    }
+  }
 })

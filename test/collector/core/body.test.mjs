@@ -59,3 +59,43 @@ test('an SSE stream or JSON reply that is not valid UTF-8 keeps its bytes (raw_b
   assert.deepEqual([lab.binary, lab.notJson], [true, false])
   assert.match(lab.text, /not UTF-8 text: its bytes are kept \(raw_b64\)/)
 })
+
+test('4.1 #13 — a compressed reply keeps its wire bytes once: wire_b64 when decoded, raw_b64 when not; content_encoding is the header', () => {
+  const code = { gzip: (b) => zlib.gzipSync(b), br: (b) => zlib.brotliCompressSync(b), deflate: (b) => zlib.deflateSync(b) }
+  // the first coding listed is applied first; identity and a token nobody knows leave the bytes as they are
+  const encode = (buf, header) => header.split(',').map((c) => c.trim()).reduce((b, c) => (code[c] ? code[c](b) : b), buf)
+  const compressed = (header) => header.split(',').some((c) => c.trim().toLowerCase() !== 'identity')
+  const kinds = { sse: ['text/event-stream', SSE], json: ['application/json', '{"a":1}'], text: ['text/plain', 'hello'] }
+  const states = {
+    decoded: (h, p) => ({ body: encode(Buffer.from(p), h) }),
+    corrupt: () => ({ body: Buffer.from('these bytes are not that coding') }),
+    overLimit: (h) => ({ body: encode(Buffer.alloc(2 << 20), h), llm: false }),
+    truncated: (h, p) => ({ body: encode(Buffer.from(p), h), truncated: true }),
+  }
+  for (const header of ['gzip', 'br', 'deflate', 'gzip, br', 'identity', 'x-unknown']) {
+    for (const [kind, [ctype, payload]] of Object.entries(kinds)) {
+      for (const [state, make] of Object.entries(states)) {
+        const at = `${header} / ${kind} / ${state}`
+        const { body: wire, ...rest } = make(header, payload)
+        const r = shapeResponse({ status: 200, headers: [['Content-Type', ctype], ['Content-Encoding', header]], body: wire, ...rest })
+        if (!compressed(header)) {
+          assert.deepEqual(['wire_b64' in r, 'content_encoding' in r], [false, false], at)
+          continue
+        }
+        assert.equal(r.content_encoding, header, at)
+        const isWire = (x) => typeof x === 'string' && Buffer.from(x, 'base64').equals(wire)
+        assert.equal([r.wire_b64, r.raw_b64].filter(isWire).length, 1, at)
+        assert.ok(!('wire_b64' in r && 'encoding_error' in r), at)
+        if (state === 'decoded' && header.split(',').every((c) => code[c.trim()])) assert.ok('wire_b64' in r, `${at}: a body that decodes keeps its wire bytes`)
+        if ('wire_b64' in r) {
+          const text = r.kind === 'json' ? (r.raw ?? JSON.stringify(r.body)) : r.raw
+          assert.ok(decodeContent(Buffer.from(r.wire_b64, 'base64'), r.content_encoding).buf.equals(Buffer.from(text)), at)
+        }
+      }
+    }
+  }
+  const none = shapeResponse({ status: 200, headers: [['Content-Type', 'text/plain']], body: Buffer.from('hello') })
+  assert.deepEqual(['wire_b64' in none, 'content_encoding' in none], [false, false])
+  const empty = shapeResponse({ status: 200, headers: [['Content-Encoding', 'gzip']], body: Buffer.alloc(0) })
+  assert.deepEqual([empty.kind, 'wire_b64' in empty, 'content_encoding' in empty], ['empty', false, false])
+})

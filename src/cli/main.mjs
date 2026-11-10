@@ -10,6 +10,7 @@
 //               what a command runs (a test's spy: what was dispatched, not what it does)
 //   The command gets `(argv, ctx)`; `ctx.args` is the parsed form of argv ({ positionals, flags }) and `ctx.json` whether `--json` was asked.
 import os from 'node:os'
+import { createRequire } from 'node:module'
 import { makeIo, hidingIo, asOneDocument } from '../off/io.mjs'
 import { commandNamed, printHelp } from './commands.mjs'
 import { parseArgs } from './args.mjs'
@@ -17,9 +18,10 @@ import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
 import { EXIT, SCHEMA_VERSION } from './schema.mjs'
 import { codeId, selfCommand } from '../version.mjs'
-import { recordUserPath } from '../off/user-path.mjs'
+import { recordUserPath, presentEnvNames } from '../off/user-path.mjs'
 import { COMMAND_INDENT } from '../off/receipt.mjs'
 
+process.getBuiltinModule ??= createRequire(import.meta.url) // 22.3 brought it; the floor is older, and src/off/control-client.mjs loads node:http with it
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const helpWord = (a) => a === '--help' || a === '-h'
 const REPORT = 'Please report it with what you ran: https://github.com/Bug-001/trocar/issues'
@@ -29,7 +31,7 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   /** One answer that is not an answer: a JSON document on stdout, or a line (and the usage line, when there is one) on stderr. */
   const refuse = (command, code, message, { usage = null, detail = null, exit = EXIT.usage } = {}) => {
     if (json) printJson(io, errorDoc(command, code, message, detail))
-    else { io.err(message); if (usage) for (const line of wrap(usage, WIDTH, '  ')) io.err(line) } // §1.1⑥: the usage line folds like help's, it does not pass 80 columns
+    else { io.err(message); if (usage) for (const line of usage.split('\n').flatMap((u) => wrap(u, WIDTH, '  '))) io.err(line) } // §1.1⑥: a message keeps its lines (a command stands whole on its own); each usage line stays its own
     return exit
   }
   const [first, ...rest] = argv[0] === '--json' ? [...argv.slice(1), '--json'] : argv // §2: `trocar --json status` is `trocar status --json`
@@ -60,9 +62,18 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   // 4.11 `present`: a command typed in a terminal records the user's PATH while trocar is installed (before the run, for what it reads; after it, for
   // what `install` just installed), so every asker resolves a form's command alike — but not one whose table row says `recordsPath: false` (`daemon`:
   // the login service's PATH is not the user's; `uninstall`: it deletes that file). A command `deps.commands` replaces does nothing of its own, so it
-  // records nothing either. A failure to record never changes the answer.
-  const remember = () => { if (mutates && cmd.recordsPath !== false && run === cmd.run) try { recordUserPath({ home, env, ...(deps.fs ? { fs: deps.fs } : {}) }) } catch { /* the next command records it */ } }
-  remember()
+  // records nothing either, and neither does a dry run (§1.4: it writes nothing). A failure to record never changes the answer.
+  // With the PATH, the variables that move a footprint place (presentEnvNames), for the same reason.
+  let names = null
+  const remember = async () => {
+    if (!(mutates && cmd.recordsPath !== false && run === cmd.run && !args.flags['dry-run'])) return
+    try {
+      // only driver mode (Linux) judges presence by footprint places: elsewhere no descriptor is loaded for this (it costs `on` / `off` ~50 ms)
+      names = names || (platform === 'linux' ? presentEnvNames(deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses().catch(() => [])) : [])
+      recordUserPath({ home, env, names, ...(deps.fs ? { fs: deps.fs } : {}) })
+    } catch { /* the next command records it */ }
+  }
+  await remember()
   try {
     const body = (cmdIo) => run(rest, { io: cmdIo, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })
     return await (json ? asOneDocument(cio, cmd.name, body) : body(cio)) // §1.2: a refusal the command only says on stderr still answers with a document
@@ -72,5 +83,5 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
     if (json) { printJson(cio, errorDoc(cmd.name, 'internal', message, (e && e.stack) || String(e))); return EXIT.crash }
     cio.err(message); cio.err(REPORT)
     return EXIT.crash
-  } finally { remember() }
+  } finally { await remember() }
 }

@@ -22,6 +22,21 @@ async function setup(page) {
 
 // a real mouse drag across the first visible text run inside `sel` (trimmed ≥ 4 chars, not in a link or a button, ≥ 20 px wide)
 async function dragSelect(page, sel, { max = 60 } = {}) {
+  // the drag goes where the reader sees the text: the page's layout may still move right after a row is drawn (the desk's window
+  // measures rows after their first frame), so the box is read once it has held still for two frames
+  await page.evaluate((sel) => new Promise((ok, no) => {
+    const t0 = performance.now()
+    let last = null, still = 0
+    const tick = () => {
+      const r = document.querySelector(sel)?.getBoundingClientRect(), k = r ? `${r.left},${r.top},${r.width}` : null
+      still = k != null && k === last ? still + 1 : 0 // frames the box has not moved since the one before
+      last = k
+      if (still >= 2) ok()
+      else if (performance.now() - t0 > 2000) no(new Error(`${sel} still moving after 2 s`))
+      else requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  }), sel)
   const box = await page.evaluate((sel) => {
     const root = document.querySelector(sel)
     if (!root) return null

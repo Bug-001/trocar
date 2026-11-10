@@ -1,5 +1,5 @@
-// issuer.mjs — the daemon's leaf issuer over a key custody (RFC 4.11 P2). A custody without issueIntermediate (`file`, Linux)
-// signs leaves with the root exactly as createLeafIssuer does today. Otherwise the root key stays in its OS backend: at start
+// issuer.mjs — the macOS / Windows daemon's leaf issuer over a key custody (RFC 4.11 P2; Linux has no
+// custody and signs leaves with the root itself, leaf.mjs). The root key stays in its OS backend: at start
 // the issuer makes a fresh in-memory P-256 key, has the custody issue a 7-day intermediate for it, checks it against the
 // INTERMEDIATE profile, and signs leaves with it; it issues the next one when the current one is 6 days old. A failure keeps
 // the current intermediate, records `cert-intermediate-unavailable` once per failure streak and retries every hour; when the
@@ -8,7 +8,6 @@
 // this module has no file system at all.
 import crypto from 'node:crypto'
 import { checkProfile, certPem, certSubjectAndSki, INTERMEDIATE } from './cert.mjs'
-import { loadCa } from './ca.mjs'
 import { createLeafIssuer } from './leaf.mjs'
 import { CODE } from '../codes.mjs'
 import { NO_KEY } from './custody-cli.mjs'
@@ -35,18 +34,6 @@ function asRequested(der, { spkiDer, notBefore }) {
 export async function makeIssuer({ custody, root = null, clock = () => Date.now(), timers = { setTimeout, clearTimeout }, record = () => {} }) {
   const now = () => new Date(clock())
   const fail = (code, reason) => record({ event: 'failure', where: 'ca', code, reason })
-
-  if (typeof custody.issueIntermediate !== 'function') {
-    // the file custody: today's root-signed leaves
-    const ca = custody.read()
-    if (ca.error) {
-      const missing = !custody.exists()
-      fail(missing ? CODE.certKeyMissing : 'ca-invalid', ca.error)
-      return { state: () => (missing ? 'key-missing' : 'unavailable'), leafFor: () => null, close() {} }
-    }
-    const leaves = createLeafIssuer(loadCa(ca), { now })
-    return { state: () => 'ready', leafFor: (host) => leaves.chainFor(host), close() {} }
-  }
 
   let current = null      // { notAfter, leaves }
   let failState = null    // 'unavailable' | 'key-missing' of the running failure streak

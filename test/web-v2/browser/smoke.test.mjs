@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
-import { probe, withBoard, shoot, launchChrome, serveWorld } from './harness.mjs'
+import { probe, withBoard, shoot, launchChrome, serveWorld, settle } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
@@ -14,7 +14,7 @@ for (const width of [1280, 1024]) {
       const b = await withBoard({ width, theme, chromium: gate.chromium })
       try {
         await b.page.waitForFunction(() => document.querySelector('#sidebar')?.children.length > 0, null, { timeout: 10000 })
-        await b.page.waitForLoadState('networkidle')
+        await settle(b.page)
         await shoot(b.page, 'home', { width, theme })
         assert.deepEqual(b.errors, [])
       } finally { await b.stop() }

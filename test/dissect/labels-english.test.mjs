@@ -27,11 +27,14 @@ const ws = (o = {}) => ({ id: 'w', ts_request: '2026-10-21T00:00:00Z', is_llm_ca
 const HTTP_AXES = {
   respTruncated: { resp: { status: 200, kind: 'sse', raw: SSE, truncated: true, body_bytes: 10 } },
   respPartial: { resp: { kind: 'error', status: null, error: { type: 'ECONNRESET' }, partial: { kind: 'sse', raw: SSE } } },
+  // the agent closed the connection after the reply's own last event (3.5 §访问模式 ②)
+  respClosed: { error: true, resp: { kind: 'error', status: 200, error: { type: 'ECONNRESET' }, partial: { status: 200, kind: 'sse', raw: SSE, raw_sse: [{ type: 'message_stop' }] } } },
   respUndecoded: { resp: { status: 200, kind: 'text', raw_b64: 'AAEC', encoding_error: 'bad gzip' } },
   respBinary: { resp: { status: 200, kind: 'sse', raw_b64: 'AAEC' } },
   respNotJson: { resp: { status: 200, kind: 'text', raw: 'oops' } },
   respEmpty: { resp: { status: 200, kind: 'empty' } },
   respUnparsed: { resp: { status: 200, kind: 'sse', raw: SSE, unparsed_events: 2 } },
+  respDecodedOnly: { resp: { status: 200, kind: 'sse', raw: SSE, headers: { 'content-encoding': 'gzip' } } },
   respReserialized: { body_wire_bytes: undefined, resp: { status: 200, kind: 'json', body: { content: [], usage: {} } } },
   reqUndecoded: { req_body: null, req_body_b64: 'AAEC', req_content_encoding: 'zstd', req_encoding_error: 'bad zstd' },
   proxy: { capture: 'proxy' },
@@ -82,8 +85,8 @@ test('2.6 / D58 — no capture label, label text or observer effect the board re
   for (const h of HARNESSES) for (const e of h.observerEffects || []) { collect(`${h.id} effect`, e.what); collect(`${h.id} effect`, e.cause) }
   // the table reaches every producer: a label from each id the board can receive
   const ids = new Set(said.map(([w]) => w.split(' ')[2]).filter(Boolean))
-  for (const id of ['resp-truncated', 'resp-partial', 'resp-undecoded', 'ws-truncated', 'req-undecoded', 'capture-routing', 'trocar-added',
-    'retention-log', 'retention-legacy-meta', 'resp-json-reserialized', 'req-incomplete', 'reply-unread']) assert.ok(ids.has(id), `no variant reached ${id}`)
+  for (const id of ['resp-truncated', 'resp-partial', 'resp-closed-early', 'resp-undecoded', 'ws-truncated', 'req-undecoded', 'capture-routing', 'trocar-added',
+    'retention-log', 'retention-legacy-meta', 'resp-json-reserialized', 'resp-decoded-only', 'req-incomplete', 'reply-unread']) assert.ok(ids.has(id), `no variant reached ${id}`)
   const cjk = said.filter(([, s]) => CJK.test(s))
   assert.deepEqual(cjk, [], 'labels with CJK')
 })

@@ -7,23 +7,31 @@
 // req_body is the default and never written out, so every ref minted before the segment is unchanged.
 export const TEXT_REF_FIELD = /^(resp\.raw|resp\.messages\.\d+|req_extra_messages\.\d+)$/;
 // The text a field segment addresses in a record (one definition: the resolver and the board's locators
-// both read it). resp.raw = the decoded reply text the collector stored (SSE or text); resp.messages.<j> = a
-// WebSocket envelope's j-th server message; req_extra_messages.<k> = a later client message of the same call.
-// An error envelope keeps what arrived under resp.partial, with the same numbering (ws_raw's m slices count it
-// the same way). → { text } | { missing: why } — a non-text value is never stringified into "bytes".
+// both read it). resp.raw = the reply's wire text: the decoded text the collector stored (SSE, text, or a JSON reply that does not write
+// back to itself) or, for a JSON reply stored parsed, its body written out, which parseJsonReply stored only because that gives the
+// wire text (4.1 保真边界 ⑤; before D40 it may not: `reserialized` says so). resp.messages.<j> = a WebSocket envelope's j-th server
+// message; req_extra_messages.<k> = a later client message of the same call. An error envelope keeps what arrived under resp.partial,
+// with the same numbering (ws_raw's m slices count it the same way). → { text, reserialized? } | { missing: why } — no other non-text
+// value is stringified into "bytes".
 const STORED_AS = (v) => (v && typeof v === 'object'
   ? (typeof v.b64 === 'string' ? `base64 bytes ({b64}${v.decode_error ? ', not decodable' : ''})`
     : v.omitted_bytes != null ? `{omitted_bytes: ${v.omitted_bytes}} — over the per-call cap, bytes not kept`
       : v.verbatim === false ? 'its length only ({raw_chars}) — not verbatim' : 'a non-text value')
   : `${v === undefined ? 'nothing' : typeof v}`);
+const storedPart = (r) => (r.kind === 'error' && r.partial && typeof r.partial === 'object' ? r.partial : r);
+const parsedOnly = (part) => part.kind === 'json' && part.body !== undefined && typeof part.raw !== 'string';
+// A JSON reply from before D40, told by its shape: only from D40 on does a record carry body_wire_bytes and keep the wire text whenever
+// the two differ, so a parsed reply with neither may not write back to what was on the wire.
+export const reserializedReply = (rec) => parsedOnly(storedPart(respOf(rec) || {})) && !rec.body_wire_bytes;
 export function fieldTextOf(rec, field) {
   const m = TEXT_REF_FIELD.exec(String(field || ''));
   if (!m) return { missing: `has no text_ref field "${field}"` };
-  const resp = (rec && (rec.resp || rec.response)) || {};
-  const part = resp.kind === 'error' && resp.partial && typeof resp.partial === 'object' ? resp.partial : resp;
+  const part = storedPart(respOf(rec) || {});
   let v;
-  if (field === 'resp.raw') v = part.raw;
-  else {
+  if (field === 'resp.raw') {
+    if (parsedOnly(part)) return { text: JSON.stringify(part.body), ...(reserializedReply(rec) ? { reserialized: true } : {}) };
+    v = part.raw;
+  } else {
     const [, list, j] = /^(resp\.messages|req_extra_messages)\.(\d+)$/.exec(field);
     const arr = list === 'resp.messages' ? (part.kind === 'ws' ? part.messages : null) : rec && rec.req_extra_messages;
     if (!Array.isArray(arr) || Number(j) >= arr.length) return { missing: `has no ${field}` };
@@ -41,3 +49,27 @@ export const headersOf = (rec) => (rec && (rec.request_headers || rec.req_header
 // while the pre-D10 test fixture kept them green. Mirrors headersOf: tolerate BOTH shapes forever,
 // because old captures on disk are still the user's data (invariant 2).
 export const respOf = (rec) => (rec && (rec.resp || rec.response)) || null;
+
+// Unify the two response shapes: streamed SSE (already reconstructed into
+// response.{usage,text,tool_calls}) and non-streaming JSON (raw body in response.body). The reply's tool calls leave
+// under the neutral name `tools` (2.6 §A): `tool_calls` is a wire name the board does not read (invariant 3).
+// Without this, JSON responses (all the security-monitor calls) read as ctx=0 / no text.
+export function normResp(r) {
+  const rs = respOf(r) || {};
+  if (rs.kind === 'json' && rs.body && typeof rs.body === 'object') {
+    const c = Array.isArray(rs.body.content) ? rs.body.content : []
+    return {
+      status: rs.status,
+      usage: rs.body.usage || {},
+      text: c.filter((b) => b.type === 'text').map((b) => b.text || '').join(''),
+      thinking: c.filter((b) => b.type === 'thinking').map((b) => b.thinking || '').join('') || undefined,
+      tools: c.filter((b) => b.type === 'tool_use' || b.type === 'server_tool_use')
+        .map((b) => ({ id: b.id, name: b.name, input: b.input })),
+      stop_reason: rs.body.stop_reason,
+    }
+  }
+  return {
+    status: rs.status, usage: rs.usage || {}, text: rs.text || '',
+    thinking: rs.thinking, tools: rs.tool_calls || [], stop_reason: rs.stop_reason,
+  }
+}

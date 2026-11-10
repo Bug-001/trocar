@@ -1,9 +1,11 @@
 // version.mjs — the one place that says which code this is (RFC 1.6 §2, §5.5; D67⑤).
-//   codeId()  `<package.json version>+<first 7 of HEAD>` in a git checkout, `<version>` anywhere else.
+//   codeId()  `<package.json version>+<first 7 of HEAD>` in a git checkout; anywhere else `<version>+<first 7 of a hash of the code>` (bin/ and
+//             src/, each file's path and bytes), so two trees of one version tell apart; the plain version when neither reads.
 // `trocar --version` prints it, the daemon reports it as `code` on its control channel, and `trocar update` compares the two to tell
 // whether the daemon runs this code. Files are read, nothing is spawned: git may be absent, and this is asked on a daemon's start path.
 // Anything that cannot be read (no `.git`, an unreadable HEAD, a ref nowhere to be found) is the plain version, never a guess.
 //   channelOf(root)  how the code at `root` came here: 'git' | 'npm' | 'script' | null — the one place that is told apart (D67②, D74).
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -16,7 +18,7 @@ const read = (file) => { try { return fs.readFileSync(file, 'utf8') } catch { re
 export const packageRoot = () => path.resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 /** The git directory of the checkout at `root`: `<root>/.git`, or what a `.git` FILE names (a worktree, a submodule); null when there is none. */
-export function gitDir(root = packageRoot()) {
+function gitDir(root = packageRoot()) {
   const dot = path.join(root, '.git')
   let st
   try { st = fs.statSync(dot) } catch { return null }
@@ -29,7 +31,7 @@ const SHA = /^[0-9a-f]{40}$/
 
 /** The commit HEAD names in `dir`: a detached HEAD, a loose ref, or one line of packed-refs — in `dir` and, for a worktree, in the common
  *  directory its `commondir` names (a worktree keeps its own HEAD and the branches in the main checkout). null when none of that reads. */
-export function headSha(dir) {
+function headSha(dir) {
   const head = (read(path.join(dir, 'HEAD')) || '').trim()
   if (!head) return null
   const named = /^ref:\s*(\S+)/.exec(head)
@@ -47,11 +49,84 @@ export function headSha(dir) {
 /** `<version>+<first 7 of a commit>`, the one place that format is composed: `null` / no sha is the plain version. */
 export const codeIdOf = (version, sha) => (sha ? `${version}+${String(sha).slice(0, 7)}` : version)
 
-/** This code's version: `0.1.0+1a2b3c4` in a git checkout, `0.1.0` outside one. */
-export function codeId(root = packageRoot()) {
-  const version = JSON.parse(read(path.join(root, 'package.json')) || '{}').version || '0.0.0'
+// The code itself, outside a git checkout: sha256 over every file under bin/ and src/ that ships — each file's path from `root` and its bytes, in path
+// order — leaving out dotfiles and what a `build-outputs` file there names (a build's outputs: the Linux helper's objects, header and binary; a file
+// every channel ships, where npm packs no .gitignore), and what a `.gitignore` names, so a build or the OS writing beside the code never changes it. null when there is none to read. Asked once per root and process; a read that failed is the plain
+// version for that process (an install then sees other code and replaces the collector: the safe way).
+const IGNORE_FILES = ['build-outputs', '.gitignore']
+const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+// a .gitignore's lines (blank and # skipped, no negation) → a test of a path relative to its directory: `*` is any run of non-slash characters
+const ignoredBy = (text) => {
+  const res = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#') && !l.startsWith('!'))
+    .map((l) => new RegExp(`^${l.replace(/^\//, '').replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}(/.*)?$`))
+  return (rel) => res.some((re) => re.test(rel))
+}
+// the walk once, as the reads it needs: `yield ['dir', p]` → its entries (null when unreadable), `yield ['file', p]` → its bytes
+function* hashSteps(root) {
+  const h = crypto.createHash('sha256')
+  let n = 0
+  function* walk(rel, rules) {
+    const ents = yield ['dir', path.join(root, rel)]
+    if (!ents) return
+    let here = rules
+    for (const name of IGNORE_FILES) if (ents.some((e) => e.name === name && e.isFile())) here = [...here, { at: rel, test: ignoredBy(yield ['file', path.join(root, rel, name)]) }]
+    for (const e of ents.sort(byName)) {
+      const r = `${rel}/${e.name}`
+      if (e.name.startsWith('.') || here.some((g) => g.test(r.slice(g.at.length + 1)))) continue
+      if (e.isDirectory()) yield* walk(r, here)
+      else if (e.isFile()) { h.update(`${r}\0`); h.update(yield ['file', path.join(root, r)]); h.update('\0'); n++ }
+    }
+  }
+  yield* walk('bin', []); yield* walk('src', [])
+  return n ? h.digest('hex') : null
+}
+const DIR = { withFileTypes: true }
+const hashes = new Map()
+/** At once, for a CLI that compares it (status, doctor, install, update, --version). */
+function codeHash(root) {
+  if (hashes.has(root)) return hashes.get(root)
+  let out = null
+  try {
+    const g = hashSteps(root)
+    for (let step = g.next(); ; ) {
+      if (step.done) { out = step.value; break }
+      const [kind, p] = step.value
+      let v = null
+      if (kind === 'dir') { try { v = fs.readdirSync(p, DIR) } catch { v = null } } else v = fs.readFileSync(p)
+      step = g.next(v)
+    }
+  } catch { out = null }
+  hashes.set(root, out)
+  return out
+}
+/** The version in the package.json at `root`; 0.0.0 when it has none. */
+const versionAt = (root) => JSON.parse(read(path.join(root, 'package.json')) || '{}').version || '0.0.0'
+/** Without holding the event loop, for a daemon that asks it as it starts (D62①): the same id codeId gives. */
+export async function codeIdAsync(root = packageRoot()) {
+  const version = versionAt(root)
   const dir = gitDir(root)
-  return codeIdOf(version, dir && headSha(dir))
+  const sha = dir && headSha(dir)
+  if (sha || hashes.has(root)) return codeIdOf(version, sha || hashes.get(root))
+  let out = null
+  try {
+    const g = hashSteps(root)
+    for (let step = g.next(); ; ) {
+      if (step.done) { out = step.value; break }
+      const [kind, p] = step.value
+      let v = null
+      if (kind === 'dir') { try { v = await fs.promises.readdir(p, DIR) } catch { v = null } } else v = await fs.promises.readFile(p)
+      step = g.next(v)
+    }
+  } catch { out = null }
+  hashes.set(root, out)
+  return codeIdOf(version, out)
+}
+
+/** This code's version: `0.1.0+1a2b3c4` — HEAD in a git checkout, a hash of the code outside one; `0.1.0` when neither reads. */
+export function codeId(root = packageRoot()) {
+  const version = versionAt(root)
+  const dir = gitDir(root)
+  return codeIdOf(version, (dir && headSha(dir)) || codeHash(root))
 }
 
 /** The `name` in the package.json at `root`, or null. */

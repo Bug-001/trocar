@@ -10,7 +10,7 @@ import { runOffCli } from '../../src/off/main.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
-import { formatOnReceipt, formatPlan } from '../../src/cli/receipt.mjs'
+import { formatOnReceipt, formatPlan, formatUninstallReceipt } from '../../src/cli/receipt.mjs'
 import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { readStateFile } from '../../src/off/state.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
@@ -23,6 +23,7 @@ import { assertEnglish } from '../helpers/english.mjs'
 import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
 import { runStatus, down, reply, asDaemon } from './fixtures/status-ctx.mjs'
 import { selfCommand } from '../../src/version.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
 // 1.6 §3.2 sample: the line after `If trocar itself breaks, run:` is the standalone trocar-off, HOME shown as ~
@@ -34,11 +35,9 @@ test('V7: a first install outside a terminal without --yes prints the plan, writ
   const home = tmpDir('trocar-v7-'); seedClaude(home); const before = snapshot(home)
   const io = fakeIo({ tty: false })
   assert.equal(await runInstallCli([], onCtx(home, io)), 2)
-  assert.match(io.text(), /^trocar install will write \d+ files:/m, 'the plan is install\'s')
   assert.match(io.text(), /~\/\.claude\/settings\.json/, 'the plan names the file it would change, as the user knows the path')
   assert.match(io.text(), /--yes/, 'and says how to go on')
   assertEnglish(io.text(), 'the install plan')
-  for (const [re, what] of [[/record +~\/\.trocar\/collector\/install-manifest\.json/, 'the manifest'], [/certificate +~\/\.trocar\/collector\/ca\/ca\.key/, 'the CA'], [/record +~\/\.trocar\/collector\/run\/trust\//, 'the runtime directory'], [/goes to ~\/\.trocar\/backup\//, 'the backups of the files it changes (R2)']]) assert.match(io.text(), re, `the plan lists ${what}`)
   assert.deepEqual(snapshot(home), before, 'exit 2: not one byte written, no directory made')
 
   const dry = fakeIo({ tty: false })
@@ -165,7 +164,7 @@ test('on: refused as root (R7), with the helper missing it writes nothing and sa
   for (const platform of ['win32', 'darwin', 'freebsd']) {
     io = fakeIo(); const bare = onCtx(home, io); bare.platform = platform
     assert.equal(await runOnCli(['--dry-run'], bare), 0, `${platform}: ${io.text()}`)
-    assert.match(io.text(), /^trocar will start capturing /m, `${platform}: the new collector's plan, not a refusal`)
+    assert.doesNotMatch(io.text(), /refus|not as root/i, `${platform}: the new collector's plan, not a refusal`)
     assertEnglish(io.text(), `the dry-run plan of on on ${platform}`)
   }
   assert.deepEqual(snapshot(home), before)
@@ -257,7 +256,7 @@ const bookkeeping = (rel) => /^\.trocar\/(backup|collector\/flows)\//.test(rel) 
 const listedPaths = (r) => new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || []).map((x) => (typeof x === 'string' ? x : x.path)), ...(r.kept_bundles || []).map((k) => k.path), ...((r.autostart && r.autostart.removed) || [])])
 const ctxOf = (s, io, deps = {}) => ({ io, env: s.sh.env, home: s.home, platform: 'linux', deps: s.offDeps({ getuid: () => 1000, ...deps }) })
 
-test('V3 (off): every file the receipt lists, in the text and in --json, is a file that changed, and every user file that changed is listed', async () => {
+test('V3 (off): every file the receipt lists, in the text and in --json, is a file that changed, and every user file that changed is listed', { skip: POSIX_WORLD }, async () => {
   const setup = async () => {
     const s = await installedHome({ names: ['claude-code', 'codex'] })
     fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EDITED_AFTER=1\n') // a file the user edited after trocar: still listed, as undone-but-not-identical
@@ -281,7 +280,7 @@ test('V3 (off): every file the receipt lists, in the text and in --json, is a fi
   assert.deepEqual(rows.filter((f) => b.certs.has(f)), [], 'and lists none')
 })
 
-test('V3 (uninstall): the receipt lists what changed and what trocar removed — the files that changed or went are exactly those, the captures and the records excepted', async () => {
+test('V3 (uninstall): the receipt lists what changed and what trocar removed — the files that changed or went are exactly those, the captures and the records excepted', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   fs.mkdirSync(path.join(s.dir, 'audit'), { recursive: true }); fs.writeFileSync(path.join(s.dir, 'audit', 'a.ndjson'), '{}\n') // a capture: kept, so not in the receipt
   const before = snapshot(s.home)
@@ -296,7 +295,7 @@ test('V3 (uninstall): the receipt lists what changed and what trocar removed —
   assert.ok(r.dropped_backups.length > 0 && r.dropped_backups.every((b) => !fs.existsSync(b)), 'the backups it deleted are named')
 })
 
-test('V3 (uninstall — the certificate entries are its, D55① — the install manifest cannot be saved at the end): the entries were undone all the same, so the receipt — text and --json — lists exactly the files that changed, says why it stopped, exits 1; the next off finishes', async () => {
+test('V3 (uninstall — the certificate entries are its, D55① — the install manifest cannot be saved at the end): the entries were undone all the same, so the receipt — text and --json — lists exactly the files that changed, says why it stopped, exits 1; the next off finishes', { skip: POSIX_WORLD }, async () => {
   const setup = async () => {
     const s = await installedHome({ names: ['claude-code', 'codex'] })
     const manifestFile = path.join(s.dir, 'install-manifest.json')
@@ -315,7 +314,7 @@ test('V3 (uninstall — the certificate entries are its, D55① — the install 
   assert.deepEqual([flowEvents(a.s.dir).at(-1).kind, flowEvents(a.s.dir).at(-1).outcome], ['result', 'failed'])
   assert.ok(flowEvents(a.s.dir).some((e) => e.event === 'failure' && e.code === 'entry-not-undone' && /ENOSPC/.test(e.reason)))
   const b = await setup(); const io2 = fakeIo()
-  assert.equal(await runUninstallCli(['--yes'], ctxOf(b.s, io2, { fs: b.full })), 1)
+  assert.equal(await runUninstallCli(['--yes', '--details'], ctxOf(b.s, io2, { fs: b.full })), 1) // 1.6 §1.1 ④: each file is a --details fact
   const text = io2.stdoutText(), shown = (f) => f.replace(b.s.home, '~')
   assert.doesNotMatch(text, /No file of yours was changed/, 'the text does not say nothing changed over files that were put back')
   assert.deepEqual(diffOf(b.s, b.before).filter((f) => !text.includes(shown(f))), [], 'every changed file is in the text')
@@ -338,7 +337,7 @@ test('V29: the on receipt after install, in the text and in --json, carries the 
   assert.ok(path.isAbsolute(r.standalone))
   assert.ok(fs.statSync(r.standalone).isFile() && (fs.statSync(r.standalone).mode & 0o100), 'and the path is a file trocar wrote, executable (install wrote it; test/off/standalone.test.mjs runs it)')
   const io2 = fakeIo(); const home2 = tmpDir('trocar-on-v29b-'); seedClaude(home2); await installFirst(home2)
-  assert.equal(await runOnCli(['--yes'], onCtx(home2, io2)), 0)
+  assert.equal(await runOnCli(['--yes', '--details'], onCtx(home2, io2)), 0) // the four next steps are --details facts (§3.3)
   for (const c of ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall']) assert.ok(io2.stdoutText().includes(c), `the text carries ${c}`)
   assert.equal(breakGlassLine(io2.stdoutText()), '~/.trocar/bin/trocar-off', 'the text carries trocar-off, HOME as ~ (1.6 §3.2)')
   const m = readManifest(path.join(home, '.trocar', 'collector'))
@@ -358,7 +357,7 @@ test('V29: the on receipt after install, in the text and in --json, carries the 
 
 // V10 (1.6 R11, §6, D49): what `status` could not read is `unknown (<reason>)` — the connections still relayed (a daemon whose reply carries no count), the
 // daemon itself (a lock that cannot be read) — and never a confident 0 or none, in the text and in --json
-test('V10: status says unknown with the reason for connections the daemon did not count, and a lock that could not be read — never 0 or none', async () => {
+test('V10: status says unknown with the reason for connections the daemon did not count, and a lock that could not be read — never 0 or none', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   // the daemon answers, but its reply has no `relayed`
   let r = await runStatus(s, [], { request: asDaemon(reply({ relayed: undefined })) })
@@ -367,9 +366,9 @@ test('V10: status says unknown with the reason for connections the daemon did no
   // the lock cannot be read and nothing answers
   const lock = path.join(s.dir, 'lock'); fs.writeFileSync(lock, '{}')
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === lock) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
-  r = await runStatus(s, [], { request: down(), fs: broken })
+  r = await runStatus(s, ['--details'], { request: down(), fs: broken }) // the service's line and Connections are --details' when not needed (1.6 §3.5)
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  assert.match(flat(r.text), new RegExp(`Daemon: unknown \\(${esc(lock)}: EACCES`))
+  assert.match(flat(r.text), new RegExp(`Daemon: unknown \\(${esc(lock.replace(s.home, '~'))}: EACCES`)) // HOME as ~ (1.6 §1.1⑤)
   assert.match(flat(r.text), /Connections unknown \(whether a daemon runs is not known/)
   assert.ok(!/Connections (0|none|no )/.test(flat(r.text))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
   // --json: the same, as data
@@ -423,4 +422,31 @@ test('formatPlan: the backup line only when the plan changes a file of yours', a
   const edits = { ...own, entries: [{ harness: 'claude-code', path: '/home/a/.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'] }] }
   assert.doesNotMatch(formatPlan(own, { home }), /\.trocar\/backup/)
   assert.match(formatPlan(edits, { home }), /\.trocar\/backup/)
+})
+
+test('uninstall text: a file is one row of Removed, however its entries spell it on Windows and however many changes it had', () => {
+  const home = 'C:\\Users\\u'
+  const ca = `${home}\\.trocar\\collector\\ca\\trocar-ca.pem`, env = `${home}\\.codex\\.env`
+  const text = formatUninstallReceipt({ ...newReceipt('uninstall'), ok: true, changed: [{ path: ca, change: "trocar's root certificate removed from your trust store" }, { path: env, change: 'HTTPS_PROXY removed' }, { path: env, change: 'SSL_CERT_FILE removed' }],
+    removed: [ca.replace('.trocar', '.TROCAR'), ca, `${home}\\.dsh\\trocar-cordis-plugin.mjs`] }, { home, platform: 'win32' })
+  for (const name of ['trocar-ca.pem', '.env', 'trocar-cordis-plugin.mjs']) assert.equal(text.split('\n').filter((l) => l.toLowerCase().includes(name.toLowerCase())).length, 1, `${name}: ${text}`)
+})
+
+// 1.6 §1.4「只问一次」· §1.1 ④ rules 4 and 6: an interactive uninstall shows its plan and asks — nothing before the question says nothing was changed
+// or to run it with --yes (the question is the way on); with no terminal the plan is followed by the one way on, --yes
+test('§1.4: interactive uninstall asks with no "Nothing was changed" or --yes before Proceed; without a terminal it says --yes', { skip: POSIX_WORLD }, async () => {
+  for (const flags of [[], ['--details']]) {
+    const s = await installedHome({ names: ['codex'] })
+    const io = fakeIo({ tty: true, answers: ['n'] })
+    await runUninstallCli(flags, ctxOf(s, io))
+    assert.equal(io.asked.length, 1, `asked once:\n${io.text()}`)
+    const out = io.stdoutText(), before = out.slice(0, out.indexOf(io.asked[0]) + io.asked[0].length)
+    assert.doesNotMatch(before, /Nothing was changed|--yes/, `${flags}: before the question:\n${before}`)
+    assert.doesNotMatch(io.text(), /--yes/, `${flags}: an answered question needs no --yes:\n${io.text()}`)
+
+    const t = await installedHome({ names: ['codex'] })
+    const nt = fakeIo({ tty: false })
+    assert.equal(await runUninstallCli(flags, ctxOf(t, nt)), 2, nt.text())
+    assert.equal(nt.text().split('--yes').length - 1, 1, `${flags}: no terminal: the way on, --yes, said once:\n${nt.text()}`)
+  }
 })

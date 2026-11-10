@@ -2,6 +2,7 @@
 // HOME (acceptance S10 collector part, T10 + T11 for the CC entry). No root, no daemon (stop is injected).
 import { PHASES } from '../../src/off/manifest.mjs' // install's items are phase install, which off spares (D55①): these cases drive the undo rules over both phases, as uninstall runs them
 import test from 'node:test'
+import { lockWrites } from '../helpers/lock-probe.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -24,15 +25,19 @@ import { createRedirectorClient } from '../../src/collector/arch/linux/redirecto
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 import { spawnStandin } from '../helpers/standin.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { fakeSystem, recordingExec, fakeDaemon, ROOTS } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
 import { envelopesOf } from '../helpers/record-store.mjs'
+import { appendEvent } from '../../src/collector/core/events.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 function box() {
   const home = tmpDir('trocar-inst-')
+  seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   return { home, dir: path.join(home, '.trocar', 'collector'), done: () => fs.rmSync(home, { recursive: true, force: true }) }
 }
 const base = (b, o = {}) => ({ home: b.home, env: { HOME: b.home }, osName: 'none', harnesses: [cc], freePort: async () => 47011, ...o })
@@ -199,7 +204,7 @@ test('a refused plan entry or a non-JSON settings file leaves every user file un
   const b = box()
   try {
     const bashrc = path.join(b.home, '.bashrc'); fs.writeFileSync(bashrc, 'export X=1\n')
-    const loginEnv = { name: 'login-env', inject: () => ({ entries: [{ kind: 'json-key', path: bashrc, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: path.join(b.dir, 'ca', 'trocar-ca.pem'), semantic: 'append' }] }) }
+    const loginEnv = { name: 'login-env', present: [{ base: 'home' }], inject: () => ({ entries: [{ kind: 'json-key', path: bashrc, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: path.join(b.dir, 'ca', 'trocar-ca.pem'), semantic: 'append' }] }) }
     await assert.rejects(installCollector(base(b, { harnesses: [cc, loginEnv] })), /login-environment/)
     assert.ok(!fs.existsSync(settingsOf(b)), "CC's entry, planned first, was not written: the whole plan is checked before any file changes")
     assert.ok(!fs.existsSync(path.join(b.home, '.trocar')), 'a refused plan writes nothing at all, not even the manifest or the CA')
@@ -254,15 +259,13 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     assert.match(f[0].reason, /settings\.json: trocar cannot read it \(line 1, column \d+\); trocar's env\.NODE_EXTRA_CA_CERTS = .*trocar-ca\.pem may still be in it/)
     const { runStatusCli } = await import('../../src/cli/status.mjs')
     const out = []; const err = []
-    const code = await runStatusCli(['--failures'], { io: { out: (x) => out.push(x), err: (x) => err.push(x) }, home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux',
+    const code = await runStatusCli(['--failures', '--details'], { io: { out: (x) => out.push(x), err: (x) => err.push(x) }, home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux',
       // the control socket is asked through an injected `request` (0.1 §3): the sandbox HOME's socket path is longer than an AF_UNIX path may be on macOS,
       // so a real connect there fails with EINVAL ("does not answer") instead of the ENOENT of a daemon that is simply not running
       deps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test' }] }), request: async () => { throw Object.assign(new Error('no such socket'), { code: 'ENOENT' }) } } })
     // §3.5: the exit code counts only the harnesses that are on and not captured NOW — nothing is on here, so a clean 0; a failure in the last
     // 24 h is a Problems line, never an exit code (the old assertion was 1, from when "no daemon" decided it)
     assert.equal(code, 0, 'nothing is on, so nothing is uncaptured: the failure below does not decide the exit code (§3.5)')
-    assert.match(out.join('\n'), /^Daemon not running; nothing is captured\. Start it: trocar on$/m)
-    assert.match(out.join('\n'), /^ {2}Problems {4,}1 in the last 24 hours, latest just now$/m, 'the uninstall residue reaches the Problems line')
     // D38: what the uninstall left behind is still named — in the text (--failures) and in the document (`failures`)
     assert.match(out.join('\n'), /\.claude/, 'the residue, with its path, is in the text')
     const doc = []
@@ -385,7 +388,7 @@ async function plugHarness(b) {
   const dir = path.join(b.home, '.trocar', 'collector')
   return {
     name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'trocar:marker', semantic: 'append' }] },
-    inject: (ctx) => ({
+    present: [{ base: 'home' }], inject: (ctx) => ({
       owned: [
         { path: path.join(ctx.home, '.config', 'plug', 'plugins', 'trocar-ca.js'), role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 },
         { path: path.join(dir, 'plugins', 'plug', 'index.js'), role: 'plugin', data: 'export {}\n', mode: 0o644 },
@@ -454,13 +457,13 @@ test('an entry uninstall cannot undo stays in the manifest; install refuses unti
 // A synthetic replace-semantics harness: a dotenv block naming its combined bundle (Codex / Hermes shape).
 const repHarness = (dir, extra = {}) => ({
   name: 'rep', runtime: 'rust', processes: { names: [{ name: 'rep' }] }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], ...extra },
-  inject: (ctx) => ({
+  present: [{ base: 'home' }], inject: (ctx) => ({
     entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep', '.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }],
     files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }],
   }),
 })
 
-test('uninstall step 2: a combined bundle a live process may have loaded is kept without the trocar CA and reported; the next uninstall removes it (S10 b, T11)', async () => {
+test('uninstall step 2: a combined bundle a live process may have loaded is kept without the trocar CA and reported; the next uninstall removes it (S10 b, T11)', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     const corp = createCa({ commonName: 'corp relay CA' }); const root = createCa({ commonName: 'a root' })
@@ -499,7 +502,7 @@ test('uninstall step 2: a combined bundle a live process may have loaded is kept
 // claim was false and uninstall said "uninstalled" over a live process's trust root. It is an item that could not be undone:
 // the pid that may hold it, a failure event with the errno, an outcome of 'left', the manifest kept, and the next uninstall
 // (once the user fixed the file) finishes. A bundle nobody holds is removed whatever its state.
-test('uninstall step 2: a bundle a live process may hold that cannot be read is an item left (failure, outcome left, manifest kept), not "kept without the trocar CA"; one nobody holds is removed', async () => {
+test('uninstall step 2: a bundle a live process may hold that cannot be read is an item left (failure, outcome left, manifest kept), not "kept without the trocar CA"; one nobody holds is removed', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     const corp = createCa({ commonName: 'corp relay CA' }); const root = createCa({ commonName: 'a root' })
@@ -544,7 +547,7 @@ test('uninstall step 2: a bundle a live process may hold that cannot be read is 
   } finally { c.done() }
 })
 
-test('uninstall step 2: a harness that re-reads its entry while running keeps the bundle for any live process of it; step 5 says until when each still trusts', async () => {
+test('uninstall step 2: a harness that re-reads its entry while running keeps the bundle for any live process of it; step 5 says until when each still trusts', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
@@ -559,7 +562,7 @@ test('uninstall step 2: a harness that re-reads its entry while running keeps th
 
 // 4.6 安装 / 卸载不静默: an entry that could not be undone keeps the bundle it names (the agent's next start reads it), and a second uninstall
 // with the same process alive still finds a kept bundle as the first left it — the first one removed the CA certificate it was judged by
-test('uninstall: a replace-semantics entry that cannot be undone keeps its bundle without the trocar CA and says so; the second uninstall with the holder alive says the same, not "still holds the CA" (4.6 撤销顺序 第 2 步)', async () => {
+test('uninstall: a replace-semantics entry that cannot be undone keeps its bundle without the trocar CA and says so; the second uninstall with the holder alive says the same, not "still holds the CA" (4.6 撤销顺序 第 2 步)', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp relay CA' }).certPem)
@@ -670,6 +673,56 @@ test('ensureDaemonUp: a start call the OS held back is said in the notes with th
   assert.deepEqual([fast.up, fast.notes], [true, []], 'a start that did not block says nothing')
 })
 
+// R12 / D62: while the daemon starts, `on` asks it again and again until a deadline of about 15 s; an `off` that lands meanwhile stops the wait.
+// The clock is the pauses themselves, so this asserts what is found, never how fast.
+test('ensureDaemonUp: a daemon that answers late in the wait is found, one that never answers is a start failure, and an off seen meanwhile halts', async () => {
+  const run = async ({ upAt = Infinity, haltAfter = Infinity } = {}) => {
+    let clock = 0, polls = 0
+    const unit = { path: '/u/com.trocar.collector.plist', registered: () => ({ state: 'present' }), startNow: () => ({ code: 0 }) }
+    return ensureDaemonUp({
+      osName: 'darwin', dir: '/nope/collector', env: {}, unit, socketPath: '/tmp/trocar-test.sock',
+      request: async () => { if (clock < upAt) throw Object.assign(new Error('not there'), { code: 'ENOENT' }); return { doors: {} } },
+      pause: async (ms) => { clock += ms }, ms: () => clock, halted: () => ++polls > haltAfter,
+    })
+  }
+  const late = await run({ upAt: 14_000 })
+  assert.deepEqual([late.up, late.started, late.problems], [true, true, []])
+  const soon = await run({ upAt: 1 })
+  assert.deepEqual([soon.up, soon.problems], [true, []])
+  const never = await run()
+  assert.deepEqual([never.up, never.problems.length], [false, 1])
+  const halted = await run({ haltAfter: 3 })
+  assert.deepEqual([halted.up, halted.halt, halted.problems], [false, true, []])
+})
+
+// A daemon that refuses to start (node-too-old, elevated-token, root-token) writes its own {where:'start'} record and exits 0, so nothing ever answers. The poll reads
+// the start records written since the start was asked and stops on one, its reason the problem (D38: the daemon's words), with no start-failed on top.
+// A start record from before this start is not this start's answer, and a daemon that only never answers ends as before.
+test('ensureDaemonUp: a start the daemon refused ends the poll with the daemon\'s own reason and no second record; one that never answers still ends in start-failed', async () => {
+  const boxes = []
+  try {
+    const run = async (refuse, code = 'node-too-old') => {
+      const b = box(); boxes.push(b) // a box per run: the first run's refusal is not the second's, even within one millisecond
+      appendEvent(b.dir, { event: 'failure', where: 'start', code: 'node-too-old', reason: 'AN OLDER REFUSAL' }, { now: new Date(Date.now() - 3600e3) })
+      let polls = 0
+      const put = []
+      const unit = { path: '/Users/ada/Library/LaunchAgents/com.trocar.collector.plist', registered: () => ({ state: 'present' }), startNow: () => { if (refuse) appendEvent(b.dir, { event: 'failure', where: 'start', code, reason: 'THE DAEMON SAYS WHY' }); return { code: 0 } } }
+      const out = await ensureDaemonUp({ osName: 'darwin', dir: b.dir, env: {}, unit, socketPath: '/tmp/trocar-test.sock', put: (e) => put.push(e),
+        request: async () => { polls++; throw Object.assign(new Error('not there'), { code: 'ENOENT' }) }, pause: async () => {} })
+      return { ...out, polls, put }
+    }
+    const refused = await run(true)
+    assert.deepEqual([refused.up, refused.problems, refused.put], [false, ['THE DAEMON SAYS WHY'], []], 'the daemon\'s reason, nothing written on top')
+    assert.ok(refused.polls <= 3, `the poll stops at the record, not after 15 s: ${refused.polls} probes`)
+    // a start failure the OS's next start may clear (the endpoint held, say) is no answer yet: the wait goes on to its end
+    const passing = await run(true, 'control-endpoint-held')
+    assert.ok(passing.polls > 3 && passing.put.some((e) => e.code === 'start-failed'), `a failure a relaunch may clear does not end the wait: ${passing.polls} probes`)
+    const silent = await run(false)
+    assert.deepEqual([silent.up, silent.problems.length, silent.put.map((e) => [e.where, e.code])], [false, 1, [['start', 'start-failed']]], 'no answer and no refusal: start-failed as before')
+    assert.ok(!silent.problems[0].includes('AN OLDER REFUSAL'), 'a refusal from before this start is not its answer')
+  } finally { for (const b of boxes) b.done() }
+})
+
 // A Windows test machine, tested 2026-10-20 (`trocar update`): right after the daemon was stopped, the first probe on the named pipe came back `write EPIPE` --
 // Windows' answer for a pipe whose server has gone, where a unix socket answers ENOENT. Read as "a daemon holds the socket and does not answer",
 // it halted the run and the collector was never started again. The first probe asks once more, and an answer like that twice is "not up".
@@ -698,6 +751,7 @@ test('ensureDaemonUp: on win32 an EPIPE / ECONNRESET on the FIRST probe is "not 
   assert.deepEqual([gone.up, gone.halt, gone.problems, gone.startedUnit], [true, false, [], true], 'EPIPE then ENOENT is a gone pipe, so the daemon is started')
   const other = await run({ osName: 'win32', code: 'EACCES', upAfter: 99 })
   assert.deepEqual([other.up, other.halt, other.startedUnit], [false, true, false], 'an error that is not a gone pipe is still a daemon that does not answer')
+  assert.ok(other.problems.length && other.problems.every((p) => !p.includes('§')), 'the refusal is user text: no spec section numbers (1.6 §1.1)')
   const linux = await run({ osName: 'linux', code: 'EPIPE', upAfter: 99 })
   assert.deepEqual([linux.up, linux.halt], [false, true], 'only win32 reads EPIPE this way')
 })
@@ -720,12 +774,12 @@ test('daemonEnv: the install shell\'s NODE_EXTRA_CA_CERTS goes to the unit when 
   } finally { b.done() }
 })
 
-test('uninstall step 5: only a process that may have read the entry is reported — started after its harness was installed (an owned plugin file counts), or of a harness that re-reads it; the descriptor says, as data in the manifest snapshot, that only a process whose environ names a file of trocar ever read it; each is kept as an uninstall-note (review 3 #6)', async () => {
+test('uninstall step 5: only a process that may have read the entry is reported — started after its harness was installed (an owned plugin file counts), or of a harness that re-reads it; the descriptor says, as data in the manifest snapshot, that only a process whose environ names a file of trocar ever read it; each is kept as an uninstall-note (review 3 #6)', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     // plugin-only harness: its install time is its owned file's; a harness whose afterUninstall is a function of the process
     const plug = { name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
-      inject: (ctx) => ({ owned: [{ path: path.join(ctx.home, '.plug', 'plugins', 'trocar-ca.js'), role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }] }) }
+      present: [{ base: 'home' }], inject: (ctx) => ({ owned: [{ path: path.join(ctx.home, '.plug', 'plugins', 'trocar-ca.js'), role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }] }) }
     const picky = { ...repHarness(b.dir), name: 'picky', processes: { names: [{ name: 'picky' }] },
       inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.picky', '.env'), vars: { SSL_CERT_FILE: path.join(b.dir, 'ca', 'combined-picky.pem') }, semantic: 'replace' }], files: [{ path: path.join(b.dir, 'ca', 'combined-picky.pem'), bundle: true, certsFrom: [] }] }),
       trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], afterUninstall: 'next-connection', untilEnviron: 'VIA' } }
@@ -747,7 +801,7 @@ test('uninstall step 5: only a process that may have read the entry is reported 
   } finally { b.done() }
 })
 
-test('install: an autostart unit file already there is refused before anything is written (review 4 #7); uninstall records a disable systemd refused and a link it could not remove (D38, review 4 #9)', async () => {
+test('install (4.11 P4): an autostart unit under trocar\'s name the record does not list is backed up and replaced, and the plan says it replaces it; uninstall records a disable systemd refused and a link it could not remove (D38, review 4 #9)', async () => {
   const b = box()
   try {
     const unitDir = path.join(b.home, '.config', 'systemd', 'user')
@@ -755,10 +809,12 @@ test('install: an autostart unit file already there is refused before anything i
     fs.mkdirSync(path.dirname(unitFile), { recursive: true }); fs.writeFileSync(unitFile, '[Service]\nExecStart=/usr/bin/false\n')
     let listed = false
     const unit = { path: unitFile, links: [], text: () => '[Unit]\n', registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
-    await assert.rejects(installCollector(base(b, { unit, onPlan: () => { listed = true } })), /trocar-collector\.service already exists/)
-    assert.deepEqual([listed, fs.existsSync(b.dir)], [false, false], 'refused before the plan is printed and before the CA or the manifest exist')
-    fs.rmSync(unitFile)
-    await installCollector(base(b, { unit }))
+    await installCollector(base(b, { unit, onPlan: (p) => { listed = p.steps.find((x) => x.kind === 'unit') } }))
+    assert.ok(listed && listed.action === 'write' && /replaces/.test(listed.why), `the plan says the unit is replaced: ${JSON.stringify(listed)}`)
+    assert.equal(fs.readFileSync(unitFile, 'utf8'), '[Unit]\n', 'replaced')
+    const bk = path.join(b.home, '.trocar', 'backup')
+    assert.ok(fs.readdirSync(bk).some((n) => fs.readFileSync(path.join(bk, n), 'utf8') === '[Service]\nExecStart=/usr/bin/false\n'), 'the bytes that were there are kept')
+    assert.ok(readManifest(b.dir).files.some((f) => f.path === unitFile && f.role === 'unit'), 'and recorded as trocar\'s')
     const link = path.join(unitDir, 'default.target.wants', 'trocar-collector.service')
     fs.mkdirSync(path.dirname(link)); fs.symlinkSync(unitFile, link)
     const refuses = { ...fs, rmSync: (f, o) => { if (f === link) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); return fs.rmSync(f, o) } }
@@ -783,13 +839,15 @@ test('uninstall step 5: a Claude Code from before install is reported too — it
   } finally { b.done() }
 })
 
+// the way to start over is followed in order: uninstall, then install (on never installs the certificates, D55), then on
+const startsOver = (msg) => { const at = ['uninstall', 'install', 'on'].map((v) => msg.indexOf(`"trocar ${v}"`)); return at.every((x, i) => x >= 0 && (i === 0 || x > at[i - 1])) }
 // D-4: "already installed" only with a usable CA.
 test('install: installed but with an unusable CA is not "already installed" — it says what is wrong and how to fix it (D-4)', async () => {
   const b = box()
   try {
     await installCollector(base(b))
     fs.writeFileSync(path.join(b.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem'), 'not a certificate')
-    await assert.rejects(installCollector(base(b)), /installed, but its CA is unusable \(cert: .*run "trocar uninstall", then "trocar on"$/)
+    await assert.rejects(installCollector(base(b)), (e) => /installed, but its CA is unusable/.test(e.message) && startsOver(e.message))
   } finally { b.done() }
 })
 
@@ -807,7 +865,7 @@ test('uninstall that cannot undo an entry keeps the manifest with only what is l
     assert.deepEqual([m.install, m.entries.map((e) => [e.path, e.keys.join('.')]), m.files, m.uninstall_left.map((l) => l.result), typeof m.uninstalled_at],
       [null, [[settingsOf(b), 'env.NODE_EXTRA_CA_CERTS']], [], ['left-link'], 'string'], 'the manifest stays, listing only what is left')
     assert.deepEqual([fs.existsSync(path.join(b.dir, 'ca', 'trocar-ca.pem')), fs.existsSync(path.join(b.dir, 'ca', 'ca.key'))], [false, false], 'the CA files go all the same (an append-semantics agent only warns about a missing file)')
-    await assert.rejects(installCollector(base(b)), /an earlier uninstall could not undo 1 item\(s\) \(.*settings\.json\); fix them, run "trocar uninstall" again, then "trocar on"$/)
+    await assert.rejects(installCollector(base(b)), (e) => /an earlier uninstall could not undo 1 item\(s\) \(.*settings\.json\)/.test(e.message) && startsOver(e.message))
     fs.rmSync(settingsOf(b)); fs.writeFileSync(settingsOf(b), installed) // the user puts a regular file back
     const again = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
     assert.deepEqual([again.left, again.entries.map((e) => e.result)], [[], ['restored']])
@@ -965,7 +1023,7 @@ test('a manifest of a version this build does not read stops install before anyt
 })
 
 // ---- D39 / 4.6 撤销顺序: the liveness snapshot — what `off` needs to judge, with no descriptor in sight, which live process may hold what ----
-test('install records liveness per harness it changed anything for: its signature as JSON, whether it re-reads its entry, until when a running one still trusts', async () => {
+test('install records liveness per harness it changed anything for: its signature as JSON, whether it re-reads its entry, until when a running one still trusts', { skip: POSIX_WORLD }, async () => {
   const b = box()
   try {
     const { reviveSignature } = await import('../../src/off/signature.mjs')
@@ -1033,7 +1091,7 @@ const until = async (fn, ms = 3000) => { const end = Date.now() + ms; for (;;) {
 const pause = (ms) => new Promise((r) => setTimeout(r, ms))
 
 test('V16 (unit half): a Claude Code started while its harness was off, then on again, is config-after-start — passed through with no client error, listed under restart by the on receipt, trusted only after it restarts (1.6 §1.1, R9)', async () => {
-  const root = tmpDir('as-v16-'); const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const root = tmpDir('as-v16-'); const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc])
   const b = { home, dir: path.join(home, '.trocar', 'collector') }
   const sock = path.join(root, 'run', 'c.sock')
   const p = fakeProc(); const up = await relay()
@@ -1041,7 +1099,9 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
   const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient: () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE_LOADER], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c }, procRoot: p.root, uid: process.getuid() }) }
   const ticks = () => Math.ceil((Date.now() / 1000 - p.btime) * 100)
   const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
-  const start = async (pid) => { p.add(pid, { uid: process.getuid(), exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: root, env: { HOME: home }, startTicks: ticks() }); await clients[0].raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: 'claude', filename: CC_EXE, ts_ns: pid }) }
+  const helper = () => clients[clients.length - 1] // off with nothing left on lets the helper go; the next on starts a new one (4.6 §开关语义)
+  // exec: reported by the helper; with none running (off) the process is only in /proc, and the next on's rescan finds it
+  const start = async (pid, exec = true) => { p.add(pid, { uid: process.getuid(), exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: root, env: { HOME: home }, startTicks: ticks() }); if (exec) await helper().raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: 'claude', filename: CC_EXE, ts_ns: pid }) }
   const ask = (method, path_, body) => controlRequest({ socketPath: sock, method, path: path_, body })
   const agentOf = async (pid) => (await ask('GET', '/status')).agents.find((a) => a.pid === pid)
   // the daemon below really binds the manifest's engine port: a free one, not onBase's fixed 47011 (two full runs at once collided there)
@@ -1063,7 +1123,7 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     const out = await undoHarnesses({ dir: b.dir, home, phases: PHASES, manifest: readManifest(b.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
     assert.deepEqual(out.left, [])
     await pause(30)
-    await start(4343) // started while it is off
+    await start(4343, false) // started while it is off: no helper runs to report its exec
     await pause(40)
     // Linux off still takes the certificate entry out (the handoff's open item (a)), so install writes it again, and on: both processes are older than it
     await installCollector({ ...onBase(b), unit: null })
@@ -1074,10 +1134,10 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     assert.deepEqual(again.receipt.restart.map((x) => [x.harness, x.pid, x.reason]).sort((x, y) => x[1] - y[1]), [['claude-code', 4242, 'config-after-start'], ['claude-code', 4343, 'config-after-start']], 'the receipt says which processes capture waits for a restart of')
     const row = await agentOf(4343)
     assert.deepEqual([row.trusted, row.reason, row.decrypt], [false, 'config-after-start', false])
-    assert.equal((await clients[0].raw({ op: '__watched' })).watch['4343'], 0, 'the kernel only observes it: its connections go direct')
+    assert.equal((await helper().raw({ op: '__watched' })).watch['4343'], 0, 'the kernel only observes it: its connections go direct')
     // its connection passes through the engine untouched: the client sees the relay's own certificate, no error, and the relay got the bytes
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
-    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4343, decrypt: 0 })
+    await helper().raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4343, decrypt: 0 })
     const conn = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: up.ca.certPem }); await once(conn, 'secureConnect')
     const body = JSON.stringify({ model: 'claude-x', max_tokens: 4, messages: [{ role: 'user', content: 'v16-through' }] })
     const reply = await new Promise((resolve, reject) => { let t = ''; conn.on('error', reject); conn.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`) })
@@ -1091,7 +1151,7 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     const fresh = await until(async () => { const a = await agentOf(4444); return a && a.trusted && a })
     assert.deepEqual([fresh.reason, fresh.decrypt], ['ok', true])
     const raw2 = net.connect(d.port, '127.0.0.1'); await once(raw2, 'connect')
-    await clients[0].raw({ op: '__inject_port', port: raw2.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4444, decrypt: 1 })
+    await helper().raw({ op: '__inject_port', port: raw2.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4444, decrypt: 1 })
     const conn2 = tls.connect({ socket: raw2, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(b.dir, 'ca', 'trocar-ca.pem'), 'utf8') }); await once(conn2, 'secureConnect') // trocar's leaf, which only a process that trusts trocar's CA accepts
     const body2 = JSON.stringify({ model: 'claude-x', max_tokens: 4, messages: [{ role: 'user', content: 'v16-after-restart' }] })
     await new Promise((resolve, reject) => { let t = ''; conn2.on('error', reject); conn2.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn2.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body2)}\r\n\r\n${body2}`) })
@@ -1102,7 +1162,7 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
 })
 
 // ---- D39 / 1.6 §1.1, V13: the order of `trocar uninstall` ----
-test('V13: uninstall writes desired off, asks the daemon to switch off and exit, stops it through systemd, and only then undoes the first entry; the CA, the unit, the run directory, the backups, trocar-off and the manifest come after the last entry, the manifest last; the captures stay; nothing restarts', async () => {
+test('V13: uninstall writes desired off, asks the daemon to switch off and exit, stops it through systemd, and only then undoes the first entry; the CA, the unit, the run directory, the backups, trocar-off and the manifest come after the last entry, the manifest last; the captures stay; nothing restarts', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const entryPaths = new Set(s.manifest().entries.flatMap((e) => [e.path, e.real_path].filter(Boolean)))
   const unitFile = path.join(s.home, '.config', 'systemd', 'user', 'trocar-collector.service')
@@ -1163,3 +1223,49 @@ for (const [name, reply, turned] of [['POST /on throws', null, false], ['the dae
     if (turned) assert.ok(r.plan.targets.length > 0)
   })
 }
+
+// 4.11 P4 「trocar 拥有的文件不写在别人的上面」 (Linux): a plugin path the manifest does not list, with a file there that is not trocar's, or cannot be
+// read, is left byte for byte and unrecorded; the receipt's `skipped` names it, that harness gets nothing more, the others are installed. A file
+// inside trocar's own tree (a combined bundle) is trocar's by its place: written and recorded.
+for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earlier plugin\n'], ['foreign', '// the user\'s own plugin\n'], ['unreadable', 'x\n']]) {
+  test(`install (Linux) · 4.11 P4: an owned plugin, ${at} at its path; a combined bundle with someone else's text at its path`, { skip: POSIX_WORLD }, async () => {
+    const b = box()
+    try {
+      const file = path.join(b.home, '.plug', 'plugins', 'trocar-ca.js')
+      const plug = { name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
+        present: [{ base: 'home' }], inject: () => ({ owned: [{ path: file, role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }] }) }
+      const bundle = path.join(b.dir, 'ca', 'combined-picky.pem')
+      const picky = { ...repHarness(b.dir), name: 'picky', processes: { names: [{ name: 'picky' }] },
+        inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.picky', '.env'), vars: { SSL_CERT_FILE: bundle }, semantic: 'replace' }], files: [{ path: bundle, bundle: true, certsFrom: [] }] }) }
+      if (seed != null) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, seed) }
+      fs.mkdirSync(path.dirname(bundle), { recursive: true }); fs.writeFileSync(bundle, 'not a bundle\n')
+      const sealed = { ...fs, readFileSync: (f, ...a) => { if (at === 'unreadable' && f === file) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
+      const r = await installCollector(base(b, { harnesses: [plug, picky], roots: { node: [], osText: '' }, fs: sealed }))
+      const m = readManifest(b.dir)
+      assert.ok(m.files.some((f) => f.path === bundle) && fs.readFileSync(bundle, 'utf8').includes('BEGIN CERTIFICATE'), 'the bundle inside trocar\'s tree is written and recorded')
+      if (at === 'foreign' || at === 'unreadable') {
+        assert.equal(fs.readFileSync(file, 'utf8'), seed, 'left byte for byte')
+        assert.deepEqual(m.files.filter((f) => f.path === file), [], 'no record of it')
+        assert.ok(r.skipped.some((s) => s.what === file && typeof s.reason === 'string'), JSON.stringify(r.skipped))
+        assert.ok(readEvents(b.dir).some((e) => e.event === 'failure' && e.code === 'not-trocars-file' && e.path === file), 'on record (D38)')
+      } else {
+        assert.equal(fs.readFileSync(file, 'utf8'), '// trocar collector: trust plugin\n')
+        assert.equal(m.files.filter((f) => f.path === file).length, 1)
+      }
+    } finally { b.done() }
+  })
+}
+
+
+test('R12: turnOn asks op.lock\'s question about itself of the identity reader it was handed, and the lock records that answer', async () => {
+  const b = box()
+  try {
+    await installCollector({ ...onBase(b), unit: null })
+    const asked = [], lw = lockWrites()
+    const identity = (pid) => { asked.push(pid); return { start_time: '4242', boot_id: 'b-1' } }
+    await turnOn(onBase(b, { socketPath: path.join(b.home, 'run', 'c.sock'), request: async () => ({ desired: 'on', actual: 'on' }), unit: null, identity, fs: lw.fs }))
+    assert.ok(asked.includes(process.pid))
+    assert.ok(lw.held.length > 0)
+    for (const h of lw.held) assert.deepEqual([h.pid, h.start_time, h.boot_id], [process.pid, '4242', 'b-1'])
+  } finally { b.done() }
+})

@@ -5,11 +5,13 @@
 import { fmtWhen } from '../../../legacy/core/fmt.mjs'
 import { harnessName, harnessKey, HARNESS_ORDER } from '../../../legacy/core/chips.mjs'
 import { HEALTH_READ } from '../../../legacy/labels/common.mjs'
-import { redactUrlCredentials } from '../../../legacy/core/sensitive.mjs'
+import { redactUrlCredentials, redactPair } from '../../../legacy/core/sensitive.mjs'
 import { failureSentence } from '../../../legacy/core/capture-verdict.mjs'
 import { LOG, ERR_WHERE } from '../../../legacy/labels/capture.mjs'
 
 const list = (x) => (Array.isArray(x) ? x : [])
+// every technical-details pair goes out through redactPair: shown and copied values hide URL userinfo (1.9 §保真边界)
+const pairs = (ps) => ps.map(redactPair)
 const groupsOf = (doc) => list(doc && doc.failures && doc.failures.groups).filter((g) => g && typeof g === 'object')
 const errorsAt = (doc, where) => list(doc && doc.errors).filter((e) => e && e.where === where)
 const expectedOf = (doc) => groupsOf(doc).filter((g) => g.level === 'expected')
@@ -30,12 +32,12 @@ function rowOf(g) {
   return {
     key: `${g.level ?? ''}/${g.where ?? ''}/${g.code ?? ''}`, // the fold's own key (C.3): level + where + code
     time: single ? fmtWhen(g.last_ts) : `${fmtWhen(g.first_ts)} – ${fmtWhen(g.last_ts)}`,
-    who, whoText: who ? who.name : LOG.who, text: s.text, unknown: s.unknown, count,
-    tech: [
+    who, whoText: who ? who.name : LOG.who, text: redactUrlCredentials(s.text), unknown: s.unknown, count,
+    tech: pairs([
       ...['level', 'where', 'code'].filter((k) => g[k] != null).map((k) => ({ k, v: { mono: String(g[k]) } })),
       ...(g.reason != null ? [{ k: 'reason', v: { text: String(g.reason) } }] : []), // the server's own words
       { k: 'first', v: { text: fmtWhen(g.first_ts) } }, { k: 'latest', v: { text: fmtWhen(g.last_ts) } }, { k: 'count', v: { text: count } },
-    ],
+    ]),
     diag: redactUrlCredentials(JSON.stringify(g, null, 2)),
   }
 }
@@ -57,20 +59,20 @@ export function logModel(doc, { filter = null } = {}) {
   const base = { reason: null, say: [], partial: null, rows: [], none: null, manifest: [], foot: null }
   if (doc == null) return { state: 'reading', ...base }
   if (doc.unreadable != null) {
-    const reason = String(doc.unreadable)
-    return { state: 'unreadable', ...base, reason, say: [HEALTH_READ.unreadable], foot: { expected: [], errors: [{ k: 'reason', v: { text: reason } }] } }
+    const reason = redactUrlCredentials(String(doc.unreadable))
+    return { state: 'unreadable', ...base, reason, say: [HEALTH_READ.unreadable], foot: { expected: [], errors: pairs([{ k: 'reason', v: { text: reason } }]) } }
   }
   const rows = failureRows(doc, filter), exp = expectedOf(doc)
   const since = doc.failures && doc.failures.since
   const partial = errorsAt(doc, ERR_WHERE.health)
   const say = [...(since ? [LOG.window(fmtWhen(since))] : []), ...(filter ? [LOG.filterRule] : []), ...(partial.length ? [LOG.truncated] : []),
     ...(rows.length || exp.length ? [LOG.metadataOnly] : [])] // said once per page, not once per row
-  const errors = list(doc.errors).filter(Boolean).map((e) => ({ k: String(e.where ?? '?'), v: { text: redactUrlCredentials(String(e.reason ?? '')) } }))
+  const errors = pairs(list(doc.errors).filter(Boolean).map((e) => ({ k: String(e.where ?? '?'), v: { text: String(e.reason ?? '') } })))
   return {
     state: 'ready', reason: null, say,
-    partial: partial.length ? partial.map((e) => ({ k: String(e.where), v: { text: String(e.reason ?? '') } })) : null,
+    partial: partial.length ? pairs(partial.map((e) => ({ k: String(e.where), v: { text: String(e.reason ?? '') } }))) : null,
     rows, none: rows.length ? null : LOG.none,
-    manifest: errorsAt(doc, ERR_WHERE.manifest).map((e) => ({ k: LOG.manifestError, v: { mono: String(e.reason ?? '') } })),
-    foot: exp.length || errors.length ? { expected: exp.map((g) => `${failureSentence(g).text} ×${g.count ?? '?'}`), errors } : null,
+    manifest: pairs(errorsAt(doc, ERR_WHERE.manifest).map((e) => ({ k: LOG.manifestError, v: { mono: String(e.reason ?? '') } }))),
+    foot: exp.length || errors.length ? { expected: exp.map((g) => redactUrlCredentials(`${failureSentence(g).text} ×${g.count ?? '?'}`)), errors } : null,
   }
 }

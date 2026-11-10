@@ -13,6 +13,7 @@ import { turnOn, installCollector } from '../../src/collector/install.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { ROOTS } from '../cli/fixtures/on-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { seedFootprint } from '../helpers/footprint.mjs'
 
 // the descriptor with its per-OS arms attached (the raw linux base has no darwin arm, and the plan would find nothing to write)
 const cc = (await loadHarnesses()).find((d) => d.name === 'claude-code')
@@ -40,15 +41,16 @@ const fakeUnit = (home) => ({ path: path.join(home, 'trocar-collector.service'),
 const claudeHome = (root) => {
   const home = path.join(root, 'home'); fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
   fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: {} }, null, 2))
+  seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   return home
 }
 
 // linux keeps the $XDG_RUNTIME_DIR socket with no token: the same no-injection world must resolve it the linux way.
 test('on (linux): the daemon is found through $XDG_RUNTIME_DIR, and POST /on sends no token there', async () => {
-  const root = tmpDir('as-ep-linux-')
+  const root = tmpDir('as-') // short: macOS caps a unix socket path at 104 bytes, and $TMPDIR there is long
   try {
     const home = claudeHome(root)
-    const run = path.join(root, 'run'); fs.mkdirSync(run, { recursive: true })
+    const run = path.join(root, 'r'); fs.mkdirSync(run, { recursive: true })
     const sock = path.join(run, 'trocar', 'collector.sock')
     fs.mkdirSync(path.dirname(sock), { recursive: true })
     const d = daemon({ sock, token: null })
@@ -82,3 +84,50 @@ test('loadParts (win32): the CLI parts view builds no redirector on win32 — th
   assert.equal(p2.linger(), false)
   assert.deepEqual(p2.lingerRead(), { state: false })
 })
+
+// D62 ①, invariant 5: no install record, no early start — the daemon would refuse to run (1.6 §5.2), so `on` asks for no start it cannot have
+test('on (linux): with no install record the daemon is not started early; on refuses before the plan, with cert-not-installed', async () => {
+  const root = tmpDir('k-')
+  try {
+    const home = claudeHome(root)
+    const run = path.join(root, 'r'); fs.mkdirSync(path.join(run, 'trocar'), { recursive: true })
+    const env = { HOME: home, XDG_RUNTIME_DIR: run }
+    const order = []
+    const unit = { ...fakeUnit(home), startNow: () => { order.push('start'); return { code: 0 } }, start: () => { order.push('start'); return { code: 0 } } }
+    const r = await turnOn({ home, env, osName: 'linux', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, unit, sleep: async () => {}, onPlan: () => order.push('plan'), confirm: async () => true })
+    assert.deepEqual([r.exit, r.receipt.error && r.receipt.error.code, order.filter((x) => x === 'start')], [1, 'cert-not-installed', []])
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+// D62 ①: with nothing on the socket, `on` asks the OS to start the daemon before it reads the plan, so the daemon boots while the plan is read; the start is
+// asked once, and what it answered is still the receipt's (a start that fails is a problem and exit 1, never a silent wait).
+for (const fails of [false, true]) {
+  test(`on (linux): no daemon on the socket — its start is asked before the plan, once${fails ? ', and a start that fails is reported' : ''}`, async () => {
+    const root = tmpDir('k-') // short: a unix socket path has about 104 bytes on macOS
+    try {
+      const home = claudeHome(root)
+      const run = path.join(root, 'r'); fs.mkdirSync(run, { recursive: true })
+      const sock = path.join(run, 'trocar', 'collector.sock')
+      fs.mkdirSync(path.dirname(sock), { recursive: true })
+      const env = { HOME: home, XDG_RUNTIME_DIR: run }
+      await installCollector({ home, env, osName: 'linux', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, unit: null })
+      const order = []
+      let d = null
+      const unit = { ...fakeUnit(home), startNow: () => { order.push('start'); if (fails) return { code: 1, err: 'no bus' }; d = daemon({ sock, token: null }); return { code: 0 } }, start: () => { order.push('direct'); return fails ? { code: 1, err: 'no node' } : { code: 0 } } }
+      const r = await turnOn({ home, env, osName: 'linux', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, unit, sleep: async () => {},
+        onPlan: () => order.push('plan'), confirm: async () => { order.push('confirm'); return true } })
+      assert.equal(order[0], 'start', `the start comes before the plan (${order})`)
+      assert.equal(order.filter((x) => x === 'start').length, 1, 'asked once')
+      if (fails) {
+        assert.equal(r.exit, 1)
+        assert.equal(r.receipt.daemon.state, 'not-running')
+        assert.ok(r.receipt.problems.length > 0, 'the failed start is a problem of the receipt')
+      } else {
+        assert.equal(r.exit, 0, JSON.stringify(r.receipt.notes))
+        assert.equal(r.receipt.daemon.state, 'running')
+        assert.ok(d.saw.some((x) => x.method === 'POST' && x.path === '/on'), 'the daemon it started took the on request')
+        await d.close()
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+}

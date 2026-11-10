@@ -98,7 +98,7 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { skip: awa
     // capture on for codex at the old daemon's real endpoint, then the agent's WebSocket through its door, decrypted and left open
     const up = { path: path.join(w.home, 'trocar-unit'), text: () => '', links: [], enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), registered: () => ({ state: 'present' }), reload: () => {} }
     const quiet = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-    assert.equal(await runOnCli(['codex', '--yes'], { io: quiet, env: w.env, home: w.home, platform, deps: { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: platform, harnesses: w.harnesses, arch: { unit: { userUnit: () => up } } }, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) } }), 0)
+    assert.equal(await runOnCli(['codex', '--yes'], { io: quiet, env: w.env, home: w.home, platform, deps: { getuid: () => 501, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: platform, harnesses: w.harnesses, arch: { unit: { userUnit: () => up } } }, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) } }), 0)
     const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
     a.ports.add(await freePort()); publish()
     const c = await through({ door: Number(u.port), auth: Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64'), target, localPort: [...a.ports].at(-1), ca: [rootPem], req: kind === 'ws' ? upgradeOf(target) : reqOf(target), open })
@@ -128,7 +128,7 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { skip: awa
       return win ? win.io.exec(file, args, opts) : { status: 1, stdout: '', stderr: `not faked: ${file}` }
     }
     const deps = {
-      root, exec, script, getuid: () => 501, unit: box.unit, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs },
+      root, exec, script, getuid: () => 501, unit: box.unit, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx,
       harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, drainMs: kind === 'ws' ? 1000 : 20_000, // http: a wait that cannot see the end would run 20 s, then cut
       identity: (pid) => ((pid === child.pid && childUp()) || pid === process.pid ? { start_time: '111', boot_id: 'boot-1' } : null), // what the daemons' lock stub wrote
       kill: (pid, signal) => { signalled.push(signal); if (pid !== child.pid) throw Object.assign(new Error('not the old daemon'), { code: 'ESRCH' }); process.kill(pid, signal) },

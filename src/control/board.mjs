@@ -16,7 +16,7 @@ const SCRIPT = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
  * already failed (ok:false) is the answer: there is nothing to confirm. Both answers are what the command prints with --json, so a URL's password
  * is `***@` in them (1.6 §1.2「不印凭据」); the plan_id is over the plan as shown.
  */
-export async function planThenConfirm({ dryRun, run, confirm }) {
+async function planThenConfirm({ dryRun, run, confirm }) {
   const receipt = hidden(await dryRun())
   if (receipt.ok === false) return { status: 200, doc: receipt }
   const plan_id = crypto.createHash('sha256').update(JSON.stringify(receipt.planned)).digest('hex')
@@ -45,7 +45,7 @@ export const VERBS = Object.freeze({
   },
   /** POST /control/harness: `trocar on` (runOn, with --json and --dry-run / --yes) or `trocar off` (runOff) for one harness, planned then confirmed;
    *  the receipt is the one `--json` prints, a refusal included. `source:'board'` marks every flows/ record the run writes. The plan is the dry-run
-   *  receipt's `planned` — for an off with an install record that is [] (1.6 附录 C.2), so its plan_id binds nothing but the harness. */
+   *  receipt's `planned` (1.6 附录 C.2). */
   async harness({ harness, on, confirm }, { home, deps }) {
     const [{ resolveHarnesses }, { newReceipt }] = await Promise.all([import('../off/harness-names.mjs'), import('../cli/schema.mjs')])
     const named = typeof harness === 'string' ? resolveHarnesses([harness]) : { ok: false }
@@ -67,7 +67,8 @@ export const VERBS = Object.freeze({
   },
   /** POST /control/setup: `trocar install`'s own function for one harness (only), planned then confirmed (D65④). Its plan is that harness's missing
    *  carriers ([] when it has them all); the root and the login entry are install's steps, read back when in place, asked as install asks when not —
-   *  a dialog nobody answered is a `pending` row carrying `trocar install`, the harness's carriers placed all the same (4.4 「Set up 的三件实话」). */
+   *  a dialog nobody answered is a `pending` row carrying `trocar install`, the harness's carriers placed all the same (4.4 「Set up 的三件实话」).
+   *  Every platform: in driver mode (Linux) there is no root in a store, so the plan is the carriers alone (4.6 「这个 harness 装好了没有」). */
   async setup({ harness, confirm }, { home, deps }) {
     const [{ resolveHarnesses }, { newReceipt }, { install }] = await Promise.all([import('../off/harness-names.mjs'), import('../cli/schema.mjs'), import('../cli/install.mjs')])
     const named = typeof harness === 'string' ? resolveHarnesses([harness]) : { ok: false }

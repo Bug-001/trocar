@@ -1,13 +1,14 @@
 // sign-helper.swift — trocar's macOS key custody (RFC 4.11 P1 `keychain`)
 // The root's P-256 private key lives in the user's login keychain, not extractable
-// and sensitive (the flags at the top level as well, R3-M1); its ACL names this binary, so only this binary signs with it.
+// and sensitive (the flags at the top level as well); its ACL names this binary, so only this binary signs with it.
 // It signs nothing a caller hands it: it BUILDS both certificates itself (CM3) — the root (CA pathLen 1, KU keyCertSign|cRLSign,
 // EKU serverAuth, SKI) and the 7-day intermediate (CA pathLen 0, same KU/EKU, SKI, AKI = the root's key, issuer = the root).
 //   trocar-sign-helper create --subject <cn>        → {"rootDer":b64}        (exit 5 + {"error":"exists"} when a key is there)
 //   trocar-sign-helper exists                       → {"exists":true|false}
 //   trocar-sign-helper issue --spki <b64 P-256 SPKI> --serial <hex> --not-before <iso>  → {"certDer":b64}
 //   trocar-sign-helper remove                       → {"removed":true|false}
-// No GUI session (CSSMERR_CSP_NO_USER_INTERACTION over ssh, R3-M3), interaction not allowed, a locked keychain:
+//   trocar-sign-helper session                      → {"graphic":true|false}  (can this security session show the keychain's UI: create needs it; never touches the keychain)
+// No GUI session (CSSMERR_CSP_NO_USER_INTERACTION over ssh), interaction not allowed, a locked keychain:
 // {"error":"unavailable"}, exit 3. No key: {"error":"no-key"}, exit 4. Bad argv: exit 2. Anything else: exit 1.
 // Build: scripts/build-darwin-native.sh (universal, pinned in native/pins.json). Never run it in a test: it writes the keychain.
 import CryptoKit
@@ -138,6 +139,11 @@ case "remove":
   let st = SecItemDelete(query as CFDictionary)
   if st != errSecSuccess && st != errSecItemNotFound { fail(Int(st), "remove") }
   emit(["removed": st == errSecSuccess])
+case "session":
+  var sid = SecuritySessionId(0), attrs = SessionAttributeBits(rawValue: 0)
+  let st = SessionGetInfo(callerSecuritySession, &sid, &attrs)
+  if st != errSecSuccess { fail(Int(st), "session") }
+  emit(["graphic": attrs.contains(.sessionHasGraphicAccess)])
 default:
-  usage("trocar-sign-helper create --subject <cn> | exists | issue --spki <b64> --serial <hex> --not-before <iso> | remove")
+  usage("trocar-sign-helper create --subject <cn> | exists | issue --spki <b64> --serial <hex> --not-before <iso> | remove | session")
 }

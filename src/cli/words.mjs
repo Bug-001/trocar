@@ -5,6 +5,29 @@
 // stands for stay in the technical details (the board) and after the sentence (`trocar status --failures`).
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+|ERR_[A-Z0-9_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), as src/health/codes.mjs spells them
 
+/** 1.6 §1.1 ④ (D58 ⑦): the words the default text of a command never says, each with the word it says instead — the one place this table is
+ *  written (the spec's table is its description). `--details` and `--json` may say them; a command line someone copies may name a pid. */
+export const UNSAID = Object.freeze([
+  { say: 'agent', not: ['harness'] },
+  { say: "trocar's service", not: ['daemon', 'collector'] },
+  { say: 'trocar', not: ['door', 'carrier', 'entry', 'control socket', 'holder'] },
+  { say: 'a sentence', not: ['errno', 'exit code', 'hash', 'pid'] },
+])
+// a word, its plural too (`entry` → `entries`); an error code (EPIPE, ERR_*) by its shape, case and all; a path is the user's or trocar's name for a
+// place, so `~/.trocar/collector/flows/` is not the word "collector"
+const stem = (w) => w.replace(/ /g, '\\s+').replace(/y$/, '(?:y|ies)')
+const UNSAID_RE = new RegExp(`\\b(?:${UNSAID.flatMap((u) => u.not).map(stem).join('|')})(?:e?s)?\\b`, 'i')
+const ERRNO_WORD = /\b(?:E[A-Z][A-Z0-9_]{2,}|ERR_[A-Z0-9_]+)\b/
+/** The lines of `text` that say an unsaid word, a line laid out as a command to copy (four spaces in) aside. */
+export const unsaidIn = (text) => String(text).split('\n').filter((l) => {
+  if (/^ {4}\S/.test(l)) return false
+  const words = l.replace(/\S*[\\/]\S*/g, ' ')
+  return UNSAID_RE.test(words) || ERRNO_WORD.test(words)
+})
+
+/** 1.6 §3.3 · 1.9 §保真边界: the note of a route that sends loopback direct, naming the hosts it carries (4.11 P6). */
+export const loopbackWords = (hosts) => `requests to ${hosts.join(', ')} (a model or relay on this computer) do not go through trocar and are not captured`
+
 /** One short English sentence per failure code trocar's writers can put into a log (src/health/codes.mjs's closed sets, the raw layer's journal
  *  outcomes and segment problems): the one catalog the CLI and the board word a failure group from (0.1 §2, D58②: no code on screen). A key is
  *  a bare `code`, or `where/code` where one code means two things under two `where`s (that key wins). A code that is also a status reason and
@@ -24,7 +47,9 @@ export const FAILURE_WORDS = Object.freeze({
   'loop-late': 'the background process was held up for a moment',
   'query-failed': 'a query worker failed; the query was answered another way',
   'projection-write-failed': 'a session could not be saved to disk for faster reading; its answers are unchanged',
+  'fold-failed': "a session's answer could not be built; it is tried again at the next read",
   'root-refused': 'refused: it was run as root',
+  'node-too-old': 'refused: the Node it runs on is too old',
   'root-token': 'refused: it was run as root',
   'elevated-token': 'refused: it was run elevated',
   // records and the raw layer (sealing, indexing, reading capture files)
@@ -62,6 +87,7 @@ export const FAILURE_WORDS = Object.freeze({
   'config-unparsable': 'a config file could not be parsed',
   'agent-list-invalid': 'the list of agent names could not be read, or holds items trocar cannot use',
   'harness-note': 'a note from the install',
+  'loopback-direct': 'requests to this computer do not go through trocar and are not captured',
   'unit-env-not-carried': "the login item's environment cannot carry the install's certificate variable",
   'holders-unreadable': 'the list of running processes could not be read',
   'door-record-unreadable': "trocar's record of which programs used its doors could not be read",
@@ -78,13 +104,14 @@ export const FAILURE_WORDS = Object.freeze({
   'negative-cache/upstream-handshake': "a host refused trocar's handshake (it likely wants a client certificate), so trocar passes the program's traffic to it on unread",
   'trust-rejected': "a program refused trocar's certificate under TLS, so that host is not captured",
   'client-rejected-leaf': "a connection whose program refused trocar's certificate",
-  'client-closed-no-data': 'a connection its program closed before sending anything, while trocar was slow or after the program had already accepted its certificate',
+  'client-closed-no-data': 'a connection its program closed before sending anything, while trocar was slow',
   'upstream-slow': 'the upstream was slow',
   'leaf-error': 'a certificate could not be issued',
   'framer-error': 'a request could not be parsed',
   'unpaired-response': 'a response arrived with no request to pair it with',
   'prior-proxy-unknown': 'the proxy in use before trocar could not be told',
   'pac-peer-refused': "a program not shown to be yours asked for trocar's proxy settings file (PAC) and was refused",
+  'pac-address-stale': "your program asked for trocar's proxy settings file (PAC) at an address from before this install's key and was refused",
   'pac-owner-unread': "trocar's proxy settings file (PAC) could not tell whose program asked, so it answered without routing through trocar",
   'client-left-held': 'a program gave up on a connection while trocar was slow to judge it',
   'client-left-queued': 'a program dropped a connection before trocar picked it up',
@@ -95,18 +122,23 @@ export const FAILURE_WORDS = Object.freeze({
   'upstream-handshake': "a host refused trocar's handshake (it likely wants a client certificate)",
   h2: 'an HTTP/2 connection could not be decrypted',
   'malformed-hello': "a program's handshake message could not be read",
-  'ingress-auth-failed': 'a program did not answer the proxy challenge',
+  'ingress-auth-failed': "a program gave a wrong password for trocar's proxy, so its connection was not made",
   'ingress-unknown': 'a program spoke something other than a proxy request to trocar',
+  'ingress-challenge-unanswered': "a program was asked for trocar's proxy password and never came back with it, so its connection was not made",
   'engine-port-taken': "trocar's port is taken",
+  'door-unconfirmed': "trocar's background process did not answer, so trocar on kept its ports",
+  'system-proxy-unreadable': 'the system proxy could not be read; trocar keeps the last one it read',
   'upstream-unavailable': 'the upstream could not be dialled',
   // a connection row forwarded by design (4.6 §记录「连接行」的预期类; `where` is the row's 'flow'): the reason when the reason decided the class, else not_captured
   'flow/not-an-agent': 'connections of programs that are not agents, passed on unread',
+  'flow/trusted-before': "connections a program closed unused, after it had already accepted trocar's certificate",
   'flow/agent-helper': "connections of an agent's helper programs, passed on unread",
   'flow/harness-off': 'connections of agents that are turned off, passed on unread',
   'flow/group-off': 'connections of agents still running after off, passed on unread',
   'flow/outside-host-set': 'connections of agents to hosts trocar does not read for them, passed on unread',
   'flow/other-user': "connections of another user's programs, passed on unread",
-  'flow/not-verified': 'connections of agent forms or hosts not verified for capture yet, passed on unread',
+  'flow/not-verified': 'connections of agent forms not verified for capture yet, passed on unread',
+  'flow/forward-only-host': 'connections of agents to hosts trocar forwards by design, passed on unread',
   'flow/policy': 'connections to hosts trocar does not read, passed on unread',
   'flow/not-trust-path': "connections an agent makes without reading trocar's certificate, passed on unread",
   'flow/https-proxy': "connections through a proxy the agent did not set itself, passed on unread",
@@ -147,6 +179,7 @@ export const FAILURE_WORDS = Object.freeze({
   'install-error': 'the install step failed',
   'install-pending': 'an install step is still waiting',
   'setup-needed': 'an agent needs setting up before capture can be turned on',
+  'stopped-by-off': 'an on stopped because an off came while it ran',
   'uninstall-error': 'the uninstall step failed',
   'left-unparsable': 'an uninstall left an item behind',
   'left-link': 'a change is a link and was not undone automatically',
@@ -158,6 +191,7 @@ export const FAILURE_WORDS = Object.freeze({
   'bundle-kept': 'a certificate bundle still in use is kept for now',
   'residue-not-removed': "files the agent wrote because of trocar's plugin are kept; reported, not deleted",
   'collectors-online': 'uninstall was refused: capture is still on for an agent, or a program may still be using trocar',
+  'home-mismatch': "install or uninstall was refused: HOME is not your account's home, which the login entry uses",
   // failure events that carry no code of their own (the group's code is the event)
   failure: 'a problem was recorded',
   'agent-untrusted': "a running agent does not trust trocar's certificate yet",
@@ -182,6 +216,13 @@ const UNKNOWN_WORDS = Object.freeze({ denied: 'not allowed to read', timeout: 't
   pac: 'a PAC script trocar does not run', 'kernel-filter-invisible': 'a kernel filter it cannot see', 'env-unreadable': 'environment not readable' })
 /** An `unknown.reason` code in words; a code outside the set is read out as its own words, never printed as a code. */
 export const unknownWords = (reason) => UNKNOWN_WORDS[reason] || String(reason ?? '').replace(/-/g, ' ')
+/** A file error as 附录 C's `unknown.reason`: EACCES / EPERM (Windows' denial) → denied, ENOENT → absent, any other → null. */
+export const errnoReason = (e) => { const c = e && e.code; return c === 'EACCES' || c === 'EPERM' ? 'denied' : c === 'ENOENT' ? 'absent' : null }
+/** The same error in 1.6 A.1's words, never its errno or Node's message (D58③); `verb` 'write' for a file that could not be written. */
+export const errnoWords = (e, verb = 'read') => {
+  const r = errnoReason(e)
+  return r === 'denied' && verb !== 'read' ? `not allowed to ${verb}` : r ? unknownWords(r) : `could not be ${verb === 'write' ? 'written' : 'read'}`
+}
 
 /** One line out of many: newlines and runs of whitespace become one space (a launchctl stderr with line breaks must not break the digest's alignment). */
 export const squashed = (s) => String(s ?? '').replace(/\s+/g, ' ').trim()
@@ -214,9 +255,11 @@ function brief(g, max) {
 /** The status reasons a single harness defines (its descriptor's trust hints and entry checks; the 「a harness's own」 part of
  *  src/health/codes.mjs TRUST_REASONS and kimi's shim checks). Their own words come with the data; the clause here is the fallback. */
 const HARNESS_OWN = new Set(['settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
-  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override'])
+  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override', 'zcode-env-network'])
 
 /** `trocar on`'s note for a harness whose paused hosts it made trocar try again (POST /on's `retried`, 4.11 §1 on/off, D54②). */
+// 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON); `on` says it in both modes (4.11 P4b, 4.6)
+export const SETUP_WHY = Object.freeze({ 'carrier-absent': 'trocar has not set up its certificate for it (installed after trocar, or what trocar placed is gone)', 'carrier-overwritten': 'its own update overwrote what trocar placed for its certificate', 'bundle-lacks-ca': 'its certificate bundle lacks a CA you added after install', 'marked-without-record': "a file trocar sets up for its certificate still holds trocar's text from an earlier install whose record is gone, so install skipped it", 'root-missing': "trocar's root certificate is no longer trusted" })
 export const retriedNote = (h, hosts) => `trocar decrypts ${hosts.join(', ')} again from ${h}'s next connection; that traffic had been passed on unread after a TLS failure`
 
 /** The reason an agent is not captured (RFC 1.6 §3.5 NOTE column, D38): the one catalog, a clause for every code of
@@ -245,6 +288,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'link-missing': ['trocar is not attached'],
     'entry-missing': ['the setting that points at trocar is gone', null, `trocar on ${h}`],
     'entry-changed': ['the setting that points at trocar holds something else'],
+    'pac-address-stale': [`${h}'s setting holds trocar's proxy settings address from before this install's key, which trocar refuses, so its calls are not captured`, null, `trocar on ${h}`],
     'forwarder-down': [`trocar is not listening, so ${h} cannot connect`],
     'not-routed': [`new connections from ${h} do not go through trocar`],
     'local-upstream': [`${h} sends its model calls to a program on this machine; calls to this machine do not pass through trocar`], // no fix (1.6 附录 B)
@@ -258,27 +302,32 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'cert-root-missing': ["trocar's root certificate is no longer trusted", null, 'trocar install'],
     'cert-root-pending': ["trocar's root certificate is not trusted yet", null, 'trocar install'],
     'cert-root-declined': ["you declined trocar's root certificate"],
+    'autostart-missing': ["trocar's login entry is not registered or is switched off", null, 'trocar install'],
     'cert-key-missing': ["the key for trocar's root is gone"],
     'cert-intermediate-unavailable': ['trocar cannot sign certificates right now, so it only forwards'],
     'cert-bundle-missing': [`${h}'s certificate file no longer holds trocar's root`],
+    'bundle-lacks-ca': [`${h}'s certificate bundle lacks a CA your settings add now`, null, 'trocar install'],
     'cert-tier-unreachable': [`this form of ${h} has no way to reach a certificate`],
     'not-verified': [`this form of ${h} is not verified yet, so trocar passes its traffic on without reading it`],
     'not-users-file': [`${h} points at a certificate file that is not yours`],
+    'marked-without-record': [`a file trocar sets up for ${h}'s certificate still holds trocar's text from an earlier install whose record is gone, so install skipped it`], // its steps: the finding's (1.6 附录 B)
+    'not-trocars-file': [`trocar cannot tell the file where it puts its own for ${h} is its own`],
     'shim-not-on-path': [`${h} did not start through the program trocar installed`],
     'form-unsupported': [`this form of ${h} cannot be captured with the proxy it is set to use`],
     'outside-host-set': [`${h} talked to a host outside the ones trocar reads for it, so that traffic is only forwarded`],
+    'forward-only-host': [`${h} talked to a host trocar forwards by design without reading it`],
     'chromium-child': [`a helper process of ${h} that makes no model calls; it is never decrypted`],
     'hook-inherited': [`this ${h} process got trocar's proxy from its parent but did not load trocar's plugin, so it is only forwarded`, `start ${h} on its own, with its plugins loaded`],
     // the trust resolver's generic reasons (src/collector/core/trust)
-    'var-missing': ["this process's environment has no trocar trust entry in effect", null, 'trocar install'],
+    'var-missing': ["this process's environment has no trocar trust entry in effect", `restart ${h} after trocar install`, 'trocar install'], // the entry is read at start
     'file-unreadable': ['the certificate file the trust entry points to could not be read', `fix the read permission of that file, then restart ${h}`],
-    'ca-not-in-file': ["the certificate file in effect does not hold trocar's certificate", null, 'trocar install'],
-    'replace-without-ca': ["a setting that replaces the root certificates points to a bundle without trocar's certificate", null, 'trocar install'],
-    shadowed: ["a higher-priority setting without trocar's certificate overrides trocar's entry", 'change that setting', 'trocar install'],
+    'ca-not-in-file': ["the certificate file in effect does not hold trocar's certificate", `restart ${h} after trocar install`, 'trocar install'],
+    'replace-without-ca': ["a setting that replaces the root certificates points to a bundle without trocar's certificate", `restart ${h} after trocar install`, 'trocar install'],
+    shadowed: ["a higher-priority setting without trocar's certificate overrides trocar's entry", `change that setting, or run trocar install; then restart ${h}`, 'trocar install'],
     'verify-disabled': [`${h} turned off certificate checks on a connection itself, so trocar does not decrypt it`, 'turn the checks back on to have that connection recorded'],
     'marker-stale': ["the trust plugin's marker belongs to an earlier process with the same pid", `restart ${h} once`],
     'marker-pending': ["waiting for this process's trust plugin to report (up to tens of seconds after start)", 'this updates itself'],
-    'ca-unusable': ["trocar's capture certificate cannot be used", null, 'trocar install'],
+    'ca-unusable': ["trocar's capture certificate cannot be used", `restart ${h} after trocar install`, 'trocar install'],
     'environ-unreadable': ["this process's environment could not be read, so its trust entry cannot be judged", `restart ${h} once`],
     'config-unreadable': ['one of its config files could not be read, so the trust entry in it does not count', `fix the read permission of that file, then restart ${h}`],
     'settings-unparsable': ['one of its settings files could not be parsed, so the trust entry in it does not count', `fix that file, then restart ${h}`],
@@ -290,7 +339,8 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'dsh-use-openssl-ca': [`${h} runs with --use-openssl-ca, under which trocar cannot add its certificate`, 'start it without that flag'],
     'dsh-node-too-old': [`${h} runs on a Node too old to add a certificate while running`, 'run it on a newer Node'],
     'kimi-npm-no-shim': [`this is the npm build of ${h}; trocar sets up only the build from its own installer`],
-    'desktop-ca-override': [`the desktop certificate setting of ${h} overrides the one trocar wrote`],
+    'desktop-ca-override': [`the desktop certificate setting of ${h} overrides the one trocar wrote`, "trocar install adds trocar's certificate to the file that the app's httpProxyCaCertPath setting (its setting.json) names; then restart the app (or clear that setting instead)", 'trocar install'],
+    'zcode-env-network': [`${h} was started with ZCODE_HTTP_PROXY, so it does not read the certificate setting trocar wrote`, 'start it without ZCODE_HTTP_PROXY, or point ZCODE_AGENT_CA_CERT in that environment at a file that holds trocar\'s certificate'],
     'smart-app-control': [`Smart App Control is on, so trocar could not set up the install folder of ${h}`],
     // the rest of doctor's findings (1.6 附录 B, src/netenv/findings.mjs FINDING_CODES): the catalogue's "what" sentence, without the values a clause is not given
     'egress-differs': [`some of ${h}'s connections now leave through a different hop`, `to keep the old path, turn capture off for ${h}`, `trocar off ${h}`],
@@ -304,7 +354,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'prior-proxy-unknown': [`trocar could not recover the proxy ${h}${pid != null ? ` (pid ${pid})` : ''} started with`, `put that proxy in ${h}'s own setting, then restart ${h}`, `trocar on ${h}`],
     'collectors-online': [`capture is still on for ${h}, so nothing was uninstalled`, 'turn capture off, then uninstall again', 'trocar off'],
     'cause-unknown': [`if ${h} still cannot connect: trocar found no cause on its side`, `turn capture off for ${h} and try again`, `trocar off ${h}`],
-    'engine-port-taken': ['another program holds the port trocar listens on, so nothing is captured', 'turn capture off and on again, and trocar picks another port'],
+    'engine-port-taken': ['another program holds the port trocar listens on, so nothing is captured', ...(harness ? [`turn capture on for ${h} again, and trocar picks another port`, `trocar on ${h}`] : ['free that port; trocar doctor names the program that holds it'])], // with no harness it may be the engine's own port, fixed at install: on picks no other
     'socktable-unavailable': ['Windows did not say which program owns a connection, so it was forwarded only', 'no action is needed; the next connection is asked again'],
   }
   if (!Object.hasOwn(M, code)) return null
@@ -317,3 +367,53 @@ export function statusNote(code, opts) {
   const r = statusReason(code, opts)
   return r && [r.text, r.fix, r.command && `run: ${r.command}`].filter(Boolean).join('; ')
 }
+
+// ── the default text's words (1.6 §1.1 ④, D58 ⑦) ─────────────────────────────────────────────────────────────────────────────────────────────
+/** The default text's sentence where the shared one (the board's, and `--details`') says a word of UNSAID: by failure code, and by status
+ *  reason. Everything else reads the shared tables as they are. */
+export const PLAIN_FAILURE = Object.freeze({
+  'late-write': "a record arrived after trocar's service stopped and was not written",
+  'door-record-unreadable': "trocar's record of which programs used it could not be read",
+  'classes-bad-entry': 'the traffic class table holds an item trocar cannot use',
+  'home-mismatch': "install or uninstall was refused: HOME is not your account's home, which the login item uses",
+})
+export const PLAIN_REASON = Object.freeze({
+  'var-missing': "this process's environment does not carry trocar's certificate",
+  'file-unreadable': 'the certificate file its setting points to could not be read',
+  shadowed: "a higher-priority setting without trocar's certificate overrides trocar's",
+  'marker-stale': "the trust plugin's mark belongs to an earlier process with the same number",
+  'environ-unreadable': "this process's environment could not be read, so whether it carries trocar's certificate is not known",
+  'config-unreadable': 'one of its config files could not be read, so the certificate setting in it does not count',
+  'settings-unparsable': 'one of its settings files could not be parsed, so the certificate setting in it does not count',
+  'autostart-missing': "trocar's login item is not registered or is switched off",
+  'agent-list-invalid': '~/.trocar/agents.json has bad items; the rest is still used',
+})
+const PLAIN_FIX = Object.freeze({ 'agent-list-invalid': 'fix or remove those items; no restart is needed' })
+/** statusReason in the default text's words (PLAIN_REASON, PLAIN_FIX). */
+export const plainReason = (code, opts) => { const r = statusReason(code, opts); return r && { ...r, ...(Object.hasOwn(PLAIN_REASON, code) ? { text: PLAIN_REASON[code] } : {}), ...(Object.hasOwn(PLAIN_FIX, code) ? { fix: PLAIN_FIX[code] } : {}) } }
+/** statusNote in the default text's words. */
+export const plainNote = (code, opts) => { const r = plainReason(code, opts); return r && [r.text, r.fix, r.command && `run: ${r.command}`].filter(Boolean).join('; ') }
+const STATUS_CODE = /^[a-z][a-z0-9-]*$/
+const PASSED_ON = new Set(['untrusted', 'untracked'])
+const REFUSED = new Set(['client-rejected-leaf', 'trust-rejected']) // a program refused trocar's certificate: `status <agent>` names the hosts and the fix
+const upper = (s) => s.replace(/^./, (m) => m.toUpperCase())
+/** One failure group (C.3 `failures.groups[]`) as `status --failures` says it by default: `{ text, todo }`, what happened and what to do ('' when
+ *  nothing). A reason that is itself a status code (a connection passed on unread because its program started before capture) says that reason, so
+ *  two groups of one cause read as one; the code, the raw reason and the program stay in `--details`. A code no table knows says so, never its name. */
+export function plainFailure(g) {
+  const h = (g && g.harness) || ''
+  // only a connection passed on unread carries its cause as its reason, and only an agent's: any other group's reason is its own words
+  const byReason = h && PASSED_ON.has(g.code) && typeof g.reason === 'string' && STATUS_CODE.test(g.reason) ? plainReason(g.reason, { harness: h }) : null
+  const byCode = plainReason(g && g.code, { harness: h })
+  const shared = failureWord(g && g.where, g && g.code, h, g && g.cause)
+  const text = (byReason && byReason.text) || (Object.hasOwn(PLAIN_FAILURE, g && g.code) ? PLAIN_FAILURE[g.code] : null)
+    || (byCode && shared === statusReason(g.code, { harness: h }).text ? byCode.text : shared) // the shared word came from statusReason: its plain one
+  const r = h ? byReason || byCode : null // the shared clauses name the agent; with none they would say "it"
+  const todo = r && r.fix ? `${upper(r.fix)}.` : r && r.command ? `Run: ${r.command}` : h && REFUSED.has(g.code) ? `See: trocar status ${h}` : ''
+  return text ? { text, todo } : { text: 'a problem trocar has no sentence for yet', todo: 'See: trocar status --failures --details' }
+}
+/** A sentence another module wrote and --json keeps (a finding's, a board or login reason, a reason a read failed) in the default text's words:
+ *  its few words of UNSAID said the user's way, its error code left out. */
+export const plainSentence = (s) => String(s).replace(/\bbad entry\b/g, 'bad item').replace(/\bbad entries\b/g, 'bad items').replace(/\blogin entry\b/g, 'login item')
+  .replace(/\bentry (\d+)\b/g, 'item $1').replace(/\b(?:the |a |trocar's )?(?<![\\/.\w])(?:daemon|collector)\b(?![\\/])/gi, "trocar's service") // a path's /collector/ is its name
+  .replace(/:? ?\(?\b(?:E[A-Z][A-Z0-9_]{2,}|ERR_[A-Z0-9_]+)\b\)?/g, '') // an error code is --details' (§1.1 ④ rule 3): the sentence around it says what happened

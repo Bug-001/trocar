@@ -2,13 +2,13 @@
 //
 // Stat only: the raw/ name list and `statKey` of each file, never a byte of a record and never through a warm cache
 // (a cache would answer with what IT last saw, and the point of a stamp is to notice that the disk moved).
-import path from 'node:path';
 import { statKey } from './warm.mjs';
 import { segStamp } from './index-build.mjs';
 import { namesStamp } from './rows.mjs';
 import { classesFile, classesLog } from '../paths.mjs';
 import { pricingFile } from './named/pricing.mjs';
 import { usageFile } from './usage.mjs';
+import { titlesFile } from './titles.mjs';
 
 const segmentsOf = ({ home, fs }) => {
   const names = namesStamp(home, fs);
@@ -24,6 +24,9 @@ export function usage(ctx) {
   const list = segmentsOf(ctx);
   return [...corpusOf(ctx, list), ...list.segs.map((s) => statKey(usageFile(ctx.home, s), ctx.fs))];
 }
+
+/** `sessions`: the corpus + the title table (a table written moves the stamp, so a new title is never held back by a 304). */
+export const titles = (ctx) => [...corpus(ctx), statKey(titlesFile(ctx.home), ctx.fs)];
 
 /** `classes`: the corpus + the user's table and the classification log. */
 export const classes = (ctx) => [...corpus(ctx), statKey(classesFile(ctx.home), ctx.fs), statKey(classesLog(ctx.home), ctx.fs)];

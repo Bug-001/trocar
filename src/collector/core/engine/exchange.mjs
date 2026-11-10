@@ -45,7 +45,7 @@ const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e
  * per request when its head arrives — the same instant as isRecording() — and once per WebSocket call at its first frame.
  * At `log` the bodies are not buffered, only counted; either way the full wire length of each body is counted past the cap
  * (body_wire_bytes). No callback: every call is `full`, its class told by the endpoint alone. */
-export const noFailureSink = (r) => { throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.code}: ${r.reason}`), { code: r.code }) } // a wiring fault: loud, never dropped
+const noFailureSink = (r) => { throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.code}: ${r.reason}`), { code: r.code }) } // a wiring fault: loud, never dropped
 export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = MAX_BODY_BYTES, newId, wsTerminal = null, retention = null, onFailure = noFailureSink, onTurnEnd = () => {} }) {
   // the retention callback, sampled once per call: a throw or a nonsense answer is `full`, its class told by the
   // endpoint alone (never throws into the framer: a bad flow object is trocar's own bug, reported where the envelope

@@ -80,6 +80,25 @@ test('1.5 K-29 read deadline: a read with no answer within READ_DEADLINE_MS fail
       await Promise.resolve()
       mock.timers.tick(READ_DEADLINE_MS)
       const r = await p
+      assert.equal(r.ok, false); assert.equal(r.status, 0); assert.equal(r.timedOut, true, 'a deadline is its own cause class')
+      assert.equal(calls[0].init.signal.aborted, true)
+    })
+  } finally { mock.timers.reset() }
+})
+
+test('1.8 #18 a read with deadlineMs is still out at READ_DEADLINE_MS and fails with status 0 at deadlineMs', async () => {
+  const deadlineMs = READ_DEADLINE_MS * 5
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    await withFetch(hanging(), async (calls) => {
+      let out = true
+      const p = api.get('sessions', { harness: 'long-deadline-test' }, { deadlineMs }).finally(() => { out = false })
+      await Promise.resolve()
+      mock.timers.tick(deadlineMs - 1)
+      await new Promise((d) => setImmediate(d))
+      assert.equal(out, true); assert.equal(calls[0].init.signal.aborted, false)
+      mock.timers.tick(1)
+      const r = await p
       assert.equal(r.ok, false); assert.equal(r.status, 0)
       assert.equal(calls[0].init.signal.aborted, true)
     })
@@ -138,6 +157,16 @@ test('invariant 4: a failed read is never an empty success', async () => {
     [() => json({ error: 'unknown endpoint' }, 404), (r) => { assert.equal(r.ok, false); assert.equal(r.status, 404) }],
   ]
   for (const [i, [answer, check]] of cases.entries()) await withFetch(answer, async () => check(await api.get('calls', { ref: 'fail-' + i })))
+})
+
+// 1.5 K-29: a failed answer hands its first error code on, so a 503 still-reading can be told from a failure (1.8 §数据与刷新)
+test('K-29: a non-2xx answer carries its first error code; none when the body names none', async () => {
+  for (const [i, [body, code]] of [[{ error: 'still reading', errors: [{ code: 'still-reading', reason: 'rows' }] }, 'still-reading'], [{ error: 'boom' }, undefined], [{ error: 'x', errors: [] }, undefined]].entries()) {
+    await withFetch(() => json(body, 503), async () => {
+      const r = await api.get('sessions', { limit: 1 + i })
+      assert.deepEqual([r.ok, r.status, r.code, r.error], [false, 503, code, body.error])
+    })
+  }
 })
 
 // 4.4 §每用户口令: the page keeps the token in the board origin's localStorage, so a load without the fragment (history, bookmark,
@@ -258,6 +287,27 @@ test('4.4 §答案文件 代标签: a Range read with a held tag sends it as If-
     assert.equal(headerOf(calls[1].init, 'if-range'), '"g1"')
     assert.equal(part.etag, '"g1"')
   })
+})
+
+test('K-30: a latched page reloads when a #t= link lands in its tab; another fragment does not, and an open page never listens', async () => {
+  const saved = ['addEventListener', 'location'].map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)])
+  const on = [], loc = { hash: '#/overview', reloads: 0, reload() { loc.reloads++ } }
+  Object.defineProperty(globalThis, 'addEventListener', { configurable: true, writable: true, value: (k, fn) => { if (k === 'hashchange') on.push(fn) } })
+  Object.defineProperty(globalThis, 'location', { configurable: true, writable: true, value: loc })
+  try {
+    const open = await freshHttp()
+    await withFetch(() => json({ sessions: [] }), async () => assert.equal((await open.get('/api/sessions')).ok, true))
+    assert.equal(on.length, 0, 'an open page never listens')
+    const shut = await freshHttp()
+    await withFetch(() => json({ error: 'x' }, 403), async () => assert.equal((await shut.get('/api/sessions')).status, 403))
+    assert.equal(on.length, 1, 'the 403 arms one listener')
+    loc.hash = '#/sessions'; for (const fn of on) fn()
+    assert.equal(loc.reloads, 0, 'a route change is not a token')
+    loc.hash = '#t=new-token'; for (const fn of on) fn()
+    assert.equal(loc.reloads, 1, 'a pasted link with a token reopens the page')
+  } finally {
+    for (const [k, d] of saved) { if (d) Object.defineProperty(globalThis, k, d); else delete globalThis[k] }
+  }
 })
 
 test('K-30: after a 403 no request is sent, every read is {ok:false, status:403}, onForbidden fires once', async () => {

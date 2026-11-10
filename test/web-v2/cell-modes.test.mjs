@@ -1,23 +1,28 @@
 // test/web-v2/cell-modes.test.mjs — a cell's view mode (spec 2.3 §两种模式, 1.2 §键盘):
 // the per-cell override follows the cell's identity across steps, the desk default survives a reload through storage and
-// degrades to Raw when storage fails, and the cell keys are a pure function of the key event. No DOM; storage is a fake.
+// degrades to Readable when storage fails, and the cell keys are a pure function of the key event. No DOM; storage is a fake.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { cellOf, cellBodyHtml, modeOf, setMode, bodyCache, overrideScope, clearOverrides } from '../../web/legacy/replay/cell.mjs'
+import { cellOf, cellBodyHtml, modeOf, setMode, bodyCache, overrideScope, clearOverrides, onlyMode, wireCells } from '../../web/legacy/replay/cell.mjs'
 import { cellKey, keyAction } from '../../web/legacy/replay/keymap.mjs'
 
 const CELL = new URL('../../web/legacy/replay/cell.mjs', import.meta.url).href
 const memStorage = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) } }
 
+test('a non-block key with no ref is no cell: its row says why instead', () => {
+  assert.equal(cellOf({ key: 'stream', ref: null, why: 'nothing to point at' }), null)
+})
+
 test('an override follows the block across steps that re-send it, whatever its byte locator', () => {
   // one block re-sent at two steps: the same content key, two records
   const def1 = { sec: 'messages', role: 'user', kind: 'text', key: 'K:1', text_ref: 's/main#r1::10-20', chars: 6, preview: 'abc' }
   const def2 = { ...def1, text_ref: 's/main#r9::10-20' }
-  bodyCache.set(def2.text_ref, { status: 'ok', text: '"abc"' })
-  setMode(cellOf(def1).bid, 'read')
+  bodyCache.set(def2.text_ref, { status: 'ok', text: '"abc"', view: { r: { as: 'text', f: { body: ['text'] } }, body: { text: 'abc' } } })
+  const other = modeOf(cellOf(def1).bid) === 'raw' ? 'read' : 'raw' // the mode the desk default is not: only an override draws it
+  setMode(cellOf(def1).bid, other)
   const c2 = cellOf(def2)
-  assert.equal(modeOf(c2.bid), 'read')
-  assert.match(cellBodyHtml(c2, modeOf(c2.bid)), /data-mode="read"/)
+  assert.equal(modeOf(c2.bid), other)
+  assert.match(cellBodyHtml(c2, modeOf(c2.bid)), new RegExp(`data-mode="${other}"`))
   assert.equal(c2.ref, def2.text_ref, 'the bytes are located by the ref, never by the key')
 })
 
@@ -38,16 +43,16 @@ test('2.3 §逐格覆盖 · D71③: an override belongs to the session desk it w
 test('the desk default survives a reload through storage', async () => {
   const storage = memStorage()
   const a = await import(CELL + '?fresh=b1')
-  a.setDeskMode('read', { storage })
+  a.setDeskMode('raw', { storage }) // not the start, so only the stored choice gives it back
   const b = await import(CELL + '?fresh=b2')
-  assert.equal(b.deskMode({ storage }), 'read')
+  assert.equal(b.deskMode({ storage }), 'raw')
 })
 
-test('a storage that throws leaves the desk default at Raw and never throws', async () => {
+test('2.3 #14: a storage that throws never throws a choice back', async () => {
   const bad = { getItem() { throw new Error('denied') }, setItem() { throw new Error('denied') } }
   const m = await import(CELL + '?fresh=c1')
-  assert.equal(m.deskMode({ storage: bad }), 'raw')
-  assert.doesNotThrow(() => m.setDeskMode('read', { storage: bad }))
+  assert.doesNotThrow(() => m.setDeskMode('raw', { storage: bad }))
+  assert.equal(m.deskMode({ storage: bad }), 'raw', 'the page keeps the choice it could not store')
 })
 
 test('the cell keys are a pure function of the key event, and the desk keys ignore them', () => {
@@ -60,15 +65,29 @@ test('the cell keys are a pure function of the key event, and the desk keys igno
   for (const key of ['v', 'V', 'c']) assert.equal(keyAction({ key }, { at: 0, n: 5, problems: [] }), null)
 })
 
-test('Readable names the kind it drew: the toolbar word and the body class agree, whatever r asked for (§2.3 fallbacks)', async () => {
-  const { KIND_WORD } = await import('../../web/legacy/labels/cells.mjs')
-  const KD = { md: 'markdown', sec: 'sections' } // the two classes that are not kd-<as> (RFC 2.3 §两种模式)
-  const values = ['plain', '"a json string"', '{"k":1,"v":[true,null,"x"]}', '[1,2,{"z":"q"}]', '42', 'null', '{"broken"', '<s>x</s>t', '@@ -1 +1 @@\n-a\n+b']
-  const specs = [undefined, { as: 'nope' }, ...Object.keys(KIND_WORD).flatMap((as) => [{ as }, { as, f: { body: ['missing'] } }, { as, tone: 'error' }])]
-  for (const [i, v] of values.entries()) for (const r of specs) {
-    const html = cellBodyHtml(cellOf({ inline: `${v}${' '.repeat(i)}`, r }), 'read')
-    const cls = html.match(/class="cellread ([^"]*)"/)[1].split(' ').find((c) => c.startsWith('kd-'))
-    const drawn = html.includes('class="kd-fail"') ? 'text' : KD[cls.slice(3)] ?? cls.slice(3)
-    assert.equal(html.match(/<span class="cellkind">([^<]*)</)[1], KIND_WORD[drawn], `${JSON.stringify(r)} over ${JSON.stringify(v)}`)
-  }
+test('2.3 §两种模式: a non-block cell is Raw only, whatever view its answer carries; a block with one has both', () => {
+  const view = { r: { as: 'text', f: { body: ['text'] } }, body: { text: 'abc' } }
+  const key = cellOf({ key: 'req', ref: 'r1::req.raw::0-5', chars: 5 }), def = cellOf({ sec: 'messages', role: 'user', kind: 'text', text_ref: 'r1::req.raw::5-8', chars: 3 })
+  assert.equal(onlyMode(key, { status: 'ok', text: '"abc"', view }), 'raw')
+  assert.equal(onlyMode(def, { status: 'ok', text: '"abc"', view }), null)
+})
+
+// jsdom is a devDependency and plain `npm test` needs none (D75③, 0.1 §3): without it the test skips and says why
+const jsdom = await import('jsdom').catch(() => null)
+test('2.3 #19: `v` on a Raw-only cell leaves its mode as it is', { skip: jsdom ? false : 'jsdom is not installed (a devDependency: npm ci installs it)' }, (t) => {
+  const { window } = new jsdom.JSDOM('<!doctype html><body></body>')
+  t.after(() => window.close())
+  Object.assign(globalThis, { document: window.document, NodeFilter: window.NodeFilter, MutationObserver: window.MutationObserver, getComputedStyle: (el) => window.getComputedStyle(el) })
+  globalThis.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} }
+  const ref = 's/main#r5::0-5'
+  bodyCache.set(ref, { status: 'ok', text: 'bytes' }) // the answer has no view: Raw only
+  const cell = cellOf({ sec: 'messages', role: 'user', kind: 'text', text_ref: ref, chars: 5 }), before = modeOf(cell.bid)
+  const root = document.createElement('div')
+  document.body.append(root)
+  root.innerHTML = `<div class="cblk" tabindex="0">${cellBodyHtml(cell, 'raw')}</div>`
+  t.after(wireCells(root, { storage: memStorage() }))
+  assert.ok(root.querySelector('.cell[data-only]'), 'the cell is drawn Raw only')
+  root.querySelector('.cblk').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'v', bubbles: true }))
+  assert.equal(modeOf(cell.bid), before)
+  assert.equal(root.querySelector('.cell').dataset.mode, 'raw')
 })

@@ -6,17 +6,29 @@
 // A row's `path` is a regex source matched as `^(?:path)` against the path with its querystring removed. Suffix rules, so
 // relay prefixes count too (RFC 4.6 §记录: `/anthropic/v1/messages` is still an inference request). Order matters: the first
 // matching row wins, so the token-count row comes first (`/v1/messages/count_tokens` is a ruler, not inference, 3.2).
-// `wire` is the wire format the path names on its own, or null when the path names none the board dissects (Gemini, D37 ⑥).
-// `unsupported` names an inference wire with no dissector in v1 (D37 ⑥), which the registry labels.
-export const ENDPOINTS = Object.freeze([
+// `wire` is the wire format the path names on its own, or null when the path names none.
+const ENDPOINTS = Object.freeze([
   { path: '.*count_tokens.*', class: 'token-count', wire: null },
   { path: '.*/v1/messages$', class: 'llm', wire: 'anthropic' },            // Anthropic Messages (incl. relay prefixes)
   { path: '.*/responses$', class: 'llm', wire: 'openai-responses' },       // OpenAI Responses (Codex)
   { path: '.*/chat/completions$', class: 'llm', wire: 'openai-chat' },     // OpenAI / DeepSeek Chat Completions
-  { path: '.*:streamGenerateContent.*', class: 'llm', wire: null, unsupported: 'gemini' }, // Gemini
-  { path: '.*:generateContent.*', class: 'llm', wire: null, unsupported: 'gemini' },
+  { path: '.*:streamGenerateContent.*', class: 'llm', wire: 'gemini' },  // Gemini API (pi)
+  { path: '.*:generateContent.*', class: 'llm', wire: 'gemini' },
 ].map((r) => Object.freeze(r)))
 const MATCHERS = ENDPOINTS.map((r) => [new RegExp(`^(?:${r.path})`), r])
+
+// D37 ⑥: inference wires this version records and does not read, which the registry labels and no reader gives a provider. Vertex
+// first: its Gemini models also end in :generateContent, which the table above names the Gemini API wire.
+const UNSUPPORTED = [
+  ['vertex', /\/projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/models\/[^/:]+:[A-Za-z]+$/],
+  ['bedrock', /\/model\/[^/]+\/(invoke|invoke-with-response-stream|converse|converse-stream)$/],
+]
+/** The name of the inference wire this version records and does not read that `endpoint` is on, else null. */
+export function unsupportedOf(endpoint) {
+  const p = pathOf(endpoint)
+  for (const [name, re] of UNSUPPORTED) if (re.test(p)) return name
+  return null
+}
 
 /** The path an endpoint names: its querystring removed. */
 export const pathOf = (endpoint) => String(endpoint || '').split('?')[0]
@@ -37,8 +49,16 @@ export const LLM_ENDPOINT_PATHS = pathsOf('llm')
 export const TOKEN_COUNT_ENDPOINT_PATHS = pathsOf('token-count')
 
 /**
- * THE failed rule (3.5 §访问模式, both rules): a call failed when it errored, or — unless it is a WebSocket logical call, which
- * has no HTTP status and fails inside its reply — when its HTTP status is absent or ≥ 400. The index row passes only
- * {status, ws}; the call row adds `error` = the record's error, an unparsed request, or the dissector's failed(norm, rec).
+ * THE failed rule (3.5 §访问模式, both rules): a call failed when its reply's own terminal says so (`ended` 'failed'), when it errored
+ * and its reply did not end in a named success (`ended` not 'ok'), or — unless it is a WebSocket logical call, which has no HTTP
+ * status and fails inside its reply — when its HTTP status is absent or ≥ 400. The index row passes only {status, ws}; the call row
+ * adds `error` = the record's error or an unparsed request, and `ended` = the dissector's hook (3.1 `ended`; null keeps the rest).
  */
-export const failedOf = ({ status, ws = false, error = false }) => !!error || (!ws && (status == null || status >= 400))
+// A record the collector wrote as cut (an error envelope), or the reply of one read as itself (registry.mjs closedAfterEnd): the
+// only records whose `error` a named success ending can lift.
+export const cutOf = (rec) => !!rec && (((rec.resp || rec.response) || {}).kind === 'error' || rec._closed === true);
+export const failedOf = ({ status, ws = false, error = false, ended = null, cut = false }) =>
+  ended === 'failed' || (!!error && !(cut && ended === 'ok')) || (!ws && (status == null || status >= 400))
+// A reply's own terminal from the endings it names (`seen`), over a wire's closed lists (data in each dissector): any named failure →
+// 'failed', else any named success → 'ok', else null.
+export const endOf = (ends, seen) => (seen.some((v) => ends.failed.includes(v)) ? 'failed' : seen.some((v) => ends.ok.includes(v)) ? 'ok' : null)

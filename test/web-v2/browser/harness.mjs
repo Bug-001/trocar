@@ -3,6 +3,7 @@
 // node --test runs every .mjs, so nothing here runs at import. The browser suite runs only under `npm run test:browser`
 // (TROCAR_PLAYWRIGHT=1); anywhere else probe() says why it is not ok and the cases skip with that reason.
 import fs from 'node:fs'
+import { ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,12 +38,20 @@ const LOCAL_STATE = { password_manager: { os_password_blank: false, os_password_
  *  exit (at 'disconnected' Windows Chrome still holds profile files), never into the run's temp directory, which leak-guard checks; what
  *  is still held then, or a browser never closed, goes when the process exits (tmpDir). Closing the browser, any context or any page of
  *  it first drops the routes on what closes (closeQuietly). */
-export async function launchChrome(chromium) {
+export async function launchChrome(chromium, pids = []) {
   const tmp = tmpDir('trocar-chrome-')
   const profile = path.join(tmp, 'profile')
   fs.mkdirSync(profile)
   fs.writeFileSync(path.join(profile, 'Local State'), JSON.stringify(LOCAL_STATE))
-  const browser = (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser()
+  // a `{ launch }` stand-in (the WebKit cases') has no Chrome profile to seed: it is launched as is. The pids of what it starts go into
+  // `pids` as they start, so a launch that hangs can be killed too (withBoard's deadline)
+  // launches never overlap (one test at a time, one launch per board); overlapping ones would restore out of order
+  const spawn = ChildProcess.prototype.spawn
+  ChildProcess.prototype.spawn = function (...a) { const r = spawn.apply(this, a); if (this.pid) pids.push(this.pid); return r }
+  let browser
+  try {
+    browser = chromium.launchPersistentContext ? (await chromium.launchPersistentContext(profile, { ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })).browser() : await chromium.launch()
+  } finally { ChildProcess.prototype.spawn = spawn }
   const close = browser.close.bind(browser)
   browser.close = async (...a) => {
     try { return await close(...a) } finally {
@@ -54,6 +63,8 @@ export async function launchChrome(chromium) {
   browser.newContext = async (...a) => {
     const c = await newContext(...a)
     c.on('page', (p) => closeQuietly(p, () => [p]))
+    // the step head's numbers for the tests, from its data attributes (its words are the reader's and change, 1.2 §编号): {n, m} or null
+    await c.addInitScript(() => { window.__stepNo = () => { const e = document.querySelector('#stepbar .sb-no'); return e ? { n: +e.dataset.n, m: +e.dataset.m } : null } })
     closeQuietly(c, () => [c, ...c.pages()])
     return c
   }
@@ -100,11 +111,23 @@ export async function timerReads(b) {
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
  *  `missing` lists every static file answered ≥ 400 (`<status> <path>`).
  *  `idleMs`: the face's query worker idles out after that many ms (the service's default when absent).
- *  `setup(page)` runs before the first navigation (routes a case must hold from the first request on).
+ *  `setup(page, face)` runs before the first navigation (routes a case must hold from the first request on).
  *  `home`: a prebuilt {userHome, home} served instead of boardHome({bytes}). `base`: an external board's URL carrying `#t=<token>` — no
  *  face is started (`face` is null) and `get` reads that board with the token header.
  *  `requests` logs every /api (the answer files /api/d/* too) and /control response as {url, method, body (the request's post data, or null), range (its Range header, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
-export async function withBoard({ bytes, home, base, idleMs, token = true, width = 1280, height = 900, theme = 'light', chromium, setup } = {}) {
+// 0.1 §3 约定 13: how long a board's browser may go on in one test, under the run's per-test timeout. A board shared by several tests is
+// given each test's budget with renew(ms) when that test starts; a test whose own timeout is longer passes its own (a little under it)
+export const BOARD_DEADLINE_MS = 270_000
+// the browser's processes gone at once: their group where there are groups (Playwright starts Chrome in one of its own, with its renderers
+// and GPU process), else the process itself
+function killBrowser(pids) {
+  for (const pid of pids) {
+    // a recorded pid that leads no group (a worker the face forked during the launch, the face's to end) or is gone is left alone: a pid
+    // gone may be another process's by now
+    try { process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL') } catch (e) { if (e.code === 'EPERM') try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+  }
+}
+export async function withBoard({ bytes, home, base, idleMs, token = true, width = 1280, height = 900, theme = 'light', chromium, setup, deadline = BOARD_DEADLINE_MS } = {}) {
   chromium ||= (await import('playwright-core')).chromium
   const face = base ? null : await serveBoard({ ...(home || boardHome({ bytes })), idleMs })
   const ext = base && new URL(base), extToken = ext && new URLSearchParams(ext.hash.slice(1)).get('t')
@@ -118,17 +141,31 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
   const requests = []
   const errors = []
   const missing = []
-  let browser, context, page
+  let browser, context, page, dead = null
+  // the hard deadline (0.1 §3 约定 13): the browser's processes are killed, which rejects whatever call waits on it; stop() then fails
+  const pids = []
+  let timer = null
+  const renew = (ms = deadline) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => { dead = new Error(`browser did not answer in ${Math.round(ms / 1000)} s`); killBrowser(pids) }, ms)
+    timer.unref()
+  }
+  renew()
   const stop = async () => {
-    try { await page?.close() } finally {
-      try { await context?.close() } finally {
-        try { await browser?.close() } finally { await face?.close() }
+    clearTimeout(timer)
+    try {
+      try { await page?.close() } finally {
+        try { await context?.close() } finally {
+          try { await browser?.close() } finally { await face?.close() }
+        }
       }
-    }
+    } catch (e) { if (!dead) throw e }
+    if (dead) throw dead
   }
   try {
-    browser = await launchChrome(chromium)
+    browser = await launchChrome(chromium, pids)
     context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
+    trackRequests(context)
     page = await context.newPage()
     page.on('pageerror', (e) => errors.push(String(e)))
     // TROCAR_CPU_RATE=<n>: the page's CPU slowed n times (CDP), for report-only runs on a slower machine's footing
@@ -144,23 +181,22 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
       globalThis.__timerRounds = []
       new PerformanceObserver((l) => { for (const e of l.getEntries()) if (e.name === name) globalThis.__timerRounds.push({ at: performance.timeOrigin + e.startTime, base: e.detail && e.detail.base }) }).observe({ type: 'mark' })
     }, TIMER_ROUND)
-    await setup?.(page)
+    await setup?.(page, face)
     const t = token === true ? face?.token : token
     await page.goto(face ? `${face.base}/${t ? `#t=${encodeURIComponent(t)}` : ''}` : base, { waitUntil: 'load' })
   } catch (e) { await stop(); throw e }
-  return { url: face ? face.base : ext.origin, get, face, page, stop, requests, errors, missing }
+  return { url: face ? face.base : ext.origin, get, face, page, stop, renew, requests, errors, missing }
 }
 
-// the build the face serves: the desk-next build under `npm run test:browser -- --desk-next` (scripts/test-browser.mjs), else the default
-export const DESK_NEXT = process.env.TROCAR_DESK_NEXT === '1'
+// the step head's place as 'n/m' from its data attributes (window.__stepNo), for timed()'s 'step' / 'reply' conds: they wait for it to change
+export const stepKey = (page) => page.evaluate(() => { const x = window.__stepNo(); return x ? `${x.n}/${x.m}` : null })
 export const mark = (page, name) => page.evaluate((n) => { performance.mark(n) }, name)
 /** ms from `startMark` to now, recorded as measure `name`. */
 export const measure = (page, name, startMark) => page.evaluate(([n, s]) => performance.measure(n, s).duration, [name, startMark])
 
 /** In the page (no closure; also sent as source): the largest stretch (px) of #ctxwin's visible box that no drawn item covers, from the
  *  box's top to the nearer of its bottom and the last item's bottom (empty space below a short window is no gap), and one
- *  --cblk-pitch in px: { gap, pitch }. Drawn items are the window's units (2.3 §读与画, 1.4 白名单) and the legacy desk's group
- *  placeholder (rule 4 旧台, a drawn stand-in). A gap is a stretch taller than one pitch (row margins are smaller). No drawn item in
+ *  --cblk-pitch in px: { gap, pitch }. Drawn items are the window's units (2.3 §读与画, 1.4 白名单). A gap is a stretch taller than one pitch (row margins are smaller). No drawn item in
  *  the box: the whole box is the gap. No #ctxwin: an infinite gap. */
 export function gapInPage() {
   const W = document.querySelector('#ctxwin')
@@ -171,7 +207,7 @@ export function gapInPage() {
   if (!W) return { gap: Infinity, pitch }
   const box = W.getBoundingClientRect(), top = box.top + W.clientTop, bottom = top + W.clientHeight
   const sel = ['.cwfline', '.cwwin', '.cwsec', '.cwfoldall', '.chline', '.cwremoved', '.cwturn > .cwturnhd', '.cblk', '.cwreply', '.cwbusy',
-    '.cwframe', '.cwnoreq', '.cwunparsed', '.empty', '.cwgroup[aria-busy]'].join(', ')
+    '.cwframe', '.cwnoreq', '.cwunparsed', '.empty'].join(', ')
   const rs = [...W.querySelectorAll(sel)].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0)
   const end = Math.min(bottom, Math.max(...rs.map((r) => r.bottom)))
   const seen = rs.filter((r) => r.bottom > top && r.top < end).sort((a, b) => a.top - b.top)
@@ -185,10 +221,33 @@ export function gapInPage() {
 }
 export const windowGap = (page) => page.evaluate(gapInPage)
 
+// every page's requests in flight and the time the last one started or ended, from its context's events (a page withBoard's context opens)
+const NET = new WeakMap()
+function trackRequests(context) {
+  const net = (r) => { let p; try { p = r.frame().page() } catch { return null } if (!NET.has(p)) NET.set(p, { open: 0, last: Date.now() }); return NET.get(p) }
+  const end = (r) => { const n = net(r); if (n) { n.open = Math.max(0, n.open - 1); n.last = Date.now() } }
+  context.on('request', (r) => { const n = net(r); if (n) { n.open++; n.last = Date.now() } })
+  context.on('requestfinished', end)
+  context.on('requestfailed', end)
+}
+/** Until `page` has had no request in flight, and none started or ended, for `ms`: the board's own reads after an action are over (an
+ *  opened desk's 100 ms rest and its body reads, 2.3 §正文预取; a screen's first reads). Playwright's waitForLoadState('networkidle')
+ *  cannot say this after the page's load: the page reached that state once, and moving the hash does not reset it, so it returns at once.
+ *  Rejects after `deadline` ms with what is still open. A page made in a withBoard context only. */
+export async function settle(page, ms = 500, deadline = 30_000) {
+  const t0 = Date.now()
+  for (;;) {
+    const n = NET.get(page) || { open: 0, last: t0 }, wait = n.open ? ms : n.last + ms - Date.now()
+    if (!n.open && wait <= 0) return
+    if (Date.now() - t0 > deadline) throw new Error(`the page did not settle in ${deadline / 1000} s: ${n.open} request(s) in flight`)
+    await page.waitForTimeout(Math.max(20, Math.min(wait, ms)))
+  }
+}
+
 /** ms from the input `act` makes (its first pointerdown / keydown, marked by a listener armed and awaited before it, so the input can
  *  never outrun it) until `cond` holds and that frame has painted: 'replay' (a session's window drawn), 'step' (the step head no longer
  *  reads `arg` and the window is drawn), 'n' (the step head's number, data-n, is no longer `arg` and the window is drawn), 'sel'
- *  (selector `arg` matches). 'step' and 'n' also wait for the visible box to be filled, in the same frame: no gap over one pitch
+ *  (selector `arg` matches), 'reply' (below). 'step', 'n' and 'reply' also wait for the visible box to be filled, in the same frame: no gap over one pitch
  *  (gapInPage; D64② a step counts once it is completely drawn). Rejects after 10 s. */
 export async function timed(page, cond, arg, act) {
   await page.evaluate(() => {
@@ -201,11 +260,15 @@ export async function timed(page, cond, arg, act) {
   return page.evaluate(`(${([cond, a], gapOf) => new Promise((resolve, reject) => {
     const q = (s) => document.querySelector(s)
     const filled = () => { const g = gapOf(); return g.gap <= g.pitch }
+    const key = () => { const x = window.__stepNo(); return x ? `${x.n}/${x.m}` : null }
     const holds = {
       replay: () => location.hash.startsWith('#/replay/') && !!q('#stepbar .sb-no') && !!q('#ctxwin') && !q('#ctxwin .cwload'),
-      step: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload') && filled(),
+      step: () => !!q('#stepbar .sb-no') && key() !== a && !q('#ctxwin .cwload') && filled(),
       n: () => !!q('#stepbar .sb-no') && +q('#stepbar .sb-no').dataset.n !== a && !q('#ctxwin .cwload') && filled(),
       sel: () => !!q(a),
+      // a step's reply wholly drawn: the step head moved (a[0], as 'step'), the visible box is filled, and a table of the reply holds a[1]
+      reply: () => !!q('#stepbar .sb-no') && key() !== a[0] && !q('#ctxwin .cwload') && filled()
+        && [...document.querySelectorAll('#ctxwin .cwreply .md-table')].some((t) => t.textContent.includes(a[1])),
     }[cond]
     const t0 = performance.now()
     const tick = () => {
@@ -225,8 +288,8 @@ export async function timed(page, cond, arg, act) {
  *  `pending: {done, total}`. `paced`: a head read moves k on only while a move granted by more(n) is left, so the growth follows
  *  the test's steps rather than the board's poll timer. `latency`: every answer waits that many ms first. → { left(), more(n) }: the
  *  members not reached yet; grant n more moves. */
-export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32, paced = false } = {}) {
-  const last = w.marks.length - 1
+export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32, paced = false, truncated = null } = {}) {
+  const last = w.marks.length - 1, webkit = page.context().browser()?.browserType().name() === 'webkit'
   let k = Math.min(from, last), at = null, f = null, granted = paced ? 0 : Infinity
   // every answer: `latency` ms, then the one fulfill of what `fn` makes of the request, returned to Playwright. Routes dropped while it
   // waited (stop's closeQuietly) leave Playwright to continue the request itself; the late fulfill then rejects ("Route is already
@@ -234,7 +297,7 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
   // floating would instead fail whichever case is stopping. A request the page gave up on takes the fulfill without error.
   const answer = (pattern, fn) => page.route(pattern, async (route) => { await new Promise((r) => setTimeout(r, latency)); return route.fulfill(fn(route.request())) })
   const json = (doc) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
-  const now = () => { if (at !== k) { at = k; f = w.files(w.marks[k], pack); if (k < last) f.head = { ...f.head, pending: { done: k + 1, total: last + 1 } } } return f }
+  const now = () => { if (at !== k) { at = k; f = w.files(w.marks[k], pack); if (k < last) f.head = { ...f.head, pending: { done: k + 1, total: last + 1 } }; if (truncated) f.head = { ...f.head, truncated } } return f }
   const tails = new Map() // part → {n, text, last: Map(id → its lines' JSON)}
   function tail(part) {
     const { head, docHead, open } = now(), n = head.open.n
@@ -254,7 +317,8 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
     if (name === 'head') {
       if (at != null && granted > 0) { granted--; k = Math.min(last, k + grow) }
       const body = JSON.stringify(now().head), etag = `"${createHash('sha1').update(body).digest('hex').slice(0, 16)}"`
-      if (req.headers()['if-none-match'] === etag) return { status: 304, headers: { etag } }
+      // Playwright's WebKit refuses to fulfill any 3xx: there the board takes the whole answer, which it reads like any new head
+      if (req.headers()['if-none-match'] === etag && !webkit) return { status: 304, headers: { etag } }
       return { status: 200, contentType: 'application/json', headers: { etag }, body }
     }
     const pk = /^p(\d+)\.(main|rest)$/.exec(name), op = /^open\.(main|rest)$/.exec(name)
@@ -271,7 +335,7 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
   // 3.5 §会话读 `block`: one item per asked ref, its bytes made from the ref (the shape of session-read-contract.json `block_multi`)
   await answer('**/api/block?**', (req) => {
     const refs = new URL(req.url()).searchParams.getAll('ref')
-    return json({ schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
+    return json({ schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), view: blockView(ref, w.replyRefs.has(ref)), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
   })
   return { left: () => last - k, more: (n = 1) => { granted += n } }
 }
@@ -293,8 +357,21 @@ export const stampFetches = (page) => page.addInitScript(() => {
   }
 })
 
+/** `skip` (the suite's own reason, or false), else why WebKit cannot run: only an executable already installed, never downloaded. */
+export async function webkitGate(skip) {
+  if (skip) return skip
+  try {
+    const { webkit } = await import('playwright-core')
+    const exe = webkit.executablePath()
+    return exe && fs.existsSync(exe) ? false : 'the WebKit executable is not installed (not downloaded here)'
+  } catch (e) { return `WebKit unavailable: ${String(e?.message || e).split('\n')[0]}` }
+}
+
 /** The bytes serveWorld answers for a `block` ref. */
 export const blockBytes = (ref) => `body of ${ref}`
+/** The `view` serveWorld answers with them (3.5 §会话读 `block`): markdown holding those bytes, several top-level blocks for a reply. */
+const blockView = (ref, reply) => ({ r: { as: 'markdown', f: { body: ['text'] } },
+  body: { text: reply ? `## Result\n\n${blockBytes(ref)}\n\n- first\n- second\n\nThe last paragraph.\n` : blockBytes(ref) } })
 
 /** Nearest-rank p50 / p95 of a list of ms. */
 export function stats(samples) {
@@ -370,9 +447,11 @@ export const layoutFaults = (page, root = '#content') => page.evaluate(async ({ 
   }
   for (const b of boxes) {
     if (b.control) continue
-    for (let e = b.el; e && e !== document.body; e = e.parentElement) {
+    let scroller = false // what a scroll container's rows do past its edge is scrolling, whatever clips the container itself
+    for (let e = b.el; e && e !== document.body && !scroller; e = e.parentElement) {
       const cs = getComputedStyle(e)
       const clips = (o) => o === 'hidden' || o === 'clip'
+      scroller = /auto|scroll/.test(cs.overflowY)
       if (!clips(cs.overflowX) && !clips(cs.overflowY)) continue
       const er = e.getBoundingClientRect()
       if (er.width <= 2 || er.height <= 2) break // a box hidden on purpose (a screen-reader-only label)

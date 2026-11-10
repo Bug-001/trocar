@@ -14,7 +14,7 @@ function pageProbe() {
   const now = () => Date.now()
   const CAP = 5000
   const push = (list, x) => { list.push(x); if (list.length > CAP) list.splice(0, list.length - CAP) }
-  const S = { fetchLog: [], inflight: 0, intervals: new Set(), ac: { created: 0, aborted: 0 }, longtasks: [], consoleErrors: [], blank: [], keep: [] }
+  const S = { fetchLog: [], inflight: 0, deskRead: 0, intervals: new Set(), ac: { created: 0, aborted: 0 }, longtasks: [], consoleErrors: [], blank: [], keep: [] }
 
   // ── listeners ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
   const ET = EventTarget.prototype
@@ -84,6 +84,8 @@ function pageProbe() {
       const e = byResponse.get(this)
       return orig.apply(this, a).then((x) => {
         if (e) {
+          // what a desk keeps of its reads (I-heap): the answer files, its lanes and bodies. A tail is read as text (core/http.mjs)
+          if (/^\/api\/(d\/|lane|block)/.test(e.url)) S.deskRead += m === 'text' ? x.length : x.byteLength || 0
           // the board reads every answer as bytes (core/http.mjs readBody): a head answer's bytes are decoded here
           const d = m === 'arrayBuffer' ? (e.url.startsWith('/api/d/head') ? docOf('text', new TextDecoder().decode(x)) : null) : docOf(m, x)
           e.pending = !!d && d.pending != null
@@ -144,7 +146,7 @@ function pageProbe() {
       t: now(),
       listeners: { window: count(window), document: count(document), other: otherCount },
       intervals: S.intervals.size,
-      inflight: S.inflight,
+      inflight: S.inflight, deskRead: S.deskRead,
       ac: { ...S.ac },
       longtasks: S.longtasks.slice(), longtaskMax: S.longtasks.reduce((m, x) => Math.max(m, x.ms), 0), origin: performance.timeOrigin,
       consoleErrors: S.consoleErrors.slice(),

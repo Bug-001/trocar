@@ -24,10 +24,6 @@ import path from 'node:path';
 
 export const trocarHome = () => path.join(os.homedir(), '.trocar');
 
-// reverse-proxy / relay tee (CC-CLI, Codex, OpenCode, DeepSeek-CLI)
-export const captureOut = () => path.join(trocarHome(), 'capture.ndjson');
-// MITM (Claude Desktop — the only source that must decrypt TLS)
-export const mitmOut = () => path.join(trocarHome(), 'claude-capture.ndjson');
 // The per-user process collector's own state and logs (RFC 4.6 §记录) live here: ca/ flows/ audit/ replays/ lock
 // state.json. NO envelopes — those are segments under rawHome(). The board never reads this subtree because a
 // root's scan only descends into <sub>/calls.ndjson (server.mjs scanRoots), and `trocar etl <dir>`
@@ -50,7 +46,7 @@ export const classesLog = (home = trocarHome()) => path.join(home, 'logs', 'clas
 // place) can no longer remove it. The keychain identifies a root by its subject name, not its path,
 // so an existing CA keeps working wherever it sits: if the legacy directory holds one, that IS the
 // CA, and we use it in place. Only a machine with no CA at all gets one in the new home.
-// (The subject name `CA_CN` is frozen for exactly this reason — see D27's explicit non-scope.)
+// (The old root's subject name is frozen for exactly this reason — see D27's explicit non-scope.)
 export function caDir({ home = trocarHome(), legacyCa = path.join(os.homedir(), '.atrace', 'ca') } = {}) {
   const fresh = path.join(home, 'ca');
   if (existsQuiet(fresh)) return fresh;

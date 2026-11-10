@@ -106,6 +106,25 @@ test('P2: no unpriced card while overview is not there; each unpriced model copi
   }
 })
 
+test('P4: no model is listed as without a price until the price table is read: not while it is on its way, not when its read fails', async () => {
+  const MODELS = [{ model: 'claude', input: 3, output: 15, cache_write: 3.75, cache_read: 0.3 }]
+  const overview = ok({ as_of: '2026-10-20T09:00:00Z', usage: { rows: [{ model: 'claude-sonnet-4', calls: 4, sessions: 2 }, { model: 'glm-4.6', calls: 3, sessions: 1 }] } })
+  let answer: (a: Answer) => void = () => {}
+  vi.spyOn(api, 'get').mockImplementation(async (name: string) => (name === 'pricing' ? new Promise<Answer>((r) => { answer = r }) : name === 'overview' ? overview : NOT_FOUND))
+  const client = new QueryClient()
+  const page = render(<QueryClientProvider client={client}><PricesScreen route={parseHash('#/settings/prices')} router={router} /></QueryClientProvider>)
+  await waitFor(() => expect(client.getQueryState(['overview', 'no-since'])?.status).toBe('success'))
+  expect(page.container.querySelector('.umodel')).toBeNull()
+  await act(async () => { answer({ ok: false, status: 500, data: null, error: 'HTTP 500' }) })
+  await page.findByText(W.RETRY)
+  expect(page.container.querySelector('.umodel')).toBeNull()
+  await act(async () => { fireEvent.click(page.getByText(W.RETRY)) })
+  expect(pricingCalls()).toBe(2)
+  await act(async () => { answer(ok({ source: 'default', models: MODELS })) })
+  await page.findByRole('heading', { name: W.CARD_UNPRICED })
+  expect([...page.container.querySelectorAll('.umodel .um')].map((e) => e.textContent)).toEqual(['glm-4.6'])
+})
+
 test('P3: every entry reads the price table again; a failed re-read keeps the last good answer\'s read time (1.11 §数据与刷新)', async () => {
   const T1 = Date.UTC(2026, 9, 20, 9, 0, 0), T2 = T1 + 3 * 3600e3 + 7e3
   let now = T1, answer: Answer = ok({ source: 'default', models: [{ model: 'claude', input: 3, output: 15, cache_write: 3.75, cache_read: 0.3 }] })

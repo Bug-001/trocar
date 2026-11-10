@@ -17,11 +17,12 @@ import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo, onCtx, seedClaude, fakeSystem, installFirst } from './fixtures/on-ctx.mjs'
 import { runStatus, reply, asDaemon } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const HEALTH_OK = { summary: { state: 'ok', since: '2026-10-12T00:00:00.000Z' }, collector: { installed: true, daemon: { state: 'running' }, conditions: [], failures: [], expected: {} }, raw: { problems: [] }, read: { errors: [], truncated: false } }
 
 // (c)+(d) colour (D58): TTY-only, NO_COLOR honoured — and zero ANSI bytes anywhere else
-test('D58: a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan, receipt); a TTY run colours the verdict lines', async () => {
+test('D58: a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan, receipt); a TTY run colours the verdict lines', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   for (const tty of [false, true]) { // a pipe, and a TTY under NO_COLOR
     process.env.NO_COLOR = '1'
@@ -38,7 +39,8 @@ test('D58: a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan, receip
   const tty = fakeIo({ tty: true })
   const r = await runStatus(s, [], { request: asDaemon(reply({ health: HEALTH_OK })), io: tty })
   assert.match(r.text.split('\n')[0], /^\u001b\[1m/, 'the verdict line of the summary is bold on a TTY: ' + JSON.stringify(r.text.split('\n')[0]))
-  assert.match(r.text.split('\n')[0].replace(/\u001b\[\d+m/g, ''), /^Capturing |^No harness is set up/, 'and it strips back to the same words')
+  const pipe = await runStatus(s, [], { request: asDaemon(reply({ health: HEALTH_OK })), io: fakeIo() })
+  assert.equal(r.text.split('\n')[0].replace(/\u001b\[\d+m/g, ''), pipe.text.split('\n')[0], 'and it strips back to the same words')
   const home = tmpDir('trocar-color-'); seedClaude(home); await installFirst(home)
   const sys = fakeSystem(); const on = fakeIo({ tty: true })
   await runOnCli(['--yes'], onCtx(home, on, { exec: sys.exec, daemon: sys.daemon }))
@@ -56,9 +58,9 @@ test('R6: --dry-run still prints the same receipt the real run will — the same
   assert.equal(await runOnCli(['--dry-run'], onCtx(home, fakeIo())), 0)
   const realHome = tmpDir('trocar-r6-'); seedClaude(realHome); await installFirst(realHome); await installFirst(realHome); const sys = fakeSystem()
   const real = fakeIo()
-  assert.equal(await runOnCli(['--yes'], onCtx(realHome, real, { exec: sys.exec, daemon: sys.daemon })), 0, real.text())
+  assert.equal(await runOnCli(['--yes', '--details'], onCtx(realHome, real, { exec: sys.exec, daemon: sys.daemon })), 0, real.text()) // each file is a --details fact (§1.1 ④)
   const dryHome = tmpDir('trocar-r6-'); seedClaude(dryHome); await installFirst(dryHome); await installFirst(dryHome); const dry = fakeIo()
-  assert.equal(await runOnCli(['--dry-run'], onCtx(dryHome, dry)), 0, dry.text())
+  assert.equal(await runOnCli(['--dry-run', '--details'], onCtx(dryHome, dry)), 0, dry.text())
   assert.match(dry.stdoutText(), /^trocar will start capturing /m, 'the dry run is the same receipt in the future tense')
   // the same files, named the same way: `trocar will make:` in the dry run, `trocar's own files:` after the real one
   const files = (t, head, home) => (t.replace(/\n\s+/g, ' ').split('\n').find((l) => l.startsWith(head)) || '').slice(head.length).trim().split(/\s+/).map((f) => f.replace(home, '')).sort()

@@ -17,14 +17,20 @@ export const SEGMENT_PROBLEMS = Object.freeze(['record-unparseable', 'record-unr
 /** The notes the context projection puts into a read's errors (src/query/projection.mjs; level 'note', RFC 4.3 §4): it was rebuilt, or could not be written. */
 export const PROJECTION_NOTES = Object.freeze(['projection-rebuilt', 'projection-write-failed'])
 /** The codes of an unreadable ref in a `block` read's errors (src/query/named/block.mjs; 3.5 §会话读, 1.6 C.5). */
-export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing'])
+export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing', 'view-unreadable'])
 
+/** C.3: codes that record a wait and lose nothing (the connection goes on, its bytes are kept): their groups are notes from their first record,
+ *  and a replay's capture gap does not count them (1.2 §会话保真行). */
+export const NOTHING_LOST = Object.freeze(['upstream-slow'])
+
+/** The codes of a query the daemon ended before a worker answered it (src/query/service.mjs; 3.5 §行表先读, 1.6 C.5). */
+export const QUERY_WAIT_PROBLEMS = Object.freeze(['still-reading'])
 /** The codes of a `session` read's own errors (src/query/named/session.mjs; 3.5 §会话读): no such session, a member that did not read back or extract. */
 export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable',
-  'record-missing', 'field-missing']) // a member whose block the reduction could not read back (3.5 §读不全不静默)
+  'record-missing', 'field-missing', 'index-pending']) // index-pending: answered while capture files are still re-indexed (3.5 §行表先读「先答的会话」), no loss // a member whose block the reduction could not read back (3.5 §读不全不静默)
 /** Why a session's background fold stopped (`pending.stopped.code` in its head, src/query/named/session.mjs; 3.5 §会话读「`session --head`」):
- *  not even one row of the session fits the heap's budget, or any other error a slice threw. */
-export const FOLD_STOPS = Object.freeze(['heap-no-room', 'fold-failed'])
+ *  not even one row of the session fits the heap's budget, any other error a slice threw, or its files cannot be saved (4.3 §4 盘满). */
+export const FOLD_STOPS = Object.freeze(['heap-no-room', 'fold-failed', 'projection-write-failed'])
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
@@ -36,7 +42,7 @@ export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-sto
 /** The `reason` of a door's `untracked` row (4.8 §5.2 · §5.3, 4.6 §连接行怎么落码): why the door could not vouch for the connection's process. */
 export const UNTRACKED_REASONS = Object.freeze(['pid-unresolved', 'facts-unavailable', 'other-user', 'outside-host-set', 'agent-helper', 'cmdline-pending', 'not-an-agent', 'ambiguous', 'harness-off', 'group-off', 'door-deadline'])
 
-/** Failure codes the failure recorder never folds by where + code: the reader folds each of them into a condition per
+/** Failure codes the failure recorder never folds by where + code + harness: the reader folds each of them into a condition per
  *  (pid, host), so a folded line would make the pairs folded into it vanish (4.6 §事件与码, D1-1). Bounded: a (pid,
  *  host) is written at most once in the process's life. */
 export const UNFOLDED_CODES = Object.freeze(['negative-cache', 'trust-rejected'])
@@ -45,7 +51,7 @@ export const UNFOLDED_CODES = Object.freeze(['negative-cache', 'trust-rejected']
 export const LEVELS = Object.freeze(['critical'])
 
 /** The part of trocar a record comes from. */
-export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
+const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
   // the old capture (RFC 4.1 过渡期, ~/.trocar/logs/mitm-events.ndjson; deleted with it)
   'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard',
   // the raw layer's sealer (D35 · D60②, RFC 4.2 §自动封存): the daemon's seal queue reports a segment it could not seal
@@ -64,10 +70,10 @@ export const TRUST_REASONS = Object.freeze([
   'var-missing', 'env-frozen', 'config-after-start', 'start-time-unknown', 'file-unreadable', 'ca-not-in-file', 'replace-without-ca', 'shadowed',
   'verify-disabled', 'marker-stale', 'marker-pending', 'no-marker', 'ca-unusable', 'environ-unreadable', 'config-unreadable',
   'settings-unparsable', 'settings-unreadable', 'chromium-child', 'hook-inherited',
-  'not-verified', 'outside-host-set', // proxy mode's verdict (4.11 P11): the form or host is not verified for decryption; a hostTree form's host program talking off its host set (the door's untracked reason, the same word)
+  'not-verified', 'forward-only-host', 'outside-host-set', // proxy mode's verdict (4.11 P11): the process or form is not verified for decryption; a host the form forwards by design; a hostTree form's host program talking off its host set (the door's untracked reason, the same word)
   // a harness's own
   'settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
-  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override',
+  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override', 'zcode-env-network',
 ])
 
 /** The reasons a restart of the agent fixes (「重启后才会被采集」, 1.6 §1.1): `on`'s restart list, `status`'s, and doctor's expected class read this one list. */
@@ -75,24 +81,26 @@ export const RESTART_REASONS = Object.freeze(['config-after-start', 'env-frozen'
 
 /** Codes trocar names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
-  daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
-    'query-failed', 'projection-write-failed', 'segment-unreadable', 'loop-late'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
+  daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'node-too-old', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
+    'query-failed', 'projection-write-failed', 'fold-failed', 'segment-unreadable', 'loop-late'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
+    // node-too-old — 4.9 §7 · 4.8 §7: macOS / Windows, the daemon's Node is below the arch's floor (`where:'start'`, the reason names that Node's path and version and `trocar install`)
     // query-failed — D63 (4.6 §事件与码): the query worker crashed, exited non-zero or did not answer in time; that query is still answered (a re-fork, or the caller's local path)
     // projection-write-failed — 4.3 §4 盘满: the query worker could not write a context projection; answers are unchanged, one record per episode
+    // fold-failed — 3.5 §会话读 `session --head`: rendering a session's answer files threw; its head says the same stop, one record per episode
     // segment-unreadable — 4.3 §4 回收: the query worker could not list raw/, so its projection GC deleted nothing that time
     // loop-late — 4.6 §记录: the code of the state event of that name; the event loop ran ≥ 1 s late, no failure
   record: ['record-error', 'file-replaced', 'late-write'], // late-write: a write that reached the record store after the stop made it final (1.6 §5.2); not written, said once per kind
   raw: ['seal-failed', 'index-failed'], // index-failed: the daemon could not keep a segment's index current (D62); the records are on disk and the next query indexes them itself, and says so (`index-cold`)
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
   // a harness's configuration or files, read or written (the Claude Code settings layers have their own codes, above)
-  harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial',
+  harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'loopback-direct', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial',
     'agent-list-invalid'], // ~/.trocar/agents.json cannot be read / parsed, or holds bad items (with `path` and `problems`; one per file version, D51③)
   trust: [...TRUST_REASONS],
   bundle: ['roots-changed', 'missing', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial'], // the last three: the bundles of the harnesses that are on were (re)built with no OS root, without OS roots that did not parse, without a roots source whose read failed (4.6 「合并包」)
-  note: ['ok'], // the code of an agent-trusted line
+  note: ['ok', 'restart-unread', 'start-time-unknown'], // ok: the code of an agent-trusted line; the other two: on's notes when which processes need a restart could not be listed, or one's start time not read (1.6 §3.3)
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
   engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response', 'prior-proxy-unknown',
-    'trust-rejected', 'pac-peer-refused', 'pac-owner-unread', 'upstream-header-ignored', 'holders-unreadable', 'door-record-unreadable', 'client-left-held', 'client-left-queued'], // client-left-*: the code of the state event of that name, 4.8 §5.1: a client that left while held, or in the accept queue; no failure // the last three (4.11 P7 · P12): X-Trocar-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay); the door's durable record door-seen.json could not be read at start (its lives are not known: every live process of a harness that was on holds) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused trocar's leaf: level 'critical', one per (pid, host) (D51④)
+    'trust-rejected', 'pac-peer-refused', 'pac-address-stale', 'pac-owner-unread', 'upstream-header-ignored', 'holders-unreadable', 'door-record-unreadable', 'client-left-held', 'client-left-queued'], // client-left-*: the code of the state event of that name, 4.8 §5.1: a client that left while held, or in the accept queue; no failure // the last three (4.11 P7 · P12): X-Trocar-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay); the door's durable record door-seen.json could not be read at start (its lives are not known: every live process of a harness that was on holds) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused trocar's leaf: level 'critical', one per (pid, host) (D51④)
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
   // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
   // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in
@@ -104,9 +112,9 @@ export const CODES_BY_PART = Object.freeze({
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
   ca: ['ca-invalid', 'cert-key-missing', 'cert-intermediate-unavailable'], // the last two: the issuer's (4.11 P2, ⑱): the root key is not in its custody; the custody did not issue an intermediate
-  install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'not-users-file', 'cert-not-installed', 'install-pending', 'collectors-online', 'setup-needed'], // not-users-file: install skipped a P8 install-folder wrapper, the program is not this user's one native file (4.11 P8) (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
+  install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'not-users-file', 'not-trocars-file', 'cert-not-installed', 'install-pending', 'collectors-online', 'setup-needed', 'stopped-by-off', 'home-mismatch'], // home-mismatch: install / uninstall refused under a HOME that is not the account's, nothing written (1.6 §1.5); stopped-by-off: an on that an off cut short (1.6 §3.1); not-users-file: install skipped a P8 install-folder wrapper, the program is not this user's one native file (4.11 P8) (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
   // names no writer produces any more, kept so old records still read (4.8 §12 「旧 flows/ 行照读」): the old MITM's, and macOS Hermes' route-without-ca (4.11 §3 ⑱)
-  doctor: ['file-readable-by-others', 'standalone-unreadable', 'standalone-stale', 'backup-unclaimed'], // doctor's own findings (1.6 §3.7), beside the network ones of 附录 B
+  doctor: ['file-readable-by-others', 'standalone-unreadable', 'standalone-stale', 'backup-unclaimed', 'backup-holds-door-password', 'stray-root', 'daemon-other-code', 'capture-failures'], // doctor's own findings (1.6 §3.7), beside the network ones of 附录 B
   legacy: ['retention-unparsable', 'retention-unreadable', 'retention-log-failed', 'route-without-ca', 'tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
@@ -129,8 +137,9 @@ export const ROUTE_WHERE = Object.freeze(['routing', 'ingress']) // the choice a
 export const ROUTE_EVENTS = Object.freeze(['route-applied']) // a state change, not a failure
 /** `code` of a failure event, by the `where` the §12 table gives it. Every row of the table is the class 失败, so the next list is this one. */
 export const ROUTE_CODES = Object.freeze([
-  'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
+  'ingress-auth-failed', 'ingress-unknown', 'ingress-challenge-unanswered', 'engine-port-taken', 'door-unconfirmed', 'upstream-unavailable', // ingress (`door-unconfirmed`: on kept a held door port because our daemon was there (control endpoint or lock) and did not answer, so it may be trocar's own door; `upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
   'socktable-unavailable', 'helper-start-failed', // helper
+  'system-proxy-unreadable', // netenv: the door's system proxy watcher could not read it — not a change, no netenv-change; the doors keep the last one read (4.7)
   'task-register-failed', // install: `on` still succeeds, through the HKCU Run fallback (4.8 §7)
   'launchd-register-failed', // install, darwin: the LaunchAgent would not register (4.9 §4) — launchd is the only autostart, so `on`'s receipt says it; no fallback exists to succeed through
   'elevated-token', // start
@@ -163,8 +172,8 @@ const NET_STATUS_REASONS = Object.freeze(['not-routed', 'local-upstream', 'proxy
 
 // What `trocar status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. trocar's own, then every trust
 // reason above (the resolver's and the harnesses' own). A block of its own, as the ones above are. The Windows collector's reasons (ROUTE_STATUS_REASONS: what a form that is not captured says; ROUTE_TRUST_REASONS: why a running agent is not trusted) are part of it. `negative-cache` is also a code of the engine.
-export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache', 'not-seen',
-  'cert-not-installed', 'cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file']) // the cert group's status reasons that have a producer (1.6 §9.7, 4.11 §3 ⑱)
+const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache', 'not-seen',
+  'cert-not-installed', 'cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file', 'bundle-lacks-ca', 'marked-without-record', 'pac-address-stale']) // the cert group's status reasons that have a producer (1.6 §9.7, 4.11 §3 ⑱)
 export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...ROUTE_STATUS_REASONS, ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 
 // What `trocar status` and `trocar doctor` name in their own documents (RFC 1.6 附录 C.3 / C.4 / C.5), a block of its own like the ones above: the `where` of an
@@ -181,10 +190,11 @@ export const isEvent = (e) => sets.event.has(e) // the sets checkRecord() judges
 export const isWhere = (w) => sets.where.has(w)
 
 /** The `reason`s that make an `untracked` / `untrusted` row expected: the connection is forwarded by design, not lost (4.6 §记录「连接行」;
- *  4.6 §连接行怎么落码 and 4.8 §5.2 for the door's untracked reasons, 1.6 附录 for `not-verified`). Every other reason, and none, stays a failure. */
+ *  4.6 §连接行怎么落码 and 4.8 §5.2 for the door's untracked reasons, 1.6 附录 for `not-verified` and `forward-only-host`). Every other reason, and none, stays a failure. */
 export const NOT_CAPTURED_BY_DESIGN = Object.freeze({
   untracked: Object.freeze(['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user']),
-  untrusted: Object.freeze(['not-verified', 'outside-host-set']),
+  untrusted: Object.freeze(['not-verified', 'forward-only-host', 'outside-host-set']),
+  'client-closed-no-data': Object.freeze(['trusted-before']), // not by design, but nothing was lost: the process already accepted the leaf there (4.6 §引擎 5)
 })
 const byDesign = Object.fromEntries(Object.entries(NOT_CAPTURED_BY_DESIGN).map(([k, v]) => [k, new Set(v)]))
 

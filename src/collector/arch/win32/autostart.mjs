@@ -9,10 +9,10 @@ import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
 import { collectorHome } from '../../../paths.mjs'
-import { elevationByWhoami, elevatedRefusal } from '../../../off/win32.mjs'
+import { elevationByWhoami, elevatedRefusal, TASK_FILE, taskAction, sameTask } from '../../../off/win32.mjs'
 
 export const TASK_NAME = '\\trocar\\collector' // the scheduled task, in the \trocar folder of the Task Scheduler
-export const TASK_FILE = 'trocar-collector.task.xml' // the task's XML, an owned file of the install manifest, beside the collector's other files
+export { TASK_FILE } // the task's XML, an owned file of the install manifest, beside the collector's other files (src/off/win32.mjs: off reads it too)
 /** The login start-up entry that stands in when the Task Scheduler refuses the task (4.8 §7): one value of the user's own Run key. */
 export const RUN_KEY = Object.freeze({ hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'trocar-collector' })
 const RUN_PATH = `${RUN_KEY.hive}\\${RUN_KEY.key}`
@@ -34,7 +34,7 @@ export function nodePreflight({ versions = process.versions } = {}) {
 
 /**
  * R7 on Windows (4.8 §7, W25): trocar never runs with an elevated token or as SYSTEM. → `null` (go on) or `{ code: 'elevated-token', reason, token }`, which `on` and `daemon` turn into the refusal and the `start` failure record.
- * One criterion for on, daemon, off and uninstall: `whoami /groups` by SID (src/off/win32.mjs elevationByWhoami, with D53③'s unsplit-token exception). It used to be a
+ * One criterion for on, daemon, off and uninstall: `whoami /user /groups` by SID (src/off/win32.mjs elevationByWhoami, with D53③'s unsplit-token exception). It used to be a
  * helper started for this one question, whose C# compile made it the costliest step of `on` (a Windows test machine 2026-10-17: 1.2 s of on's 5.8 s, and the daemon's own 0.6 s before it
  * answers). A token that cannot be read is not a refusal: `onUnknown(reason)` says why (R11). `run`: execTool's injected runner.
  */
@@ -52,7 +52,6 @@ const plain = (name, v, { quoted = false } = {}) => {
   return v
 }
 const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-
 const daemonArgs = (program) => {
   if (!Array.isArray(program) || !program.length) throw new TypeError(`task: program is a non-empty array, got ${JSON.stringify(program)}`)
   return `--headless ${program.map((v, i) => `"${plain(`program[${i}]`, v, { quoted: true })}"`).join(' ')} daemon --supervise`
@@ -165,7 +164,7 @@ const taskState = ({ run, env }) => {
 const taskEnabled = ({ run, env }) => {
   const r = schtasks(['/Query', '/TN', TASK_NAME, '/XML'], { run, env })
   const xml = r.code === 0 ? String(r.out).replace(/\u0000/g, '') : ''
-  if (/<Task[\s>]/.test(xml)) return /<Enabled>\s*false\s*<\/Enabled>/i.test(xml) ? { state: 'disabled' } : { state: 'present' }
+  if (/<Task[\s>]/.test(xml)) return /<Enabled>\s*false\s*<\/Enabled>/i.test(xml) ? { state: 'disabled', xml } : { state: 'present', xml }
   const s = taskState({ run, env })
   if (s.state !== 'present') return s // not there, or not known at all: taskState's own verdict and its own words
   return { state: 'unknown', err: `the task ${TASK_NAME} is registered, and whether it is enabled could not be read (schtasks /Query /XML: ${r.code === 0 ? 'it answered no task XML' : errOf(r)})` }
@@ -205,17 +204,21 @@ function sameValue(read, wanted) {
 
 /**
  * The fallback of 4.8 §7: write the one Run value that starts the supervised daemon at login, with `reg add … /t REG_SZ` through execTool, and read it back (生效要复核).
+ * `record(entry, ours)` is called before `reg add` and answers null, or why the entry could not be recorded (then nothing is written).
  * → `{ ok: true, ours, entry }` · `{ ok: false, reason, entry? }`. `entry` is what the manifest ledgers: `{ kind: 'run-key', hive, key, name, value, prior }`, where `prior` is the user's own value that was there (`{ kind, value }`, to be put back by
  * the undo) or null. A value an earlier `on` of trocar wrote is not a prior: `ours` is true and `prior` null, and the caller keeps the prior its ledger already has. A prior that is not a string (REG_SZ or REG_EXPAND_SZ) could
  * not be put back, so it is never overwritten. `entry` comes with a failure only when the write went through and the read-back disagreed (the undo is idempotent, so it is ledgered all the same).
  */
-export function runKeyFallback({ command, run = null, env = process.env } = {}) {
+export function runKeyFallback({ command, run = null, env = process.env, record = null } = {}) {
   const before = readRunValue({ run, env })
   if (before.error) return { ok: false, reason: before.error }
   const mine = before.present && ours(before.value)
   if (before.present && !mine && !['REG_SZ', 'REG_EXPAND_SZ'].includes(before.kind)) return { ok: false, reason: `${RUN_PATH}\\${RUN_KEY.name} already exists as ${before.kind}, not a string, and trocar does not overwrite what it cannot put back` }
   if (before.present && !mine && before.lossy) return { ok: false, reason: `${RUN_PATH}\\${RUN_KEY.name} already exists and has characters that reg.exe printed in a console code page, not UTF-8 (U+FFFD): trocar cannot put it back byte for byte, so it does not overwrite it` }
   const entry = { kind: 'run-key', hive: RUN_KEY.hive, key: RUN_KEY.key, name: RUN_KEY.name, value: command, prior: before.present && !mine ? { kind: before.kind, value: before.value } : null }
+  // W24: the entry, with the user's prior, is in the install record before the value changes; a record that cannot be written leaves the value alone
+  const unrecorded = record ? record(entry, mine) : null
+  if (unrecorded) return { ok: false, reason: unrecorded }
   const w = execTool('reg', ['add', RUN_PATH, '/v', RUN_KEY.name, '/t', 'REG_SZ', '/d', command, '/f'], { run, env })
   if (w.code !== 0) return { ok: false, reason: `reg add failed (${errOf(w)})` }
   const after = readRunValue({ run, env })
@@ -240,7 +243,7 @@ export function removeRunValue({ run = null, env = process.env, prior = null } =
 const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1, out: [task.out, k.out].filter(Boolean).join('\n'), err: [task.err, k.err].filter(Boolean).join('; '), task: task.state, runKey: k.runKey })
 
 /**
- * The per-user autostart as `trocar on` (src/cli/on.mjs) and install.mjs consume it, the same shape as arch/linux/unit.mjs `userUnit`: `{ name, path, links, text(env), enable({ now }), start(), reload(), disable(), remove() }`, each verb
+ * The per-user autostart as `trocar on` (src/cli/on.mjs) and install.mjs consume it, the same shape as arch/linux/unit.mjs `userUnit`: `{ name, path, links, text(env), enable({ now, prior, record }), start(), startNow(), registered(), reload(), remove() }`, each verb
  * returning `{ code, out, err }`. `path` is the task's XML, an owned file the install manifest lists; `links` is empty (a task has no wants/ link); `text(env)` is the XML (a Windows task has no environment of its own, so the
  * daemon environment install offers is not carried: a daemon the task starts trusts the system store, 4.8 §6.2). Nothing is registered until `enable`.
  *   enable({ now })  registers the task (`/Create /XML … /F`, which also switches a disabled one on) and, with `now` (the default; install passes false when a daemon already answers), runs it (`/Run`) → `via: 'task'`.
@@ -249,7 +252,7 @@ const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1
  *                    of the control socket is the "no daemon answers" check here) with `warn` saying exactly that ('started directly this run; the task will start it at next login'); the task keeps
  *                    the login either way. A result that cannot be read changes nothing: the /Run's own answer stands.
  *                    When schtasks REFUSES the registration, the Run-key fallback takes over (4.8 §7): `via: 'run-key'`, code 0 (`on` does not fail because the Task Scheduler said no), `reason` (why), `ledger` (the manifest entry,
- *                    runKeyFallback's), `ours`, `event` (the `task-register-failed` failure record for the caller to write: it carries the reason and names the entry used instead), and with `now` the supervised daemon is started
+ *                    runKeyFallback's, recorded through `enable({ record })` before the value is written), `ours`, `event` (the `task-register-failed` failure record for the caller to write: it carries the reason and names the entry used instead), and with `now` the supervised daemon is started
  *                    directly (the Run value only runs at the next login). When the fallback fails too, code is not 0 and `err` has both reasons.
  *                    Exactly one login mechanism is left live: by the task, trocar's own Run value of an earlier fallback is taken out (`runKey: 'removed' | 'restored'` when it was there: the caller drops the `run-key`
  *                    ledger entry; `enable({ prior })` takes the ledger entry's prior so that the user's own value comes back); by the fallback, an earlier task is switched off (`task: 'disabled'`). Either that cannot be
@@ -257,8 +260,6 @@ const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1
  *   start()          the fallback `on` uses when the task cannot start it: this session, nothing registered. A task with a login trigger would be an autostart, so none is registered: the supervised daemon is started directly, detached, with no window, with the
  *                    environment of `directStartEnv(env)` (the shell's, without the trust and proxy variables a login-started daemon would not have).
  *   reload()         nothing to do: a rewritten task is registered again by `enable` (`/F`).
- *   disable({ prior }) a no-argument `off`: the task is switched off (`/Change /DISABLE`; it does not end a running instance, the caller stops the supervisor parent first, 4.8 §4.2) and trocar's Run value is taken out, whichever
- *                    of the two an earlier `on` used. → `{ code, out, err, task: 'disabled' | 'absent' | 'failed', runKey }`. `prior` is the Run entry's ledgered prior value.
  *   remove({ prior }) `uninstall`: the task is deleted (`/Delete /F`) and the Run value taken out the same way. A task that is not there is already as asked (found with `/Query`, never by parsing a localised error text); a `/Query` that did not run at all is not "not there": it is a failure (`task: 'failed'`, code 1) and nothing is changed on a guess.
  */
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, user = null, conhost = 'conhost.exe' } = {}) {
@@ -273,6 +274,15 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   // the task is changed or deleted when it is there, and trocar's Run value is taken out; each says what it did
   // `on`'s start (D61): the task's own `/Run`, and the direct start when /Run answers SUCCESS and runs nothing (267011, no
   // interactive session for the task) — the registration is never touched here, `install` made it.
+  // Is the task under trocar's name the one install wrote? Its action against the task file install wrote and registered (no file: no record of a task, so it is
+  // not trocar's). Running it would run whatever someone registered there; only its program is said, never its arguments (they can carry anything).
+  const foreignOf = (xml) => {
+    let written = null
+    try { written = fs.readFileSync(file, 'utf8') } catch { /* no task file: none of trocar's */ }
+    if (sameTask(xml, written)) return null
+    const reg = taskAction(xml)
+    return { state: 'absent', how: 'foreign', program: (reg && reg.command) || 'no program' }
+  }
   const runNow = () => {
     const ran = schtasks(['/Run', '/TN', TASK_NAME], tools)
     if (!(ran.code === 0 && lastTaskResult(tools) === TASK_NOT_YET_RUN)) return ran
@@ -290,7 +300,9 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   return {
     name: 'trocar-collector', path: file, links: [],
     text: () => taskXml({ user: user || taskUser(env), program, conhost }),
-    enable({ now = true, prior = null } = {}) {
+    // 4.11 P4: the task registered under trocar's name now, as its XML (null when none, or unreadable): what install backs up before it replaces an unrecorded one
+    registeredBytes() { const r = schtasks(['/Query', '/TN', TASK_NAME, '/XML'], tools); const xml = r.code === 0 ? String(r.out).replace(/\u0000/g, '') : ''; return /<Task[\s>]/.test(xml) ? Buffer.from(xml) : null },
+    enable({ now = true, prior = null, record = null } = {}) {
       const c = register({ file, run, env, fs })
       if (c.code === 0) {
         // the task is the one start at login now: an earlier fallback's Run value would start a second supervisor at every login, so it goes (the user's own prior value, the ledger's, comes back)
@@ -303,29 +315,32 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       }
       if (c.precondition) return { ...c, via: 'task' }
       const why = errOf(c)
-      const f = runKeyFallback({ command: daemonCommandLine({ program, conhost }), run, env })
+      const f = runKeyFallback({ command: daemonCommandLine({ program, conhost }), run, env, record })
       if (!f.ok) {
-        const reason = `schtasks /Create was refused (${why}) and the HKCU Run entry ${RUN_KEY.name} could not be written either (${f.reason}): trocar does not start at login`
+        const reason = `schtasks /Create was refused (${why}) and the HKCU Run entry ${RUN_KEY.name} could not be written either (${f.reason}): trocar does not start at login; put that right, then run trocar install again`
         return { code: c.code ?? 1, out: '', err: `${why}; the Run-key fallback failed too: ${f.reason}`, via: 'task', ...(f.entry ? { ledger: f.entry } : {}), event: { event: 'failure', where: 'install', code: 'task-register-failed', reason } }
       }
       const event = { event: 'failure', where: 'install', code: 'task-register-failed', reason: `schtasks /Create was refused (${why}); trocar starts at login through the HKCU Run entry ${RUN_KEY.name} instead, with the supervisor parent restarting the daemon` }
-      // the Run value is the one start at login now: a task an earlier `on` registered would start a second supervisor, so it is switched off (it stays registered; the undo takes it out)
-      const q = taskState(tools)
+      // the Run value is the one start at login now: an enabled task under trocar's name (trocar's own from before, or one someone else put there, which install
+      // replaces) would also run at every login, so it is switched off; when that is refused it is said, with what it runs (its program only)
+      const q = taskEnabled(tools)
       const off = q.state === 'present' ? schtasks(['/Change', '/TN', TASK_NAME, '/DISABLE'], tools) : null
       const task = off ? (off.code === 0 ? 'disabled' : 'failed') : null
-      const warn = task === 'failed' ? `the task ${TASK_NAME} of an earlier \`on\` is still registered and enabled (/Change /DISABLE: ${errOf(off)}): both it and the Run entry start trocar at login (one supervisor runs, the other leaves at once); \`trocar off\` disables both`
-        : q.state === 'unknown' ? `${q.err}: an earlier task ${TASK_NAME} may still be registered and enabled next to the Run entry (one supervisor runs, the other leaves at once); \`trocar off\` disables both` : null
+      const a = q.xml ? taskAction(q.xml) : null
+      const warn = task === 'failed' ? `the task ${TASK_NAME} (it runs ${(a && a.command) || 'no program'}) could not be switched off (/Change /DISABLE: ${errOf(off)}), so it still runs at every login beside the Run entry that starts trocar; an account allowed to change it can delete it: schtasks /Delete /TN ${TASK_NAME} /F`
+        : q.state === 'unknown' ? `${q.err}: a task ${TASK_NAME} may still run at every login beside the Run entry that starts trocar` : null
       const started = now ? startDirect() : null
       const base = { via: 'run-key', reason: why, ledger: f.entry, ours: f.ours, event, ...(task ? { task } : {}), ...(warn ? { warn } : {}) }
       return started && started.code !== 0 ? { code: started.code, out: '', err: started.err, ...base } : { ...ok, ...base, ...(started ? { pid: started.pid } : {}) }
     },
     start: (carry = null) => startDirect(carry),
-    startNow: () => runNow(), // D61: `on` starts the daemon through the task, never touching the registration
+    // D61: `on` starts the daemon through the task, never touching the registration, and only a task install wrote (enable has just registered its own)
+    startNow: () => { const q = taskEnabled(tools), f = q.xml ? foreignOf(q.xml) : null; return f ? { code: 1, out: '', err: `the scheduled task ${TASK_NAME} is not trocar's (it runs ${f.program}), so it was not started` } : runNow() },
     // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything — `schtasks /Query /TN <task> /XML`
     // (taskEnabled: its XML says both whether the task is there and whether it is switched off, so a registered task costs ONE schtasks start, D62) —
     // and trocar's own HKCU Run value when the
     // task was refused or switched off by that very fallback (the §7 fallback IS the login entry then).
-    registered: () => { const q = taskEnabled(tools); if (q.state === 'present') return q; const k = readRunValue({ run, env }); return k.present && ours(k.value) ? { state: 'present' } : q },
+    registered: () => { const t = taskEnabled(tools), q = (t.xml && foreignOf(t.xml)) || t; if (q.state === 'present') return { state: 'present' }; const k = readRunValue({ run, env }); return k.present && ours(k.value) ? { state: 'present' } : (({ xml, ...rest }) => rest)(q) },
     reload: () => ({ ...ok }),
     remove: ({ prior = null } = {}) => undo(['/Delete', '/TN', TASK_NAME, '/F'], 'removed', prior),
   }
