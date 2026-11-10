@@ -315,7 +315,7 @@ test('2.1 §token 计数行: the row\'s "no size" number is probes.count − pro
 })
 
 // 1.3 无叠加轨 · 1.5 K-31: a tier-0 head has read no lane yet: the overlay area says nothing about the session's lanes, and still
-// takes its row, so a tier-1 head draws its rows without moving what is above and below; past tier 0, a main-only session says so
+// takes its row; past tier 0, a main-only session says so
 test('1.3 无叠加轨: a tier-0 head draws no "only the main thread" line, but keeps the row; tier 1 draws it', () => {
   for (const tier of [0, 1]) {
     const s = { ...railDesk({ subs: 0, bgs: 0, tc: false }), desk: { head: { tier } } }, el = { innerHTML: '', querySelector: () => null }
