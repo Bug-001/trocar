@@ -29,7 +29,7 @@ import { saveManifest, KNOWN_KINDS, FILE_ENTRY_KINDS, PHASES, undoByHand, restor
 import { undoRunKey, undoScheduledTask, TASK_FILE } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, trocarHome } from './paths.mjs'
-import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
+import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside, pathKey } from './fsutil.mjs'
 import { harnessesOf, hasIdentity, withAgentList, mayHaveRead, trustRereads } from './signature.mjs'
 import { readAgentList } from './identity.mjs'
 import { holdersOf } from './holders.mjs'
@@ -71,7 +71,8 @@ const without = (list, item, manifest, fs) => {
   list.splice(i, 1)
   const orphans = []
   for (const d of item.created_dirs || []) {
-    const heir = [...(manifest.files || []), ...(manifest.entries || [])].find((r) => typeof r.path === 'string' && r.path.startsWith(d + path.sep))
+    const key = (p) => pathKey(p, { realpath: null }) // as off compares paths: case-blind where file names are
+    const heir = [...(manifest.files || []), ...(manifest.entries || [])].find((r) => typeof r.path === 'string' && key(r.path).startsWith(`${key(d)}/`))
     if (heir) heir.created_dirs = [...new Set([...(heir.created_dirs || []), d])].sort((a, b) => a.length - b.length) // parents first: removeEmptyDirs goes deepest first
     else orphans.push(d)
   }

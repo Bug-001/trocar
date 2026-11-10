@@ -140,6 +140,21 @@ test('after on, off and on again of one switch harness, then off, --purge-data l
 
 // the same for a directory whose last record removes its file without trying the directory (a CA file): it goes when that record goes, and a
 // directory that still holds a file of the user's stays
+// the hand-over finds the record still in a directory as off compares paths (pathKey): where file names are case-blind, a record whose path names
+// that directory in another case (an environment variable's spelling against the profile's) is still in it
+test('where file names are case-blind, a directory passes to a record that names it in another case', async (t) => {
+  const { pathKey } = await import('../../src/off/fsutil.mjs')
+  if (pathKey('/a', { realpath: null }) !== pathKey('/A', { realpath: null })) return t.skip('file names keep case on this host: SWITCH is another directory')
+  const { writeOwnedFile, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
+  const on = (s, h, file) => { const m = readM(s.dir); writeOwnedFile({ dir: s.dir, manifest: m, harness: h, role: 'switch', phase: 'on', file, data: 'http://127.0.0.1:47012\n', home: s.home }); saveM(s.dir, m) }
+  const s = await installedHome({ names: ['claude-code'] })
+  on(s, 'kimi-code', switchFileIn(s.dir, 'kimi-code')) // makes switch/
+  on(s, 'deepseek-dsh', path.join(s.dir, 'SWITCH', 'deepseek-dsh')) // the same directory, named in another case
+  assert.equal((await s.off({ yes: true, ids: ['kimi-code'] })).exit, 0) // switch/ still holds dsh's file: it passes to dsh's record
+  assert.equal((await s.off({ yes: true })).exit, 0)
+  assert.equal(fs.existsSync(switchDirIn(s.dir)), false, 'after off, as after install, there is no switch/ (4.6 #16)')
+})
+
 test('a directory on made goes with the last record in it, whichever kind that is; one holding a user file stays', async () => {
   const { writeOwnedFile, applyJsonKey, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
   for (const userFile of [false, true]) {
