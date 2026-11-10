@@ -1000,6 +1000,26 @@ test('the line that takes trocar\'s root out names an unquoted HOME as ~', () =>
   }
 })
 
+// §1.1⑤ never a wrong line to copy: HOME in another case is HOME only where its volume is case-blind (pathKey asks the volume; the test answers for it)
+test('HOME in another case is ~ only on a case-blind volume: on a case-sensitive one the line to copy and the words keep the path', async () => {
+  const { pathKey } = await import('../../src/off/fsutil.mjs')
+  const home = '/Users/al', there = ['/', '/Users', '/Users/al']
+  const enoent = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
+  const caseSensitive = (d) => (there.includes(d) ? d : enoent())
+  const caseBlind = (d) => there.find((e) => e.toLowerCase() === d.toLowerCase()) || enoent()
+  const cmd = 'security remove-trusted-cert /users/AL/.trocar/ca.pem'
+  const receipt = { command: 'off', ok: true, outcome: 'done', all: true, harnesses: [], routing: { confirmed: true }, changed: [], removed: [],
+    still_trusting: [{ what: 'root', reason: 'it could not be removed', command: cmd }], problems: ['/users/AL/x could not be read'] }
+  const platformFolds = pathKey('/a', { realpath: null }) === pathKey('/A', { realpath: null })
+  for (const [name, f] of [['text', formatOffText], ['--details', formatOffReceipt]]) {
+    const kept = f(receipt, { home, realpath: caseSensitive }).split('\n')
+    assert.ok(kept.includes(`${COMMAND_INDENT}${cmd}`) && kept.some((l) => l.includes('/users/AL/x')), `${name}, case-sensitive volume: another case is another directory:\n${kept.join('\n')}`)
+    if (!platformFolds) continue // file names keep case on this platform whatever the volume
+    const blind = f(receipt, { home, realpath: caseBlind }).split('\n')
+    assert.ok(blind.includes(`${COMMAND_INDENT}security remove-trusted-cert ~/.trocar/ca.pem`) && blind.some((l) => l.includes('~/x')), `${name}, case-blind volume:\n${blind.join('\n')}`)
+  }
+})
+
 // the supervisor supervisor.lock names (pid 4040) still runs: the one powershell question stopByHand asks, answered
 const supervisorRuns = (file, args) => (file === 'powershell' && args.join(' ').includes('Get-Process -Id 4040 ') ? { status: 0, stdout: '1000000000001', stderr: '' } : { status: 1, stdout: '', stderr: 'not this question' })
 
