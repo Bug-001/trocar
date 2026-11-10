@@ -734,8 +734,16 @@ function headAt(ctx, s) {
 // Answer files never go back (3.5): a fold's frontier at `read` members, below what the files reach (a log cut back to its sidecar), writes
 // neither head nor tail while a tier-1 head stands on disk. With none there is no answer to keep. The end of a fold writes all the same.
 const behind = (ctx, id, read, log, members) => read < reachOf(ctx, id, log, members) && readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs)?.tier === 1;
-/** stands(ctx, s) → whether the answer on disk stands, whatever the state `s`: while the session is re-read, and while its fold is behind the files. */
-export const stands = (ctx, s) => rereading(ctx, s.id) || (ctx.writer === true && behind(ctx, s.id, s.mark == null ? 0 : s.pos(s.mark) + 1, s.V.log, s.rows));
+// ...nor does an early answer (the boot pass still re-indexes: index-pending) over a whole tier-1 head: every worker's pass re-indexes the
+// live segment, and its early answer would write that head and every pack again under the pending doc head, then again once the pass ends
+function early(ctx, s) {
+  if (!s.indexErrors.some((e) => e.code === 'index-pending')) return false;
+  const h = readHead(ctx.home ?? trocarHome(), s.id, ctx.fs || nodeFs);
+  return h?.tier === 1 && h.pending == null;
+}
+/** stands(ctx, s) → whether the answer on disk stands, whatever the state `s`: while the session is re-read, while its fold is behind the
+ *  files, and while an early answer would stand over a whole head. */
+export const stands = (ctx, s) => rereading(ctx, s.id) || (ctx.writer === true && (behind(ctx, s.id, s.mark == null ? 0 : s.pos(s.mark) + 1, s.V.log, s.rows) || early(ctx, s)));
 /** files(ctx, s) → a request's turn at the answer files: toState(), or nothing while the answer on disk stands; whether they are at the
  *  state `s`, so a head of it may be written. */
 export function files(ctx, s) {

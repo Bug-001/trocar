@@ -194,6 +194,40 @@ test('3.5 读不全不静默: the files are written again when the doc head\'s e
   assert.ok(!same([pending(1), bad('EIO')], [pending(1)]), 'an error coming moves them')
 })
 
+// 3.5 答案文件不回退: a worker that starts again re-indexes while it answers early; a whole head the last worker left stands, nothing is written
+const snapshot = (home, id) => { const d = sessionDir(home, id); return Object.fromEntries(fs.readdirSync(d).filter((f) => /^(head|p\d+|open)\./.test(f)).map((f) => [f, [fs.readFileSync(path.join(d, f)).toString('base64'), fs.statSync(path.join(d, f)).mtimeMs]])) }
+test('3.5 §行表先读: a session with a whole head on disk is answered from its files while the pass still reads, and none of them is written', async () => {
+  const home = path.join(tmpDir('trocar-early-stands-'), '.trocar'), B = 'early-stand-4a1b-9c2d-000000000005'
+  fs.mkdirSync(path.join(home, 'collector'), { recursive: true, mode: 0o700 })
+  const old = bigSession({ home, id: L, segment: S0 })
+  old.append(3); await old.seal()
+  for (let i = 0; i < 3; i++) { const o = bigSession({ home, id: `early-f${String(i).padStart(3, '0')}-4a1b-9c2d-000000000003`, segment: `20261020T1647${String(2 + i).padStart(2, '0')}Z` }); o.append(3); await o.seal() }
+  while (!old.file.includes(NEWEST)) await old.seal()
+  bigSession({ home, id: B, segment: NEWEST, growth: 60 }).append(PACK_MEMBERS + 40) // one pack sealed, and the open span
+  const first = service(home, false)
+  try { await settle(first.svc, home, B) } finally { first.svc.stop() }
+  const before = snapshot(home, B)
+  assert.ok(Object.keys(before).some((f) => f.startsWith('p0.')), 'a sealed pack on disk')
+  // the next worker's pass re-indexes every capture file (the segments' index files go; the answer files under index/ctx stay)
+  for (const f of fs.readdirSync(indexDir(home))) if (f !== 'ctx') fs.rmSync(path.join(indexDir(home), f), { recursive: true, force: true })
+  const { said, svc, release } = service(home, true)
+  try {
+    const head = await ask(svc, 'session', { id: B, head: true })
+    const tail = recorder()
+    await within(svc.relay({ name: 'lane', params: { id: B, tail: 'main' }, res: tail }), 60_000, 'the tail answered')
+    assert.equal(rowsSaid(said), false, 'answered while the pass still reads')
+    assert.equal(head.status, 200)
+    assert.equal(tail.status, 200)
+    assert.deepEqual(head.doc, readHead(home, B), 'the head on disk is the answer')
+    assert.deepEqual(snapshot(home, B), before, 'no file written: the whole answer on disk stands')
+    release()
+    await until(() => rowsSaid(said), 'the pass ended')
+    await settle(svc, home, B)
+    const after = snapshot(home, B)
+    assert.deepEqual(Object.fromEntries(Object.entries(after).map(([f, [b]]) => [f, b])), Object.fromEntries(Object.entries(before).map(([f, [b]]) => [f, b])), 'after the pass the files are the same bytes')
+  } finally { svc.stop() }
+})
+
 test('3.5 §行表先读: a session the synthesized-key rule decides waits for the pass, even when its calls are all read', async () => {
   const { home, H } = await world()
   const { said, svc, release } = service(home, true)
