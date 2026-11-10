@@ -23,6 +23,7 @@ import { whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { rawHome } from './raw-home.mjs'
 import { listed } from '../helpers/head-done.mjs'
+import { bigSession } from './big-session.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
@@ -126,6 +127,45 @@ test('3.5 #37: a stop on an upgrade target leaves no upgrade.skip', { timeout: 1
     assert.equal(head.status, 200)
     const doc = JSON.parse(Buffer.concat(head.chunks).toString('utf8'))
     assert.deepEqual([doc.tier, doc.pending?.done, doc.pending?.total, doc.pending?.stopped], [1, 3, 4, undefined], 'the head as it stands, with the member past its mark pending')
+  } finally { svc.stop() }
+})
+
+/** A `fork` for createQueryService: the worker as the service forks it, counting the opens of `log` for writing (`opens()`). */
+function counted(log) {
+  const dir = tmpDir('trocar-counted-'), count = path.join(dir, 'count'), preload = path.join(dir, 'count.cjs')
+  fs.writeFileSync(count, '')
+  fs.writeFileSync(preload, `const fs = require('node:fs'), openSync = fs.openSync
+fs.openSync = (f, ...a) => { if (String(f) === ${JSON.stringify(log)} && a[0] === 'r+') fs.appendFileSync(${JSON.stringify(count)}, 'x'); return openSync(f, ...a) }`)
+  return { fork: (h, ...argv) => fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, '--require', preload, ...heapFlags(HEAP_MB)], env: workerEnv() }),
+    opens: () => fs.statSync(count).size }
+}
+
+test('3.5 #37: a stop an earlier worker wrote does not hold the session in a new worker: a read of it is folded in the request, never asked again', { timeout: 180_000 }, async () => {
+  const { home, sessions: [s] } = await homeOf('trocar-room-disk-', 'room-a')
+  // an upgrade target big enough to keep the new worker's idle slices on it: the idle period that would fold every stopped session does not come
+  const U = 'room-disk-u000-4a1b-9c2d-000000000001', N = 'room-disk-n000-4a1b-9c2d-000000000002'
+  bigSession({ home, id: U, segment: '20261105T080000Z', growth: 300 }).append(400)
+  // the newest session, folded: the new worker's first look (the newest session's) takes it, not the stopped one
+  bigSession({ home, id: N, segment: '20261105T100000Z' }).append(2)
+  let r = watched(workerFork), svc = createQueryService({ home, fork: r.fork, idleMs: 20_000 })
+  try {
+    svc.kick([recordId('20261105T080000Z', 400), recordId('20261105T100000Z', 2)])
+    await until(r, 'the upgrade target and the newest session folded', () => folded(home, U) && folded(home, N))
+  } finally { svc.stop() }
+  for (const f of fs.readdirSync(sessionDir(home, U))) if (/^open\./.test(f)) fs.unlinkSync(path.join(sessionDir(home, U), f)) // no tail: an upgrade target
+  const b = ballasted(foldLog(home, s))
+  const first = await parked(home, s, b, { idleMs: 60_000 })
+  try { await until(first.r, 'the earlier worker wrote its stop', () => stoppedOn(home, s.id)) } finally { first.svc.stop() }
+  const c = counted(foldLog(home, { id: U }))
+  r = watched(c.fork)
+  svc = createQueryService({ home, fork: r.fork, idleMs: 60_000 })
+  try {
+    svc.sweep()
+    await until(r, 'the upgrade scan ended and the upgrade began', () => c.opens() > 0) // the scan read the stop on disk before it
+    const a0 = r.again, tail = answer()
+    await svc.relay({ name: 'lane', params: { id: s.id, tail: 'main' }, res: tail })
+    assert.equal(tail.status, 200)
+    assert.equal(r.again, a0, 'answered in the request: no ask again for room')
   } finally { svc.stop() }
 })
 
