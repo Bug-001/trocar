@@ -8,7 +8,7 @@ import path from 'node:path'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { formatUninstallReceipt } from '../../src/cli/receipt.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
-import { standalonePath, standaloneFiles } from '../../src/off/paths.mjs'
+import { standalonePath, standaloneFiles, switchFileIn, switchDirIn } from '../../src/off/paths.mjs'
 import { writeStandalone } from '../../src/off/standalone.mjs'
 import { installedHome, writeDaemonLock, flowEvents, procTable, fakeClock, DAEMON_ROWS, hangsOnStatus, snapshot } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
@@ -115,6 +115,45 @@ test('§3.6: the class-change log is data — a plain uninstall keeps it byte fo
   const r = await cli(purged, ['--purge-data', '--yes'])
   assert.equal(r.exit, 0, r.io.text())
   assert.equal(fs.existsSync(path.dirname(purged.dir)), false, 'no ~/.trocar after a full purge')
+})
+
+// invariant 5 · §3.6: on writes a switch file per harness under <collector>/switch/; a record names the directories its own write made, so after
+// one harness went off and on again while another kept switch/ in use, the directory still has to go with the last off (4.6 #16: after off as
+// after install) and the purge leaves no ~/.trocar, on each platform
+test('after on, off and on again of one switch harness, then off, --purge-data leaves no ~/.trocar: the emptied switch directory goes too', async () => {
+  const { writeOwnedFile, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
+  const on = (s, h) => { const m = readM(s.dir); writeOwnedFile({ dir: s.dir, manifest: m, harness: h, role: 'switch', phase: 'on', file: switchFileIn(s.dir, h), data: 'http://127.0.0.1:47012\n', home: s.home }); saveM(s.dir, m) }
+  for (const platform of ['linux', 'darwin', 'win32']) {
+    const s = await installedHome({ names: ['claude-code'] })
+    on(s, 'kimi-code'); on(s, 'deepseek-dsh')
+    assert.equal((await s.off({ yes: true, ids: ['kimi-code'] })).exit, 0)
+    on(s, 'kimi-code') // switch/ is there (dsh's file): this record makes no directory
+    assert.equal((await s.off({ yes: true })).exit, 0)
+    assert.equal(fs.existsSync(switchDirIn(s.dir)), false, `${platform}: after off, as after install, there is no switch/ (4.6 #16)`)
+    fs.mkdirSync(switchDirIn(s.dir)) // as an older build's off left it: empty, and no record names it
+    const r = await cli(s, ['--purge-data', '--yes'], { platform })
+    assert.equal(r.exit, 0, r.io.text())
+    assert.equal(fs.existsSync(path.dirname(s.dir)), false, `${platform}: no ~/.trocar after a full purge; left: ${fs.existsSync(s.dir) ? fs.readdirSync(s.dir, { recursive: true }).join(', ') : '(no collector dir)'}`)
+  }
+})
+
+// the same for a directory whose last record removes its file without trying the directory (a CA file): it goes when that record goes, and a
+// directory that still holds a file of the user's stays
+test('a directory on made goes with the last record in it, whichever kind that is; one holding a user file stays', async () => {
+  const { writeOwnedFile, applyJsonKey, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
+  for (const userFile of [false, true]) {
+    const s = await installedHome({ names: ['claude-code'] })
+    const d = path.join(s.dir, 'made-by-on', 'deep') // a file trocar removes without trying its directory (a CA file) is only ever under ~/.trocar
+    const m = readM(s.dir)
+    applyJsonKey({ dir: s.dir, manifest: m, harness: 'claude-code', phase: 'on', file: path.join(d, 'settings.json'), keys: ['env', 'HTTPS_PROXY'], value: 'http://127.0.0.1:1', home: s.home })
+    writeOwnedFile({ dir: s.dir, manifest: m, role: 'ca-cert', phase: 'install', file: path.join(d, 'ca.pem'), data: 'not a real certificate\n', home: s.home })
+    saveM(s.dir, m)
+    if (userFile) fs.writeFileSync(path.join(d, 'mine.txt'), 'the user\'s\n')
+    const r = await cli(s, ['--yes'])
+    assert.equal(r.exit, 0, r.io.text())
+    assert.equal(fs.existsSync(path.join(s.dir, 'made-by-on')), userFile, userFile ? 'a directory holding a user file stays' : `the directories on made are gone; left: ${fs.existsSync(d) ? fs.readdirSync(d).join(', ') : '-'}`)
+    if (userFile) assert.equal(fs.readFileSync(path.join(d, 'mine.txt'), 'utf8'), 'the user\'s\n')
+  }
 })
 
 test('R6 · §3.6: uninstall always asks — no terminal and no --yes prints the plan and exits 2 with nothing done; a terminal asks once (n: nothing, exit 1); --yes goes; --purge-data says the records go for good', async () => {
