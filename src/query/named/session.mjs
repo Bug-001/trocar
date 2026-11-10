@@ -760,9 +760,9 @@ function toState(ctx, s, deadline = Infinity) {
 // session answers meanwhile says as its stop (headStanding): `projection-write-failed` for what the system refused, `fold-failed` for a
 // render that threw.
 const writeFails = new Map();
-function saidOnce(ctx, id, record, stop = 'projection-write-failed') {
+function saidOnce(ctx, id, record) {
   if (writeFails.has(id)) return;
-  writeFails.set(id, { code: stop, reason: record.reason });
+  writeFails.set(id, { code: record.code, reason: record.reason });
   ctx.persist?.(record);
 }
 /** writeFailure(home, id, e) → the D38 record of a write of a session's answer files that failed with `e`. Its code is the head's stop. */
@@ -772,8 +772,7 @@ export function writeFailure(home, id, e) {
     : { where: 'projection', code: 'fold-failed', reason: `The answer of session ${id} could not be built: ${String((e && e.message) || e).split('\n')[0]}` };
 }
 function writeFailed(ctx, id, e) {
-  const r = writeFailure(ctx.home ?? trocarHome(), id, e);
-  saidOnce(ctx, id, r, r.code);
+  saidOnce(ctx, id, writeFailure(ctx.home ?? trocarHome(), id, e));
 }
 /** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs), the same bytes
  *  here and in the worker: the title is a function of the disk. */
