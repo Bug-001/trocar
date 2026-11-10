@@ -23,6 +23,8 @@ const asJson = (v) => (typeof v === 'string' ? v : JSON.stringify(v ?? {}));
 // the API puts results right after the turn that made the calls), so a call left with no result shifts no other turn; `t` is in the key,
 // so equal places in two turns stay apart. A reply is the turn after its request's model turns (one per candidate): the next request
 // carries it as its last model turn and keys its calls the same.
+// shortcut: two model contents in a row are two turns, so a result after them pairs with the second's call of that name; no captured pi
+// request has such a run (186 of 186 alternate) — count a run of model contents as one turn when a harness sends them.
 const newTurn = (t) => ({ t, seen: new Map() });
 const pairKey = (turn, side, f) => {
   if (f.id) return f.id;

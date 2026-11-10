@@ -38,7 +38,7 @@ test('unknown traffic is counted as unknown with its endpoint, has no provider, 
   assert.deepEqual(doc.calls, [], 'no call row (so no blocks, usage or ground truth) for undissected bytes');
 });
 
-// 3.1 #4 · invariant 4: a wire this version records and does not read (the endpoint table's `unsupported`) is named where it stands
+// 3.1 #4 · invariant 4: a wire this version records and does not read (src/dissect/endpoints.mjs unsupportedOf) is named where it stands
 const bedrock = (id, ts, endpoint = '/model/anthropic.claude-x/invoke-with-response-stream') => ({
   id, ts_request: ts, host: 'bedrock-runtime.us-east-1.amazonaws.com', proc: OC, endpoint,
   req_headers: { 'x-session-id': 'sess-br', 'user-agent': 'aws-sdk-js/3.0.0' },
