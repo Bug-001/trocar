@@ -28,8 +28,9 @@ import { installedHome, ROOTS } from '../off/fixtures/off-ctx.mjs'
 import { setKey } from '../../src/off/json-text.mjs'
 import { removeTrocarText } from '../../src/off/text-edit.mjs'
 import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
+import { MARKER_PATHS } from '../../src/off/marker.mjs'
 
-const DOTENV_CA = new Set(['codex', 'hermes']) // their Linux certificate item is a dotenv path value (a POSIX path only)
+const dotenvCa = (h) => MARKER_PATHS[h].some((x) => x.how === 'block') // a harness whose Linux carrier is a dotenv block: its value is a POSIX path only
 
 const A = 'codex', B = 'z-code' // B: its CLI form is present when ~/.zcode is, and carries the root through a config key (a carrier of its own)
 const HELPER = { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }
@@ -225,7 +226,7 @@ const DAMAGE = {
   overwritten: (x) => { const t = fs.readFileSync(x.path, 'utf8'); fs.writeFileSync(x.path, x.kind === 'json-key' ? setKey(t, x.keys, '/elsewhere/ca.pem').text : removeTrocarText(t, x.ops).text) },
 }
 for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (const [how, damage] of Object.entries(DAMAGE)) {
-  test(`Linux · V67 · V91: ${h}'s certificate item ${how} → setup needed; Set up places it again (→ ready, on ${h} turns it on) or refuses with setup-needed, writing nothing`, { skip: DOTENV_CA.has(h) && POSIX_WORLD }, async () => {
+  test(`Linux · V67 · V91: ${h}'s certificate item ${how} → setup needed; Set up places it again (→ ready, on ${h} turns it on) or refuses with setup-needed, writing nothing`, { skip: dotenvCa(h) && POSIX_WORLD }, async () => {
     const s = await installedHome({ names: [h] })
     const desc = s.descs[0], judged = () => driverSetup(desc, { os: 'linux', home: s.home, env: s.sh.env, manifest: s.manifest() })
     const items = s.manifest().entries.filter((e) => e.harness === h && e.phase === 'install')
@@ -267,7 +268,7 @@ for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'z-code']) for (
 // footprint the test controls; STRIP takes away what its inject reads.
 const STRIP = { codex: '.codex', 'kimi-code': '.bashrc' }
 for (const h of Object.keys(STRIP)) for (const cell of ['q5', 'absent', 'lost']) {
-  test(`Linux · 4.6: Set up ${h} (${cell}) with nothing to place → setup-needed with install's reason, nothing written`, { skip: cell === 'lost' && DOTENV_CA.has(h) && POSIX_WORLD }, async () => {
+  test(`Linux · 4.6: Set up ${h} (${cell}) with nothing to place → setup-needed with install's reason, nothing written`, { skip: cell === 'lost' && dotenvCa(h) && POSIX_WORLD }, async () => {
     const s = await installedHome({ names: cell === 'lost' ? ['claude-code', h] : ['claude-code'] })
     const real = (await loadHarnesses()).find((d) => d.name === h)
     const fp = { ...real, present: [{ base: 'home', dir: `.fp-${h}` }] }
