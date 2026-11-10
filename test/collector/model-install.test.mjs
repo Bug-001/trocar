@@ -137,6 +137,23 @@ for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
   })
 }
 
+// a carrier is placed when install wrote one of its parts, intact when it wrote none: dsh's plug-in file gone (its loader row still there) is placed
+// again on the second install, while every other carrier is intact
+test('D54: the second install places only the carrier a part of which was gone; the others are intact', async () => {
+  const w = await everything()
+  const r1 = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r1.exit, 0, JSON.stringify({ c: r1.carriers, p: r1.problems }))
+  const plugin = readManifest(w.dir).files.find((f) => f.harness === 'deepseek-dsh' && f.role === 'plugin')
+  assert.ok(plugin, 'install wrote dsh\'s plug-in')
+  fs.rmSync(plugin.path)
+  const r2 = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r2.exit, 0, JSON.stringify({ c: r2.carriers, p: r2.problems }))
+  const states = r2.carriers.filter((c) => c.state === 'placed' || c.state === 'intact').map((c) => [c.harness, c.carrier, c.state])
+  assert.deepEqual(states.filter(([, , st]) => st === 'placed'), states.filter(([h, k]) => h === 'deepseek-dsh' && k === 'plugin').map(([h, k]) => [h, k, 'placed']), JSON.stringify(states))
+  assert.ok(states.some(([h, k, st]) => h === 'deepseek-dsh' && k === 'plugin' && st === 'placed') && states.some(([, , st]) => st === 'intact'), JSON.stringify(states))
+  assert.ok(fs.existsSync(plugin.path), 'and the file is back')
+})
+
 test('D54 · CM1: install; install changes no byte, makes no second key, raises no prompt — the fingerprint stays', async () => {
   const w = await everything()
   const r1 = await w.install({ wrapperKit: { renderWrapper } })
