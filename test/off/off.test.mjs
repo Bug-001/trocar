@@ -462,7 +462,7 @@ test('V24: with the install manifest gone and no terminal, off takes the routing
   let rcOriginal
   const s = await installedHome({ names: ['claude-code', 'codex', 'kimi-code'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
-    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
     rcOriginal = fs.readFileSync(sh.files['kimi-code'][0], 'utf8')
   } })
   const settings = path.join(s.home, '.claude', 'settings.json'), codexEnv = path.join(s.home, '.codex', '.env'), rc = s.sh.files['kimi-code'][0], shim = path.join(s.dir, 'bin', 'kimi')
