@@ -63,11 +63,10 @@ export const envHas = (env, name) => isSet(get(env, name))
  *  that exists and cannot be read or parsed is not known (D38). A loc whose variable is unset names no file (a relative path is skipped). */
 export function expandEnv(src, ctx) {
   const env = new Map(ctx.env instanceof Map ? ctx.env : Object.entries(ctx.env || {}))
-  const abs = ctx.os === 'win32' ? path.win32.isAbsolute : path.posix.isAbsolute
   for (const from of src.expandFrom || []) {
     let files
     try { files = resolveLoc(from.file, ctx) } catch (e) { if (!absent(e)) return { error: why(e), where: String(from.file.path || '') }; files = [] }
-    for (const f of files.filter(abs)) {
+    for (const f of files.filter((p) => isAbs(p))) {
       let text
       try { text = ctx.readFile(f) } catch (e) { if (absent(e)) continue; return { error: why(e), where: f } }
       try { for (const [k, v] of Object.entries(PARSE[from.format](String(text)))) env.set(k, v) } catch (e) { return { error: `unparsable ${from.format}: ${(e && e.message) || e}`, where: f } }
