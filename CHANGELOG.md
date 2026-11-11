@@ -4,6 +4,8 @@ Keep a Changelog style, versions follow SemVer (in 0.x a minor version may break
 
 ## [Unreleased]
 
+- [2026-11-11](docs/release-notes/2026-11-11.md)
+
 ## [0.2.1] - 2026-11-10
 
 Fixes since 0.2.0: the replay opens in Readable, pi sessions on the Gemini API show their steps, and the board and the CLI got a round of fixes.
