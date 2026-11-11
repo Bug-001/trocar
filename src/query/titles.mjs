@@ -13,6 +13,7 @@ import path from 'node:path';
 import { compareStep } from '../view/step-order.mjs';
 import { recordsAt } from './records.mjs';
 import { isModelCall } from './rows.mjs';
+import { withMember } from '../view/reduce.mjs';
 import { foldFacts } from './usage.mjs';
 import { indexDir } from './index-build.mjs';
 import { fsTag, statKey } from './warm.mjs';
@@ -21,7 +22,7 @@ import { projectOf, projectFields } from '../dissect/project.mjs';
 import { HARNESSES, hintsOf, bodyOf } from '../dissect/harnesses.mjs';
 import { reqIncompleteOf } from '../dissect/capture-labels.mjs';
 
-export const TITLE_V = 8;
+export const TITLE_V = 9; // 9: `d`, the members an entry was checked over by identity (4.2 §标题表)
 export const TITLE_BUDGET_MS = 100; // how long a `sessions` in the worker computes titles before it says ask again (3.5 §访问模式)
 /** Thrown by titleOf past its `deadline`: the answer is a `102`, what was computed stays in the table. */
 export class TitlesPending extends Error {}
@@ -33,7 +34,8 @@ export const titlesFile = (home) => path.join(indexDir(home), 'titles.json');
 
 const byStep = (a, b) => compareStep(a.ts, a.id, b.ts, b.id);
 
-// The table as this process holds it, per home: session id → {t, r, c, p, s, l, a, k, b, w, m}. An entry's `m` moves in memory as new members are checked, so
+// The table as this process holds it, per home: session id → {t, r, c, p, s, l, a, k, b, w, m, d}. An entry's `m` (and `d`, the first `m`
+// members' ids by identity, reduce.mjs withMember) moves in memory as new members are checked, so
 // a warm answer looks at the new rows only; `dirty` says a kept key (KEYS) changed since the file was written, and a dirty table is not reloaded.
 const tables = new Map();
 const tableKey = (home, fs) => `${fsTag(fs)}\n${home}`;
@@ -54,8 +56,21 @@ function tableOf(home, fs) {
 
 // What the table says after this session's new members are checked: `keep` (the entry stands; `waits`: on model calls past `m` that are
 // still too few to fold again, so `m` stays where the count starts), or how far the calls are known to hold no main one.
+// `d` names the members `m` counts: another member among them (a summary request the kinship rule moved, 3.4) is another session's first
+// calls, so the entry is computed again; an entry with no `d` (a table of before) is no entry
+// A member array only grows in place (rows.mjs sessionGroups), so its digest is kept per array and extended by its new members; the first
+// `n` of them are that less the ones past `n` (an entry that waits: at most c/8 calls), so a `sessions` poll hashes no member twice.
+const prefixes = new WeakMap();
+function idsOf(members, n) {
+  let c = prefixes.get(members);
+  if (!c) prefixes.set(members, (c = { n: 0, d: 0 }));
+  for (; c.n < members.length; c.n++) c.d = withMember(c.d, String(members[c.n].id));
+  let d = c.d;
+  for (let i = n; i < c.n; i++) d = withMember(d, String(members[i].id), -1);
+  return d;
+}
 function check(was, members) {
-  if (!was || members.length < was.m) return { from: 0 };
+  if (!was || members.length < was.m || was.d !== idsOf(members, was.m)) return { from: 0 };
   const fresh = members.slice(was.m).filter(isModelCall);
   if (!fresh.length) return { keep: true };
   const first = was.s != null && members.find((r) => r.id === was.s); // a call before it changes the lineage (3.4 §血缘)
@@ -167,7 +182,7 @@ const KEYS = ['t', 'r', 'c', 'p', 's', 'l', 'a', 'k', 'b', 'w'];
  *  `deadline`: a performance.now() time; past it, a title that needs a read throws TitlesPending. */
 export function titleOf({ home = trocarHome(), fs = nodeFs, id, members, errors = [], progress = () => {}, deadline = null }) {
   const table = tableOf(home, fs), was = table.titles.get(id), state = check(was, members);
-  if (state.keep) { if (!state.waits) was.m = members.length; return said(was); }
+  if (state.keep) { if (!state.waits) { was.m = members.length; was.d = idsOf(members, was.m); } return said(was); }
   if (deadline != null && performance.now() >= deadline) throw new TitlesPending();
   const calls = members.filter(isModelCall);
   const got = firstMain({ home, fs, calls, steps: [...calls].sort(byStep), from: state.from, progress });
@@ -176,7 +191,7 @@ export function titleOf({ home = trocarHome(), fs = nodeFs, id, members, errors 
     return was && was.t != null ? said(was) : { title: null, title_source: 'unread', ...projectFields(was ? was.p ?? null : null), ...lineageOf(was) };
   }
   if (!was || KEYS.some((k) => was[k] !== got[k])) table.dirty = true;
-  table.titles.set(id, { ...got, m: members.length });
+  table.titles.set(id, { ...got, m: members.length, d: idsOf(members, members.length) });
   return said(got);
 }
 
