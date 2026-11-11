@@ -84,7 +84,7 @@ test('4.2 两个版本键: an index whose v is past and whose fv is current is r
   const got = entries(await segmentIndex({ home, segment: SEG, owner: true }))
   assert.equal(got[2].kin_fp, PLANT, 'copied from the old entry, not read from the body')
   assert.deepEqual(got.map((r, i) => (i === 2 ? { ...r, kin_fp: cold[2].kin_fp } : r)), cold, 'every other field as a cold build gives it')
-  assert.deepEqual(docOf(idxFile(home)).filter((o) => o.m).map((o) => [o.v, o.fv]), [[docOf(idxFile(await built(recs))).find((o) => o.m).v, 1]], 'written at the current versions')
+  assert.deepEqual(docOf(idxFile(home)).filter((o) => o.m).map((o) => [o.v, o.fv]), [docOf(idxFile(await built(recs))).filter((o) => o.m).map((o) => [o.v, o.fv])[0]], 'written at the current versions')
 })
 
 test('4.2 两个版本键: a line whose old entry is not its own (other stored bytes, another offset) is computed, as is a line the old index lacks', async () => {
@@ -98,15 +98,16 @@ test('4.2 两个版本键: a line whose old entry is not its own (other stored b
   assert.deepEqual(got[3], cold[3], 'another offset: computed')
 })
 
-test('4.2 两个版本键: a past fv rebuilds every fact; a v-12 mark with no fv is FACTS_V 1 and is used as it is; an older one with none rebuilds', async () => {
+test('4.2 两个版本键: a past fv rebuilds every fact; a v-12 mark with no fv is FACTS_V 1, past now, and rebuilds; an older one with none rebuilds', async () => {
   const recs = PI(), cold = await fresh(recs)
   let home = await built(recs)
   edit(home, { mark: (o) => ({ ...o, fv: 0 }), entry: (o) => ({ ...o, kin_fp: PLANT }), at: 2 })
   assert.deepEqual(entries(await segmentIndex({ home, segment: SEG })), cold, 'fv past: every body read again')
   home = await built(recs)
   edit(home, { mark: ({ fv, ...o }) => o, entry: (o) => ({ ...o, kin_fp: PLANT }), at: 2 })
-  assert.equal(entries(await segmentIndex({ home, segment: SEG }))[2].kin_fp, PLANT, 'no fv at v 12: the index is current and read as it is')
-  edit(home, { mark: (o) => ({ ...o, v: 11 }) })
+  assert.deepEqual(entries(await segmentIndex({ home, segment: SEG })), cold, 'no fv at v 12 is FACTS_V 1, which is past: every body read again')
+  home = await built(recs)
+  edit(home, { mark: ({ fv, ...o }) => ({ ...o, v: 11 }), entry: (o) => ({ ...o, kin_fp: PLANT }), at: 2 })
   assert.deepEqual(entries(await segmentIndex({ home, segment: SEG })), cold, 'no fv before v 12: no known facts, every body read again')
 })
 

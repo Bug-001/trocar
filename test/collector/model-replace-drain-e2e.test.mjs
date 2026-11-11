@@ -11,7 +11,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
+import { withScratchCwd, UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { WITH_PARENT, watchEnv } from '../helpers/standin.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -33,7 +33,7 @@ const TURN = '{"type":"response.create","response":{"input":"trocar-drain-e2e"}}
 const until = async (ok, ms, what) => within((async () => { for (;;) { const v = ok(); if (v) return v; await new Promise((r) => setTimeout(r, 25)) } })(), ms, what)
 
 for (const platform of ['darwin', 'win32']) {
-  test(`MA21 · ${platform}: during a daemon swap's drain a new connection is decrypted, GET /status counts the drain, and the cut at the end exits 0 with state.json untouched`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
+  test(`MA21 · ${platform}: during a daemon swap's drain a new connection is decrypted, GET /status counts the drain, and the cut at the end exits 0 with state.json untouched`, { skip: UNSERVABLE[platform], timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
     const upCa = createCa({ commonName: 'e2e upstream CA' }), upIssuer = createLeafIssuer(loadCa(upCa))

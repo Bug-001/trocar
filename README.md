@@ -666,7 +666,7 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 - **DeepSeek's cache semantics on its Anthropic endpoint are not settled.** `dsh` (that endpoint) and
   DeepSeek's Chat Completions API are read like any other wire, but calls to the Anthropic endpoint show
   **What this provider's cache numbers mean is not certain** until a real capture settles them (3.3 OPEN).
-- **Some sessions are grouped by guess.** pi on the Anthropic Messages and Chat Completions APIs, Hermes on a custom
+- **Some sessions are grouped by guess.** pi on the Anthropic Messages, Chat Completions and Gemini APIs, Hermes on a custom
   endpoint, and Kimi without a body key send no session id at all. Each of their calls joins the conversation whose
   history it continues (never by process or connection), so each agent is its own session, also across a pause of up
   to a day; calls whose system prompt

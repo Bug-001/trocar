@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import { spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { tmpDir } from './tmp.mjs'
 import { spawnStandin, WITH_PARENT, EXIT_WITH_PARENT, watchEnv } from './standin.mjs'
 
@@ -22,7 +22,7 @@ async function gone(pid, ms) { for (const end = Date.now() + ms; Date.now() < en
 async function parentOf(what) {
   const dir = tmpDir('trocar-standin-')
   const file = path.join(dir, 'parent.mjs')
-  fs.writeFileSync(file, `import { spawnStandin, WITH_PARENT, watchEnv } from ${JSON.stringify(STANDIN)}\nimport { spawn } from 'node:child_process'\nconst child = ${what}\nconsole.log(child.pid)\nsetInterval(() => {}, 1000)\n`)
+  fs.writeFileSync(file, `import { spawnStandin, WITH_PARENT, watchEnv } from ${JSON.stringify(pathToFileURL(STANDIN).href)}\nimport { spawn } from 'node:child_process'\nconst child = ${what}\nconsole.log(child.pid)\nsetInterval(() => {}, 1000)\n`)
   const parent = spawn(process.execPath, [file], { stdio: ['ignore', 'pipe', 'inherit'], env })
   const childPid = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('the parent printed no pid')), 15000)

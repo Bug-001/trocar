@@ -12,7 +12,10 @@ import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { boardHome, serveBoard } from '../web-v2/real-face.mjs'
-import { serveFace, withToken } from './face.mjs'
+import { serveFace, withToken, TOKEN } from './face.mjs'
+import { loadSessions } from '../../web/legacy/library/logic.mjs'
+import { api } from '../../web/legacy/core/api.mjs'
+import { configure } from '../../web/legacy/core/http.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
 import { storedFile, writeStored } from '../../src/query/stored.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
@@ -98,7 +101,7 @@ test('4.4 #18: a live worker that has not said `{rows: true}` leaves sessions to
   } finally { w.close() }
 })
 
-test('3.5 #38: the last release\'s stored list, its rows short of keys added since, is handed out at once by a cold worker\'s face', { timeout: 60_000 }, async (t) => {
+test('3.5 #38: the last release\'s stored list, its rows short of keys added since, is handed out at once by a cold worker\'s face to the board\'s own first read', { timeout: 60_000 }, async (t) => {
   const { userHome, home } = boardHome()
   // the name built here, not by storedFile(): the format of the last release's file is pinned
   const file = path.join(home, 'index', 'stored', `sessions.${createHash('sha1').update(JSON.stringify([['limit', '500']])).digest('hex').slice(0, 16)}.json.gz`)
@@ -110,11 +113,23 @@ test('3.5 #38: the last release\'s stored list, its rows short of keys added sin
   const b = await serveBoard({ userHome, home })
   try {
     assert.equal(b.workers().length, 0, 'cold: no worker yet')
-    const got = await get(b.port, LIST)
-    t.diagnostic(`stored answer in ${Math.round(got.ms)} ms`)
-    assert.equal(got.status, 200)
-    assert.ok(got.ms < 500, `answered in ${Math.round(got.ms)} ms, over the 0.5 s line`)
-    assert.ok(got.raw.equals(bytes), 'the file\'s bytes, as stored')
+    // the request is the board's own (loadSessions over the real http client, as useSessions calls it), so a change to it that misses
+    // this file is red. shortcut: the board's readers (useSessions, freshSessions) pass loadSessions no limit; a reader given its own
+    // would miss this file unseen here, so give this test the same call then
+    const asked = [], real = globalThis.fetch
+    await real('data:,') // the http client loaded before the clock starts
+    globalThis.fetch = (url, init) => { asked.push(String(url)); return real(`http://127.0.0.1:${b.port}${url}`, init) }
+    configure({ token: TOKEN })
+    const t0 = performance.now()
+    let got
+    try { got = await loadSessions(api) } finally { globalThis.fetch = real; configure({ token: null }) }
+    const ms = performance.now() - t0
+    t.diagnostic(`stored answer in ${Math.round(ms)} ms (${asked.length} request)`)
+    assert.equal(got.ok, true)
+    assert.equal(asked.length, 1, 'one request')
+    assert.equal(got.data.stored, '2020-01-01T00:00:00.000Z', 'the stored answer, not one built since')
+    assert.deepEqual(got.data.sessions, [row], 'the file\'s rows, as stored')
+    assert.ok(ms < 500, `answered in ${Math.round(ms)} ms, over the 0.5 s line`)
   } finally { await b.close() }
 })
 

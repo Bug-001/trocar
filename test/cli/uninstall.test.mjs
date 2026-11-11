@@ -140,6 +140,21 @@ test('after on, off and on again of one switch harness, then off, --purge-data l
 
 // the same for a directory whose last record removes its file without trying the directory (a CA file): it goes when that record goes, and a
 // directory that still holds a file of the user's stays
+// the hand-over finds the record still in a directory as off compares paths (pathKey): where file names are case-blind, a record whose path names
+// that directory in another case (an environment variable's spelling against the profile's) is still in it
+test('where file names are case-blind, a directory passes to a record that names it in another case', async (t) => {
+  const { pathKey } = await import('../../src/off/fsutil.mjs')
+  if (pathKey('/a', { realpath: null }) !== pathKey('/A', { realpath: null })) return t.skip('file names keep case on this host: SWITCH is another directory')
+  const { writeOwnedFile, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
+  const on = (s, h, file) => { const m = readM(s.dir); writeOwnedFile({ dir: s.dir, manifest: m, harness: h, role: 'switch', phase: 'on', file, data: 'http://127.0.0.1:47012\n', home: s.home }); saveM(s.dir, m) }
+  const s = await installedHome({ names: ['claude-code'] })
+  on(s, 'kimi-code', switchFileIn(s.dir, 'kimi-code')) // makes switch/
+  on(s, 'deepseek-dsh', path.join(s.dir, 'SWITCH', 'deepseek-dsh')) // the same directory, named in another case
+  assert.equal((await s.off({ yes: true, ids: ['kimi-code'] })).exit, 0) // switch/ still holds dsh's file: it passes to dsh's record
+  assert.equal((await s.off({ yes: true })).exit, 0)
+  assert.equal(fs.existsSync(switchDirIn(s.dir)), false, 'after off, as after install, there is no switch/ (4.6 #16)')
+})
+
 test('a directory on made goes with the last record in it, whichever kind that is; one holding a user file stays', async () => {
   const { writeOwnedFile, applyJsonKey, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
   for (const userFile of [false, true]) {
@@ -375,14 +390,14 @@ test('§3.6: an uninstall that must wait for the op lock and finds an unanswerin
 
 // 1.6 §3.6 「记录没列的标记」: the record lists codex's file and not Claude Code's settings (marked by trocar, its value backed up): one uninstall takes
 // both out — the unlisted one by trocar's marks at the places planByMarker reads, its old value from the backup — and the receipt names it as undone by marker
-test('§3.6: uninstall also takes out a marked file the record does not list, by its marks, the value from its backup; one run clears both', async () => {
+test('§3.6: uninstall also takes out a marked file the record does not list, by its marks, the value from its backup; one run clears both', { skip: POSIX_WORLD }, async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
-    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
   } })
   const settings = path.join(s.home, '.claude', 'settings.json')
-  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(s.sh.corp)} }\n}\n`
   assert.notEqual(fs.readFileSync(settings, 'utf8'), settingsOriginal, 'trocar\'s value is in')
   const mf = path.join(s.dir, 'install-manifest.json')
   const m = JSON.parse(fs.readFileSync(mf, 'utf8'))
@@ -397,9 +412,9 @@ test('§3.6: uninstall also takes out a marked file the record does not list, by
 })
 
 // 1.6 §1.4 「计划写全」, V85: the plan (--dry-run, and the one shown before a yes) names the unlisted marked file too, and writes nothing
-test('§1.4: uninstall --dry-run plans the marked file the record does not list beside the one it lists; the home is unchanged', async () => {
+test('§1.4: uninstall --dry-run plans the marked file the record does not list beside the one it lists; the home is unchanged', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
-    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
   } })
   const settings = path.join(s.home, '.claude', 'settings.json'), codexEnv = path.join(s.home, '.codex', '.env')
   const mf = path.join(s.dir, 'install-manifest.json')
@@ -418,13 +433,13 @@ test('§1.4: uninstall --dry-run plans the marked file the record does not list 
   assert.deepEqual(snapshot(s.home), snap)
 })
 
-test('V24 (uninstall): with the install manifest gone and no terminal, uninstall takes the routing off, stops the daemon, undoes nothing, removes nothing of trocar\'s and exits 1; with --yes it undoes the entries by their marks and removes trocar\'s own files by name — the CA, the unit, the state, every backup', async () => {
+test('V24 (uninstall): with the install manifest gone and no terminal, uninstall takes the routing off, stops the daemon, undoes nothing, removes nothing of trocar\'s and exits 1; with --yes it undoes the entries by their marks and removes trocar\'s own files by name — the CA, the unit, the state, every backup', { skip: POSIX_WORLD }, async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
-    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
   } })
-  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(s.sh.corp)} }\n}\n`
   fs.rmSync(path.join(s.dir, 'install-manifest.json'))
   const installed = s.userFiles()
   // §3.6: no terminal and no --yes is the plan and nothing else now — not even the routing is touched, and the exit is 2 (§1.4)
@@ -443,7 +458,7 @@ test('V24 (uninstall): with the install manifest gone and no terminal, uninstall
 })
 
 test('R3 (uninstall, no manifest): a file the marks cannot undo keeps its backups — here every backup that could hold the replaced value is unreadable: exit 1, the file is left, each backup still on disk and not among the dropped', async () => {
-  const s = await installedHome({ names: ['claude-code'], seed: (home, sh) => fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`) })
+  const s = await installedHome({ names: ['claude-code'], seed: (home, sh) => fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`) })
   const file = path.join(s.home, '.claude', 'settings.json')
   const backups = backupsOf({ home: s.home, file })
   assert.ok(backups.length, 'install saved the file first')

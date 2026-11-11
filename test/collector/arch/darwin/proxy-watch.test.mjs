@@ -38,7 +38,9 @@ test('without a notice the watch keeps its everyMs poll (an injected OS: the tes
   w.stop()
 })
 
-test('scutilChanges: tells scutil to watch the proxy key on stdin, any output is a notice, its end is onExit, and stop() ends it without one', async () => {
+// the stub is a shell script, which Windows cannot start (scutilChanges itself runs only on macOS): there the spawn fails and no notice ever comes.
+// The limit bounds any host on which the notice never comes, so a hang costs 20 s, not the run
+test('scutilChanges: tells scutil to watch the proxy key on stdin, any output is a notice, its end is onExit, and stop() ends it without one', { skip: process.platform === 'win32' && 'its tools are shell-script stubs', timeout: 20_000 }, async () => {
   const dir = tmpDir('trocar-scutil-watch-'), got = path.join(dir, 'stdin.txt')
   const stub = (body) => fs.writeFileSync(path.join(dir, 'scutil'), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
   const env = { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}` }
