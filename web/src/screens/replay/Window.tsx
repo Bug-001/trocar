@@ -44,17 +44,19 @@ const Tech = ({ rows }: { rows: Array<[string, unknown]> }) => (rows.length ? <T
 const Half = () => <span className="cwhalf" aria-hidden="true"><Svg html={HALF} /></span>
 
 // ── the pins (decision 2), pure ───────────────────────────────────────────────────────────────────────────────────────
-/** The indexes to draw: the visible range [startIndex, endIndex], the items touching one window height `h` above and below the box
+/** The indexes to draw: the items touching the box and one window height `h` above and below it
  * (its top at `top`, its bottom at `top + h`), the pins, and the landing band — the items from index `band` through the last one
- * starting within `h` after its start, clamped at the list's end. `starts` are the items' starts in list order. */
-function withPins(range: { startIndex: number, endIndex: number, count: number, starts: ArrayLike<number>, top: number, h: number },
+ * starting within `h` after its start, clamped at the list's end. `starts` are the items' starts in list order.
+ * The span around `top` holds the virtualizer's own visible range because its overscan is 0 (the range is then the items touching the
+ * box); if overscan > 0, union the range only when it is current (its offset equals `top`). */
+function withPins(range: { count: number, starts: ArrayLike<number>, top: number, h: number },
   pins: Array<number | null | undefined>, band: number | null): number[] {
-  const { startIndex, endIndex, count, starts, top, h } = range
+  const { count, starts, top, h } = range
   const last = (y: number) => { let a = 0, b = count; while (a < b) { const m = (a + b) >> 1; if (starts[m] <= y) a = m + 1; else b = m } return a - 1 } // last start ≤ y
   const out = new Set<number>()
   const span = (lo: number, hi: number) => { for (let i = Math.max(0, lo); i <= Math.min(count - 1, hi); i++) out.add(i) }
   if (count) {
-    span(Math.min(startIndex, last(top - h)), Math.max(endIndex, last(top + 2 * h)))
+    span(last(top - h), last(top + 2 * h))
     if (band != null && band >= 0 && band < count) span(band, Math.max(band, last(starts[band] + h - 0.5)))
   }
   for (const p of pins) if (p != null && p >= 0 && p < count) out.add(p)
@@ -298,11 +300,16 @@ export function Window({ desk }: { desk: DeskView }) {
   const pinKeys = [keyAt(typeof document !== 'undefined' ? document.activeElement : null), keyAt(sel && sel.rangeCount ? sel.anchorNode : null), revealKey.current]
   const pins = [list.findIndex((x) => x.type === 'chline'), list.findIndex((x) => x.type === 'reply'), ...pinKeys.map((k) => (k ? list.findIndex((x) => x.key === k) : -1))]
   const vRef = useRef<ReturnType<typeof useVirtualizer<HTMLDivElement, Element>> | null>(null)
-  // the box's top is in the signature: inside one tall item the range stays, and the band still has to follow the box
-  const pinSig = [...pins, landIdx, vRef.current?.scrollOffset ?? 0].join(',')
+  // the box's top is in the signature: inside one tall item the range stays, and the band still has to follow the box. It is the box's
+  // own scrollTop, not the virtualizer's offset or its visible range: those are read back from the scroll event, a frame after the
+  // landing scrolls (a range joined from the old offset to the new one would draw everything between them).
+  // shortcut: while the virtualizer holds size corrections it cannot write (iOS touch momentum, a reported over-scroll) its layout
+  // offset is scrollTop plus the held amount; the band reaches a screen past the box, so a hold under a screen still covers it, and the
+  // next scroll event picks it again. Read the library's conversion if a hold of more than a screen shows up.
+  const pinSig = [...pins, landIdx, ref.current?.scrollTop ?? 0].join(',')
   const rangeExtractor = useCallback((r: Range) => {
-    const ms = vRef.current?.measurementsCache ?? [], h = vRef.current?.scrollRect?.height ?? 0, top = vRef.current?.scrollOffset ?? 0
-    return withPins({ startIndex: r.startIndex, endIndex: r.endIndex, count: r.count, starts: ms.map((m) => m.start), top, h }, pins, landIdx >= 0 ? landIdx : null)
+    const ms = vRef.current?.measurementsCache ?? [], h = vRef.current?.scrollRect?.height ?? 0, top = ref.current?.scrollTop ?? 0
+    return withPins({ count: r.count, starts: ms.map((m) => m.start), top, h }, pins, landIdx >= 0 ? landIdx : null)
   }, [pinSig]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // eslint-disable-next-line react-hooks/incompatible-library -- the window reads the virtualizer on every render
