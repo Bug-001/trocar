@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { rawHome } from '../../../paths.mjs'
 import { SEGMENT_BYTES, segmentName, parseSegment, recordId } from './segments.mjs'
+import { BIG, fileId } from '../../../file-id.mjs'
 
 export function createRecordStore({ root, raw = rawHome(path.dirname(root)), segmentBytes = SEGMENT_BYTES, onError = () => {}, now = () => new Date() }) {
   const fds = new Map() // filePath → open fd (only the current day's files, and the current segment)
@@ -42,9 +43,9 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
     let fd = fds.get(filePath)
     if (fd !== undefined) {
       let now = null
-      try { now = fs.statSync(filePath) } catch { /* gone */ }
-      const was = fs.fstatSync(fd)
-      if (now && now.ino === was.ino && now.dev === was.dev) return fd
+      try { now = fs.statSync(filePath, BIG) } catch { /* gone */ }
+      const was = fs.fstatSync(fd, BIG)
+      if (now && fileId(now) === fileId(was)) return fd
       try { fs.closeSync(fd) } catch { /* already closed */ }
       fds.delete(filePath)
       report(Object.assign(new Error(`${filePath} was ${now ? 'replaced' : 'renamed or deleted'} while the collector had it open; a new file is opened at that path`), { code: 'file-replaced' }), filePath)

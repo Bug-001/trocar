@@ -49,6 +49,7 @@ import { isModelOs, backendsFor, doorPartsFor, sourcesCtx } from './arch/model-b
 import { createModelCollector, replacesDaemon } from './core/proxymode/collector.mjs'
 import { TEMPLATES } from './harness/templates/index.mjs'
 import { readStateFile } from '../off/state.mjs'
+import { BIG, fileKey } from '../file-id.mjs'
 
 /** When this process started, from the OS's own clock of it (1.6 C.3 `daemon.since`). Set once, as the module loads in the daemon. A daemon started
  *  later in the same process (only tests run two) answers its own start instead: install compares it with the login entry's time (1.6 §3.2 step 5). */
@@ -125,7 +126,7 @@ function healthOnDisk(dir, harnesses) {
 // → next(): readAgentList's result when the key moved, else null.
 function agentListWatch({ home, write }) {
   const file = agentListPath(home)
-  const keyOf = () => { try { const st = fs.statSync(file); return `${st.ino}:${st.size}:${st.mtimeMs}:${st.mode}` } catch (e) { return `gone:${(e && e.code) || 'error'}` } }
+  const keyOf = () => { try { const st = fs.statSync(file, BIG); return `${fileKey(st)}:${st.mode}` } catch (e) { return `gone:${(e && e.code) || 'error'}` } }
   let key = null, bad = false
   return function next() {
     const k = keyOf()
