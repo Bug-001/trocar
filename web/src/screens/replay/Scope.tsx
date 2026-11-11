@@ -107,11 +107,13 @@ const ProblemMark = memo(function ProblemMark({ p }: { p: Item }) {
   return <button type="button" className="pflag" data-i={p.i} data-rid={p.rid} style={{ height: `${Math.max(4, Math.round((p.h ?? 0) * FLAG_PX))}px` }} title={p.tip} aria-label={p.aria} />
 }, (p, n) => p.p.i === n.p.i && p.p.kind === n.p.kind && p.p.h === n.p.h && p.p.tip === n.p.tip)
 
-export function Scope({ desk }: { desk: DeskView }) {
+export function Scope({ desk, onDrawn }: { desk: DeskView, onDrawn?: () => void }) {
   const el = useRef<HTMLDivElement>(null)
   const { m, ov } = useScope(desk)
   const s = desk.s
   const vRough = useDeskVersion(desk, 'rough')
+  // every commit that drew the scope: its frame fits it to what was drawn before the paint, and before the window lands under it
+  useLayoutEffect(() => { onDrawn?.() })
 
   // the lane's capacity: measured on the bars row's grid column, on mount and on every resize
   useLayoutEffect(() => {

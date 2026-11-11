@@ -27,6 +27,12 @@ function onWidth(f: () => void) {
   return () => m.removeEventListener('change', f)
 }
 
+/** Runs a fit from the scope's commit. Until the panel's Group has registered its panels the library has no size to read or set and
+ * throws "Group <id> not found"; that one is swallowed (the ResizeObserver fits that commit), anything else throws. */
+export function fitOnDraw(fit: () => void) {
+  try { fit() } catch (e) { if (!/^Group \S+ not found$/.test((e as Error)?.message ?? '')) throw e }
+}
+
 export function DeskFrame({ desk }: { desk: DeskView }) {
   const wide = !useSyncExternalStore(onWidth, isNarrow)
   const side = useSplit('trocar.v2.split.side'), scope = useSplit('trocar.v2.split.scope'), { held } = scope
@@ -42,9 +48,15 @@ export function DeskFrame({ desk }: { desk: DeskView }) {
   // the scope is as tall as its content, up to half the column less the step head and the boundary (1.2 §上下文窗的高度). The less one:
   // the half is of the height under the head as the viewport has it, and the column starts a pixel lower than that
   const fit = useCallback(() => {
-    const h = col.current!.clientHeight, $h = (sel: string) => col.current!.querySelector<HTMLElement>(sel)!.offsetHeight
-    if (h && !held()) scopePanel.current?.resize(Math.min(content.current!.offsetHeight, h / 2 - 1 - $h('#stepbar') - $h('[data-separator]')))
+    const c = col.current
+    if (!c) return
+    const h = c.clientHeight, $h = (sel: string) => c.querySelector<HTMLElement>(sel)!.offsetHeight
+    const p = scopePanel.current, want = Math.min(content.current!.offsetHeight, h / 2 - 1 - $h('#stepbar') - $h('[data-separator]'))
+    // a size it already has is no resize: the fit also runs on every commit that drew the scope
+    if (h && !held() && p && Math.abs(p.getSize().inPixels - want) >= 1) p.resize(want)
   }, [held, scopePanel])
+  // the scope's commits fit it before the paint, ahead of the window's landing below it
+  const drawn = useCallback(() => fitOnDraw(fit), [fit])
   useLayoutEffect(() => {
     const ro = new ResizeObserver(fit)
     for (const el of [content.current!, col.current!, desk.root.querySelector('#stepbar')!]) ro.observe(el)
@@ -62,7 +74,7 @@ export function DeskFrame({ desk }: { desk: DeskView }) {
     <Group className="deskpanes" groupRef={sideGroup} defaultLayout={side.defaultLayout} onLayoutChanged={side.onLayoutChanged}>
       <Panel id="desk-main" minSize={480}>
         <Group orientation="vertical" className="deskcol" elementRef={col} defaultLayout={scope.defaultLayout} onLayoutChanged={scope.onLayoutChanged}>
-          <Panel id="desk-scope" panelRef={scopePanel} minSize={48} maxSize="75%"><div ref={content} className="scopefit"><Scope desk={desk} /></div></Panel>
+          <Panel id="desk-scope" panelRef={scopePanel} minSize={48} maxSize="75%"><div ref={content} className="scopefit"><Scope desk={desk} onDrawn={drawn} /></div></Panel>
           <Separator disableDoubleClick title={SCOPE_SPLIT_TIP} aria-label={SCOPE_SPLIT_TIP} onDoubleClick={() => { scope.forget(); fit() }} />
           <Panel id="desk-read" minSize="25%"><div id="midcol"><StepHead desk={desk} /><Window desk={desk} /></div></Panel>
         </Group>
