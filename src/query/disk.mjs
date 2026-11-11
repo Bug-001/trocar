@@ -7,6 +7,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { trocarHome } from '../paths.mjs';
+import { BIG, fileId } from '../file-id.mjs';
 
 const DISK_GROUPS = Object.freeze(['records', 'sealed', 'index', 'logs', 'other']);
 
@@ -31,7 +32,7 @@ export async function diskUsage({ home = trocarHome(), fs = fsp, now = Date.now,
   let files = 0, total = 0;
   const seen = new Set(); // `${dev}:${ino}` of every directory walked: a link back into the home, or two links to one folder, walk it once
   async function walk(dir, rel) {
-    try { const st = await fs.stat(dir), id = `${st.dev}:${st.ino}`; if (seen.has(id)) return; seen.add(id); } catch { /* readdir says why */ }
+    try { const id = fileId(await fs.stat(dir, BIG)); if (seen.has(id)) return; seen.add(id); } catch { /* readdir says why */ }
     let ents;
     try { ents = await fs.readdir(dir, { withFileTypes: true }); } catch (e) {
       if (!(e && e.code === 'ENOENT' && rel === '')) unreadable.push({ path: dir, error: String((e && e.message) || e) });

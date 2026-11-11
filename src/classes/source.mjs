@@ -10,6 +10,7 @@
 import nodeFs from 'node:fs'
 import { classesFile } from '../paths.mjs'
 import { BUILTIN, readTable, classify, keepOf } from './table.mjs'
+import { BIG, fileKey } from '../file-id.mjs'
 
 const errText = (e) => String((e && e.message) || e)
 
@@ -25,7 +26,7 @@ export function createClassSource({ home = undefined, fs = nodeFs, now = Date.no
   let table = { classes: BUILTIN }, classOf = classify(table), problems = []
   let sig, checkedAt = -Infinity, loaded = false, problemsKey = null
   const emit = (fn, rec) => { try { fn({ where: 'classes', ...rec }) } catch { /* a recorder that throws must not stop a call from being captured */ } }
-  const statKey = () => { try { const st = fs.statSync(file); return `${st.ino}:${st.size}:${st.mtimeMs}` } catch { return null } }
+  const statKey = () => { try { return fileKey(fs.statSync(file, BIG)) } catch { return null } }
 
   function refresh() {
     const t = now()

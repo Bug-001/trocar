@@ -1,4 +1,4 @@
-// scripts/test-browser.mjs — `npm run test:browser [-- <file>…]`: the browser suite (Playwright on, one file at a time), or only the
+// scripts/browser-suite.mjs — `npm run test:browser [-- <file>…]`: the browser suite (Playwright on, one file at a time), or only the
 // files named. Appending a file to the suite's globs ran the whole suite plus that file, ~40 min for one file (2026-10-23).
 // The files run against a fresh build of web/ (1.2 §涉及源文件): built once into a temp dir, which the test face serves from memory exactly
 // as the daemon serves the committed build (TROCAR_BOARD_DIR → createServer({ webDir })), removed after the run.

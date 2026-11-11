@@ -64,7 +64,7 @@ test('switch: on,on and off,off are no-ops (S6)', async () => {
 
 // the CLI's `trocar on` writes desired on first (1.6 R9), then asks the running daemon: the file already says what the daemon would write
 const cliOn = (f, ids) => { const s = JSON.parse(fs.readFileSync(f, 'utf8')); const at = new Date().toISOString(); s.updated_at = at; for (const id of ids) s.harnesses[id] = { ...s.harnesses[id], desired: 'on', updated_at: at }; fs.writeFileSync(f, JSON.stringify(s, null, 2) + '\n') }
-const fileKey = (f) => { const s = fs.statSync(f); return { ino: s.ino, mtimeMs: s.mtimeMs, bytes: fs.readFileSync(f, 'utf8') } }
+const fileKey = (f) => { const s = fs.statSync(f, { bigint: true }); return { ino: s.ino, mtimeMs: s.mtimeMs, bytes: fs.readFileSync(f, 'utf8') } }
 
 test('switch: an on the file already says is not written again; one that changes a harness is', async () => {
   const stateFile = tmpState(); const sw = mk(fakeRedirector(), stateFile)

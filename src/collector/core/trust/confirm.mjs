@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import { chromiumRole } from '../../../off/chromium.mjs'
+import { BIG, fileKey } from '../../../file-id.mjs'
 
 const PEM_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g
 
@@ -76,8 +77,8 @@ export function createTrustChecker({ caCertPem, readFile = fs.readFileSync, stat
   const cache = new Map() // absolute path → { key, fps }; the key changes when the file does
   function fingerprintsOf(file) {
     let st
-    try { st = stat(file) } catch { return null }
-    const key = `${st.ino}:${st.size}:${st.mtimeMs}`
+    try { st = stat(file, BIG) } catch { return null }
+    const key = fileKey(st)
     const hit = cache.get(file)
     if (hit && hit.key === key) return hit.fps
     let text

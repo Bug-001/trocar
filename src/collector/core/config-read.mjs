@@ -6,6 +6,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseJsonText } from '../../off/json-text.mjs'
+import { BIG, fileKey } from '../../file-id.mjs'
 
 export function readText(file, { readFile = fs.readFileSync } = {}) {
   try { return readFile(file, 'utf8') } catch { return null }
@@ -178,8 +179,8 @@ const NODE_RELEASE = Buffer.from('/download/release/v')
 const versionCache = new Map()
 export function nodeReleaseVersion(file, { fs: f = fs, chunk = 1 << 20 } = {}) {
   let st
-  try { st = f.statSync(String(file).replace(/ \(deleted\)$/, '')) } catch { return null }
-  const key = `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`
+  try { st = f.statSync(String(file).replace(/ \(deleted\)$/, ''), BIG) } catch { return null }
+  const key = fileKey(st)
   if (versionCache.has(key)) return versionCache.get(key)
   let found = null
   let fd = null
