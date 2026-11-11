@@ -85,6 +85,14 @@ test('1.2 §编号: a head whose steps are not on the anchor lane\'s axis does n
   expect(bar().querySelector('.sb-no')!.getAttribute('data-m')).toBe(String(s.anchor.count ?? s.anchor.calls.length))
 })
 
+// 1.5 K-31: a tier-0 head has no step to show: the step head's place holds the session's model-call total, with no step control
+test('1.5 K-31: a tier-0 head with no row draws the call total where the step head goes, and no control', () => {
+  const { s, view, bar } = step({ at: 1 })
+  s.playRid = null; s.desk.head = { ...s.desk.head, tier: 0, axis: null, steps: 1580 }; act(() => view.step())
+  expect(bar().textContent).toBe(W.callsWord(1580))
+  expect(bar().querySelectorAll('button').length).toBe(0)
+})
+
 // a catch-up (a head with pending after a head without it) is not a first read: N / M stays
 test('1.2 §编号: a catch-up after the first read keeps N / M', () => {
   const { s, view, bar, model } = step({ at: 1 })

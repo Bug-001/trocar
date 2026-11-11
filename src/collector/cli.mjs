@@ -30,7 +30,7 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
     }
     const i = argv.indexOf('--binary'), dir = path.join(packageRoot, 'src', 'collector', 'arch', 'linux')
     const binarySrc = i >= 0 ? argv[i + 1] : path.join(dir, 'trocar-redirector')
-    if (!binarySrc || !fs.existsSync(binarySrc)) { // a fresh checkout: the helper is built from source first (README · Install)
+    if (!binarySrc || !fs.existsSync(binarySrc)) { // a fresh checkout: the helper is built from source first (docs/install.md)
       err(i >= 0 ? `trocar setup-helper: --binary ${binarySrc ? `${binarySrc} is not a file` : 'needs the path of a helper you built'}.`
         : `trocar setup-helper: the helper is not built yet. Build it as yourself first:\n${COMMAND_INDENT}make -C ${shellArg(dir)}`)
       return 1

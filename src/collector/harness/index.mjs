@@ -70,6 +70,10 @@ function proxyModeProblems(pm) {
     if (has[0] === 'policy' && !(obj(s.policy) && Object.keys(s.policy).every((os) => PM.os.includes(os)))) say('kind', `${at}.policy is not { darwin?, win32? }`)
     if (has[0] === 'file') { loc(s.file, `${at}.file`, false); oneOf(s.format, PM.format, `${at}.format`); if (!Array.isArray(s.keys) || !s.keys.length) say('shape', `${at}.keys is empty`) }
     if (obj(s) && s.expand !== undefined && !(has[0] === 'file' && s.expand === 'env')) say('shape', `${at}.expand is not 'env' on a { file } source`)
+    if (obj(s) && s.expandFrom !== undefined) {
+      if (s.expand !== 'env' || !Array.isArray(s.expandFrom)) say('shape', `${at}.expandFrom is not a list on an expand: 'env' source`)
+      else s.expandFrom.forEach((x, i) => { if (!obj(x)) return say('shape', `${at}.expandFrom[${i}] is not { file, format }`); loc(x.file, `${at}.expandFrom[${i}].file`, false); oneOf(x.format, ['dotenv'], `${at}.expandFrom[${i}].format`) })
+    }
   }
   const cond = (c, at) => { if (c === undefined) return; if (!obj(c) || !('src' in c)) return say('shape', `${at} is not { src, equals? }`); src(c.src, `${at}.src`) }
   const spellings = (list, at) => {

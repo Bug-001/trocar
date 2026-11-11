@@ -15,7 +15,7 @@ import { sha256 } from '../../src/off/fsutil.mjs'
 import { certBlocks, composeBundle } from '../../src/off/pem.mjs'
 import { lineComment } from '../../src/off/text-edit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { applyTextEntry } from '../../src/collector/core/trust/journal.mjs'
+import { applyTextEntry, applyJsonKey, applyJsonKeys, saveManifest } from '../../src/collector/core/trust/journal.mjs'
 import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const ROOT = createCa({ commonName: 'undo root' }), CORP = createCa({ commonName: 'undo corp relay' }), OSROOT = createCa({ commonName: 'undo os root' })
@@ -124,6 +124,83 @@ test('backups (R2): dropped when the file is back at its pre_sha256, kept and li
   const u = await t.run({ manifest: tm })
   assert.deepEqual(u.results.map((x) => x.result).sort(), ['already-restored', 'missing'])
   assert.deepEqual([fs.existsSync(aa.backup), u.manifest.kept_backups.map((k) => k.backup), fs.existsSync(bbBackup)], [true, [aa.backup], false])
+})
+
+// a file `on` wrote two entries into in one write (a key and an array item: VS Code's settings), put back by hand to its bytes before `on`: each entry's own
+// "before" is the file as the previous entry left it, but the file is as it was before trocar touched it — every entry is already restored, and
+// no backup is kept as "not what it was before"
+test('two entries in one file, the file back to its bytes before the first: both already restored, no backup kept as changed', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  const file = write(s.b, '.aa/vs/settings.json', '{\n  "editor.fontSize": 13\n}\n'), pre = fs.readFileSync(file)
+  const at = { dir: s.b.dir, manifest: m, harness: 'aa', phase: 'on', home: s.b.home, now: new Date(), fs }
+  applyJsonKeys({ ...at, file, sets: [{ keys: ['http.proxy'], value: 'http://127.0.0.1:47011' }], items: [{ keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' }] }) // as on writes a route file: once
+  saveManifest(s.b.dir, m, fs)
+  assert.equal(readManifest(s.b.dir).entries.filter((e) => e.path === file).length, 2)
+  fs.writeFileSync(file, pre) // put back by hand
+  const backups = readManifest(s.b.dir).entries.filter((e) => e.path === file).map((e) => e.backup)
+  const r = await s.run()
+  assert.deepEqual(r.results.filter((x) => x.path === file).map((x) => x.result), ['already-restored', 'already-restored'])
+  assert.deepEqual(r.manifest.kept_backups.filter((k) => k.path === file), [], 'no backup kept as if the file were changed')
+  assert.deepEqual(backups.filter((b) => b && fs.existsSync(b)), [], 'both backups are gone: each held only what trocar or the file before it held')
+  assert.deepEqual(fs.readFileSync(file), pre)
+})
+
+// the same file naming the bundle trocar made for its harness (a value the user had there before `on`): step 1 drops its backups as already restored, the
+// bundle step then puts its entries back among the left ones — and no row may point at a backup that is gone
+test('an entry put back among the left ones after step 1 dropped its backup names no backup that is gone', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  const file = write(s.b, '.aa/vs/settings.json', `{\n  "ca": ${JSON.stringify(s.b.ca('combined-aa.pem'))}\n}\n`), pre = fs.readFileSync(file)
+  const at = { dir: s.b.dir, manifest: m, harness: 'aa', phase: 'on', home: s.b.home, now: new Date(), fs }
+  applyJsonKeys({ ...at, file, sets: [{ keys: ['http.proxy'], value: 'http://127.0.0.1:47011' }], items: [{ keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' }] }) // as on writes a route file: once
+  saveManifest(s.b.dir, m, fs)
+  fs.writeFileSync(file, pre)
+  const r = await s.run({ dropCa: true })
+  const mine = r.left.filter((l) => l.path === file)
+  assert.ok(mine.length > 0, `the bundle step put the file's entries back among the left ones: ${JSON.stringify(r.left.map((l) => [l.path, l.result]))}`)
+  for (const l of r.left) assert.ok(!l.backup || fs.existsSync(l.backup), `${l.path}: names a backup that is gone (${l.backup})`)
+  for (const l of mine) assert.ok(!/is kept at/.test(l.reason), l.reason)
+})
+
+// the user edited the file between trocar's two writes: the later backup is the only copy of that edit, so the file back at its first bytes does not make
+// it needless — that entry is judged by its own bytes, and its backup stays
+test('two entries in one file with a user edit between two on runs: the later backup is kept, the file back at its first bytes or not', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  const file = write(s.b, '.aa/vs/settings.json', '{\n  "editor.fontSize": 13\n}\n'), pre = fs.readFileSync(file)
+  const at = { dir: s.b.dir, manifest: m, harness: 'aa', phase: 'on', home: s.b.home, now: new Date(), fs }
+  applyJsonKeys({ ...at, file, items: [{ keys: ['settingsSync.ignoredSettings'], item: 'http.proxy' }] }) // one on
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('13', '14')) // the user's edit, between two on runs
+  applyJsonKey({ ...at, file, keys: ['http.proxy'], value: 'http://127.0.0.1:47011' })
+  saveManifest(s.b.dir, m, fs)
+  const later = readManifest(s.b.dir).entries.filter((e) => e.path === file).at(-1).backup
+  fs.writeFileSync(file, pre)
+  const r = await s.run()
+  assert.ok(later && fs.existsSync(later), 'the backup holding the user\'s edit stays')
+  assert.ok(r.manifest.kept_backups.some((k) => k.backup === later))
+})
+
+// install's entry and on's entries in one file (Claude Code's settings): the file put back to how install left it is already restored for on's entries, and
+// install's entry stays for uninstall
+test('install and on entries in one file, back to how install left it: on\'s entries are already restored; install\'s stays', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  const file = write(s.b, '.aa/cc/settings.json', '{\n  "model": "x"\n}\n')
+  const at = { dir: s.b.dir, manifest: m, harness: 'aa', home: s.b.home, now: new Date(), fs }
+  applyJsonKey({ ...at, phase: 'install', file, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: s.b.ca('trocar-ca.pem') })
+  const installed = fs.readFileSync(file)
+  applyJsonKey({ ...at, phase: 'on', file, keys: ['env', 'HTTPS_PROXY'], value: 'http://127.0.0.1:47011' })
+  applyJsonKey({ ...at, phase: 'on', file, keys: ['env', 'NO_PROXY'], value: 'localhost' })
+  saveManifest(s.b.dir, m, fs)
+  const onBackups = readManifest(s.b.dir).entries.filter((e) => e.path === file && e.phase === 'on').map((e) => e.backup)
+  assert.equal(onBackups.filter(Boolean).length, 2, 'each on run backed the file up')
+  fs.writeFileSync(file, installed)
+  const r = await s.run({ phases: ['on'] })
+  assert.deepEqual(r.results.filter((x) => x.path === file).map((x) => x.result), ['already-restored', 'already-restored'])
+  assert.deepEqual(r.manifest.entries.filter((e) => e.path === file).map((e) => e.phase), ['install'])
+  assert.deepEqual(fs.readFileSync(file), installed)
+  assert.deepEqual([onBackups.filter((b) => fs.existsSync(b)), (r.manifest.kept_backups || []).filter((k) => k.path === file)], [[], []], 'on\'s backups held only what install or on left: gone, none kept as changed')
 })
 
 // 4.11 P13: the kinds the collector model adds. A json-array-item is a file entry (step 1); `switch` and `config-entry` files go with the plugins; a

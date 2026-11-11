@@ -16,6 +16,7 @@ import { validateReceipt } from '../../src/cli/schema.mjs'
 import { sandbox, installedViaCli, snapshot } from '../cli/fixtures/dispatch-ctx.mjs'
 import { claudeProc } from '../cli/fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const descs = await loadHarnesses()
 const D = Object.fromEntries(descs.map((d) => [d.name, d]))
@@ -32,7 +33,7 @@ const setProxy = (s, value) => { const d = readJson(settingsOf(s)); d.env.HTTPS_
 const setProxyFile = (s, value) => setProxy(s, value) // (named for what it is in the test above: the file of the harness)
 const readJson = (f) => JSON.parse(fs.readFileSync(f, 'utf8'))
 
-test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and keys hold none — the user\'s own is where it was, the receipt draws the chain with the credentials masked, and netenv.json has the hash and not the value', async () => {
+test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and keys hold none — the user\'s own is where it was, the receipt draws the chain with the credentials masked, and netenv.json has the hash and not the value', { skip: POSIX_WORLD }, async () => {
   const s = sandbox(ENGINE); seedProxy(s)
   const r = await s.run(['on', '--yes', '--json'], { deps: FACTS })
   assert.equal(r.exit, 0, r.io.text())
@@ -142,7 +143,7 @@ test('V47 the daemon\'s 5 s check: a change of the file is one `netenv-change` (
   assert.equal(events.length, 2, 'a further change is one more')
 })
 
-test('V47 (b) proxy mode: a field that holds anything but what trocar put there bypasses trocar — captured false: one `netenv-change` and one `failure` (where netenv), however many checks run, and the file is not touched', async () => {
+test('V47 (b) proxy mode: a field that holds anything but what trocar put there bypasses trocar — captured false: one `netenv-change` and one `failure` (where netenv), however many checks run, and the file is not touched', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const { routing, field } = proxyRouting(s)
   await s.run(['on', '--yes', 'codex'], { deps: { ...FACTS, routing } })
@@ -192,7 +193,7 @@ test('V47 drift is measured on what the files hold: a proxy variable in the shel
   assert.ok((await doctorCodes(s)).includes('proxy-changed'), 'a value written into the file after `on` is')
 })
 
-test('V47 the files are found the same way by every reader: `on` records where it read them (CLAUDE_CONFIG_DIR of its shell), the daemon\'s check (which has no such variable) stats and reads those, and an edit there is seen', async () => {
+test('V47 the files are found the same way by every reader: `on` records where it read them (CLAUDE_CONFIG_DIR of its shell), the daemon\'s check (which has no such variable) stats and reads those, and an edit there is seen', { skip: POSIX_WORLD }, async () => {
   const s = sandbox(ENGINE)
   const dir = path.join(s.home, 'cc-config'); fs.mkdirSync(dir, { recursive: true })
   const settings = path.join(dir, 'settings.json')
@@ -241,7 +242,7 @@ function proxyRouting(s, calls = []) {
   return { routing, field, calls }
 }
 
-test('V46 (b) proxy mode: `adopt` is handed the setting that was there (the value as written, for the platform\'s upstream; masked everywhere that is printed), a field it writes is recorded as what trocar wrote, and a change of the system proxy is one `netenv-change`, no `failure`, and no file touched', async () => {
+test('V46 (b) proxy mode: `adopt` is handed the setting that was there (the value as written, for the platform\'s upstream; masked everywhere that is printed), a field it writes is recorded as what trocar wrote, and a change of the system proxy is one `netenv-change`, no `failure`, and no file touched', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'HTTPS_PROXY=http://bob:secret@proxy.old:3128\n')
   const calls = [], { routing, field } = proxyRouting(s, calls)
@@ -262,7 +263,7 @@ test('V46 (b) proxy mode: `adopt` is handed the setting that was there (the valu
   assert.deepEqual(quiet, [])
 })
 
-test('V47 (b) `on` over a field the user edited since the last `on`: not in a terminal and no --yes, it prints the plan with the line that names it and exits 2 having written nothing; with --yes `adopt` gets the new proxy; a field `on` itself wrote is not an edit', async () => {
+test('V47 (b) `on` over a field the user edited since the last `on`: not in a terminal and no --yes, it prints the plan with the line that names it and exits 2 having written nothing; with --yes `adopt` gets the new proxy; a field `on` itself wrote is not an edit', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const calls = [], { routing, field } = proxyRouting(s, calls)
   await s.run(['on', '--yes', 'codex'], { deps: { ...FACTS, routing } })
@@ -281,7 +282,7 @@ test('V47 (b) `on` over a field the user edited since the last `on`: not in a te
   assert.equal(readJson(netenvOf(s)).adopted.codex.proxy, 'http://proxy.new:3128')
 })
 
-test('V47 `adopt` that fails is an `on` that did not finish: exit 1, the harness is named, and no record says it was adopted', async () => {
+test('V47 `adopt` that fails is an `on` that did not finish: exit 1, the harness is named, and no record says it was adopted', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const routing = { ownsProxyField: () => true, fieldOf: () => ({ path: '/x', key: 'HTTPS_PROXY' }), adopt: async () => { throw new Error('the kernel did not start') } }
   const r = await s.run(['on', '--yes', '--json', 'codex'], { deps: { ...FACTS, routing } })

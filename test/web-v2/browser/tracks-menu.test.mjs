@@ -88,14 +88,21 @@ test('2.1 #19: the menu and the gutter read one state', OPTS, async () => {
 
 test('2.1 #19: Next problem lands on the step `n` lands on, and is off past the last problem', OPTS, async () => {
   await onDesk(800, async (page, steps) => {
+    // what the page shows around each leg, carried by a failure: the step, the URL and the problem steps the axis marks (0-based)
+    const state = () => page.evaluate(() => ({ n: document.querySelector('#stepbar .sb-no')?.dataset.n, url: location.hash,
+      marks: [...document.querySelectorAll('#probrow [data-i]')].map((e) => +e.dataset.i) }))
     await goStep(page, 1)
+    const beforeN = await state()
     await page.keyboard.press('n')
     await page.waitForFunction(() => document.querySelector('#stepbar .sb-no')?.dataset.n !== '1')
-    const landed = await page.locator('#stepbar .sb-no').getAttribute('data-n')
+    const landed = await page.locator('#stepbar .sb-no').getAttribute('data-n'), afterN = await state()
     await goStep(page, 1)
     await openMenu(page)
+    const beforeNext = await state()
     await nextItem(page).click()
-    await atStep(page, landed)
+    await atStep(page, landed).catch(async (e) => {
+      throw new Error(`Next problem did not land where n did (${landed}): ${JSON.stringify({ beforeN, afterN, beforeNext, now: await state() })}: ${e.message}`)
+    })
     await page.keyboard.press('End')
     await atStep(page, steps)
     await openMenu(page)

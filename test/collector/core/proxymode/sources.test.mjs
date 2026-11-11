@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../../../helpers/tmp.mjs'
-import { resolveLoc, readSrc, holds, isPresent } from '../../../../src/collector/core/proxymode/sources.mjs'
+import { resolveLoc, readSrc, holds, isPresent, envRefs } from '../../../../src/collector/core/proxymode/sources.mjs'
 
 const yamlOf = (v, ind = '') => Object.entries(v).map(([k, x]) => Array.isArray(x)
   ? `${ind}${k}:\n${x.map((m) => Object.entries(m).map(([a, b], i) => `${ind}  ${i ? ' ' : '-'} ${a}: "${b}"`).join('\n')).join('\n')}`
@@ -147,3 +147,13 @@ for (const [flowText, want] of FLOWS) for (const at of ['list', 'map']) {
     assert.deepEqual(r.value, want)
   })
 }
+
+// 4.11 P4 expand env, Hermes's grammar (hermes_cli/config.py _env_expand_match): ${NAME} and ${env:NAME} read NAME, spaces trimmed; a lowercase
+// source prefix is another source; an empty name reads nothing
+test('envRefs · the names a ${…} value reads, in order: env: prefix and spaces trimmed; another source, an empty name and an inherited key read none', () => {
+  assert.deepEqual(envRefs('${A}/x/${env:B}/${ C }/${env: D }'), ['A', 'B', 'C', 'D'])
+  assert.deepEqual(envRefs('${vault:A} ${file:x/y} ${env:} ${ } plain'), [])
+  assert.deepEqual(envRefs('${Env:A}'), ['Env:A'], 'only a lowercase prefix names a source')
+  const r = readSrc({ env: 'constructor' }, { env: {} })
+  assert.equal(r.set, false, 'an inherited property of the env object is no variable')
+})
