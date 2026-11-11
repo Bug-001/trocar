@@ -373,7 +373,7 @@ function makeReader({ fs, fd, file, st, ident, tables, indexOffset, version, fra
   function close() { if (fd === null) return; try { fs.closeSync(fd); } catch {} fd = null; }
 
   return {
-    file, size: st.size, indexOffset, frames, shards, streams, records, deltas,
+    file, size: st.size, ident, indexOffset, frames, shards, streams, records, deltas,
     get count() { return records.length; },
     entry, lineAt, warm, lines, find, close,
   };

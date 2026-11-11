@@ -170,9 +170,9 @@ export function releaseDecoded() { closeFds(); shared.files.clear(); decoded.fra
 const fsIds = new WeakMap();
 let fsSeq = 0;
 const fsId = (fs) => { let n = fsIds.get(fs); if (n === undefined) fsIds.set(fs, n = fsSeq++); return n; };
-// the reader keys its entries by its open (`<seq>:<file key>:<n>`); the shared caches key them by the file's bytes
-const byIdentity = (cache, id) => {
-  const k = (ck) => id + ck.slice(ck.lastIndexOf(':'));
+// the reader keys its entries by its open and the file it opened (`<seq>:<file key>:<n>`); the shared caches drop the open: the file's bytes
+const byIdentity = (cache, fs) => {
+  const k = (ck) => fsId(fs) + ck.slice(ck.indexOf(':'));
   return { get: (ck) => cache.get(k(ck)), set: (ck, v) => cache.set(k(ck), v), max: cache.max };
 };
 
@@ -182,12 +182,11 @@ function sharedSealed(file, fs) {
   if (e && (e.key !== key || e.fs !== fs)) { dropReader(e); shared.files.delete(file); e = undefined; }
   if (!shared.armed) { shared.armed = true; setImmediate(closeFds); }
   if (e) { shared.files.delete(file); shared.files.set(file, e); return e; }
-  const id = `${fsId(fs)}:${key}`;
-  const sf = openSealed(file, { fs, frameCache: byIdentity(decoded.frames, id), lineCache: byIdentity(decoded.lines, id) });
+  const sf = openSealed(file, { fs, frameCache: byIdentity(decoded.frames, fs), lineCache: byIdentity(decoded.lines, fs) });
   const at = new Map();
   for (let i = 0; i < sf.count; i++) at.set(Number(sf.records[i][R.lineNo]) + 1, i);
   if (shared.files.size >= SHARED_FILES) { const [f, old] = shared.files.entries().next().value; dropReader(old); shared.files.delete(f); }
-  e = { sf, at, key, fs };
+  e = { sf, at, key: sf.ident, fs }; // the file it opened: one renamed over the path after the look above is not kept as the old one
   shared.files.set(file, e);
   return e;
 }

@@ -123,3 +123,19 @@ test('(e) one record read for an answer is the plaintext record, its frames deco
   assert.deepEqual(json(await read(at)), plain)
   assert.equal(sync.mock.callCount(), 0)
 })
+
+test('(f) a sealed file replaced between the reader\'s look at its path and its open is kept as the file it opened, not as the one it looked at', async () => {
+  const N = 6
+  const one = await sealedHome('one', N)
+  const two = await sealedHome('two', N)
+  const keep = `${one.sealed}.keep`
+  fs.linkSync(one.sealed, keep) // the first file, to put back under the same identity (same inode, size and mtime)
+  let swapped = false
+  const racing = { ...fs, openSync: (p, ...a) => { if (p === one.sealed && !swapped) { swapped = true; fs.renameSync(two.sealed, one.sealed) } return fs.openSync(p, ...a) } }
+  releaseDecoded()
+  assert.deepEqual(json(recordsAt({ home: one.home, fs: racing, rows: rowsOf(N), remember: false })), two.plain, 'the bytes at the path when it was opened')
+  fs.renameSync(keep, one.sealed) // in the same stretch: the path names the first file again
+  const errors = []
+  assert.deepEqual(json(recordsAt({ home: one.home, fs: racing, rows: rowsOf(N), errors, remember: false })), one.plain)
+  assert.deepEqual(errors, [])
+})
