@@ -61,12 +61,11 @@ async function sealOne(file, { lockFile, fs, frameBytes, onPhase, onProgress }) 
   if (seg.segment === liveSegment(lockFile, { fs })) throw new SealRefused(`refusing to seal ${file}: the daemon's lock ${lockFile} names it as the segment being appended to`);
   let st0;
   try { st0 = fs.statSync(file); } catch (e) { if (e.code === 'ENOENT') return { file, gone: true }; throw e; }
-  const id0 = fileId(fs.statSync(file, BIG));
   if (!st0.isFile()) throw new SealRefused(`refusing to seal ${file}: not a regular file`);
   const out = path.join(dir, seg.segment + SEALED_EXT);
   const tmp = path.join(dir, `.${seg.segment}.${process.pid}-${randomBytes(4).toString('hex')}.tmp`);
   const name = path.basename(file);
-  let fd = fs.openSync(tmp, 'wx', 0o600), renamed = false;
+  let fd = fs.openSync(tmp, 'wx', 0o600), renamed = false, id0 = null;
   try {
     // Pass 1: read the segment once, hash it whole, encode every line.
     const writer = createSealWriter({ fd, fs, frameBytes });
@@ -74,6 +73,7 @@ async function sealOne(file, { lockFile, fs, frameBytes, onPhase, onProgress }) 
     let lines = 0, length = 0;
     const src = fs.openSync(file, 'r');
     try {
+      id0 = fileId(fs.fstatSync(src, BIG)); // the file these bytes come from: changed() asks whether the path still names it
       for (const line of readLines(fs, src)) {
         if (typeof line === 'number') { await onProgress({ step: 'encode', done: line, total: st0.size }); continue; } // a chunk read: said, and the loop gets a turn
         whole.update(line); length += line.length;
