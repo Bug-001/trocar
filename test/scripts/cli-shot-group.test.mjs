@@ -24,3 +24,17 @@ test('endGroup: the profile a removed directory held is not written again once i
   await sleep(600) // longer than the helper's SIGTERM delay
   assert.equal(fs.existsSync(dir), false, 'nothing wrote the profile after endGroup resolved')
 })
+
+test('endGroup: a child with no positive pid is never signalled — kill(-0) would be this process\'s own group', async (t) => {
+  const kill = t.mock.method(process, 'kill', () => true)
+  for (const pid of [undefined, null, 0, -1]) assert.equal(await endGroup({ pid, exitCode: null, signalCode: null, kill: () => assert.fail('signalled'), once: () => {} }), true)
+  assert.equal(kill.mock.callCount(), 0)
+})
+
+test('endGroup without process groups (win32): the child alone, by its handle, and its exit; process.kill(-pid) is never reached', async (t) => {
+  const kill = t.mock.method(process, 'kill', () => assert.fail('process.kill on a platform without groups'))
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  assert.equal(await endGroup(child, { groups: false }), true)
+  assert.ok(child.exitCode !== null || child.signalCode, 'the child ended')
+  assert.equal(kill.mock.callCount(), 0)
+})

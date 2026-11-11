@@ -118,7 +118,7 @@ export const CHROMES = [
 // pipe (fd 3 in, fd 4 out, NUL-delimited JSON) with an explicit viewport instead of --screenshot.
 function cdpShot(bin, tmp, url, w, h, out) {
   const chrome = spawn(bin, ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--use-mock-keychain', '--remote-debugging-pipe', `--user-data-dir=${tmp}/p`],
-    { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], detached: true }) // its own process group: its renderers stay in it (endGroup)
+    { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], detached: GROUPS }) // its own process group: its renderers stay in it (endGroup)
   let id = 0, buf = '', err = '', onLoad
   const waiting = new Map()
   chrome.stderr.on('data', (d) => { err = (err + d).slice(-2000) })
@@ -168,19 +168,23 @@ function cdpShot(bin, tmp, url, w, h, out) {
 }
 
 const GROUP_LIMIT_MS = 15000
-/** Ends `child` (spawned detached, so it leads its own process group) and every process of its group, then waits until none is left, bounded →
- *  true when the group is gone. Chrome's renderers outlive the browser process under load and still write its profile, so the profile is removed
- *  only after this. SIGTERM, then SIGKILL after `graceMs` to whatever ignores it. Without process groups (win32) the child alone. */
-export async function endGroup(child, { graceMs = 5000, limitMs = GROUP_LIMIT_MS } = {}) {
-  const group = (sig) => { try { process.kill(-child.pid, sig); return true } catch (e) { return e.code === 'ESRCH' ? false : null } } // null: no groups here
-  const exited = child.pid == null || child.exitCode !== null || child.signalCode ? null : new Promise((r) => child.once('exit', r)) // no pid: it never started
-  if (group('SIGTERM') === null) child.kill()
-  const hard = setTimeout(() => { if (group('SIGKILL') === null) child.kill('SIGKILL') }, graceMs)
+const GROUPS = process.platform !== 'win32' // process groups: win32 has none (no kill(-pid)), and a detached child there gets a console of its own
+/** Ends `child` (spawned detached where GROUPS, so it leads its own process group) and every process of its group, then waits until none is left,
+ *  bounded → true when the group is gone. Chrome's renderers outlive the browser process under load and still write its profile, so the profile
+ *  is removed only after this. SIGTERM, then SIGKILL after `graceMs` to whatever ignores it. On win32 the child alone, and its exit. A child with
+ *  no positive pid never started: nothing is signalled (kill(-0) would be this process's own group). */
+export async function endGroup(child, { graceMs = 5000, limitMs = GROUP_LIMIT_MS, groups = GROUPS } = {}) {
+  if (!(Number.isInteger(child.pid) && child.pid > 0)) return true
+  const exited = child.exitCode !== null || child.signalCode ? null : new Promise((r) => child.once('exit', r))
+  const group = (sig) => { try { process.kill(-child.pid, sig); return true } catch { return false } } // false: no process of the group is left
+  const kill = (sig) => (groups ? group(sig) : child.kill(sig))
+  kill('SIGTERM')
+  const hard = setTimeout(() => kill('SIGKILL'), graceMs) // one that ignores SIGTERM does not hold the script
   hard.unref()
   await exited
-  for (const end = Date.now() + limitMs; group(0) && Date.now() < end;) await new Promise((r) => setTimeout(r, 50))
+  if (groups) for (const end = Date.now() + limitMs; group(0) && Date.now() < end;) await new Promise((r) => setTimeout(r, 50))
   clearTimeout(hard)
-  return !group(0)
+  return !groups || !group(0)
 }
 
 async function shoot({ doc, w, h, out }) {
