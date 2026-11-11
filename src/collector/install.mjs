@@ -321,7 +321,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     events: path.join(dir, 'flows', `${day}.ndjson`), // install-note lines are appended here (D-28)
     _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit, unseen, drift,
       // what install records in ca_env (4.11 P4): read here, written only by install
-      caEnv: caEnvRecord({ names: caEnvNames(harnesses, [DAEMON_CA_VAR]), env, running: facts.filter((f) => match(f).agent).map((f) => f.env || new Map()), dir, fs }) },
+      caEnv: caEnvRecord({ names: caEnvNames(harnesses, [DAEMON_CA_VAR]), env, dir, fs }) },
   }
 }
 

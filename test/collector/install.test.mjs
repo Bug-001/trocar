@@ -121,10 +121,10 @@ test('install: a CA exported only in the install shell is merged into extra-cc.p
   } finally { b.done() }
 })
 
-// CM45 (4.11 P4 ca_env, Linux): a CA variable install saw — in its shell or, failing that, in a running agent — is recorded. Linux install leaves an intact
+// CM45 (4.11 P4 ca_env, Linux): a CA variable the install shell set is recorded; one only a running agent had is not (one process's fact). Linux install leaves an intact
 // carrier alone, so the record matters when one is placed again: extra-cc.pem gone, an install from a shell without the variable must not leave the
 // settings key pointing at nothing (settings env wins over the launch env: Claude Code loses the user's CA)
-test('CM45: Linux — the CA variable install saw is recorded; an extra-cc.pem placed again from a shell without it keeps the CA; set, empty, a running agent, a file gone', async () => {
+test('CM45: Linux — the CA variable install saw is recorded; an extra-cc.pem placed again from a shell without it keeps the CA; set, empty, not a running agent\'s, a file gone', async () => {
   const b = box()
   try {
     const one = createCa({ commonName: 'relay one' })
@@ -144,7 +144,8 @@ test('CM45: Linux — the CA variable install saw is recorded; an extra-cc.pem p
     assert.equal(rec(), undefined, 'set empty: none')
     const running = [{ pid: 4242, exe: '/x/claude/versions/2.1.289', argv: ['claude'], env: new Map([['NODE_EXTRA_CA_CERTS', f1]]) }]
     await run({}, { scan: async () => running, match: (f) => ({ agent: f.pid === 4242 ? 'claude-code' : null }) })
-    assert.deepEqual(rec(), { NODE_EXTRA_CA_CERTS: f1 }, 'a value only a running agent had')
+    assert.equal(rec(), undefined, 'a value only a running agent had is not recorded')
+    await run({ NODE_EXTRA_CA_CERTS: f1 })
     fs.rmSync(f1)
     await run({})
     assert.equal(rec(), undefined, 'its file gone: dropped')

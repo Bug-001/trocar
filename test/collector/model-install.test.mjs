@@ -716,3 +716,14 @@ test('§3 ⑭ · ca_env: with Codex alone, an install without NODE_EXTRA_CA_CERT
   await run(Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS')))
   assert.equal(JSON.parse(fs.readFileSync(unitPath, 'utf8')).NODE_EXTRA_CA_CERTS, mine)
 })
+
+// CM45: a user who sets none of the CA variables has no ca_env, and a second install changes no byte of the manifest or the bundle (D54)
+test('CM45: none of the CA variables set → no ca_env; install twice leaves the manifest and Z-Code\'s bundle as they were', async () => {
+  const w = await everything()
+  await w.install({ wrapperKit: { renderWrapper } })
+  const mf = path.join(w.dir, 'install-manifest.json'), bundle = path.join(w.dir, 'ca', 'bundle-z-code.pem')
+  const was = [fs.readFileSync(mf), fs.readFileSync(bundle)]
+  await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(readManifest(w.dir).ca_env, undefined)
+  assert.deepEqual([fs.readFileSync(mf), fs.readFileSync(bundle)], was)
+})

@@ -29,12 +29,12 @@ export function withCaEnv(env, dir, fs = nodeFs) {
   return env instanceof Map ? new Map([...env, ...add]) : { ...env, ...Object.fromEntries(add) }
 }
 
-/** The record one install writes: each name takes the first that sets it (empty counts) — `env`, the record, then each `running` agent's env —
- *  and is kept only while it counts. → { NAME: file } */
-export function caEnvRecord({ names, env, running = [], dir, fs = nodeFs }) {
+/** The record one install writes: each name takes this command's `env` when it sets it (empty counts), else the record — kept only while it counts.
+ *  A running agent's env is not a source: it is one process's fact, and recorded it would widen every other harness's trust (4.6). → { NAME: file } */
+export function caEnvRecord({ names, env, dir, fs = nodeFs }) {
   const prior = recordedCaEnv(dir, fs), out = {}
   for (const n of names) {
-    const first = [get(env, n), prior[n], ...running.map((r) => get(r, n))].find((v) => v !== undefined)
+    const first = get(env, n) !== undefined ? get(env, n) : prior[n]
     if (usable(first, dir, fs)) out[n] = first
   }
   return out
