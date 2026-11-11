@@ -18,6 +18,8 @@ import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { recordingExec } from '../cli/fixtures/on-ctx.mjs'
 import { hookFile } from '../../src/collector/harness/templates/index.mjs'
+import { verdictOf, carrierAt, judgedForms } from '../../src/collector/core/proxymode/verdict.mjs'
+import { userCertFilesOf } from '../../src/collector/core/proxymode/sources.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const put = (f, data) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, data) }
@@ -564,3 +566,23 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(r2.carriers.find((c) => c.harness === 'z-code' && c.carrier === 'pem-block').state, 'placed')
   })
 }
+
+// 4.11 P4 expand env + expandFrom, end to end: Hermes's provider ssl_ca_cert is `${CORP_CA}` and CORP_CA is set only in its home .env (Hermes loads it
+// after start). install's rule U reads the same setting the same way (readSrc), so it appends trocar's block to the file the .env names; the door,
+// with CORP_CA in no start environment, then reads that file through the .env too and decrypts the route.
+test('rule U · Hermes ssl_ca_cert ${CORP_CA} with CORP_CA only in ~/.hermes/.env: install appends the block there, and the door then decrypts', async () => {
+  const w = await modelWorld({ commands: ['hermes'] })
+  const hermes = path.join(w.home, '.hermes'), mine = path.join(w.home, 'certs', 'corp.pem')
+  put(mine, USER_PEM)
+  put(path.join(hermes, 'config.yaml'), 'providers:\n  corp:\n    ssl_ca_cert: ${CORP_CA}\n')
+  put(path.join(hermes, '.env'), `CORP_CA=${mine}\n`)
+  const r = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r.exit, 0, JSON.stringify(r.problems))
+  assert.equal(certBlocks(fs.readFileSync(mine, 'utf8')).filter((b) => b.fp === r.fp256).length, 1, 'install appended one block of the root to the file the .env names')
+  const d = w.harnesses.find((x) => x.name === 'hermes'), form = judgedForms(d, 'darwin')[0]
+  const facts = { name: d.name, pid: 4242, startedAt: Date.now() + 60_000, env: { HOME: w.home }, cwd: w.home }
+  const pctx = { ...w.ctx, env: facts.env, cwd: w.home }
+  const record = { carrierInstalledAt: carrierAt(readManifest(w.dir), d, form, () => userCertFilesOf(d, pctx)), rootFp256: r.fp256 }
+  const v = verdictOf({ desc: d, form, facts, record, issuer: { state: () => 'ready' }, host: d.hosts[0], ctx: w.ctx })
+  assert.deepEqual([v.decrypt, v.code ?? null], [true, null], JSON.stringify(v))
+})
