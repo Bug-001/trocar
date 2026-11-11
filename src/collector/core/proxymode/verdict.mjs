@@ -9,7 +9,7 @@
 //            hosts in the extension's own settings, the operator's extra_hosts; 4.8 OPEN 22); absent → desc.hosts.
 //   issuer = makeIssuer()'s object, or null; ctx = the sources.mjs ctx (os, home, dirs, readFile, readdir, policy, join).
 import path from 'node:path'
-import { readSrc, fileOf, rootHeldIn, envRefs, envHas, measuredOn } from './sources.mjs'
+import { readSrc, fileOf, rootHeldIn, envRefs, envHas, expandEnv, measuredOn } from './sources.mjs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { HOOK_PID_ENV } from './chain.mjs'
 import { normalizeName } from '../../../off/identity.mjs'
@@ -26,12 +26,15 @@ function read(src, ctx, facts) {
   const loc = src.file && (src.file.perOs ? src.file.perOs[ctx.os] : src.file)
   if (('env' in src || (loc && loc.env)) && facts.env == null) return { error: 'the process environment could not be read', code: 'environ-unreadable', where: src.env || loc.env }
   if (loc && loc.base === 'cwd' && facts.cwd == null) return { error: 'the process working directory is not known', code: 'config-unreadable', where: loc.path }
-  // `expand: 'env'`: a value that names the environment is not known, never unset (D38), when that environment is unread or lacks the name — the agent
-  // may set it after start (Hermes loads its .env), which the start environment the door reads does not show (4.11 P4); one that names none reads as written
+  // `expand: 'env'`: a value that names the environment is read against it with its `expandFrom` files over it; it is not known, never unset (D38),
+  // when that environment is unread or still lacks the name — the agent may set it after start from a file not listed, which the door cannot see (4.11 P4);
+  // a value that names none reads as written
   if (src.expand === 'env') {
     const raw = readSrc({ ...src, expand: undefined }, ctx), names = raw.set ? raw.all.flatMap((x) => envRefs(x.value)) : []
     if (names.length && facts.env == null) return { error: 'the process environment could not be read', code: 'environ-unreadable', where: raw.where }
-    const lack = names.find((n) => !envHas(ctx.env, n))
+    const x = names.length ? expandEnv(src, ctx) : { env: null }
+    if (x.error) return { ...x, code: 'config-unreadable' }
+    const lack = names.find((n) => !envHas(x.env, n))
     if (lack) return { error: `it names \${${lack}}, which this process's start environment does not hold (the agent may set it after start, from a file it loads)`, code: 'environ-unreadable', where: raw.where }
   }
   const r = readSrc(src, ctx)

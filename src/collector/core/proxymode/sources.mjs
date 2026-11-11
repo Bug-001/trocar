@@ -10,6 +10,8 @@
 //        the base itself); `glob` matches entry names one level below that path ('*' = any run of characters). `perOs` picks ctx.os; a missing OS = no path.
 // <src>  { env } | { file: <loc>, format: 'json' | 'jsonc' | 'yaml' | 'dotenv', keys } | { policy: { <os>: spec } } | [<src>, …]
 //        '*' in keys matches any key or list index. A list is a precedence: the first source that is set answers (an error answers too: D38).
+//        A { file } source with `expand: 'env'` reads `${NAME}` in its values from the environment; its `expandFrom: [{ file: <loc>, format: 'dotenv' }]`
+//        lists the files the program loads over that environment after start, in load order (a later one wins): see expandEnv.
 // <cond> { src, equals? } — without `equals`: "is set".
 // A file that exists but cannot be read or parsed is { error }, never "unset" (D38).
 import path from 'node:path'
@@ -56,6 +58,23 @@ const refName = (inner) => { const s = inner.trim(); if (s.startsWith('env:')) r
 export const envRefs = (value) => (typeof value === 'string' ? [...value.matchAll(REF)].map((m) => refName(m[1])).filter(Boolean) : [])
 /** Whether `env` (an object or a Map) sets `name` to a value. */
 export const envHas = (env, name) => isSet(get(env, name))
+/** The environment an `expand: 'env'` setting is read against: `ctx.env` with the setting's `expandFrom` dotenv files laid over it in order, a later
+ *  one over an earlier, as the program loads them after start (4.11 P4) → { env } (a Map) | { error, where }: a file that is absent is skipped, one
+ *  that exists and cannot be read or parsed is not known (D38). A loc whose variable is unset names no file (a relative path is skipped). */
+export function expandEnv(src, ctx) {
+  const env = new Map(ctx.env instanceof Map ? ctx.env : Object.entries(ctx.env || {}))
+  const abs = ctx.os === 'win32' ? path.win32.isAbsolute : path.posix.isAbsolute
+  for (const from of src.expandFrom || []) {
+    let files
+    try { files = resolveLoc(from.file, ctx) } catch (e) { if (!absent(e)) return { error: why(e), where: String(from.file.path || '') }; files = [] }
+    for (const f of files.filter(abs)) {
+      let text
+      try { text = ctx.readFile(f) } catch (e) { if (absent(e)) continue; return { error: why(e), where: f } }
+      try { for (const [k, v] of Object.entries(PARSE[from.format](String(text)))) env.set(k, v) } catch (e) { return { error: `unparsable ${from.format}: ${(e && e.message) || e}`, where: f } }
+    }
+  }
+  return { env }
+}
 /** The environment names the `expand: 'env'` settings of a descriptor reference now, read against `ctx` as written: what a reader asks a process for
  *  besides the names its data declares (the door asks for only the names it needs, 4.9 §5.2). A setting that cannot be read names none. */
 export function envRefsOf(desc, ctx) {
@@ -91,6 +110,8 @@ export function readSrc(src, ctx) {
   }
   let files
   try { files = resolveLoc(src.file, ctx) } catch (e) { if (!absent(e)) return { error: why(e), where: String(src.file.path || '') }; files = [] }
+  const x = src.expand === 'env' ? expandEnv(src, ctx) : null
+  if (x && x.error) return x
   const all = []
   for (const f of files) {
     let text
@@ -98,7 +119,7 @@ export function readSrc(src, ctx) {
     let data
     try { data = PARSE[src.format](String(text)) } catch (e) { return { error: `unparsable ${src.format}: ${(e && e.message) || e}`, where: f } }
     for (const m of walk(data, src.keys)) {
-      const value = src.expand === 'env' ? expanded(m.value, ctx.env) : m.value
+      const value = x ? expanded(m.value, x.env) : m.value
       if (value !== undefined) all.push({ value, where: `${f}#${m.keys.join('.')}` })
     }
   }
