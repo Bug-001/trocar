@@ -712,10 +712,11 @@ function openDesk(ctx, route0, makeView) {
   // a body read that failed is asked again on the poll's schedule (2.3 §读失败)
   const reask = () => { if (s.bodyFail.size && s.playRid != null) { targeted = s.playRid; steps.target(s.playRid) } }
 
-  // the open tails (4.4 live-poll): `Range: bytes=<held>-` with `If-Range: <its tag>` on the tail the head names; a 200 is a new file (its
-  // generation changed), applied whole. The whole file when none is held of that n or with no tag, when it is shorter than what is held
-  // (416 naming a smaller size) or when what came is not its lines. A relayed answer carries no generation tag: none, or the named
-  // query's version, which the next If-Range does not match (200 whole). → {ok, anchor} | a failed answer
+  // the open tails (4.4 live-poll): `Range: bytes=<held − 1>-` with `If-Range: <its tag>` on the tail the head names; a 200 is a new file (its
+  // generation changed), applied whole. The one byte of overlap is the held last line's end, so a tail with nothing new answers 206 with
+  // that byte, not a 416 (which the browser logs as an error each round). The whole file when none is held of that n, with no tag or no
+  // byte, when it is shorter than what is held (416), when the first byte is not that line end, or when what came is not its lines.
+  // A relayed answer carries no generation tag: none, or the named query's version, which the next If-Range does not match (200 whole). → {ok, anchor} | a failed answer
   const tails = new Map() // part → {n, used, tag}
   // every row of the session is here: the server has none pending, each sealed pack is whole at the head's tag and each open tail read
   function allRows() {
@@ -723,12 +724,13 @@ function openDesk(ctx, route0, makeView) {
     return !!h && !s.desk.pending && (h.packs || []).every((p) => heldParts(p.n, p.tag).size === PARTS.length) && (!h.open || PARTS.every((k) => tails.has(k)))
   }
   async function readTail(part, n, signal, whole = false) {
-    const t = tails.get(part), from = whole || !t || t.n !== n || !t.tag ? null : t.used
-    const r = await getText(`/api/d/open.${part}`, { id: s.id }, { range: from, tag: from == null ? null : t.tag, signal }), at = nowMs()
+    const t = tails.get(part), from = whole || !t || t.n !== n || !t.tag || !t.used ? null : t.used
+    const r = await getText(`/api/d/open.${part}`, { id: s.id }, { range: from == null ? null : from - 1, tag: from == null ? null : t.tag, signal }), at = nowMs()
     if (!r.ok) return r
-    if (r.status === 416) { const size = Number((/\/(\d+)/.exec(r.range || '') || [])[1]); return size === from ? { ok: true } : readTail(part, n, signal, true) }
+    if (r.status === 416 || (r.status === 206 && r.text[0] !== '\n')) return readTail(part, n, signal, true)
+    if (r.status === 206 && r.text.length === 1) return { ok: true } // nothing new
     let parsed
-    try { parsed = await parseSliced(r.text, { head: r.status !== 206 }, pace) } catch { return from == null ? { ok: false, status: r.status, error: 'not the file\'s lines' } : readTail(part, n, signal, true) }
+    try { parsed = await parseSliced(r.status === 206 ? r.text.slice(1) : r.text, { head: r.status !== 206 }, pace) } catch { return from == null ? { ok: false, status: r.status, error: 'not the file\'s lines' } : readTail(part, n, signal, true) }
     if (r.status !== 206 && parsed.head && parsed.head.tail && parsed.head.tail.n !== n) n = parsed.head.tail.n
     const used = (r.status === 206 ? from : 0) + parsed.used
     return serial(() => {
