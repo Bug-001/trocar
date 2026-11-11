@@ -1,6 +1,6 @@
 // test/ci/default-test-files.test.mjs — `npm test` gives `node --test` no file list, so Node runs every file its default patterns match.
-// A script outside test/ whose name matches runs inside the unit run: scripts/test-browser.mjs built the board there, and the npm and Vite
-// it spawned left node-compile-cache/ in the run's temp dir, so every full run exited 1 with 0 failures. Only files under test/ may match.
+// A script outside test/ whose name matches runs inside the unit run: the browser suite's script, once named test-*.mjs, built the board
+// there, and the npm and Vite it spawned left node-compile-cache/ in the run's temp dir (exit 1, 0 failures). Only files under test/ may match.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
