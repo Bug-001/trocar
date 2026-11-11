@@ -8,15 +8,18 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { WITH_PARENT, watchEnv } from '../helpers/standin.mjs'
 import { endGroup } from '../../scripts/cli-shot.mjs'
 
 const HELPER = `process.on('SIGTERM', () => setTimeout(() => process.exit(0), 400)); const fs = require('node:fs'), d = process.argv[1]
 setInterval(() => { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(d + '/w', String(Date.now())) }, 20)`
-const BROWSER = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(HELPER)}, process.argv[1]], { stdio: 'ignore' }); setInterval(() => {}, 1000)`
+// every process here carries the watch (standin.mjs): a test process killed before endGroup runs leaves none of them writing. The helper gets the
+// preloads from the browser's arguments and TROCAR_WATCH_PID (this process) from the environment it inherits
+const BROWSER = `require('node:child_process').spawn(process.execPath, [...${JSON.stringify(WITH_PARENT)}, '-e', ${JSON.stringify(HELPER)}, process.argv[1]], { stdio: 'ignore' }); setInterval(() => {}, 1000)`
 
 test('endGroup: the profile a removed directory held is not written again once it resolves, a helper that ends slowly included', { skip: process.platform === 'win32' && 'no process groups' }, async () => {
   const dir = path.join(tmpDir('trocar-shot-group-'), 'p')
-  const browser = spawn(process.execPath, ['-e', BROWSER, dir], { stdio: 'ignore', detached: true })
+  const browser = spawn(process.execPath, [...WITH_PARENT, '-e', BROWSER, dir], { stdio: 'ignore', detached: true, env: watchEnv() })
   for (let i = 0; i < 200 && !fs.existsSync(path.join(dir, 'w')); i++) await sleep(20) // the helper is writing
   assert.ok(fs.existsSync(path.join(dir, 'w')), 'the helper started')
   assert.equal(await endGroup(browser), true, 'every process of the group ended')
@@ -33,7 +36,7 @@ test('endGroup: a child with no positive pid is never signalled — kill(-0) wou
 
 test('endGroup without process groups (win32): the child alone, by its handle, and its exit; process.kill(-pid) is never reached', async (t) => {
   const kill = t.mock.method(process, 'kill', () => assert.fail('process.kill on a platform without groups'))
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  const child = spawn(process.execPath, [...WITH_PARENT, '-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', env: watchEnv() })
   assert.equal(await endGroup(child, { groups: false }), true)
   assert.ok(child.exitCode !== null || child.signalCode, 'the child ended')
   assert.equal(kill.mock.callCount(), 0)
