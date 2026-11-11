@@ -4,7 +4,7 @@
 // Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld } from './harness.mjs'
+import { probe, withBoard, serveWorld, settle } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
@@ -72,3 +72,56 @@ for (const theme of ['light', 'dark']) for (const width of WIDTHS) {
     } finally { await b.stop() }
   })
 }
+
+// 2.3 #35 · a step's landing is settled before its first painted frame. Cold opens of the generated sessions from the library: from the
+// first painted frame that shows the step, every frame (sampled where the browser has laid it out and is about to paint: a
+// ResizeObserver on a box resized each frame) shows the visible box covered by the list, and every item in view at the same place
+// relative to the box as in the frame before. On a cold open the scope above the window grows as the step's data arrives (a scope-growth
+// settle): sized a frame late, it left the window taller than it ends up, the landing was clamped short of its item and moved to it on
+// the next frame. A landing whose rows are drawn a frame late leaves the box part blank.
+test('2.3 #35: a cold-opened step paints its whole visible box in the first frame and nothing in view moves after it', { skip, timeout: 300_000 }, async () => {
+  const b = await withBoard({ bytes: 3e5, width: 1280, chromium: gate.chromium })
+  try {
+    const { page } = b
+    const bad = []
+    for (let row = 0; row < 4; row++) {
+      await page.evaluate(() => { location.hash = '#/sessions' })
+      await page.waitForSelector('a.lrow', { timeout: 30_000 })
+      await page.evaluate(() => {
+        const frames = window.__frames = []
+        const probe = document.createElement('div')
+        probe.style.cssText = 'position:fixed;left:-10px;top:0;width:1px;height:1px'
+        document.body.appendChild(probe)
+        let k = 0
+        const ro = new ResizeObserver(() => {
+          const W = document.querySelector('#ctxwin'), L = W?.querySelector('.cwlist')
+          if (!L || !W.querySelector('.cwit')) { if (frames.length) frames.push({ items: {}, gaps: ['no list'] }); return }
+          const box = W.getBoundingClientRect(), end = Math.min(box.bottom, L.getBoundingClientRect().bottom)
+          const rs = [...W.querySelectorAll('.cwit')].map((e) => [e.dataset.key, e.getBoundingClientRect()]).filter(([, r]) => r.bottom > box.top && r.top < end)
+            .sort((x, y) => x[1].top - y[1].top)
+          const gaps = []
+          let y = box.top
+          for (const [, r] of rs) { if (r.top > y + 1) gaps.push([Math.round(y - box.top), Math.round(r.top - box.top)]); y = Math.max(y, r.bottom) }
+          if (end > y + 1) gaps.push([Math.round(y - box.top), Math.round(end - box.top)])
+          frames.push({ items: Object.fromEntries(rs.map(([key, r]) => [key, Math.round((r.top - box.top) * 10) / 10])), gaps })
+        })
+        ro.observe(probe)
+        const tick = () => { probe.style.width = `${(k++ % 2) + 1}px`; if (frames.length < 20) requestAnimationFrame(tick); else { ro.disconnect(); probe.remove() } }
+        requestAnimationFrame(tick)
+      })
+      await page.locator('a.lrow').nth(row).click()
+      await page.waitForFunction(() => (window.__frames || []).length >= 20, null, { timeout: 30_000, polling: 'raf' })
+      const frames = await page.evaluate(() => window.__frames)
+      // the landing's own scroll is not the reader's: the cold open still follows, its URL names no step
+      const follow = await page.evaluate(() => [document.querySelector('.sh-follow')?.getAttribute('aria-pressed'), new URLSearchParams(location.hash.split('?')[1] || '').get('step')])
+      if (follow[0] !== 'true' || follow[1] != null) bad.push(`row ${row}: after the open, follow ${follow[0]} and step= ${follow[1]}`)
+      frames.forEach((f, j) => {
+        if (f.gaps.length) bad.push(`row ${row}, frame ${j}: the box shows no item in ${JSON.stringify(f.gaps)}`)
+        if (j) for (const [key, y] of Object.entries(f.items)) { const was = frames[j - 1].items[key]; if (was != null && was !== y) bad.push(`row ${row}, frame ${j}: ${key} moved ${was} -> ${y}`) }
+      })
+    }
+    await settle(page)
+    assert.deepEqual(bad, [])
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
