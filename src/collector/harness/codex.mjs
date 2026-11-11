@@ -51,6 +51,7 @@ function configHosts(ctx) {
   return urls.filter((u) => typeof u === 'string').map(hostOf).filter(Boolean)
 }
 
+const CA_ENV = ['SSL_CERT_FILE'] // the launch env's CA variable the .env block overrides
 function inject(ctx) {
   const homes = new Set()
   const def = path.join(ctx.home, '.codex')
@@ -63,7 +64,7 @@ function inject(ctx) {
   const seen = new Set() // SSL_CERT_FILE values the block overrides: the user's lines, the launch env
   const see = (v) => { if (typeof v === 'string' && v !== '' && !isOwnPath(ctx, v)) seen.add(v) }
   for (const h of present) see(parseDotenv(ctx.readText(path.join(h, '.env')) || '').get('SSL_CERT_FILE'))
-  for (const env of [ctx.env, ...ctx.running]) see(env.get('SSL_CERT_FILE'))
+  for (const env of [ctx.env, ...ctx.running]) for (const n of CA_ENV) see(env.get(n))
   notes.push(...[...seen].filter((v) => !path.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${v} is a relative CA path; its certificates are not carried over into ${path.basename(bundle)}` })))
   return {
     entries: present.map((h) => ({ kind: 'text', format: 'dotenv-block', path: path.join(h, '.env'), vars: { SSL_CERT_FILE: bundle }, semantic: 'replace' })),
@@ -116,6 +117,8 @@ const proxyMode = {
 
 export default {
   name: 'codex',
+  // the CA variables install reads from its environment to compose this harness's files (4.11 P4 ca_env: recorded, so a shell without one keeps it)
+  caEnv: CA_ENV,
   runtime: 'rust',
   // Which processes are Codex (D51 preset, every OS): the Rust binary by any install (npm's vendor dir, the editor extensions, the app). Its sandbox
   // and patch helpers run as their own argv[0] or as codex with a helper verb; the Node launcher (node …/bin/codex) is not codex.

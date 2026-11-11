@@ -140,7 +140,7 @@ test('V42: one hop that cannot be read changes no exit code and no verdict — i
   assert.equal((await status(s, ['--json'], { exec: nobody })).exit, before.exit)
 })
 
-test('1.6 §9.6: when the findings cannot be made `doctor --json` has `findings: null` and `findings_error` (the topology\'s reason), the text says unknown and not "no problems", and nothing else changes; when they were read and there are none, `findings` is []', { skip: POSIX_WORLD }, async () => {
+test('1.6 §9.6: when the network findings cannot be made `doctor --json` has `findings` (what was read) and `findings_error` (the topology\'s reason), the text says unknown and not "no problems", and nothing else changes; when they were read and there are none, `findings` is [] without findings_error', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const none = path.join(s.home, 'none')
   const fine = await s.run(['doctor', '--json'], { env: { ...s.ctx().env, TROCAR_SOURCE: none } })
@@ -149,7 +149,8 @@ test('1.6 §9.6: when the findings cannot be made `doctor --json` has `findings:
   assert.equal(fineDoc.findings_error, undefined)
   const broken = await s.run(['doctor', '--json'], { env: { ...s.ctx().env, TROCAR_SOURCE: none }, deps: { netFactsDeps: async () => { throw new Error('boom: no facts') } } })
   const doc = broken.io.json()
-  assert.deepEqual([doc.findings, doc.findings_error], [null, 'boom: no facts'])
+  assert.equal(doc.findings_error, 'boom: no facts')
+  assert.ok(Array.isArray(doc.findings) && doc.findings.every((x) => fineDoc.findings.some((y) => y.code === x.code)), `what was read, a part of the readable run's: ${JSON.stringify(doc.findings)}`)
   assert.equal(broken.exit, fine.exit, 'a finding that could not be made is not a verdict that doctor could not give')
   const capturedOf = (d) => Object.fromEntries(Object.entries(d.status.harnesses).map(([h, x]) => [h, x.captured]))
   assert.deepEqual(capturedOf(doc), capturedOf(fineDoc))

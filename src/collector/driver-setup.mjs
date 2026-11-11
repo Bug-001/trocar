@@ -11,12 +11,13 @@ import { isPresent, uncapturedOf } from './core/proxymode/sources.mjs'
 import { userWhich, userFootprintEnv } from '../off/user-path.mjs'
 import { certBlocks } from '../off/pem.mjs'
 import { samePath } from './core/trust/journal.mjs'
+import { withCaEnv } from './core/trust/ca-env.mjs'
 
 /** The ctx a descriptor's `inject` reads (the shape install's planOn hands it), plus what the proxy-mode readers (readSrc) need. */
 export function driverCtx({ os, home, env = process.env, fs = nodeFs, running = [] }) {
   const collectorDir = collectorHome(path.join(home, '.trocar'))
   return {
-    os, home, env: userFootprintEnv({ home, env, fs }), running, // a moved footprint place resolves by the recorded values, as `which` by the recorded PATH
+    os, home, env: withCaEnv(userFootprintEnv({ home, env, fs }), collectorDir, fs), running, // a moved footprint place resolves by the recorded values, as `which` by the recorded PATH; a CA variable unset here by ca_env (4.11 P4)
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f),
     readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } },
     listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } },

@@ -203,6 +203,8 @@ const proxyMode = {
 
 export default {
   name: 'claude-code',
+  // the CA variables install reads from its environment to compose this harness's files (4.11 P4 ca_env: recorded, so a shell without one keeps it)
+  caEnv: [CA_VAR],
   runtime: 'node', // Bun standalone; NODE_EXTRA_CA_CERTS semantics
   processes,
   hosts: ['api.anthropic.com'],

@@ -61,7 +61,7 @@ async function entryOf({ platform, home, env, fs, deps, unit }) {
   try { onDisk = fs.readFileSync(unit.path, 'utf8'); mtime = fs.statSync(unit.path).mtimeMs } catch { return null } // no entry on disk: the collector was not started from one
   const { daemonEnv } = await import('../collector/install.mjs')
   const since = await daemonSince({ platform, dir, env, fs, deps })
-  return { current: onDisk === unit.text(daemonEnv(env, dir).env), newer: Number.isFinite(since) ? mtime > since : null }
+  return { current: onDisk === unit.text(daemonEnv(env, dir, { fs }).env), newer: Number.isFinite(since) ? mtime > since : null }
 }
 
 // 1.6 §3.2 step 5, after the login entry is up: the collector the plan named (`stale`) is replaced through the routine update uses; routing is not

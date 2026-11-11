@@ -118,7 +118,7 @@ export const CHROMES = [
 // pipe (fd 3 in, fd 4 out, NUL-delimited JSON) with an explicit viewport instead of --screenshot.
 function cdpShot(bin, tmp, url, w, h, out) {
   const chrome = spawn(bin, ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--use-mock-keychain', '--remote-debugging-pipe', `--user-data-dir=${tmp}/p`],
-    { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] })
+    { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], detached: GROUPS }) // its own process group: its renderers stay in it (endGroup)
   let id = 0, buf = '', err = '', onLoad
   const waiting = new Map()
   chrome.stderr.on('data', (d) => { err = (err + d).slice(-2000) })
@@ -161,13 +161,30 @@ function cdpShot(bin, tmp, url, w, h, out) {
     chrome.on('exit', () => reject(new Error(`chrome exited before writing the png: ${err.trim().split('\n').pop()}`)))
     timer = setTimeout(() => reject(new Error(`chrome did not answer in 30s; killed pid ${chrome.pid}`)), 30000)
   })
-  return Promise.race([run(), died]).finally(() => {
+  return Promise.race([run(), died]).finally(async () => {
     clearTimeout(timer)
-    chrome.kill() // our own child, by its handle
-    const hard = setTimeout(() => chrome.kill('SIGKILL'), 5000) // one that ignores SIGTERM does not hold the script
-    hard.unref()
-    return new Promise((r) => (chrome.exitCode !== null || chrome.signalCode ? r() : chrome.once('exit', r))).finally(() => clearTimeout(hard))
+    if (!(await endGroup(chrome))) process.stderr.write(`cli-shot: a process of Chrome (pid ${chrome.pid}) outlived ${GROUP_LIMIT_MS / 1000}s\n`)
   })
+}
+
+const GROUP_LIMIT_MS = 15000
+const GROUPS = process.platform !== 'win32' // process groups: win32 has none (no kill(-pid)), and a detached child there gets a console of its own
+/** Ends `child` (spawned detached where GROUPS, so it leads its own process group) and every process of its group, then waits until none is left,
+ *  bounded → true when the group is gone. Chrome's renderers outlive the browser process under load and still write its profile, so the profile
+ *  is removed only after this. SIGTERM, then SIGKILL after `graceMs` to whatever ignores it. On win32 the child alone, and its exit. A child with
+ *  no positive pid never started: nothing is signalled (kill(-0) would be this process's own group). */
+export async function endGroup(child, { graceMs = 5000, limitMs = GROUP_LIMIT_MS, groups = GROUPS } = {}) {
+  if (!(Number.isInteger(child.pid) && child.pid > 0)) return true
+  const exited = child.exitCode !== null || child.signalCode ? null : new Promise((r) => child.once('exit', r))
+  const group = (sig) => { try { process.kill(-child.pid, sig); return true } catch { return false } } // false: no process of the group is left
+  const kill = (sig) => (groups ? group(sig) : child.kill(sig))
+  kill('SIGTERM')
+  const hard = setTimeout(() => kill('SIGKILL'), graceMs) // one that ignores SIGTERM does not hold the script
+  hard.unref()
+  await exited
+  if (groups) for (const end = Date.now() + limitMs; group(0) && Date.now() < end;) await new Promise((r) => setTimeout(r, 50))
+  clearTimeout(hard)
+  return !groups || !group(0)
 }
 
 async function shoot({ doc, w, h, out }) {
@@ -191,7 +208,7 @@ async function shoot({ doc, w, h, out }) {
     fs.writeFileSync(page, doc)
     await cdpShot(bin, tmp, pathToFileURL(page).href, w, h, out)
   } finally {
-    // a Chrome that outlived the timeout can still be writing its profile: let Node retry ENOTEMPTY / EBUSY, then say what stayed
+    // removed once every process of that Chrome has ended (endGroup); Node retries ENOTEMPTY / EBUSY (Windows), then says what stayed
     try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) } catch (e) { process.stderr.write(`cli-shot: could not remove ${tmp} (${e.code ?? e.message}); remove it by hand\n`) }
   }
 }
