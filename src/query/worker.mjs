@@ -108,8 +108,14 @@ async function serve(line) {
     // ask again: the daemon does (3.5 §行表先读); a session the segments read so far name the way the full list will is answered now
     if (!rowsRead && !control && Object.hasOwn(QUERIES, name) && (!QUERIES[name].rowFree || rows) && !(early = await earlyRows(name, params))) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null }
     asked = { name, params }
-    // a session waiting for room is tried by its timer, not by each ask: 102 at once, no fold (`session --head` answers its head as it stands)
-    if (!control && (name === 'lane' || (name === 'session' && !headAsked(params || {}))) && waitRoom.has(String(params?.id))) { await write(102, Buffer.alloc(0), '-', 0, '-'); return null }
+    // a session waiting for room, or stopped on it, is tried by the waiting timer once it finds room, not by each ask: 102 at once, no fold
+    // (`session --head` answers its head as it stands); a stopped one asked for waits as a user's (3.5 #37: after the stop no try while
+    // there is no room)
+    if (!control && (name === 'lane' || (name === 'session' && !headAsked(params || {}))) && held(String(params?.id))) {
+      const id = String(params.id)
+      if (noRoom.delete(id) || waitRoom.get(id)) { waitRoom.set(id, null); roomLater() } // an upgrade entry asked for waits as a user's
+      await write(102, Buffer.alloc(0), '-', 0, '-'); return null
+    }
     if (control) { // one JSON line, the bytes `trocar <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
       try {
         const { VERBS } = await import('../control/board.mjs')
@@ -210,6 +216,9 @@ const noRoom = new Set() // the sessions a background slice stopped on heap-no-r
 // heap has room, back to the head of the upgrade queue or to `follow`; when nothing else can give way (no reader, no fill, the warm
 // entries let go: heapHasRoom), it does not fit: its heap-no-room stop, and `noRoom`
 const waitRoom = new Map()
+// sessions this process found no room for: a stop an earlier worker wrote (the upgrade scan's) is this heap's to try once
+const roomless = new Set()
+const held = (id) => waitRoom.has(id) || (noRoom.has(id) && roomless.has(id)) // no try for it until the heap has room
 /** Session work pending: a request read or in flight, or a session read for a user (a request's, a follow's, a kick's). The usage fill waits
  *  for none (3.5 后台抽取与归约); a session fully read is no longer `target` nor followed, so it holds nothing. */
 const sessionWork = () => busy > 0 || (target != null && user) || follow.size > 0
@@ -232,7 +241,7 @@ const roomLater = () => {
     waitRoom.clear()
     for (const [id, u] of ids) {
       if (room) { if (u) upgrade?.unshift(u); else follow.add(id) }
-      else { noRoom.add(id); try { await noRoomStop({ home, fs: nodeFs, writer: writes, persist, once, progress }, id) } catch (e) { say(e) } }
+      else { noRoom.add(id); roomless.add(id); try { await noRoomStop({ home, fs: nodeFs, writer: writes, persist, once, progress }, id) } catch (e) { say(e) } }
     }
     kick()
   }, ROOM_MS)
@@ -248,7 +257,7 @@ async function kickedSessions(ctx) {
   for (const id of ids) if (posCmp(id, oldest) < 0) oldest = id
   const want = new Set(ids), found = []
   for (const [sid, ms] of sessionGroups((await indexed(ctx)).rows)) { // the slice below reads the same index (`once`)
-    for (let i = ms.length - 1; i >= 0 && posCmp(String(ms[i].id), oldest) >= 0; i--) if (want.has(String(ms[i].id))) { follow.add(sid); found.push([sid, ms]); break }
+    for (let i = ms.length - 1; i >= 0 && posCmp(String(ms[i].id), oldest) >= 0; i--) if (want.has(String(ms[i].id))) { if (!held(sid)) follow.add(sid); found.push([sid, ms]); break }
   }
   try { // so `sessions` finds them in the table (3.5 §访问模式); what fails is said by the next `sessions` (D38)
     for (const [id, members] of found) titleOf({ home, fs: nodeFs, id, members })
@@ -299,9 +308,9 @@ async function background() {
     try { more = await extendSession(ctx, id, SLICE_MS) } catch (e) {
       // heap-busy is no failure: a user's or an upgrade's session waits for room; the newest scan's is dropped (the next request scans again)
       if (e?.code === 'heap-busy') { if (mine !== undefined) { waitRoom.set(id, mine); roomLater() } } else say(e)
-      if (e?.code === 'heap-no-room') noRoom.add(id)
+      if (e?.code === 'heap-no-room') { noRoom.add(id); roomless.add(id) }
     }
-    if (more === null) noRoom.add(id) // its state went in the slice: the heap again, not the session
+    if (more === null) { noRoom.add(id); roomless.add(id) } // its state went in the slice: the heap again, not the session
     if (!more && !noRoom.has(id) && !waitRoom.has(id) && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
       try { writeSkip(home, target, up[1]) } catch { /* the next worker tries again */ }
     }
@@ -396,7 +405,7 @@ process.stdin.on('data', (d) => {
 // must not hold off the idle save and the GC).
 process.on('message', (m) => {
   if (m && m.sweep === true) { sweepDue = true; kick(); return }
-  if (m && typeof m.follow === 'string') { if (rereadOf(m.follow)) opened.add(m.follow); if (target !== m.follow && !waitRoom.has(m.follow)) follow.add(m.follow); kick(); return } // a session waiting for room: its timer tries it
+  if (m && typeof m.follow === 'string') { if (rereadOf(m.follow)) opened.add(m.follow); if (target !== m.follow && !held(m.follow)) follow.add(m.follow); kick(); return } // a session waiting for room or stopped on it: no try until room
   if (!m || !Array.isArray(m.kick)) return
   for (const id of m.kick) kicked.add(String(id))
   once = {}; gcDone = false; sealing = false; lastAt = Date.now()
