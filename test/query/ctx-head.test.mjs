@@ -41,7 +41,7 @@ const until = (ok, ms, what) => { let t; return within(new Promise((d) => { t = 
 const homeOf = () => { const home = path.join(tmpDir('trocar-head-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
 const headFileOf = (home, id) => path.join(sessionDir(home, id), 'head.json.gz')
 const readHead = (home, id) => gunzipSync(fs.readFileSync(headFileOf(home, id))).toString('utf8')
-const inoOf = (f) => { try { return fs.statSync(f).ino } catch { return null } }
+const inoOf = (f) => { try { return fs.statSync(f, { bigint: true }).ino } catch { return null } }
 
 // One generated session folded to its end by the worker (shared by the tests that read a tier-1 head): ≥ 1,200 calls, subagent lanes,
 // late calls, a main context that compacts many times.

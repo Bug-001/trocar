@@ -212,7 +212,7 @@ test('3.5 §谁执行它: a head written before lineage, of any tier, is stamped
       for (const k of KEYS) delete d.meta[k]
       assert.deepEqual(d, old[id], `${id}: nothing else moved`)
     }
-    const stat = (id) => { const f = [false, true].map((x) => headFile(home, id, x)).find((f) => fs.existsSync(f)); const s = fs.statSync(f); return [s.ino, s.mtimeMs] }
+    const stat = (id) => { const f = [false, true].map((x) => headFile(home, id, x)).find((f) => fs.existsSync(f)); const s = fs.statSync(f, { bigint: true }); return [s.ino, s.mtimeNs] }
     const was = Object.keys(old).map(stat)
     for (const x of [false, true]) fs.rmSync(headFile(home, 'oc-last', x), { force: true })
     w.send({ sweep: true })
@@ -236,7 +236,7 @@ test('3.5 §谁执行它: the sweep brings a head to the table\'s verdict: linea
   for (const k of KEYS) delete old.meta[k]
   writeHead(home, 'ds-late', old)
   assert.ok(old.tier > 0, 'a head past tier 0')
-  const stat = (id) => { const f = [false, true].map((x) => headFile(home, id, x)).find((p) => fs.existsSync(p)); const s = fs.statSync(f); return [s.ino, s.mtimeMs] }
+  const stat = (id) => { const f = [false, true].map((x) => headFile(home, id, x)).find((p) => fs.existsSync(p)); const s = fs.statSync(f, { bigint: true }); return [s.ino, s.mtimeNs] }
   let w = workerFork(home)
   const swept = () => within(new Promise((ok) => { const k = setInterval(() => hasHead(home, 'oc-last') && (clearInterval(k), ok()), 50) }), 60_000, 'the sweep reached the last session')
   const clear = () => { for (const x of [false, true]) fs.rmSync(headFile(home, 'oc-last', x), { force: true }) }

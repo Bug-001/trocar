@@ -41,15 +41,15 @@ test('4.3 #9: the flat layout is renamed into ctx/<k>/ on the first read; the an
       const dir = sessionDir(flat, s.id), inode = {}
       if (pre === 'none') for (const n of fs.readdirSync(dir)) if (/^(head\.|open\.|p\d+\.)/.test(n)) fs.rmSync(path.join(dir, n)) // the flat layout had no answer files
       for (const [n, ext] of Object.entries(FLAT)) {
-        if (pre === 'store') { fs.copyFileSync(path.join(dir, n), dir + ext); inode[n] = fs.statSync(path.join(dir, n)).ino; continue }
-        fs.renameSync(path.join(dir, n), dir + ext); inode[n] = fs.statSync(dir + ext).ino
+        if (pre === 'store') { fs.copyFileSync(path.join(dir, n), dir + ext); inode[n] = fs.statSync(path.join(dir, n), { bigint: true }).ino; continue }
+        fs.renameSync(path.join(dir, n), dir + ext); inode[n] = fs.statSync(dir + ext, { bigint: true }).ino
       }
       if (pre === 'none') fs.rmdirSync(dir)
       const after = await answers(flat, s.id)
       assert.equal(after, before, `${wire} · ${pre}: the answers after the move`)
       const ctx = path.dirname(dir)
       assert.deepEqual(fs.readdirSync(ctx).filter((n) => n.startsWith(path.basename(dir))), [path.basename(dir)], `${wire} · ${pre}: no flat file is left`)
-      for (const n of Object.keys(FLAT)) assert.equal(fs.statSync(path.join(dir, n)).ino, inode[n], `${wire} · ${pre}: ${n} is ${pre === 'store' ? 'the directory\'s own' : 'the flat file renamed, not a copy'}`)
+      for (const n of Object.keys(FLAT)) assert.equal(fs.statSync(path.join(dir, n), { bigint: true }).ino, inode[n], `${wire} · ${pre}: ${n} is ${pre === 'store' ? 'the directory\'s own' : 'the flat file renamed, not a copy'}`)
       if (pre === 'none') assert.equal(fs.statSync(dir).mode & 0o777, 0o700) // the others: the copy made that directory
     }
   }

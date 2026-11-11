@@ -199,10 +199,10 @@ test('a worker that only read an unchanged session leaves the reduction state: t
   s.append(300)
   await worker(home, s.id, { idle: 0 })
   assert.ok(state(), 'the fold left its state in the sidecar')
-  const side = sidecarOf(foldLogFile(home, s.id)), written = fs.statSync(side).ino
+  const side = sidecarOf(foldLogFile(home, s.id)), written = fs.statSync(side, { bigint: true }).ino
   await worker(home, s.id, { idle: 0 })
   assert.ok(state(), 'the state is still there after a worker that only read')
-  assert.equal(fs.statSync(side).ino, written, 'a read that moved nothing wrote no sidecar')
+  assert.equal(fs.statSync(side, { bigint: true }).ino, written, 'a read that moved nothing wrote no sidecar')
   s.append(1)
   const { ticks } = await worker(home, s.id, { idle: 0 })
   assert.ok(ticks < 100, `the new member alone is folded, not the session: ${ticks} ticks`)
