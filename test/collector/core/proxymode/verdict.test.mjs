@@ -261,20 +261,26 @@ test('P11 rule 4 · Hermes seed: a provider ssl_ca_cert without the root forward
 // 4.11 P4 `expand: 'env'`: Hermes reads `${NAME}` and `${env:NAME}` in config.yaml from its environment (spaces inside trimmed); another source
 // (`${vault:…}`) stays as written. The door reads the value the same way, from the process's environment. A name that environment lacks is not
 // known, never unset (D38): Hermes may have put it into its environment after start, from its .env, which the door cannot see.
-test('P11 rule 4 · Hermes ssl_ca_cert ${VAR}: in the process env → its file is judged; not in it → not known, environ-unreadable', () => {
+test('P11 rule 4 · Hermes ssl_ca_cert ${VAR}: in the process env → its file is judged (with the root: decrypt); not in it → not known, environ-unreadable', () => {
   const d = descs.find((x) => x.name === 'hermes'), f = d.proxyMode.forms.find((x) => x.id === 'hermes.cli')
   const dir = tmpDir('trocar-hermes-var-'), ca = path.join(dir, 'corp.pem')
-  fs.writeFileSync(ca, OTHER.pem)
+  const withRoot = path.join(dir, 'corp-with-root.pem')
+  fs.writeFileSync(ca, OTHER.pem); fs.writeFileSync(withRoot, pemBlock(OTHER.pem, ROOT.pem).text)
   fs.writeFileSync(path.join(dir, '.env'), `CORP_CA=${ca}\n`)
   const ctx = { os: 'darwin', home: '/nowhere', dirs: {}, env: {}, join: path.join, readFile: OWN(dir), readdir: () => [], policy: () => ({ set: false }) }
   for (const ref of ['${CORP_CA}', '${env:CORP_CA}', '${ CORP_CA }', '${env: CORP_CA }']) {
     fs.writeFileSync(path.join(dir, 'config.yaml'), `providers:\n  corp:\n    ssl_ca_cert: ${ref}\n`)
-    for (const [env, want] of [[{ CORP_CA: ca }, 'replace-without-ca'], [{}, 'environ-unreadable']]) {
+    for (const [env, want] of [[{ CORP_CA: ca }, 'replace-without-ca'], [{ CORP_CA: withRoot }, null], [{}, 'environ-unreadable']]) {
       const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir, ...env }, cwd: dir } })
-      assert.deepEqual([got.decrypt, got.code ?? null], [false, want], `${ref}: ${JSON.stringify(got)}`)
+      assert.deepEqual([got.decrypt, got.code ?? null], [want === null, want], `${ref}: ${JSON.stringify(got)}`)
       if (want === 'environ-unreadable') assert.match(got.detail, /\$\{CORP_CA\}/, 'the record names the variable')
     }
   }
+  // two references in one value: one held, one not → the one not held is named
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'providers:\n  corp:\n    ssl_ca_cert: ${CA_DIR}/${CA_NAME}\n')
+  const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir, CA_DIR: dir }, cwd: dir } })
+  assert.deepEqual([got.decrypt, got.code], [false, 'environ-unreadable'], JSON.stringify(got))
+  assert.match(got.detail, /\$\{CA_NAME\}/)
 })
 
 // D38: with the process environment unread, a value read under `expand: 'env'` that names a variable is not known — never read as unset, which would

@@ -19,7 +19,7 @@ import { resolveLoc } from '../../../off/loc.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
 import { pathKey } from '../../../off/fsutil.mjs'
 
-const get = (env, k) => (env instanceof Map ? env.get(k) : env ? env[k] : undefined)
+const get = (env, k) => (env instanceof Map ? env.get(k) : env && Object.hasOwn(env, k) ? env[k] : undefined) // own names only: `${constructor}` is no variable
 const isSet = (v) => v !== undefined && v !== null && v !== ''
 const absent = (e) => e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')
 const why = (e) => `${(e && e.code) || 'error'}: ${(e && e.message) || e}`
@@ -63,7 +63,7 @@ export function envRefsOf(desc, ctx) {
   for (const src of ((desc && desc.proxyMode) || {}).userCertFiles || []) {
     if (src.expand !== 'env') continue
     const r = readSrc({ ...src, expand: undefined }, ctx)
-    for (const x of (r.set && r.all) || []) for (const n of envRefs(x.value)) out.add(n)
+    for (const x of (r.set && r.all) || []) for (const n of envRefs(x.value)) if (!/[=\0]/.test(n)) out.add(n) // no variable is named so: asking would fail the whole read
   }
   return [...out].slice(0, MAX_REFS) // bounded: names only (`${NAME}` and nothing else of the text), at most MAX_REFS asked of a process
 }
