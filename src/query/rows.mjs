@@ -7,10 +7,10 @@
 // 1 GB (1.6 §4.1 速度目标) where reading every record back cost 4.5 s on Windows and 7 s on macOS.
 import nodeFs from 'node:fs';
 import path from 'node:path';
-import { createSynthAssigner, headsFactOf } from '../dissect/synth-key.mjs';
+import { asksFactOf, createSynthAssigner, headsFactOf, KIN_V } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { endpointClass } from '../dissect/endpoints.mjs';
-import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom, IndexPending } from './index-build.mjs';
+import { indexDir, segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom, IndexPending } from './index-build.mjs';
 import { recordsAt } from './records.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag } from './warm.mjs';
@@ -35,22 +35,34 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 // part's end 83 B; a session in the index 208 B (its Map entry and positions array); a position 8.8 B on average, charged at the
 // 12 B a slot holds right after its array grew (1.5× its length); a kinship fingerprint in an open keyed session's set 22.5 B
 // (2026-10-30, node 22; charged once per part that holds the set, even when parts share it).
-// OPEN_HEAP: an open chain with its tail and its items, measured about 664 B (a keyed entry holds neither and is charged the same).
+// OPEN_HEAP: an open chain with its tail and its items, measured about 664 B (a keyed entry holds neither and is charged the same),
+// and its latest call's locator (`at`, one flat string), measured 56 B more (2026-11-11, node 22; × 1.25 = 70).
 // TAIL_HEAP: a chain held for extension only (its tail; 3.4 合成键 有界), copied at a part's end, measured 110 B (2026-11-08, node 22).
 // REPLY_HEAP: a reply kept for kinship (its key with the item, its entry and its sessions' array; 3.4 按内容认亲 有界), measured 276 B,
 // charged once per list: the parts share the entry (copyOpen); REPLY_SLOT_HEAP: one more part's Map slot for it, measured 57 B (4,050
 // replies in the rule's state, liveHeap() before and after, then 8 copies of the state; 2026-11-08, node 22; × 1.25).
-const PART_HEAP = 450, OPEN_HEAP = 640, TAIL_HEAP = 140, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28, REPLY_HEAP = 350, REPLY_SLOT_HEAP = 72;
+const PART_HEAP = 450, OPEN_HEAP = 710, TAIL_HEAP = 140, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28, REPLY_HEAP = 350, REPLY_SLOT_HEAP = 72;
 const lists = warmCache({ max: 4, cost: (v) => v.heap, steady: true });
 // the rule moves a chain's `lastMs` in place (and replaces `fp`); a kept reply's entry it only replaces, so the copy shares it
 const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, v.owners ? v : { ...v }]));
 // the index keeps a call's kinship fingerprints as one space-joined string (index-build.mjs `kin_fp` / `kin_probe`; `kin_chain` the same way)
 const fpOf = (s) => (s == null ? null : s ? s.split(' ').map(Number) : []);
 const lineOf = (id) => Number(String(id).split(':').pop());
-// `heads`: a compaction request's windows (its row has kin_probe), read back from its record before the rule takes the row (headsReader), never held (3.4 按内容认亲 有界)
-const assignRow = (assign, r, heads = null) => (r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
+// `at`: where the row's record is (headsReader reads a compaction request's windows, and a session's latest call, back from it when the
+// rule asks), joined: one flat string, a quarter of what a template's pieces hold. `decided`: the attribution table's entry for the row
+const assignRow = (assign, r, decided) => (r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key, at: [r.id, r.offset ?? '', r.stored_bytes].join('\t'),
   hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), late: r.kin_late, chain: r.kin_chain ? r.kin_chain.split(' ') : [], items: r.kin_items ? r.kin_items.split(' ') : [], mark: r.kin_mark === true,
-  reply: r.kin_reply ?? null, heads }) : null);
+  reply: r.kin_reply ?? null, decided }) : null);
+// the rule over one row. A compaction request's outcome comes from the attribution table when it holds one, else from the rule, which
+// reads back what it needs (headsReader), and is put in the table unless a read failed (4.2 §归属表)
+async function ruleRow(assign, r, heads) {
+  if (r.kin_probe == null || !heads) return assignRow(assign, r);
+  const id = String(r.id), had = heads.kin.d.get(id), errs = heads.errors.length, reads = heads.reads;
+  const got = assignRow(assign, r, had);
+  if (had === undefined && got && got.anchor !== undefined && heads.errors.length === errs) { heads.kin.d.set(id, got.anchor); heads.kin.dirty = true; }
+  if (heads.reads !== reads && heads.ease) await heads.ease();
+  return got;
+}
 // A part keeps the rule's state at its end (`open`) only where a build resumes: the last part (the live segment grows from its own state)
 // and the one before it (a new segment, or the live one renamed or rewritten, starts from it), and every KEEP-th part; a build that starts
 // further back replays the rule from the nearest kept state (stateAt; at most KEEP - 1 parts, read from their warm index views)
@@ -58,8 +70,8 @@ const KEEP = 16, kept = (j, n) => j >= n - 2 || j % KEEP === KEEP - 1;
 async function stateAt(parts, j, heads) {
   let m = j - 1;
   while (m >= 0 && !parts[m].open) m--;
-  const open = copyOpen(m >= 0 ? parts[m].open : new Map()), assign = createSynthAssigner({ open });
-  for (let q = m + 1; q < j; q++) for (let k = 0; k < parts[q].view.length; k++) { const r = parts[q].view.at(k); assignRow(assign, r, r.kin_probe != null ? await heads(r) : null); }
+  const open = copyOpen(m >= 0 ? parts[m].open : new Map()), assign = createSynthAssigner({ open, asks: heads?.asks, heads: heads?.heads });
+  for (let q = m + 1; q < j; q++) for (let k = 0; k < parts[q].view.length; k++) await ruleRow(assign, parts[q].view.at(k), heads);
   return open;
 }
 
@@ -101,21 +113,50 @@ export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [],
   return list.rows;
 }
 const FAILED_RETRY_MS = 60_000;
-/** A compaction request's windows, read back from its record (one seek), with a progress tick after each, and a yield where the caller gives
- *  one (`ease`: the worker's boot pass, 3.5 后台抽取与归约). One that cannot be read decides nothing by its replies, and is said (D38):
- *  `read.errors` holds what this build said. */
+/** What the rule reads back when a compaction request asks it (one seek each), never held (3.4 按内容认亲 有界): `heads(at)` the request's
+ *  windows, `asks(at)` a session's latest call's user texts, with a progress tick after each (`reads` counts them; ruleRow yields after
+ *  one where the caller gives `ease`: the worker's boot pass, 3.5 后台抽取与归约). One that cannot be read decides nothing and is said
+ *  (D38): `errors` holds what this build said. `kin`: the attribution table (4.2 §归属表). */
 const headsReader = ({ home, fs, errors, progress, ease }) => {
-  const read = async (r) => {
-    const segment = String(r.id).split(':').slice(0, -1).join(':'), errs = [];
-    const [rec] = recordsAt({ home, fs, rows: [{ id: r.id, segment, lineNo: lineOf(r.id), offset: r.offset, stored_bytes: r.stored_bytes }], errors: errs, remember: false });
-    if (!rec) { const e = { where: `segments/${segment}`, code: 'record-unreadable', reason: `${r.id}: a compaction request could not be read back, so its replies decide nothing: ${errs.map((x) => x.reason).join('; ') || 'no record'}` }; read.errors.push(e); errors.push(e); }
+  const read = { errors: [], reads: 0, ease, kin: kinTable(home, fs) };
+  const at = (where, what, fact) => (loc) => {
+    const [id, offset, bytes] = loc.split('\t'), segment = id.split(':').slice(0, -1).join(':'), errs = [];
+    const [rec] = recordsAt({ home, fs, rows: [{ id, segment, lineNo: lineOf(id), offset: offset === '' ? null : Number(offset), stored_bytes: Number(bytes) }], errors: errs, remember: false });
+    read.reads++;
+    if (!rec) { const e = { where: `segments/${segment}`, code: 'record-unreadable', reason: `${id}: ${where} could not be read back, so ${what} decide nothing: ${errs.map((x) => x.reason).join('; ') || 'no record'}` }; read.errors.push(e); errors.push(e); }
     if (progress) progress();
-    if (ease) await ease();
-    return rec ? headsFactOf(rec) : null;
+    return rec ? fact(rec) : null;
   };
-  read.errors = [];
+  read.heads = at('a compaction request', 'its replies', headsFactOf);
+  read.asks = at("a session's latest call", 'its user texts', asksFactOf);
   return read;
 };
+
+// The attribution table (4.2 §归属表): `index/kinship.json`, {v: KIN_V, d: {<compaction request's record id>: <record id of the latest
+// call of the session it went to> | '' (none)}}. Held per home for the process; another version, or a file that does not parse, is an
+// empty table. Only the query worker writes it (saveKin).
+const kinFile = (home) => path.join(indexDir(home), 'kinship.json');
+const kins = new Map();
+function kinTable(home, fs) {
+  const key = `${fsTag(fs)}\n${home}`;
+  let t = kins.get(key);
+  if (t) return t;
+  let d = new Map();
+  try { const doc = JSON.parse(fs.readFileSync(kinFile(home), 'utf8')); if (doc.v === KIN_V && doc.d && typeof doc.d === 'object') d = new Map(Object.entries(doc.d).filter(([, v]) => typeof v === 'string')); } catch { /* none yet, or torn: rebuilt */ }
+  kins.set(key, (t = { d, dirty: false }));
+  return t;
+}
+/** saveKin({home, fs}): the table, whole, when this process added to it, without the entries whose segment is gone; nothing otherwise. */
+export async function saveKin({ home = trocarHome(), fs = nodeFs } = {}) {
+  const t = kins.get(`${fsTag(fs)}\n${home}`);
+  if (!t || !t.dirty) return;
+  const segs = new Set(segmentFiles(home, fs, []).map(([s]) => s)), seg = (id) => id.split(':').slice(0, -1).join(':');
+  for (const id of t.d.keys()) if (!segs.has(seg(id))) t.d.delete(id);
+  // at run time: ctx-files.mjs imports this module
+  const { putFile } = await import('./ctx-files.mjs');
+  putFile(fs, kinFile(home), Buffer.from(JSON.stringify({ v: KIN_V, d: Object.fromEntries(t.d) }), 'utf8'));
+  t.dirty = false;
+}
 
 /**
  * provisionalRows({home, fs, ready}) → {rows, errors, early: true}: the rows of the segments in `ready` (names) whose index is usable now, read as
@@ -170,11 +211,11 @@ async function rowList(segs, old, keyedOnly = false, heads = null) {
     // the part before, built here and kept by no one (shed below), hands its state on as it is: copying it for every segment
     // churned every kept reply once per segment
     const prev = !keyedOnly && j > i && !kept(j - 1, segs.length) ? parts[j - 1].open : null;
-    const open = keyedOnly ? null : was ? copyOpen(was.open) : prev || await stateAt(parts, j, heads), assign = open && createSynthAssigner({ open });
+    const open = keyedOnly ? null : was ? copyOpen(was.open) : prev || await stateAt(parts, j, heads), assign = open && createSynthAssigner({ open, asks: heads?.asks, heads: heads?.heads });
     const derived = [];
     for (let k = k0; k < view.length; k++) {
       const r = view.at(k);
-      const got = assign ? assignRow(assign, r, r.kin_probe != null ? await heads(r) : null) : null;
+      const got = assign ? await ruleRow(assign, r, heads) : null;
       // keyedOnly (provisionalRows): only a row whose session no rule before it decides
       const sid = keyedOnly ? (r.synth_hash == null ? r.session_key ?? null : null) : r.session_key ?? (got && got.key) ?? null;
       // a keyed call's chain (3.4 带键会话里的消息链) is no synthesized key: the session stays as it was

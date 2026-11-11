@@ -56,7 +56,12 @@ const WIN = 32, SAMPLE = 8, FP_CAP = 64, PROBE_CAP = 1024, STATE_CAP = 4096, MIN
 // ENDS_W, and a 64-bit digest of the whole list; a call carries the windows of its user texts, in order, the last HEAD_CAP (a compaction request's latest replies are at its end). A reply of
 // REPLY_MIN collapsed chars has about 28 windows; one with fewer than MIN_WIN is not kept. REPLY_CAP: twice the most replies one
 // harness kept in any 24 h of a real capture, rounded up to a power of two; OWNERS: the sessions one reply text is kept under, the latest.
-export const REPLY_MIN = 256, MIN_WIN = 6, ENDS_W = 3, HEAD_CAP = 8192, REPLY_CAP = 4096, OWNERS = 8;
+export const REPLY_MIN = 256, MIN_WIN = 6, ENDS_W = 3, HEAD_CAP = 32768, REPLY_CAP = 4096, OWNERS = 8;
+// a user text of ASK_MIN collapsed chars: an item when it keeps MIN_WIN windows (about 80 chars or more, as the sample falls)
+export const ASK_MIN = 64;
+// KIN_V: the version of step 1 below (by items, then by fingerprints); a reader that stores its outcome per compaction request (the
+// attribution table, src/query/rows.mjs) drops what another version stored. One more whenever a change here can change an outcome.
+export const KIN_V = 1;
 export const userTextsOf = (body) => {
   const b = body || {};
   if (typeof b.input === 'string') return [b.input];
@@ -105,9 +110,9 @@ const digestOf = (w) => createHash('sha256').update(bytesOf(w)).digest().subarra
 const DIG = 1 + 4 * ENDS_W; // where an item's digest starts, in words: after n and its first and last ENDS_W windows
 /** A text as an item: n, its first and last ENDS_W windows and the digest, as base64 (one string, so the index keeps it as a scalar),
  *  or null when it is too short to tell. */
-function itemOf(text) {
+function itemOf(text, min = REPLY_MIN) {
   const t = collapse(text);
-  if (t.length < REPLY_MIN) return null;
+  if (t.length < min) return null;
   const w = windowsOf(t), n = w.length / 2;
   if (n < MIN_WIN) return null;
   const u = new Uint32Array(DIG + 2);
@@ -118,7 +123,9 @@ function itemOf(text) {
 // the work is bounded by what is kept, not by the request's length: a suffix of the raw text collapses to a suffix of the collapsed
 // text, and a window is its WIN chars alone, so the suffix's windows are the whole's last ones exactly. Two passes at most: the last
 // HEAD_SPAN chars, and when they hold fewer than HEAD_CAP windows (a run the sample rarely keeps, or much whitespace) the last
-// 4 × HEAD_SPAN, whose windows are kept however few: at most 5 × HEAD_SPAN chars (about 390 K) are read per request, whatever its length.
+// 4 × HEAD_SPAN, whose windows are kept however few: at most 5 × HEAD_SPAN chars (about 1.6 M) are read per request, whatever its length.
+// HEAD_CAP: on a real capture's summary requests, 8192 windows joined 113 of 127 rightly and 32768 joined 123, as many as the whole
+// text did; about 16 MB held while one request is matched, 0.2 s at the 95th percentile (2026-11-11)
 const HEAD_SPAN = HEAD_CAP * SAMPLE * 1.2;
 function headsOf(texts) {
   for (const need of [HEAD_SPAN, 4 * HEAD_SPAN]) {
@@ -241,6 +248,18 @@ function factsOf(rec, memo) {
 /** headsFactOf(rec) → a compaction request's `heads` (synthFactsOf's), without the rest of its facts: what a reader that kept no windows
  *  computes when the rule reaches the request (src/query/rows.mjs). */
 export const headsFactOf = (rec) => headsOf(userTextsOf(bodyOf(rec)));
+/** asksFactOf(rec) → a call's user texts of ASK_MIN collapsed chars or more as items (itemOf), the newest first, over as many chars as
+ *  a compaction request's windows reach at most (headsOf: 5 × HEAD_SPAN): what a session's latest call says, read back from its record
+ *  when a compaction request asks the rule (3.4 按内容认亲). */
+export function asksFactOf(rec) {
+  const texts = userTextsOf(bodyOf(rec)), out = new Set();
+  for (let i = texts.length - 1, len = 0; i >= 0 && len < 5 * HEAD_SPAN; i--) {
+    const t = collapse(texts[i]), it = itemOf(t, ASK_MIN);
+    len += t.length + 1;
+    if (it) out.add(it);
+  }
+  return [...out];
+}
 
 // The call that is the compaction request: a header / request-kind hint, or its harness's text marker in one block of its own system
 // text (pi's summary request; on the Anthropic OAuth wire pi's prompt is the second block, after Claude Code's identity block), each
@@ -257,8 +276,8 @@ function compactionRequest(rec, row, hint) {
  *  fingerprints to its session's entry; a keyed call gets nothing else (null), except one with a hash: steps 2-4 below, among the
  *  chains of its key and system-prompt hash, give its chain's name as `lane` ({key: null, kin: false, lane}; 3.4 带键会话里的消息链). A keyless call, among the open chains of its
  *  harness and system-prompt hash last seen within `gapMs` (step 2: within SYNTH_TTL_MS):
- *  1. with a probe, joins the session one of the replies its user texts hold whole names (byReplies; any call's reply is kept under its
- *     session, a probe's only when it found one), else the session of its harness — keyed, or a chain of another system-prompt group — that
+ *  1. with a probe, joins the session its items name (byItems: the replies its user texts hold whole, any call's reply kept under its
+ *     session, a probe's only when it found one; the user texts of other sessions' latest calls it holds whole), else the session of its harness — keyed, or a chain of another system-prompt group — that
  *     shares the most fingerprints with it (at least MIN_SHARED; a tie → the later last call) — kin: true; a chain so found is `pending`;
  *  2. else the chain whose tail sits latest in its own chain (a tie → the later last call), however long ago its last call;
  *  3. else, among the `pending` chains (and every chain when it carries its harness's marker), the one sharing the most
@@ -266,7 +285,7 @@ function compactionRequest(rec, row, hint) {
  *     marker only the `late` fingerprints count: a new agent's first user text (one system text, a shared brief) is no rewrite;
  *  4. else a new chain, a new session (at most SYNTH_CAP chains per harness: the oldest goes). */
 const REPLY = '\u0003';
-export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } = {}) {
+export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map(), asks = null, heads = null } = {}) {
   // `${harness}\0${hash}\0${key}` → { key, lastMs, fp, tail, pending }; `\u0001${harness}\0${key}` → { key, lastMs, fp }; a keyed
   // session's chains `\u0002${harness}\0${session key}\0${hash}\0${chain}` as the first, without fp (fp: a
   // Set, replaced, never mutated, so a shallow copy of an entry is a snapshot). A caller that resumes the rule part-way
@@ -290,18 +309,23 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
     const owners = !cur ? [key] : cur.owners[cur.owners.length - 1] === key ? cur.owners : [...cur.owners.filter((k) => k !== key), key].slice(-OWNERS);
     open.set(g, { lastMs: Math.max(cur ? cur.lastMs : ms, ms), owners });
   };
-  // the session the replies a compaction request carries name (3.4 按内容认亲): the latest kept of them, when one session kept it;
-  // kept under several, the one of those holding the most of the replies; else none
-  const byReplies = (harness, heads, ms) => {
-    const w = heads ? wordsOf(heads) : null;
+  // the session a compaction request's items name (3.4 按内容认亲): the replies its user texts hold whole, each kept under its
+  // sessions, and the user texts of each other session's latest call it holds whole (`asks(at)`: that call's items, read back), under
+  // that session. An item held by more than one session names none; the one session holding the most of the rest wins; else none
+  // `heads(at)`: a compaction request's windows, read back from its record when its facts do not carry them
+  const byItems = (harness, facts, ms, own) => {
+    const h = facts.heads ?? (heads && facts.at != null ? heads(facts.at) : null), w = h ? wordsOf(h) : null;
     if (!w || w.length < 2 * MIN_WIN) return null;
-    const at = startsOf(w), pre = REPLY + harness + '\0', hits = [];
-    for (const [g, e] of open) if (g.startsWith(pre) && ms - e.lastMs <= SYNTH_TTL_MS && holds(w, at, wordsOf(g.slice(pre.length)))) hits.push(e);
-    if (!hits.length) return null;
-    const last = hits[hits.length - 1].owners;
-    if (last.length === 1) return last[0];
-    const n = new Map(last.map((k) => [k, 0]));
-    for (const e of hits) for (const k of e.owners) if (n.has(k)) n.set(k, n.get(k) + 1);
+    const at = startsOf(w), pre = REPLY + harness + '\0', by = new Map(); // item → the sessions it is kept under
+    const add = (it, keys) => { const k = by.get(it); if (k) for (const x of keys) k.add(x); else by.set(it, new Set(keys)); };
+    for (const [g, e] of open) if (g.startsWith(pre) && ms - e.lastMs <= SYNTH_TTL_MS && holds(w, at, wordsOf(g.slice(pre.length)))) add(g.slice(pre.length), e.owners);
+    if (asks) for (const [g, e] of open) {
+      if (e.at == null || g[0] === REPLY || g[0] === '\u0002' || g.startsWith(own) || !mine(g, harness) || Math.abs(ms - e.lastMs) > gapMs) continue;
+      for (const it of asks(e.at) || []) if (holds(w, at, wordsOf(it))) add(it, [e.key]);
+    }
+    const n = new Map();
+    for (const k of by.values()) if (k.size === 1) { const [x] = k; n.set(x, (n.get(x) || 0) + 1); }
+    if (!n.size) return null;
     const top = Math.max(...n.values()), won = [...n].filter(([, c]) => c === top);
     return won.length === 1 ? won[0][0] : null;
   };
@@ -329,7 +353,7 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
       const g = '\u0001' + harness + '\0' + facts.key;
       const cur = open.get(g);
       if (!cur) prune(harness, ms);
-      open.set(g, { key: facts.key, lastMs: Math.max(cur ? cur.lastMs : ms, ms), fp: grow(cur && cur.fp, facts.fp) });
+      open.set(g, { key: facts.key, lastMs: Math.max(cur ? cur.lastMs : ms, ms), fp: grow(cur && cur.fp, facts.fp), at: facts.at ?? cur?.at ?? null });
       keep(harness, facts.reply, facts.key, ms);
       if (facts.hash == null) return null;
       return { key: null, kin: false, lane: chainIn('\u0002' + harness + '\0' + facts.key + '\0' + facts.hash + '\0', { ...facts, fp: null, mark: false }).key };
@@ -342,12 +366,24 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
   };
   function keyless(facts) {
     const { harness, ms } = facts, own = harness + '\0' + facts.hash + '\0';
-    // a request with no fingerprints prunes nothing, as before replies: byReplies reads a reply's age itself, and step 3 counts a stale chain's items
+    // a request with no fingerprints prunes nothing, as before replies: byItems reads a reply's age itself, and step 3 counts a stale chain's items
     if (facts.probe && facts.probe.length) prune(harness, ms);
-    const named = facts.probe ? byReplies(harness, facts.heads, ms) : null;
+    // a decision stored for this request (`decided`: the record id of the latest call of the session it went to, '' for none) is what
+    // this step gave it then: its inputs are earlier records only, which never change. The session holding that call now takes it
+    const kinOf = (e) => (e && e.at != null ? String(e.at).split('\t')[0] : undefined), cand = (g) => g[0] !== REPLY && g[0] !== '\u0002' && mine(g, harness);
+    if (facts.probe && facts.decided !== undefined) {
+      let e = null;
+      if (facts.decided) for (const [g, x] of open) if (cand(g) && kinOf(x) === facts.decided) { e = x; break; }
+      if (e) { e.lastMs = Math.max(e.lastMs, ms); if ('tail' in e) e.pending = true; return { key: e.key, kin: true }; }
+      if (!facts.decided) return { ...chainIn(own, facts), anchor: '' };
+      // shortcut: a stored call no session holds now (only after a change to the other rules) falls back to the fingerprints, with no read; bump KIN_V with such a change
+    }
+    const named = facts.probe && facts.decided === undefined ? byItems(harness, facts, ms, own) : null;
     if (named != null) {
-      for (const [g, e] of open) if (g[0] !== REPLY && g[0] !== '\u0002' && e.key === named && mine(g, harness)) { e.lastMs = Math.max(e.lastMs, ms); if ('tail' in e) e.pending = true; break; }
-      return { key: named, kin: true };
+      let e = null;
+      for (const [g, x] of open) if (cand(g) && x.key === named) { e = x; x.lastMs = Math.max(x.lastMs, ms); if ('tail' in x) x.pending = true; break; }
+      // `anchor`: what a reader stores for this request (`decided`), when the session has a latest call to name it by
+      return { key: named, kin: true, anchor: kinOf(e) };
     }
     if (facts.probe && facts.probe.length) {
       let best = null, bestN = 0;
@@ -359,18 +395,19 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
       if (best) {
         best.lastMs = Math.max(best.lastMs, ms);
         if ('tail' in best) best.pending = true;
-        return { key: best.key, kin: true };
+        return { key: best.key, kin: true, anchor: kinOf(best) };
       }
     }
-    return chainIn(own, facts);
+    return facts.probe ? { ...chainIn(own, facts), anchor: '' } : chainIn(own, facts);
   }
   // steps 2-4 among the chains whose entry names start with `own`
   function chainIn(own, facts) {
     const { harness, ms } = facts, chain = facts.chain || [];
+    const latest = (e) => { if (!facts.probe && facts.at != null) e.at = facts.at; }; // the chain's latest call that is not a compaction request
     const live = [], reach = [];
     for (const [g, e] of open) if (g.startsWith(own) && Math.abs(ms - e.lastMs) <= SYNTH_TTL_MS) { reach.push(e); if (Math.abs(ms - e.lastMs) <= gapMs) live.push(e); }
     const join = (e) => {
-      e.tail = chain.length ? chain[chain.length - 1] : null; e.items = facts.items; e.lastMs = Math.max(e.lastMs, ms); e.fp = grow(e.fp, facts.fp); e.pending = false;
+      e.tail = chain.length ? chain[chain.length - 1] : null; e.items = facts.items; e.lastMs = Math.max(e.lastMs, ms); e.fp = grow(e.fp, facts.fp); e.pending = false; latest(e);
       return { key: e.key, kin: false };
     };
     let best = null, bestAt = -1;
@@ -381,7 +418,7 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
     if (best) return join(best);
     if (!chain.length && live.length) { // no history to judge by (3.4 合成键 step 4): the group's latest chain, which keeps the tail it has
       const e = live.reduce((x, y) => (y.lastMs > x.lastMs ? y : x));
-      e.lastMs = Math.max(e.lastMs, ms); e.fp = grow(e.fp, facts.fp);
+      e.lastMs = Math.max(e.lastMs, ms); e.fp = grow(e.fp, facts.fp); latest(e);
       return { key: e.key, kin: false };
     }
     // older items edited, or the history rewritten with some kept (3.4 合成键 step 3). It must hold how the chain's last call ended, which a
@@ -413,7 +450,7 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
     let oldest = null, count = 0;
     for (const [g, e] of open) if ('tail' in e && mine(g, harness)) { count++; if (!oldest || e.lastMs < oldest[1].lastMs) oldest = [g, e]; }
     if (count >= SYNTH_CAP) open.delete(oldest[0]);
-    open.set(own + key, { key, lastMs: ms, fp: grow(null, facts.fp), tail: chain.length ? chain[chain.length - 1] : null, items: facts.items, pending: false });
+    open.set(own + key, { key, lastMs: ms, fp: grow(null, facts.fp), tail: chain.length ? chain[chain.length - 1] : null, items: facts.items, pending: false, at: facts.probe ? null : facts.at ?? null });
     return { key, kin: false };
   }
 }

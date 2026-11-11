@@ -56,7 +56,7 @@ import { answer } from './answers.mjs'
 import { ROLES } from './warm.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 import { READING_MS, extendSession, headAsked, heapHasRoom, indexed, noRoomStop, openSessions, rereadingNow, roomFor, saveIndexes, sealParts } from './named/session.mjs'
-import { dropProvisional, indexRows, provisionalRows, sessionGroups } from './rows.mjs'
+import { dropProvisional, indexRows, provisionalRows, saveKin, sessionGroups } from './rows.mjs'
 import { segmentFiles, warmSegmentIndex } from './index-build.mjs'
 import { indexPool, needsBuild, poolSize, sweepTemps } from './index-pool.mjs'
 import { filling, pauseFill } from './usage.mjs'
@@ -261,7 +261,7 @@ async function kickedSessions(ctx) {
   }
   try { // so `sessions` finds them in the table (3.5 §访问模式); what fails is said by the next `sessions` (D38)
     for (const [id, members] of found) titleOf({ home, fs: nodeFs, id, members })
-    await saveTitles({ home, fs: nodeFs })
+    await saveTitles({ home, fs: nodeFs }); await saveKin({ home, fs: nodeFs })
   } catch (e) { say(e) }
 }
 /** A slice's boundary, with `target` in a re-read (3.5 §访问模式「版本变更的重读」): it gives way to a followed session that is not in one, and to an
@@ -345,7 +345,7 @@ async function background() {
         progress()
         await ease()
       }
-      await saveTitles({ home, fs: nodeFs })
+      await saveTitles({ home, fs: nodeFs }); await saveKin({ home, fs: nodeFs })
       if (wrote) worked()
     } finally { sweeping = false; upgrade = null; kick() } // a table not saved stops no background work
     return
@@ -437,6 +437,7 @@ async function readRows() {
       }
     } finally { pool?.close() }
     rows = await indexRows({ home, fs: nodeFs, errors: [], progress, ease })
+    await saveKin({ home, fs: nodeFs }) // what the first build decided (4.2 §归属表), before the sweep
   } catch (e) { say(e) }
   rowsRead = true
   ready.clear(); earlyList = null; dropProvisional({ home, fs: nodeFs })

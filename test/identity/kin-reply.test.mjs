@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createSynthAssigner, synthFactsOf, SYNTH_TTL_MS, REPLY_CAP } from '../../src/dissect/synth-key.mjs'
+import { asksFactOf, createSynthAssigner, synthFactsOf, SYNTH_TTL_MS, REPLY_CAP } from '../../src/dissect/synth-key.mjs'
 import { indexRows } from '../../src/query/rows.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
 
@@ -38,11 +38,16 @@ const turn = (wire, s, t, reply, ms) => rec({ wire, system: `${PI}\n<cwd>\n/work
 // a summary request carrying `parts` (replies or quotes) and nothing else, its own reply `out`
 const summary = (wire, parts, ms, out = null) => rec({ wire, system: SUMMARY, input: ['<conversation>\n' + parts.map((p) => `[Assistant]: ${p}`).join('\n\n') + '\n</conversation>'], reply: out, ms })
 
-// the rule over the calls in order → each call's session (a keyed call's is its key)
+// the rule over the calls in order → each call's session (a keyed call's is its key); a call is `at` its place, and a session's latest
+// call is read back from there when a compaction request asks (as src/query/rows.mjs reads it from the record)
 const run = (recs) => {
-  const assign = createSynthAssigner()
-  return recs.map((r) => { const f = synthFactsOf(r), got = assign(f); return { key: f.key ?? got?.key ?? null, kin: !!got?.kin } })
+  const assign = createSynthAssigner({ asks: (at) => asksFactOf(recs[at]) })
+  return recs.map((r, at) => { const f = synthFactsOf(r), got = assign({ ...f, at }); return { key: f.key ?? got?.key ?? null, kin: !!got?.kin } })
 }
+// a session's call whose user texts are `said`, and a summary request carrying `parts` as pi's serializer writes them
+const asking = (wire, s, said, reply, ms) => rec({ wire, system: `${PI}\n<cwd>\n/work/${s}\n</cwd>`, sid: wire === 'responses' ? `sid-${s}` : null, input: said, reply, ms })
+const conversation = (wire, parts, ms) => rec({ wire, system: SUMMARY, input: ['<conversation>\n' + parts.join('\n\n') + '\n</conversation>'], ms })
+const saying = (s, n = 3) => Array.from({ length: n }, (_, i) => `user ${s} asks ${i}: ${prose(700 + 10 * s + i, 300)}`)
 
 for (const wire of ['responses', 'messages']) {
   test(`kinship by reply (${wire}): a keyless summary carrying an earlier long reply joins that reply's session, keyed or synthesized`, () => {
@@ -75,6 +80,35 @@ test('kinship by reply: a reply kept under two sessions decides nothing alone: t
   // the shared one and session 1's user text → the fingerprint rule decides
   const withUser = rec({ wire: 'responses', system: SUMMARY, input: [`[Assistant]: ${shared}`, base[2].req_body.match(/user 1 turn 0 [a-z ]+/)[0]], ms: at })
   assert.deepEqual(run([...base, withUser]).at(-1), { key: 'sid-1', kin: true })
+})
+
+for (const wire of ['responses', 'messages']) {
+  // the shape of the summaries the reply rule put in the wrong session on a real capture: a session resumed from another carries the
+  // other's user texts and replies; its summary holds them, and its own user texts, so the newest reply it holds is the other's
+  test(`kinship by items (${wire}): the summary of a session resumed from another joins the resumed one, its own user texts outweighing the replies kept under the other`, () => {
+    const r = [prose(30, 600), prose(31, 600)], before = saying(0), own = saying(1)
+    const recs = [asking(wire, 0, before, r[0], T0), asking(wire, 0, before, r[1], T0 + MIN), asking(wire, 1, [...before, ...own], null, T0 + 2 * MIN),
+      conversation(wire, [...before.map((u) => `[User]: ${u}`), ...r.map((x) => `[Assistant]: ${x}`), ...own.map((u) => `[User]: ${u}`)], T0 + 3 * MIN)]
+    const k = run(recs)
+    assert.equal(k[1].key, k[0].key); assert.notEqual(k[2].key, k[0].key, 'two sessions')
+    assert.deepEqual(k[3], { key: k[2].key, kin: true }, 'three user texts of its own against two replies kept under the other; the texts both carry name neither')
+  })
+}
+
+test('kinship by items: a user text two sessions\' latest calls both carry names neither; a session\'s own one decides', () => {
+  const shared = saying(9, 2), own = saying(2, 1)
+  const recs = [asking('messages', 0, shared, null, T0), asking('messages', 1, shared, null, T0 + MIN), asking('messages', 2, own, null, T0 + 2 * MIN),
+    conversation('messages', [...shared, ...own].map((u) => `[User]: ${u}`), T0 + 3 * MIN)]
+  const k = run(recs)
+  assert.equal(new Set(k.slice(0, 3).map((x) => x.key)).size, 3, 'three sessions')
+  assert.deepEqual(k[3], { key: k[2].key, kin: true }, 'the two texts sessions 0 and 1 share say nothing; session 2\'s one does')
+})
+
+test('kinship by items: a session whose latest call is past the fingerprint window gives no user texts', () => {
+  const said = saying(0)
+  const k = run([asking('messages', 0, said, null, T0), conversation('messages', said.map((u) => `[User]: ${u}`), T0 + 31 * MIN)])
+  assert.equal(k[1].kin, false)
+  assert.equal(run([asking('messages', 0, said, null, T0), conversation('messages', said.map((u) => `[User]: ${u}`), T0 + 29 * MIN)])[1].kin, true, 'within it, it does')
 })
 
 test('kinship by reply: a reply under 256 collapsed chars, or a request quoting only the start of a long one, never joins', () => {
@@ -173,6 +207,21 @@ test('kinship by reply: live = cold in three arrival orders, cut into two segmen
       }
     }
   }
+})
+
+test('kinship by items: the rows read a session\'s latest call back from its record, the same cut into two segments; one that cannot be read gives no user texts and says so', async () => {
+  const r1 = prose(41, 600)
+  const recs = [asking('messages', 1, saying(1), r1, T0), asking('messages', 0, saying(0), null, T0 + MIN),
+    conversation('messages', [...saying(0).map((u) => `[User]: ${u}`), `[Assistant]: ${r1}`], T0 + 2 * MIN)]
+  const whole = await membership(homeOf([recs]))
+  assert.equal(whole.get(recs[2].id), whole.get(recs[1].id), 'by session 0\'s user texts, read back')
+  for (let cut = 1; cut < recs.length; cut++) assert.deepEqual(await membership(homeOf([recs.slice(0, cut), recs.slice(cut)])), whole, `cut at ${cut}`)
+  const home = homeOf([recs]), at = Buffer.byteLength(JSON.stringify(recs[0])) // a seek to session 0's line reads from the newline before it
+  const f = { ...fs, readSync: (fd, b, o, n, pos, ...rest) => { if (pos === at) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return fs.readSync(fd, b, o, n, pos, ...rest) } }
+  const errors = [], rows = [...await indexRows({ home, fs: f, errors })]
+  assert.deepEqual(errors.map((e) => [e.where, e.code]), [[`segments/${SEG[0]}`, 'record-unreadable']])
+  assert.match(errors[0].reason, new RegExp(`${rows[1].id}: a session's latest call could not be read back`))
+  assert.equal(rows[2].session_id, rows[0].session_id, 'its user texts unread, the reply it holds decides')
 })
 
 test('kinship by reply: a reply no reader can read is no reply, and its segment is read whole', async () => {
