@@ -4,6 +4,7 @@
 // folder), so the validation sees every axis. The flow half and the static guard are T25.
 export default {
   name: 'eighth',
+  caEnv: ['NODE_EXTRA_CA_CERTS', 'EXTRA_CA'], // the CA variables install reads from its environment (4.11 P4 ca_env)
   runtime: 'node',
   processes: { names: [{ name: 'eighth' }] },
   hosts: ['api.eighth.example'],

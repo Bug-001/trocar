@@ -139,6 +139,19 @@ for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
   })
 }
 
+// CM45 (4.11 P4 ca_env): a bundled Claude Code's key is the user's while the install shell sets NODE_EXTRA_CA_CERTS; an install from a shell without it
+// must not write trocar-ca.pem over it (settings env wins over the launch env: the user's CA would stop reaching Claude Code)
+test('CM45: bundled Claude Code — an install without NODE_EXTRA_CA_CERTS after one with it leaves the settings key alone', async () => {
+  const w0 = await modelWorld(), mine = path.join(w0.home, 'mine.pem'); put(mine, USER_PEM)
+  const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
+  const settings = path.join(w.home, '.claude', 'settings.json')
+  const run = (env) => w.install({ wrapperKit: { renderWrapper }, env, ctx: { ...w.ctx, env } })
+  await run(w.env)
+  assert.equal(fs.existsSync(settings), false)
+  await run(Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS')))
+  assert.equal(fs.existsSync(settings), false, 'no key written over the user\'s value')
+})
+
 // a carrier is placed when install wrote one of its parts, intact when it wrote none: dsh's plug-in file gone (its loader row still there) is placed
 // again on the second install, while every other carrier is intact
 test('D54: the second install places only the carrier a part of which was gone; the others are intact', async () => {
@@ -634,7 +647,7 @@ test('4.11 P4 · §3 ⑭: install without NODE_EXTRA_CA_CERTS keeps the private 
   assert.equal(carried(), next)
   fs.rmSync(next); await run(without)
   assert.equal(carried(), null, 'a file that is gone drops from the login entry')
-  assert.deepEqual(readManifest(w.dir).files.find((f) => f.role === 'bundle' && f.harness === 'z-code').merged_from ?? [], [], 'and from the bundle')
+  assert.equal(readManifest(w.dir).ca_env, undefined, 'and from the record')
   assert.ok(!bundleFps().includes(privFp), 'nor does the bundle hold the private CA')
 })
 
@@ -650,7 +663,7 @@ test('4.11 P4 merges: a merged file unreadable for one install stays in the reco
   await run(w.env)
   fs.chmodSync(mine, 0o000)
   try { await run(without) } finally { fs.chmodSync(mine, 0o600) }
-  assert.deepEqual(readManifest(w.dir).files.find((f) => f.role === 'bundle' && f.harness === 'z-code').merged_from, [{ src: 'env:NODE_EXTRA_CA_CERTS', file: mine }])
+  assert.deepEqual(readManifest(w.dir).ca_env, { NODE_EXTRA_CA_CERTS: mine })
   await run(without)
   assert.ok(bundleFps().includes(privFp), 'readable again: its CA is back')
 })
@@ -668,9 +681,9 @@ test('4.11 P4 merges: the desktop setting is read fresh — when it stops naming
   assert.ok(!bundleFps().includes(privFp), 'not sticky: the setting no longer names the file')
 })
 
-// a record written before `carried` / `merged_from` were kept (0.2.x): an install whose bytes are intact teaches the record what it carried and merged,
-// writing no file, so the install after it, from a shell without the variable, keeps them
-test('4.11 P4 · §3 ⑭: an intact login entry and bundle from a record without carried / merged_from learn them; the next install without the variable keeps the CA', async () => {
+// a record written before ca_env was kept (0.2.x): an install whose bytes are intact still records what it read, writing no file, so the install after
+// it, from a shell without the variable, keeps the CA
+test('4.11 P4 ca_env: an install over a 0.2.x record with intact files records the variable; the next install without it keeps the CA', async () => {
   const other = await modelWorld(); await other.install()
   const priv = fs.readFileSync(path.join(other.dir, 'ca', 'trocar-ca.pem'), 'utf8'), privFp = certBlocks(priv)[0].fp
   const w0 = await modelWorld(), mine = path.join(w0.home, 'company.pem'); put(mine, priv)
@@ -679,16 +692,38 @@ test('4.11 P4 · §3 ⑭: an intact login entry and bundle from a record without
   const run = (env) => w.install({ wrapperKit: { renderWrapper }, unit, env, ctx: { ...w.ctx, env } })
   await run(w.env)
   const mf = path.join(w.dir, 'install-manifest.json'), m = JSON.parse(fs.readFileSync(mf, 'utf8'))
-  for (const f of m.files) { delete f.carried; delete f.merged_from } // the shape 0.2.x wrote
+  delete m.ca_env // the shape 0.2.x wrote
   fs.writeFileSync(mf, JSON.stringify(m))
   const bytes = () => [fs.readFileSync(unitPath, 'utf8'), fs.readFileSync(path.join(w.dir, 'ca', 'bundle-z-code.pem'), 'utf8')]
   const was = bytes()
   await run(w.env)
   assert.deepEqual(bytes(), was, 'nothing rewritten')
-  const after = readManifest(w.dir).files
-  assert.deepEqual(after.find((f) => f.role === 'unit').carried, { NODE_EXTRA_CA_CERTS: mine })
-  assert.deepEqual(after.find((f) => f.role === 'bundle' && f.harness === 'z-code').merged_from, [{ src: 'env:NODE_EXTRA_CA_CERTS', file: mine }])
+  assert.deepEqual(readManifest(w.dir).ca_env, { NODE_EXTRA_CA_CERTS: mine })
   await run(Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS')))
   assert.deepEqual(bytes(), was, 'from a shell without the variable: still the same bytes, the CA kept')
   assert.ok(certBlocks(bytes()[1]).some((b) => b.fp === privFp))
+})
+
+// 4.11 §3 ⑭: the daemon's own NODE_EXTRA_CA_CERTS is trocar's, not any harness's: recorded in ca_env whichever harnesses there are, so a login
+// entry from a shell without it keeps the value — here with Codex alone, whose caEnv does not name it
+test('§3 ⑭ · ca_env: with Codex alone, an install without NODE_EXTRA_CA_CERTS after one with it keeps the login entry\'s value', async () => {
+  const codex = (await loadHarnesses()).find((d) => d.name === 'codex')
+  const w0 = await modelWorld(), mine = path.join(w0.home, 'corp.pem'); put(mine, USER_PEM)
+  const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
+  const unitPath = path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist'), unit = { path: unitPath, text: (env) => `${JSON.stringify(env)}\n` }
+  const run = (env) => w.install({ harnesses: [codex], wrapperKit: { renderWrapper }, unit, env, ctx: { ...w.ctx, env } })
+  await run(w.env)
+  await run(Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS')))
+  assert.equal(JSON.parse(fs.readFileSync(unitPath, 'utf8')).NODE_EXTRA_CA_CERTS, mine)
+})
+
+// CM45: a user who sets none of the CA variables has no ca_env, and a second install changes no byte of the manifest or the bundle (D54)
+test('CM45: none of the CA variables set → no ca_env; install twice leaves the manifest and Z-Code\'s bundle as they were', async () => {
+  const w = await everything()
+  await w.install({ wrapperKit: { renderWrapper } })
+  const mf = path.join(w.dir, 'install-manifest.json'), bundle = path.join(w.dir, 'ca', 'bundle-z-code.pem')
+  const was = [fs.readFileSync(mf), fs.readFileSync(bundle)]
+  await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(readManifest(w.dir).ca_env, undefined)
+  assert.deepEqual([fs.readFileSync(mf), fs.readFileSync(bundle)], was)
 })

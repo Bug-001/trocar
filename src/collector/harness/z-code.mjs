@@ -116,7 +116,7 @@ function inject(ctx) {
   const deskFile = desktopSettings(ctx.env, ctx.home)
   const desk = (jsonAt(ctx, deskFile) || {}).httpProxyCaCertPath
   see(desk)
-  for (const env of [ctx.env, ...ctx.running]) { see(env.get('NODE_EXTRA_CA_CERTS')); see(env.get('ZCODE_AGENT_CA_CERT')) }
+  for (const env of [ctx.env, ...ctx.running]) for (const n of CA_ENV) see(env.get(n))
   const notes = [...seen].filter((v) => !path.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${v} is a relative CA path; its certificates are not carried over into ${path.basename(bundle)}` }))
   // rule U (4.11 P4), the one finder and judge install's model uses: the desktop setting reaches the desktop agent as ZCODE_AGENT_CA_CERT and replaces
   // caCertFile (measured on Linux), as the variable does in the install shell, so each file they name takes trocar's marked block at its end — only the user's
@@ -151,6 +151,7 @@ const proxy = {
 // ~/.zcode/cli/config.json, re-read per new session; caCertFile = the merged bundle, D56⑨, since the key replaces the roots; the desktop's app-server is the
 // `zcode` + zcode.cjs name above). Blockers (ruling ⑩): a user proxy in the desktop's v2 setting.json, ZCODE_HTTP_PROXY, ZCODE_AGENT_CA_CERT.
 const CLI_CONFIG = DOOR_ROUTES['z-code']['cli-config'].file // where `on` writes the door, the place the marker undo looks too
+const CA_ENV = ['NODE_EXTRA_CA_CERTS', 'ZCODE_AGENT_CA_CERT']
 const CA_KEY = { file: CLI_CONFIG, format: 'jsonc', keys: ['network', 'caCertFile'] }
 const DESKTOP = { base: 'home', env: 'ZCODE_DESKTOP_HOME_DIR', path: '.zcode/v2/setting.json' }
 const DESKTOP_CA = { file: DESKTOP, format: 'json', keys: ['httpProxyCaCertPath'] } // the desktop CA setting, as rule U reads it (Linux inject)
@@ -189,6 +190,8 @@ const proxyMode = {
 
 export default {
   name: 'z-code',
+  // the CA variables install reads from its environment to compose this harness's files (4.11 P4 ca_env: recorded, so a shell without one keeps it)
+  caEnv: CA_ENV,
   runtime: 'node',
   // Which processes are Z-Code (D51 preset, every OS): the bundle zcode.cjs under glm/ run by the app's exe, its Helper or a plain node (remote
   // mode), the CLI's retitled zcode-cli, and on win32 the desktop's Chromium network service. Its plugin host and dwf child are helpers.

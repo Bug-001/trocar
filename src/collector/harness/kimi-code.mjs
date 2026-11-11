@@ -132,6 +132,8 @@ const PROXY_MODEL_OS = new Set(proxyMode.forms.flatMap((f) => f.os)) // the OSes
 
 export default {
   name: 'kimi-code',
+  // the CA variables install reads from its environment to compose this harness's files (4.11 P4 ca_env: recorded, so a shell without one keeps it)
+  caEnv: [CA_VAR],
   runtime: 'node',
   // No file-borne trust variables: kimi reads its CA from the environment only. The empty function is the contract
   // (the tracker calls it — a descriptor without it throws "own is not a function" in the live judge, the mac

@@ -23,12 +23,13 @@ import { placeWrapper, managedTree, targetOf } from './core/proxymode/hooks/wrap
 import { lineComment, removeTrocarText } from '../off/text-edit.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
-import { unitedLiveness, daemonEnv } from './install.mjs'
+import { unitedLiveness, daemonEnv, DAEMON_CA_VAR } from './install.mjs'
 import { CODE, EVENT } from './core/codes.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { writeBackup } from '../off/backup.mjs'
 import { certBlocks, certsOf, composeBundle } from '../off/pem.mjs'
 import { errnoWords } from '../cli/words.mjs'
+import { withCaEnv, caEnvRecord, caEnvNames, setCaEnv } from './core/trust/ca-env.mjs'
 
 /** The OSes the collector model (4.11) runs on — the one list `install`, `on`, `uninstall` and the arch backends ask. */
 export const MODEL_OS = Object.freeze(['darwin', 'win32'])
@@ -99,6 +100,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const dir = collectorHome(path.join(home, '.trocar'))
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
+  const shellEnv = ctx && ctx.env
+  if (ctx) ctx = { ...ctx, env: withCaEnv(ctx.env, dir, fs) } // a CA variable this shell does not set: the one ca_env records (4.11 P4)
   const stray = await strayRootRefusal({ os, m, rootStore }) // ㉔: before the first write
   if (stray) return { refusal: stray, manifest: null, fp256: null, items: [], carriers: [], pending: [], problems: [stray.reason], notes: [], exit: 1 }
   if (!m.install) m.created_at = now().toISOString() // a manifest an unclean uninstall kept (install: null): this install starts now (1.6 C.3 failures.since)
@@ -228,7 +231,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     // 4.11 P4: a registration under trocar's name the record does not list (one the unit file does not hold: a scheduled task) is backed up before it is replaced
     const prior = !m.files.some((x) => samePath(x.path, unit.path, fs)) && typeof unit.registeredBytes === 'function' ? unit.registeredBytes() : null
     if (prior) writeBackup({ home, file: unit.path, data: prior, now: now(), fs })
-    owned(unit.path, 'unit', null, unit.text(d.env), 0o644, { extra: { carried: d.env } })
+    owned(unit.path, 'unit', null, unit.text(d.env), 0o644)
   }
   const agentList = readAgentList({ home, fs }).entries
   for (const d of harnesses.filter((x) => installedHarnesses.includes(x.name))) m.liveness[d.name] = { ...unitedLiveness(m.liveness[d.name], livenessOf(d, { agentList, os })), ...pick(m.liveness[d.name], ['on_at', 'off_at', 'windows']) }
@@ -249,6 +252,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     const skippedRec = { ...kept, ...Object.fromEntries(skips) }
     const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed, ...(Object.keys(skippedRec).length ? { skipped: skippedRec } : {}), ...(code ? { code } : {}) }
     if (JSON.stringify(next) !== JSON.stringify(m.install)) m.install = next
+    if (!only) setCaEnv(m, caEnvRecord({ names: caEnvNames(harnesses, [DAEMON_CA_VAR]), env: shellEnv, dir, fs })) // a Set up runs in the daemon's env, not the user's: it records nothing
     if (JSON.stringify(m) !== before) save()
     const skipped = carriers.filter((x) => x.state === 'skipped').length + items.filter((x) => x.state === 'skipped').length
     return { manifest: m, fp256: rootDer ? rootIdOf(rootDer).fp256 : null, items, carriers, pending, problems, notes, exit: pending.length || problems.length || skipped ? 1 : 0 }
@@ -257,11 +261,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   // each → 'written' | 'intact' (the bytes it would write are already there: nothing written, D54); a carrier is placed when one of its parts was written
   function owned(file, role, harness, data, mode, { sources = null, extra = {} } = {}) {
     const j = judgeOwned({ manifest: m, file, planned: sha256(Buffer.from(data)), fs })
-    if (j.action === 'skip-intact') {
-      // what the record keeps beside the bytes (a bundle's merged_from, the unit's carried) is learned for an intact file written before it was kept
-      if (Object.entries(extra).some(([k, v]) => JSON.stringify(j.record[k] ?? null) !== JSON.stringify(v))) { Object.assign(j.record, extra); save() }
-      said(role, 'intact', { path: file, harness }); return 'intact'
-    }
+    if (j.action === 'skip-intact') { said(role, 'intact', { path: file, harness }); return 'intact' }
     writeOwnedFile({ dir, manifest: m, harness, role, phase: 'install', file, data, mode, sources, extra, home, now: now(), fs })
     said(role, 'written', { path: file, harness })
     return 'written'
@@ -293,12 +293,11 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         if (keyIsUsers(c, ctx, home)) return { state: 'rule-u' }
         if (c.semantics === 'replace') { // CM9: Node's own roots, the user CAs the key makes ineffective, the trocar root; no system roots
           const bundle = path.join(dir, 'ca', `bundle-${desc.name}.pem`)
-          const before = ((m.files || []).find((f) => f.role === 'bundle' && f.path === bundle) || {}).merged_from || [] // what each setting gave last time
-          const merged = (c.merges || []).flatMap((s) => userCertsOf(desc, s, before))
+          const merged = (c.merges || []).flatMap((s) => userCertsOf(desc, s))
           const own = new Set(certBlocks(rootPem).map((x) => x.fp)) // a merged file may already hold trocar's block (rule U of another harness): not a user CA
           const b = composeBundle({ nodeRoots, userCerts: merged.flatMap((x) => x.certs).filter((p) => !certBlocks(p).some((x) => own.has(x.fp))), caPem: rootPem })
           // the files and fingerprints it merged, as the Linux bundles record them: a rebuild of a bundle gone while a process holds it reads them (4.6 撤销 第 2 步)
-          return placedIf(owned(bundle, 'bundle', desc.name, b.data, 0o644, { sources: [...new Set(merged.map((x) => x.file))], extra: { user_fps: b.user_fps, roots_fp: b.roots_fp, merged_from: merged.map((x) => ({ src: x.src, file: x.file })) } }),
+          return placedIf(owned(bundle, 'bundle', desc.name, b.data, 0o644, { sources: [...new Set(merged.map((x) => x.file))], extra: { user_fps: b.user_fps, roots_fp: b.roots_fp } }),
             jsonKey(desc, file, c.keys, bundle))
         }
         return placedIf(jsonKey(desc, file, c.keys, ca.pem))
@@ -331,27 +330,19 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     }
   }
 
-  // the CERTIFICATE blocks of the files a `merges` source names, per file: [{ src, file, certs }] (4.11 P4); what is not carried over is said, never silent (D38).
-  // An env-sourced setting this shell does not set is unknown, not removed (D38, invariant 5): the file `before` (the bundle record's merged_from) holds
-  // for it is read again, while it is the user's and there; a value this shell sets replaces it. A file-sourced setting is read fresh, never carried.
-  function userCertsOf(desc, src, before = []) {
-    const label = 'env' in src ? `env:${src.env}` : 'file'
-    const unset = 'env' in src && (ctx.env instanceof Map ? !ctx.env.has(src.env) : !Object.hasOwn(ctx.env || {}, src.env))
-    const r = unset ? { set: true, all: before.filter((x) => x.src === label && typeof x.file === 'string').map((x) => ({ value: x.file, where: label })) } : readSrc(src, ctx)
+  // the CERTIFICATE blocks of the files a `merges` source names, per file: [{ file, certs }] (4.11 P4); what is not carried over is said, never silent (D38)
+  function userCertsOf(desc, src) {
+    const r = readSrc(src, ctx)
     if (r.error) { notes.push(`${desc.name}: ${r.where}: ${r.error}; the CA it names is not in trocar's bundle`); return [] }
     return (r.set ? r.all : []).flatMap(({ value, where }) => {
       const file = typeof value === 'string' ? value.trim() : ''
       if (!path.isAbsolute(file)) { notes.push(`${desc.name}: ${where} (${file || typeof value}) is not an absolute path; its certificates are not in trocar's bundle`); return [] }
       if (inTrocar(file, home, ctx.os)) return []
       let buf
-      try { buf = fs.readFileSync(file) } catch (e) {
-        notes.push(`${desc.name}: ${file} (${where}): ${errnoWords(e)}; its certificates are not in trocar's bundle`)
-        // only a file that is gone leaves the record; one that cannot be read now (EACCES, a Windows lock) is still the setting's, read again next time
-        return e.code === 'ENOENT' || e.code === 'ENOTDIR' ? [] : [{ src: label, file, certs: [] }]
-      }
+      try { buf = fs.readFileSync(file) } catch (e) { notes.push(`${desc.name}: ${file} (${where}): ${errnoWords(e)}; its certificates are not in trocar's bundle`); return [] }
       const got = certsOf(file, buf)
       for (const k of got.skipped) notes.push(`${desc.name}: ${file}: ${k.type ? `block ${k.index} (${k.type})` : 'the file'} is not carried into trocar's bundle: ${k.why}`)
-      return [{ src: label, file, certs: got.certs }]
+      return [{ file, certs: got.certs }]
     })
   }
 
@@ -467,6 +458,7 @@ export function planInstall({ os, harnesses, ctx, home, owns, hookFile = null, f
   const dir = collectorHome(path.join(home, '.trocar'))
   let m = null
   try { m = readManifest(dir, fs) } catch { /* an unreadable record: the run refuses it, the plan has nothing to add */ }
+  ctx = { ...ctx, env: withCaEnv(ctx.env, dir, fs) } // as the run reads it (4.11 P4 ca_env)
   // 4.11 P4: the plug-in file install would put where a file that is not trocar's already is — the run skips that carrier, so the plan says so
   const foreignPlugin = (c) => {
     const pdir = hookFile && resolveLoc(c.dir, ctx)[0]
