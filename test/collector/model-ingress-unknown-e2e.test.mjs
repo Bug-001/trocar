@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { within, onceWithin } from '../helpers/bounded.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
@@ -22,7 +22,7 @@ import { PID, agentOf, darwinExec, win32Io, flowsOf, freePort, statusDoc } from 
 const HOST = 'probe.example'
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: the real door closes an opener it cannot take and names its sender, relays a stranger's absolute-form plain http and records the agent's`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
+  test(`${platform}: the real door closes an opener it cannot take and names its sender, relays a stranger's absolute-form plain http and records the agent's`, { skip: UNSERVABLE[platform], timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
@@ -36,7 +36,7 @@ for (const platform of ['darwin', 'win32']) {
     await withScratchCwd(platform, async () => {
       try {
         const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-        const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        const deps = { getuid: () => 501, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['codex', '--yes'], { io, env: w.env, home: w.home, platform, deps }), 0)
         const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
         const door = Number(u.port)

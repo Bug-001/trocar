@@ -148,6 +148,7 @@ export const truncFact = (shown, total, fileMb) => `Showing only the latest ${sh
 export const unknownFact = (n) => `${n} records no parser can read; not drawn`
 export const LOGGED_FACT = 'calls are log only and not in the replay ›'
 export const loggedFact = (n) => `${n} ${LOGGED_FACT}`
+export const REINDEXING_FACT = 'Older capture files are still being re-indexed after an update; calls in them appear when that ends'
 export const filesFact = (n) => `${count(n, 'capture file was', 'capture files were')} not read in full; this session may be missing content ›`
 export const GAP_FACT = 'Capture had errors in this period; calls may be missing from the range read (inferred) · capture log ›'
 
@@ -227,11 +228,12 @@ export const updatingTo = (pct, calls) => `Updating to this version · ${pct}%${
 // 2.4 还在读: what stands where the empty list's line would while the ledger is answered behind the fold
 export const FILES_UPDATING = 'Updating to this version · files so far'
 export const FILES_READING = 'Still reading this session · files so far'
-// 1.5 K-31: the server's background read of this session stopped (the head's pending.stopped), one line per code of
-// src/health/codes.mjs FOLD_STOPS (the board does not import it); the code and the reason are in the technical details
+// 1.5 K-31: the server's background read of this session stopped (the head's pending.stopped): a code of src/health/codes.mjs
+// FOLD_STOPS with a line of its own (the board does not import it), else `other`; the code and the reason are in the technical details
 export const FOLD_STOPPED = Object.freeze({
   'heap-no-room': 'Reading this session stopped: it does not fit in the memory the reader has',
-  'fold-failed': 'Reading this session stopped on an error',
+  'projection-write-failed': 'Reading this session stopped: trocar could not save its index files (the disk may be full, or the folder not writable)',
+  other: 'Reading this session stopped on an error',
 })
 // 1.5 K-32: the head drawn is older than what the capture has indexed
 export const behindBy = (n, more) => `${n}${more ? '+' : ''} newer calls are not shown yet`
@@ -477,3 +479,4 @@ export const CALL_DETAILS = 'Call details'
 export const CD_EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n}`
 // 2.5: a chapter head's compaction numbers (the landing step's compaction-landed event); an empty side reads —
 export const partCompaction = (from, to) => `${from ?? '—'} → ${to ?? '—'} messages`
+export { TITLE_PENDING_TIP } from './common.mjs'

@@ -68,6 +68,31 @@ test('1.2 §编号: during a first read .sb-no counts the calls read instead of 
   expect(no.getAttribute('title')).toBe(W.stepNo(m.n, m.m))
 })
 
+// 1.2 §编号: a first read's end. The head without pending says how many steps the session has before the files that carry the main lane's
+// count arrive: the step head says that M, never a finished count shorter than the session
+test('1.2 §编号: the head\'s step count is M while the main lane\'s count has not caught up with it', () => {
+  const { s, view, bar, model } = step({ at: 1 })
+  s.desk.head = { ...s.desk.head, axis: s.anchor.id, steps: 1580 }; act(() => view.step())
+  const no = bar().querySelector('.sb-no')!
+  expect(no.getAttribute('data-m')).toBe('1580')
+  expect(no.getAttribute('title')).toBe(W.stepNo(model().n, 1580))
+})
+
+// a tier-0 head (axis null) counts every model call, sub-agents' too: its steps are not the main lane's, so M stays the lane's
+test('1.2 §编号: a head whose steps are not on the anchor lane\'s axis does not change M', () => {
+  const { s, view, bar } = step({ at: 1 })
+  s.desk.head = { ...s.desk.head, tier: 0, axis: null, steps: 1580 }; act(() => view.step())
+  expect(bar().querySelector('.sb-no')!.getAttribute('data-m')).toBe(String(s.anchor.count ?? s.anchor.calls.length))
+})
+
+// 1.5 K-31: a tier-0 head has no step to show: the step head's place holds the session's model-call total, with no step control
+test('1.5 K-31: a tier-0 head with no row draws the call total where the step head goes, and no control', () => {
+  const { s, view, bar } = step({ at: 1 })
+  s.playRid = null; s.desk.head = { ...s.desk.head, tier: 0, axis: null, steps: 1580 }; act(() => view.step())
+  expect(bar().textContent).toBe(W.callsWord(1580))
+  expect(bar().querySelectorAll('button').length).toBe(0)
+})
+
 // a catch-up (a head with pending after a head without it) is not a first read: N / M stays
 test('1.2 §编号: a catch-up after the first read keeps N / M', () => {
   const { s, view, bar, model } = step({ at: 1 })

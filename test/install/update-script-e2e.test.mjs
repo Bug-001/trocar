@@ -12,6 +12,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { mockUpstream } from '../helpers/mock-upstream.mjs'
+import { identityStubs } from '../helpers/lock-probe.mjs'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const run$ = promisify(execFile)
@@ -32,7 +33,7 @@ function go(file, args, env) {
 test('script channel: update stages the new version before anything changes, places it, and starts it through the launcher', { skip, timeout: 180_000 }, async () => {
   const work = tmpDir('trocar-update-script-')
   // the sandbox lets trocar run only what sits in the temp dir: an `sh` there that is the system's
-  fs.mkdirSync(path.join(work, 'bin'))
+  identityStubs(path.join(work, 'bin')) // the scripts' `trocar place` takes op.lock, which asks ps on macOS
   fs.writeFileSync(path.join(work, 'bin', 'sh'), '#!/bin/sh\nexec /bin/sh "$@"\n', { mode: 0o755 })
   const nv = process.versions.node, target = `${process.platform}-${process.arch}`, stem = `node-v${nv}-${target}`
   fs.mkdirSync(path.join(work, 'n', stem, 'bin'), { recursive: true })

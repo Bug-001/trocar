@@ -6,11 +6,12 @@
 import path from 'node:path'
 import { standaloneCommand, appDir } from '../off/paths.mjs'
 import { COMMAND_INDENT, isCommandLine, foldHang } from '../off/receipt.mjs'
-import { noColor, WIDTH, wrap, pairs, size, tildeText, escRe } from './text.mjs'
+import { noColor, WIDTH, wrap, pairs, size, tildeText, escRe, andList } from './text.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
 import { TASK_NAME } from '../off/win32.mjs'
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { fitCompact } from '../netenv/topology-text.mjs'
+import { plainSentence } from './words.mjs'
 
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
 export const tilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
@@ -44,13 +45,13 @@ export const routeWords = (p) => ROUTE_WORDS[p.kind] || String(p.kind ?? '').rep
 // 1.6 §1.1: why an `on` route was not written (4.11 §3 ③, P5: its `reason` in the JSON), in words; a reason outside the table is never printed as its code
 const NOT_ROUTED_WORDS = Object.freeze({
   'system-pac': 'the system proxy is a PAC script, which trocar does not run',
-  'own-egress': 'a proxy setting of yours is already there', blocker: 'a setting of yours keeps it off any entry trocar can use',
+  'own-egress': 'a proxy setting of yours is already there', blocker: 'a setting of yours keeps it from going through trocar',
   'credentialed-own-leg': 'the proxy it would go through needs a login, which this entry cannot carry',
-  absent: 'the file does not exist, and trocar does not create it', 'no-path': 'trocar found no entry for it', 'no-applied-entry': 'trocar found no entry for it',
+  absent: 'the file does not exist, and trocar does not create it', 'no-path': 'trocar found no setting of it to point at trocar', 'no-applied-entry': 'trocar found no setting of it to point at trocar',
   unreadable: 'trocar cannot read it', 'blocker-unreadable': 'trocar cannot read a setting that decides it',
 })
 /** An `on` route row's reason: a not-routed reason in words, else the text the route gave (an undo that could not be done says its own sentence). */
-export const routeReason = (r) => (r.code === 'not-routed' ? NOT_ROUTED_WORDS[r.reason] || 'there is no entry trocar can use' : String(r.reason || r.code || ''))
+export const routeReason = (r) => (r.code === 'not-routed' ? NOT_ROUTED_WORDS[r.reason] || 'trocar found no setting of it to point at trocar' : String(r.reason || r.code || ''))
 /** 1.6 §3.2: what an install plan row (planInstall's) says changes in its file — a config key by its key, a plug-in loaded from that file by the line
  *  that loads it, any other carrier in carrierWords' words; a row install changes nothing at (`state`, printed under "Left as they are:") says why. */
 export const planWords = (r) => (r.state === 'rule-u' ? 'this agent already names a certificate file of your own'
@@ -63,13 +64,12 @@ const BARE = /\u001b\[\d+m/g
  *  would paste as `sudo` alone and then a Node with no script (§1.1⑥: a command keeps its own line unbroken). */
 export const commandLine = (command) => ({ command })
 /** A line `fit` prints as it is, at column 0, never folded (HOME as `~` still): on's route line, which 附录 A.1 shortens instead of folding. */
-export const wholeLine = (whole) => ({ whole })
+const wholeLine = (whole) => ({ whole })
 
-export { tildeText } from './text.mjs'
 
 /** §1.1⑤: a command to copy shows HOME as `~` where sh, zsh and bash expand it — an unquoted word that starts with a POSIX HOME, then `/` or the word's
  *  end. A path after a `sudo` word keeps the absolute form selfCommand writes (§3.2), and a Windows HOME is never a `~`. */
-export const tildeCommand = (s, home) => (home && home.startsWith('/')
+const tildeCommand = (s, home) => (home && home.startsWith('/')
   ? s.replace(new RegExp(`(^|\\s)${escRe(home)}(?=/|\\s|$)`, 'g'), (m, pre, at) => (/(^|\s)sudo\s/.test(s.slice(0, at + pre.length)) ? m : `${pre}~`))
   : s)
 
@@ -140,6 +140,9 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
 /** The one plan item for trocar's own tree (V85): `on`'s plan on every OS ends with it. */
 export const ownTreeItem = (home, platform) => ({ what: 'trocar', path: path.join(home, '.trocar'), detail: `${asDir(tilde(path.join(home, '.trocar'), home), platform)}: trocar's own files (its install record, what is turned on, its logs); trocar uninstall takes all of it back` })
 
+// a proxy setting the user changed after the last on: going on takes their value as the upstream (§3.3「要确认时」)
+const editedLine = (e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at trocar.`
+
 /** Every file `on` (or Linux `install`) would write or change, before it writes any (§1.4): the count first, then every file by full path and key. */
 export function formatPlan(p, { home = null, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
@@ -152,7 +155,7 @@ export function formatPlan(p, { home = null, platform = 'linux', command = 'on',
     ...((p.entries || []).length ? [`A copy of every file of yours it changes goes to ${backups}/ first.`] : []),
     ...watchLines(p.watch, t).map((l) => `  ${l}`),
     ...(p.skipped && p.skipped.length ? [`Skipped: ${p.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`] : []),
-    ...(p.edited || []).map((e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at trocar.`),
+    ...(p.edited || []).map(editedLine),
     ...(p.restart && p.restart.length ? [`Restart to capture: ${p.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}. Until then they connect as they do now.`] : []),
   ].filter((l) => l !== null), { home }).join('\n')
 }
@@ -165,7 +168,7 @@ const lingerText = ({ linger, linger_reason: why = null, user = null }) => (ling
 
 /** A label that lists paths (§1.1⑥): the label on its own line, each path on a line of its own two deeper — two paths on one line fold the second to
  *  column 0. `more`: a last item after the paths (how many are not shown). */
-export const pathList = (label, list, home, more = null) => [label, ...list.map((x) => `  ${tilde(typeof x === 'string' ? x : x.path, home)}`), ...(more ? [`  ${more}`] : [])]
+const pathList = (label, list, home, more = null) => [label, ...list.map((x) => `  ${tilde(typeof x === 'string' ? x : x.path, home)}`), ...(more ? [`  ${more}`] : [])]
 
 /** The file lines of a receipt that writes (`on`, Linux `install`): each file changed — path, what, where its backup is — then what trocar made
  *  itself. `past`: false for a dry run (what it would do). */
@@ -182,8 +185,8 @@ export function changeLines(r, { past = true, home = null } = {}) {
 
 // 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1); both modes' `on` say it this way
 // a refusal's two commands, each whole on a line of its own (§1.1⑥)
-export const refusedLines = (r, { past = true } = {}) => {
-  const head = `${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${r.why}.`, commands = r.commands || (r.command ? [r.command] : [])
+export const refusedLines = (r, { past = true, plain = false } = {}) => { // `plain`: the default text, where another module's sentence is said the user's way (§1.1 ④)
+  const head = `${r.harness} ${past ? 'was not' : 'will not be'} turned on: ${plain ? plainSentence(r.why) : r.why}.`, commands = r.commands || (r.command ? [r.command] : [])
   return commands.length ? [`${head} Run, in order:`, ...commands.map(commandLine), commandLine(`trocar on ${r.harness}`)] : [head] // no command (a form not on this machine): the reason is the line
 }
 /** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
@@ -249,7 +252,8 @@ export const formatRefusal = (r, { home = null, paths = null } = {}) => fit([`tr
  *  lines in order as `error.commands`, and `error.command` the first. */
 export const markedRefusal = (command, e, steps = null) => ({ ...newReceipt(command), ok: false, error: { code: e.code, message: e.message, command: steps ? steps[0] : UNDO_LINE.install, ...(steps ? { commands: steps } : {}) }, problems: e.paths.map((f) => `${f} holds trocar's text, and no install record lists it`) })
 
-export function uninstallHeadline({ platform = process.platform, past = true } = {}) {
+function uninstallHeadline({ platform = process.platform, past = true, ok = true } = {}) {
+  if (past && ok === false) return 'trocar uninstall did not finish. What is left is below.'
   const linux = platform === 'linux'
   if (!past) return `trocar uninstall will take out everything install put on this machine, ${linux ? 'the certificate settings it gave your agents included' : 'and remove the root certificate from your trust settings'}.`
   return `Uninstalled. trocar is no longer on your agents' path, and ${linux ? 'the certificate settings it gave them are gone' : 'its root certificate is gone from your trust settings'}.`
@@ -259,7 +263,7 @@ const KEY_WHERE = { keychain: "trocar's root key, from your login keychain", cng
 // Windows' scheduled task is a name in the Task Scheduler, not a file: said as the task (§3.6), never bare, where it would read as a path on the current drive
 const removedWords = (p, t) => { if (p === TASK_NAME) return `the scheduled task ${p}`; const k = /^([a-z]{2,}):/.exec(p); return k ? KEY_WHERE[k[1]] || "trocar's root key" : t(p) }
 
-export function formatUninstallReceipt(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', dataNote = null } = {}) {
+export function formatUninstallReceipt(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', dataNote = null, asking = false } = {}) {
   const past = tense !== 'future'
   const t = (x) => tilde(x, home)
   const P = platform === 'win32' ? path.win32 : path.posix
@@ -282,7 +286,7 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   if (typeof r.class_table === 'string') kept.push(`your traffic classes, ${t(r.class_table)}`)
   // §3.6 / 4.6: a bundle a live process may still have open is kept with trocar's CA taken out — the receipt says which, and who may hold it
   for (const b of r.kept_bundles || []) kept.push(`${t(b.path)} (trocar's certificate taken out)${(b.pids || []).length ? `: ${(b.pids || []).map((p) => `pid ${p}`).join(', ')} may have loaded it` : ''}`)
-  const lines = [past && r.ok === false ? 'trocar uninstall did not finish. What is left is below.' : uninstallHeadline({ platform, past })]
+  const lines = [uninstallHeadline({ platform, past, ok: r.ok })]
   if (r.nothing_installed) lines.push('Nothing of trocar is installed for your user, so there was nothing to take out.')
   // a file is said once, as `off` says it: several entries of one file (json keys) with the same change are one row
   if (removed.length) lines.push(past ? 'Removed' : 'Will remove', ...[...new Set(removed)].map((x) => `  ${x}`))
@@ -294,6 +298,15 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   // §1.1: a connection nothing else would end was cut — how many is said, never left to --json alone
   if ((r.relayed || {}).cut) lines.push(`${r.relayed.cut} connection${r.relayed.cut === 1 ? '' : 's'} that would not end by itself ${r.relayed.cut === 1 ? 'was' : 'were'} cut.`)
   for (const n of r.non_identical || []) lines.push(`Not byte for byte what it was (you changed it after trocar did; only trocar's part was taken out): ${t(n.path)} (backup ${t(n.backup)})`)
+  lines.push(...uninstallActions(r, { past, home, platform, asking }))
+  return fit(lines, { home }).join('\n')
+}
+
+/** What both the default text and `--details` of an uninstall end with (§3.6, §1.1 ④): what is left and what went wrong, each with its own way out,
+ *  then the one next step. */
+function uninstallActions(r, { past, home, platform, asking, short = false }) {
+  const t = (x) => tilde(x, home)
+  const lines = []
   // a reason that already starts with its file (`<path> could not be removed: …`) is that row; any other is said after the file — the file is named once
   const leftRow = (l) => (typeof l.reason === 'string' && l.path && l.reason.startsWith(l.path) ? `${t(l.path)}${l.reason.slice(l.path.length)}` : `${t(l.path)}: ${l.reason}`)
   for (const l of r.left || []) lines.push(`Left in place: ${leftRow(l)}`, ...(l.command ? [commandLine(l.command)] : []))
@@ -301,16 +314,108 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   for (const n of r.notes || []) lines.push(`Note: ${n}`)
   // §3.6: the purge hint names what `kept` holds — what --purge-data deletes — and is not given when nothing is kept
   const keptWhat = (r.kept || []).map((k) => k.what)
-  const and = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs[0])
   // the script copy's last step removed trocar itself (§3.6): no trocar command is left to name (D58), so the kept paths are said as what to delete by hand
   const codeGone = home != null && [...(r.removed || []), ...(r.scheduled || [])].includes(appDir(home))
   // §3.6 / §1.1③: a refusal (error) and a left row with its own command already say the next step — a second one would only repeat it
   const ownStep = !!r.error || ((r.left || []).length > 0 && r.left.every((l) => l.command) && !(r.problems || []).length)
-  if (!past) lines.push('Nothing was changed. Run it with --yes to do it.')
+  // §1.4: the plan printed before the question does not say nothing was changed — that line is --dry-run's, and the refusal's after a no
+  if (!past) { if (!asking) lines.push('Nothing was changed. Run it with --yes to do it.') }
   else if (ownStep) { /* said above: a refusal, or left rows that each carry their own next step (a shared one leaves ok true, §3.6) */ }
   else if (r.ok === false) lines.push('Fix what is above, then run: trocar uninstall')
-  else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${and(keptWhat)}), delete ${and(r.kept.map((k) => asDir(t(k.path), platform)))} by hand.`)
-  else if (!r.purge_data && keptWhat.length) lines.push(`To delete what was kept (${and(keptWhat)}), run:`, commandLine('trocar uninstall --purge-data'))
+  else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${andList(keptWhat)}), delete ${andList(r.kept.map((k) => asDir(t(k.path), platform)))} by hand.`)
+  else if (!r.purge_data && keptWhat.length) lines.push(short ? 'To delete them too, run:' : `To delete what was kept (${andList(keptWhat)}), run:`, commandLine('trocar uninstall --purge-data'))
   else if (!codeGone) lines.push('Install it again: trocar install')
+  return lines
+}
+
+/** Where the user's trust store keeps trocar's root, as an uninstall row names it (4.11 §3 ㉔): the one spelling src/cli/uninstall.mjs and this file share. */
+export const trustStoreWhere = (platform, home) => (platform === 'win32' ? 'Cert:\\CurrentUser\\Root' : path.join(home, 'Library', 'Keychains', 'login.keychain-db'))
+
+/** The default text of `trocar uninstall` (1.6 §3.6, §1.1 ④): the plan names each file of yours by its full path (several in one directory are
+ *  one line with a count) and says trocar's own things in one sentence; the receipt is the conclusion, one Kept line and what is left to do.
+ *  Every other fact is formatUninstallReceipt's (`--details`). `asking`: the plan printed before the question (§1.4). */
+export function formatUninstallText(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', asking = false } = {}) {
+  const past = tense !== 'future', win = platform === 'win32'
+  const P = win ? path.win32 : path.posix
+  const t = (x) => tilde(x, home)
+  const own = home ? P.join(home, '.trocar') : null
+  const key = (p) => (win ? String(p).toLowerCase() : String(p)) // one file in any case on Windows
+  const under = (p, dir) => !!dir && (key(p) === key(dir) || key(p).startsWith(key(dir) + P.sep))
+  const store = home ? trustStoreWhere(platform, home) : null
+  const keyId = (p) => /^[A-Za-z]{2,}:/.test(p) && p !== TASK_NAME && !(store && key(p) === key(store)) // a root key by its custody id (keychain:…, cng:…)
+  // §1.4: trocar's own things are what is under ~/.trocar, the trust store's root and the root key; every other path is a file of yours
+  const ours = (p) => typeof p !== 'string' || under(p, own) || keyId(p) || (store && key(p) === key(store))
+  // a refusal (§3.6 前提) changed nothing: one short line for why, then its steps in order. The JSON `message` keeps the full sentence; the steps
+  // are the problem's own lines after its first (its commands, each in the command column)
+  // only refuse()'s shape, the message as the problem's first line and its steps below it; any other refusal (one stopped later, with
+  // problems of its own) keeps the full rendering below
+  const refusal = r.error && r.error.code === 'collectors-online' ? (r.problems || []).find((x) => String(x).split('\n')[0] === r.error.message && String(x).includes('\n')) : null
+  if (refusal && (r.problems || []).length === 1) {
+    const why = (r.daemon || {}).state === 'left-running' ? "trocar's service is running but does not answer, so capture is not known to be off"
+      : 'capture is still on for an agent, or a program may still be using trocar'
+    return fit([`trocar uninstall: ${why}. Nothing was changed.`, ...String(refusal).split('\n').slice(1)], { home }).join('\n')
+  }
+  const lines = [uninstallHeadline({ platform, past, ok: r.ok })]
+  if (r.nothing_installed) lines.push('Nothing of trocar is installed for your user, so there was nothing to take out.')
+  if (!past) {
+    const files = [...new Map([...(r.changed || []).map((c) => c.path), ...(r.removed || [])].filter((p) => !ours(p)).map((p) => [key(p), p])).values()]
+    const byDir = new Map()
+    for (const f of files) { const d = f === TASK_NAME ? f : P.dirname(f); byDir.set(key(d), [...(byDir.get(key(d)) || []), f]) }
+    const rows = [...byDir.values()].flatMap((fs) => (fs.length > 1 ? [`${t(P.dirname(fs[0]))} (${fs.length} files)`] : fs.map((f) => (f === TASK_NAME ? `the scheduled task ${f}` : t(f)))))
+    if (rows.length) lines.push('It takes trocar out of these files of yours:', ...rows.map((x) => `  ${x}`))
+    // the sentence says what the plan holds: a key, the backups, trocar's own files (the headline already said the root certificate)
+    const removed = r.removed || []
+    const parts = [...(removed.some(keyId) ? ["trocar's root key"] : []),
+      ...((r.dropped_backups || []).length || removed.some((p) => typeof p === 'string' && own && under(p, P.join(own, 'backup'))) ? ['its backups of your files'] : []),
+      ...(removed.some((p) => typeof p === 'string' && under(p, own) && !under(p, P.join(own, 'backup'))) ? ['its own files in ~/.trocar'] : [])]
+    if (parts.length) lines.push(`It also deletes ${andList(parts)}.`)
+    if (r.purge_data) lines.push('With --purge-data it deletes your captured records too.')
+  }
+  const kept = r.kept || []
+  if (kept.length && !r.purge_data && !r.error) { // a refusal changed nothing: what stays is not news (§1.1 ④ rule 7)
+    const known = kept.every((k) => Number.isFinite(k.bytes))
+    const total = kept.reduce((n, k) => n + (Number.isFinite(k.bytes) ? k.bytes : 0), 0)
+    const inside = kept.every((k) => under(String(k.path), own))
+    lines.push(`Kept: ${andList(kept.map((k) => k.what))} (${known ? size(total) : 'size not known'}${inside ? ', in ~/.trocar' : ''}).`)
+  }
+  const d = r.daemon || {}
+  if (d.state === 'unresponsive') lines.push("trocar's service did not answer and could not be stopped.")
+  lines.push(...uninstallActions(r, { past, home, platform, asking, short: true }))
+  return fit(lines, { home }).join('\n')
+}
+
+/** 1.6 §3.3「之后的效果」: the agents whose processes were running before capture was on, as one line (several agents in one); each process and its
+ *  pid is a --details fact. → [line] or []. */
+export const restartLine = (r) => {
+  const hs = [...new Set((r.restart || []).map((x) => x.harness))]
+  return hs.length ? [`Restart ${andList(hs)} to capture ${hs.length === 1 ? 'it: it was' : 'them: they were'} started before capture was on.`] : []
+}
+
+/** The default plan of a Linux `on` (1.6 §3.3「要确认时」): one line per agent and file of yours, `new` on a file not confirmed last time (none on
+ *  the first on), `no file of yours` for an agent with none; trocar's own files, the keys and the route words are formatPlan's (`--details`). */
+export function formatOnPlan(p, { home = null, platform = 'linux' } = {}) {
+  const own = home ? path.join(home, '.trocar') : null
+  const yours = (x) => typeof x === 'string' && !(own && (x === own || x.startsWith(own + path.sep)))
+  const rows = planItems(p, { home, platform }).filter((i) => HARNESS_IDS.includes(i.what) && yours(i.path))
+    .map((i) => [i.what, `${tilde(i.path, home)}${!p.first && (p.newPaths || []).includes(i.path) ? '  new' : ''}`])
+  for (const h of p.targets || []) if (!rows.some(([x]) => x === h)) rows.push([h, 'no file of yours'])
+  return fit(['trocar on will point these agents at trocar:', ...pairs(rows, { home }), ...watchLines(p.watch, (x) => tilde(x, home)), ...(p.edited || []).map(editedLine)], { home }).join('\n')
+}
+
+/** The default text of a Linux `on` (1.6 §3.3, §1.1 ④): the conclusion, the Restart line, linger, and what the user must act on — a refusal, a
+ *  service not running, a problem, a fact not read (D38), a blocked step — each with its command on its own line. formatOnReceipt is `--details`. */
+export function formatOnText(r, { tense = 'past', home = null, colors: c = noColor() } = {}) {
+  const past = tense !== 'future'
+  const idle = past && (r.ok !== false || onlyRefused(r)) && r.daemon && r.daemon.state !== 'running'
+  const named = andList(r.harnesses || []) || 'no agent'
+  const lines = [r.ok === false && past && !onlyRefused(r) ? `${c.red('x')} trocar on did not finish. What stopped it is below.`
+    : idle ? "The settings are in place, but trocar's service is not running: nothing is captured until it is. Start it:"
+      : past ? `${c.green('Capturing')} ${named}.` : `After trocar on, ${named} would be captured. Nothing was written.`] // a dry run: some may be captured already, so it says what is true after it
+  if (idle) lines.push(commandLine('trocar daemon'))
+  lines.push(...restartLine(r), ...(r.refused || []).flatMap((x) => refusedLines(x, { past, plain: true })))
+  if (lingerText(r)) lines.push(lingerText(r))
+  const isProblem = (n) => (r.problems ? r.problems.includes(n) : r.ok === false && past) // as formatOnReceipt judges it
+  for (const n of r.notes || []) if (isProblem(n) || /(cannot|could not) be read/.test(n)) lines.push(`${isProblem(n) ? 'Problem' : 'Note'}: ${plainSentence(n)}`)
+  for (const b of r.blocked || []) if (b.command) lines.push(commandLine(b.command))
   return fit(lines, { home }).join('\n')
 }

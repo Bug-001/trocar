@@ -11,6 +11,7 @@ import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { readHead } from '../../src/query/ctx-files.mjs'
 import { bigSession } from './big-session.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const recorder = () => {
   const r = { status: null, chunks: [] }
@@ -38,14 +39,15 @@ test('a never-projected session answers with pending, extraction goes on with no
     const first = await ask(svc, 'session', { id: s.id })
     assert.ok(first.pending, 'the first answer carries pending')
     assert.ok(first.mark, 'it has a frontier')
-    await ask(svc, 'block', { ref: first.mark })
+    // the frontier's record: a mark is a record id, or, answered before the boot pass built the row list, `<rid>@~<first>` (3.5 §行表先读)
+    await ask(svc, 'block', { ref: String(first.mark).split('@')[0] })
     const again = await ask(svc, 'session', { id: s.id })
     assert.ok(again.pending, 'a later answer still carries pending')
     // (b) with no request, the projection grows: extraction runs with nobody asking
     const file = projectionFile(home, s.id), size0 = sizeOf(file)
     await whileMoving(() => sizeOf(file) > size0, () => r.n, 'the projection grew with nobody asking')
     // (c) with no request, the session is extracted and folded to its end: the head the worker's idle period writes has nothing pending
-    await whileMoving(() => { const h = headOf(home, s.id); return h != null && h.tier === 1 && h.pending === null }, () => r.n, 'the session extracted and folded with nobody asking')
+    await whileMoving(() => { const h = headOf(home, s.id); return h != null && h.tier === 1 && h.pending === null && listed(h) }, () => r.n, 'the session extracted and folded with nobody asking')
     svc.stop() // the worker ends here, so the next answer is a new worker's, from what this one left on disk
     await whileMoving(() => kids[0].exitCode !== null || kids[0].signalCode !== null, () => r.n, 'the worker left')
     assert.deepEqual(said, [], 'no failure')

@@ -10,7 +10,6 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 
 // Every file `on` will write or change, printed before it writes any (4.6): src/cli/receipt.mjs holds the words, this is where the
 // collector's callers have always found it.
-export { formatPlan } from '../cli/receipt.mjs'
 
 const loadDaemon = () => import('./daemon.mjs')
 /** The staged copies an interrupted setup-helper left and this run removed, either way: a label sentence in 80 columns, then each path alone on its line, two in
@@ -31,7 +30,7 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
     }
     const i = argv.indexOf('--binary'), dir = path.join(packageRoot, 'src', 'collector', 'arch', 'linux')
     const binarySrc = i >= 0 ? argv[i + 1] : path.join(dir, 'trocar-redirector')
-    if (!binarySrc || !fs.existsSync(binarySrc)) { // a fresh checkout: the helper is built from source first (README · Install)
+    if (!binarySrc || !fs.existsSync(binarySrc)) { // a fresh checkout: the helper is built from source first (docs/install.md)
       err(i >= 0 ? `trocar setup-helper: --binary ${binarySrc ? `${binarySrc} is not a file` : 'needs the path of a helper you built'}.`
         : `trocar setup-helper: the helper is not built yet. Build it as yourself first:\n${COMMAND_INDENT}make -C ${shellArg(dir)}`)
       return 1

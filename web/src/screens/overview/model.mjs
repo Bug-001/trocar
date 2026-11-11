@@ -20,7 +20,8 @@ import { controlFor } from '../../../legacy/core/harness-switch.mjs'
 import { failureBrief, failureWord } from '../../../../src/cli/words.mjs'
 import * as W from '../../../legacy/labels/overview.mjs'
 import { redactUrlCredentials as hide } from '../../../legacy/core/sensitive.mjs'
-import { WINDOW_LABEL, UNTITLED, READ_FAIL, PROMPT_UNREAD, PROMPT_UNREAD_TIP, TITLE_PENDING, TITLE_PENDING_TIP } from '../../../legacy/labels/common.mjs'
+import { WINDOW_LABEL, READ_FAIL, PROMPT_UNREAD_TIP, TITLE_PENDING_TIP } from '../../../legacy/labels/common.mjs'
+import { titleCase, titleText } from '../../../legacy/core/titles.mjs'
 
 const DAY = 24 * 3600e3
 
@@ -181,7 +182,7 @@ export function overviewStats(doc, pricingDoc) {
   return {
     sessions: doc && doc.sessions ? doc.sessions.total : null, calls: doc && doc.calls ? doc.calls.llm : null,
     ...priced(rows), partial, coverage: cov, hit: hit.hit, hitUncertain: hit.uncertain, main: hit.main,
-    unpriced: unpricedModels(rows, table).length, byAgent,
+    unpriced: unpricedModels(rows, table)?.length ?? null, byAgent,
   }
 }
 
@@ -317,7 +318,7 @@ export function statsCard(s, now) {
   return {
     ...card,
     sessions: { text: W.SESSIONS_N(m.sessions ?? 0), href: `#/sessions?window=${s.w}` }, calls: W.CALLS_N(m.calls ?? 0),
-    cost: costOfModel(m, priceFail), unpriced: s.pricing && s.pricing.ok !== false && s.pricing.data && m.unpriced > 0 ? // no table yet: nothing is "unpriced"
+    cost: costOfModel(m, priceFail), unpriced: s.pricing && s.pricing.ok !== false && m.unpriced > 0 ? // a failed read says so on the cost line instead
       { text: W.UNPRICED(m.unpriced), href: '#/settings/prices' } : null,
     hit: hitOf({ hit: m.hit, uncertain: m.hitUncertain, main: m.main }), agents,
   }
@@ -331,11 +332,12 @@ export function recentCard(s, now) {
   return {
     kind: 'shown',
     rows: rows.map((r) => {
-      // 1.8 §标题规则, as the library: unread → the read failed; null → 没有采到提问; any other value or none → not read yet
-      const probe = r.calls === 0 && r.probes > 0, unread = r.title == null && r.titleSource === 'unread', pending = r.title == null && !unread && r.titleSource !== null
+      // 1.8 §标题规则, the one rule (core/titles.mjs)
+      const probe = r.calls === 0 && r.probes > 0, tc = titleCase({ title: r.title, title_source: r.titleSource }), unread = tc === 'unread', pending = tc === 'pending'
       return {
-        id: r.key, harness: r.harness, inferred: r.inferred, title: r.title ?? (unread ? PROMPT_UNREAD : pending ? TITLE_PENDING : UNTITLED), untitled: r.title == null,
-        titleTip: [r.title != null ? TITLE_FROM_WIRE : unread ? PROMPT_UNREAD_TIP : pending ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · '),
+        id: r.key, harness: r.harness, inferred: r.inferred, title: titleText({ title: r.title, title_source: r.titleSource }), untitled: r.title == null,
+        // the row cuts a long title (one line, ellipsis): the hover carries it whole, on its own line
+        titleTip: [r.title, [r.title != null ? TITLE_FROM_WIRE : unread ? PROMPT_UNREAD_TIP : pending ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · ')].filter(Boolean).join('\n'),
         calls: { text: probe ? W.PROBE_ONLY : W.CALLS_N(r.calls), tip: probe ? W.PROBE_ONLY_TIP : null }, when: when(r.last, now), href: r.href,
       }
     }),

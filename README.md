@@ -2,753 +2,106 @@
 
 **See the exact bytes your agent sends the LLM — without changing its code or wrapping its SDK.**
 
-Other LLM-observability tools ask you to wrap your client or import an SDK, and then show you what
-*your code* thinks it sent. trocar sits on the wire instead: it captures the real HTTPS traffic,
-stores the raw bytes verbatim, and replays them step by step. Nothing to integrate, no drift between
-"what I logged" and "what actually shipped."
+trocar captures the HTTPS traffic between your coding agent and its model provider, keeps every byte on your
+machine exactly as it was sent, and replays each session step by step: the full context of every call, what was
+cached, what it cost, and why the cache broke. It works with the agents as they are: nothing to integrate, no SDK
+to wrap, and no drift between what you logged and what was actually sent.
 
-Observe-only today: it never originates a request and never uses your app's token on its own, and it binds loopback only. A request is only ever changed or re-sent by you, on purpose (D30; none of that is built yet).
+![A session replayed on the board: the context of each step by content type, the cache trace, and step 8's blocks](docs/images/board-replay.png)
 
-The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**, **DeepSeek `dsh`**, **Hermes**,
-**Z-Code** and **pi**. Whether one of them has been shown to capture verbatim end to end on an OS:
+## How it works
 
-| harness | macOS | Windows | Linux |
-|---|---|---|---|
-| Claude Code | yes | yes | yes |
-| Codex | yes | yes | yes |
-| OpenCode | yes | yes | yes |
-| Kimi Code | yes | yes | yes |
-| DeepSeek `dsh` | yes | yes | yes |
-| Hermes | yes | yes | yes |
-| Z-Code | yes | yes | yes |
-| pi | not yet | not yet | not yet |
-
-`yes` = at least one of that harness's main forms (CLI, VS Code extension, desktop app) was driven end to end on that
-OS and its calls came out verbatim; `not yet` = that has not been shown there. What is not shown is not claimed.
-
-## What a capture looks like
-
-```sh
-git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
-```
-
-A small **synthetic** sample session ships in `samples/demo-session.ndjson` (fabricated, no real
-prompts or credentials) so you can read what the tool records before pointing it at anything of your
-own. The file is one record per line, readable with any JSON tool. Everything below is about capturing your own traffic.
-
-## Questions it answers that your logs cannot
-
-**"Why did my prompt cache break?"** trocar finds the first block where this call's context diverged
-from the previous one, classifies *why* — tools array reordered · JSON keys reordered · compaction
-rewrote history · a shared-prefix block changed in place — and attributes it: **yours**, **the
-harness**, or **provider-excluded**. Each cause carries a fix hint and the character offset inside the
-diverging block's rebuilt text. The cause is a structural estimate from comparing the two calls' blocks, not the
-provider's real boundary — `usage` stays the numeric truth: a call whose prefix changed but still read at least 30% of its
-input from the cache is shown as changed, not as a cache break. "Emit the tools array in a stable order" is a one-line
-fix you cannot find without seeing the wire.
-
-**"My prefix looked identical — why was I billed a miss?"** trocar checks the reusable prefix block by block
-against the call it is compared with: each block's own slice of the request bytes, with only its `cache_control`
-marker cut out, must have the same SHA-256 on both sides. A marker that moved still counts as identical; a tools
-schema that differs only in whitespace or number spelling does not, and neither does a block with no slice of its
-own in the request (it is never called identical). The board then cross-checks that against what the provider's
-`usage` actually credited.
-`read=0, write>0` is labelled a TTL rebuild, not a bug; `read=0, write=0` on a byte-identical prefix is
-flagged as a provider contradiction. The structural guess and the numeric truth are shown separately
-and never conflated.
-
-**"What did the model actually see at step 40?"** Scrub to call 40 and read the exact context —
-system, tools, every message block, in order, as bytes. Not a log line about it.
-
-**"What is eating my context?"** A per-call breakdown by section (tools / system / user / assistant /
-thinking / tool_use / tool_result), so you see *which* part grew and when.
+- `trocar install` makes a root certificate on this machine, its key never leaving it, and has the agents it captures
+  trust it.
+- `trocar on` points your agents at a local collector through their own settings (on Linux, a small helper
+  steers only their processes). trocar is not a system proxy.
+- The collector decrypts only those agents' TLS (anything else that reaches it is passed on unread), sends every
+  request on to the real provider, and appends the request and response bytes to files under `~/.trocar/raw`.
+- The board and `trocar query` read those files directly; the index that makes them fast can always be rebuilt.
+- `trocar off` takes the routing out again; `trocar uninstall` removes the certificate and the rest of trocar's changes
+  (on Linux the helper is one more `sudo` step).
 
 ## Install
 
-One line, nothing needed first: no npm, no Node. The script downloads trocar and an official Node build of its own,
-checks both against the hashes the npm registry and the package record, and puts them in `~/.trocar/app`. It needs
-no root and writes nothing outside `~/.trocar`. Then it runs `trocar install`, which prints its plan and asks
-before it changes anything.
+One line, nothing needed first: no npm, no Node. The script fetches trocar and its own Node into `~/.trocar/app`,
+checks both against their published hashes, needs no root, and then runs `trocar install`, which prints its plan
+and asks before it changes anything.
+
+On macOS and Linux:
 
 ```sh
-curl -fsSL https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh     # macOS, Linux
-wget -qO- https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh      # a Linux with wget and no curl
+curl -fsSL https://github.com/Bug-001/trocar/releases/latest/download/install.sh | sh
 ```
+
+On Windows:
 
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://github.com/Bug-001/trocar/releases/latest/download/install.ps1 | iex"
 ```
 
-The Windows line works in cmd, PowerShell and Win+R. In China, the scripts are also at
-`https://cdn.jsdelivr.net/npm/trocar-cli/install/install.sh` (or `.../install/install.ps1`); each download tries npm
-and nodejs.org first and moves to npmmirror when that source fails or is too slow. When security software blocks `irm | iex`, save the script first and run it as a file (cmd):
-
-```bat
-curl.exe -fsSLo "%TEMP%\trocar-install.ps1" https://github.com/Bug-001/trocar/releases/latest/download/install.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\trocar-install.ps1" & del "%TEMP%\trocar-install.ps1"
-```
-
-If the one-line command prints nothing or only a curl or wget error, and a new terminal has no `trocar` command, the download failed: a pipe into
-`sh` that gets nothing still exits 0. Use the jsDelivr address above, or download the script first and run it as a file:
-
-```sh
-curl -fsSLo install.sh https://github.com/Bug-001/trocar/releases/latest/download/install.sh && sh install.sh
-```
-
-`trocar install` adds `~/.trocar/bin` at the end of your PATH (one marked line in your shell's start file; on
-Windows one element of your user `Path`), so `trocar` works in a new terminal. A shell that is not interactive may not
-read that file (Ubuntu's `~/.bashrc` stops early for one, so `ssh host trocar` does not find it): use `~/.trocar/bin/trocar`
-there. Then:
-
-```sh
-trocar on                       # start capture
-```
-
-For developers, from npm (Node ≥ 22). The package is `trocar-cli`; the command it installs is `trocar`.
+Or from npm (Node ≥ 22); the package is `trocar-cli`, the command it installs is `trocar`:
 
 ```sh
 npm i -g trocar-cli
-trocar install                  # once: the certificates
-trocar on                       # then start capture
 ```
 
-`npx trocar-cli <command>` runs one command without installing, but run `trocar install` from a global install:
-it registers a login item that runs that copy, and npm may clear the `npx` cache.
+On Linux the capture also needs a small helper built once per machine; other ways to install (wget, a mirror, from
+source, from a Release), updating and removing trocar are in [docs/install.md](docs/install.md).
 
-On Linux, build the capability helper and install it once per machine, before `trocar install`. The package carries
-its source, not a build: the build needs clang, make, bpftool, the libbpf, libelf and zlib headers, and a kernel
-with BTF. Build as yourself; only the `sudo` lines need root:
+## First steps
 
 ```sh
-sudo apt-get install build-essential clang libbpf-dev libelf-dev zlib1g-dev linux-tools-generic  # Ubuntu; Debian: bpftool, not linux-tools-generic
-make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux"
-sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # root's PATH may lack node or trocar (an nvm node), so both go by their paths
+trocar install
+trocar on
+trocar board
 ```
 
-Installed with the script, the helper cannot come first: its source arrives with the script. `trocar install` finishes
-without it; the collector then runs and captures nothing, `trocar status` says the helper is missing, and the receipt's
-last line is the `sudo` line to run. The code is under `~/.trocar/app/<version>` (the version is the first word of
-`~/.trocar/app/current`): build with `make -C ~/.trocar/app/<version>/src/collector/arch/linux`, run that `sudo` line
-(it names this copy's Node and code by their full paths; `trocar on` prints it too), then `trocar on`.
+`trocar install` sets up the certificate once (the install script has run it already); it prints its plan and asks
+first. `trocar on` captures the agents installed here, or the ones you name (`trocar on claude-code codex`).
+`trocar board` opens the board in your browser.
 
-The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
-`trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
-confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
-`off` stops routing and capture for your agents; the certificates, and the wrappers and plugins that carry them, stay until `trocar uninstall`. When a TLS failure with a host (a
-sign-in page that intercepts TLS, for instance) made trocar pass that host's traffic on unread, `trocar on <agent>` again
-makes trocar try decrypting it now; otherwise trocar tries again by itself later. Running
-`trocar install` from another copy of trocar restarts the collector on that copy's code: the agents being captured
-stay captured, and connections open at that moment are cut and retried by the agent.
+From then on the agents' new connections are captured; `trocar status` says which ones are. `trocar off` stops
+capture, and `trocar uninstall` removes trocar's changes from the machine (your records stay unless you add
+`--purge-data`).
 
-From source (Node ≥ 22): there is no global `trocar` on your PATH, so run it through the repo.
+## The board
 
-```sh
-git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
-make -C src/collector/arch/linux && sudo "$(command -v node)" bin/trocar.mjs setup-helper   # Linux only, once per machine
-node bin/trocar.mjs install     # once: the certificates
-node bin/trocar.mjs on          # then start capture
-```
+`trocar board` opens the board in your browser: every captured session of every agent side by side, each one
+replayed step by step with its exact context, cache and cost. What each screen shows is in
+[docs/board.md](docs/board.md).
 
-From a GitHub Release: each Release carries the same tarball as npm and its `SHA256SUMS`. Download both into one
-folder, check the sum there, then `npm i -g` the `.tgz` file; it installs like the registry copy.
+![The overview: sessions, model calls, estimated cost and main-thread cache hit per agent](docs/images/board-overview.png)
 
-```sh
-shasum -a 256 -c SHA256SUMS     # macOS; on Linux: sha256sum -c SHA256SUMS; each prints OK
-npm i -g ./trocar-cli-<version>.tgz
-```
+![A step's context breakdown: which part of the request grew, and by how much](docs/images/board-breakdown.png)
 
-On Windows, in PowerShell, `(Get-FileHash .\trocar-cli-<version>.tgz -Algorithm SHA256).Hash -eq (Get-Content SHA256SUMS).Split(' ')[0]`
-prints `True` when the sum matches.
+## What it captures
 
-## Staying up to date
+The agents it knows, by the name `trocar on` and `trocar off` take: Claude Code `claude-code`, Codex `codex`,
+OpenCode `opencode`, DeepSeek `dsh` `deepseek-dsh`, Kimi Code `kimi-code`, Hermes `hermes`, Z-Code `z-code` and pi
+`pi`. Only those agents' TLS is decrypted and recorded; anything else that reaches trocar is passed on unread. What each command
+changes on your machine, which processes count as an agent, and what lands on disk are in
+[docs/capture.md](docs/capture.md).
 
-```sh
-trocar update            # the newest code, and the machine as it was
-```
+- **Verbatim.** Requests and responses are stored as the bytes that crossed the wire, credentials included, in
+  your own home folder. Nothing is summarized away; where the board shows something rebuilt, it says so.
+- **Local.** The records, the index and the board stay on this machine; the board listens on 127.0.0.1 only, and
+  trocar sends none of it anywhere.
+- **Hands off.** trocar never changes or sends a request on its own; the one line it adds, a `Connection: close` after
+  `off`, is labelled on the call. It reads your system proxy only to keep your own proxy chain working, and never
+  changes it or any VPN.
 
-One command takes this checkout to the newest code and leaves the machine the way it was: it refuses to touch a checkout with changes of your own, fast-forwards (never merges), runs
-`npm install --omit=dev` (no development tools) when what trocar needs changed, replaces the collector, runs `install`, and switches
-capture on again for the agents that had it on. It prints the plan — which commit to which commit,
-and which agents go off and on again — and asks first; `--yes` answers, `--dry-run` only prints.
-While it runs those agents are not captured (their connections still work), and the collector is
-replaced the way `uninstall` stops it: a response still on its way gets up to 30 s to finish (the update goes on as soon
-as it has), then the old collector cuts the rest (a call left open, such as a WebSocket) and stops itself cleanly, so the
-new one does not report that the previous one ended without a clean stop. The rows of what it cut, and its stop record,
-say that `update` (or `uninstall`) stopped it. An agent that is on while the collector is replaced (an update with only the
-collector to replace, or `trocar install` from another copy) stays captured: its new connections during those 30 s are
-decrypted and recorded as usual, and a response on one of them is waited for like any other. An update that stops half way leaves a note
-behind: run `trocar update` again and it goes on from where it stopped.
+## Learn more
 
-A copy installed with the script updates with the same `trocar update`, or by running the install line again: it
-downloads and checks the new version into its own folder before any agent goes off, then switches to it and finishes
-as below. The previous version is kept until nothing can still start it.
-
-A copy installed with npm updates through npm: `npm i -g trocar-cli@latest`, then `trocar update` finishes the
-way a git update does: the collector on the new code, `install` again, and the agents that were being captured
-switched on again. It finishes also when the collector already came back on the new code by itself (a reboot or a new
-login in between): `install` records which code ran it, and until that is the new code there is something to finish. Run it from the copy the login entry starts (the one you ran `trocar install` from); from
-another copy the collector comes back on the copy the entry starts, and `update` says so and exits 1.
-
-A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
-install trocar as described under [Install](#install). Nothing the old name left is read or kept.
-
-## Uninstall
-
-```sh
-trocar off                     # first on macOS and Windows: uninstall refuses while capture is on
-trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw, ~/.trocar/collector/flows), the last ones sealed first
-trocar uninstall --purge-data  # also deletes the records and their index (asks first)
-```
-
-On macOS and Windows, `uninstall` takes every trocar root out of your user trust store, also one an earlier install left
-without a record. `install` keeps you to one trocar root: if your trust store already holds one that trocar's install
-record does not list, it changes nothing, names that root, and asks you to run `trocar uninstall` first.
-
-Run `install` and `uninstall` with your account's own home: the login entry starts the background process there,
-so with `HOME` (Windows `USERPROFILE`) set to another directory both commands change nothing and name the two homes.
-
-On Linux the machine's capability helper is one more step, with `sudo`. Installed from npm, run it after `uninstall`:
-`sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove`.
-
-Installed with the script, `uninstall` also removes trocar itself as its last step: `~/.trocar/app` (the code and its
-Node), the `trocar` launcher and the PATH item. On Windows the folder goes as soon as the command exits. On Linux the
-helper is one per machine and other accounts may use it, so while it is installed `uninstall` removes everything else
-of yours as usual and keeps only the code, the launcher and the PATH item, which removing the helper needs. It exits 0
-and prints the `sudo ... setup-helper --remove` line with full paths. If no other account uses trocar, run that line,
-then `trocar uninstall` once more: the second run removes the code, the launcher and the PATH item. `--remove` checks
-every other account's home for a trocar install and removes nothing while it finds one or cannot read a home, naming
-them. Once trocar itself is gone, the receipt names the kept folders to delete by hand.
-
-`uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
-nothing and exits 2. On macOS and Windows `uninstall` never does `off` for you (on Linux it turns capture off itself): while a harness is on, or a process started during `on` still
-holds a door, it changes nothing, exits 1 with `error.code` `collectors-online` and names the harnesses and the pids.
-If the system's prompt to remove trocar's root certificate is not answered, `uninstall` exits 1, names the
-certificate and the command to remove it by hand, and the next `trocar uninstall` tries again.
-
-On macOS, `launchctl print-disabled gui/$(id -u)` still lists `"com.trocar.collector" => enabled` after
-`uninstall`: `launchctl` has no command that removes such an entry. It is harmless: with the LaunchAgent file gone,
-it starts nothing. The receipt says so in a note.
-
-## What you see
-
-No ETL, no database, no build step — the board reads the raw segments directly. The collector daemon
-serves it from `install` on (D66); `trocar board` prints its address with your key
-(http://127.0.0.1:9800/#t=…) and opens it in your browser. The browser keeps the key for that address, so
-the board opens again from history or a bookmark. It is the HTTP shell of `trocar query`
-over `GET /api/<name>` (D59), and `trocar status` shows its address (never the key) on its `Board` line. It
-reads `~/.trocar/raw/`, so **the sessions of every captured harness appear side by side on one
-board** (the collector's `flows/`, `audit/` and `replays/` are not envelopes and are not shown). Each agent appears by its official icon beside its name. Times read the same on every screen: a day as "Oct 18" (or "Today" / "Yesterday"), a clock time as "08:00:52", both together as "Oct 18, 08:00:52".
-Product names and logos are trademarks of their owners and identify the agents only.
-
-There is one board, at `/`. Besides reading, it writes three things, each through the plan-then-confirm protocol of `/control/*` (it shows the
-files a change touches, focus on Cancel, and Cancel or Esc sends nothing): **an agent's capture on or off**
-(the capture page; the first-use overview has the same row per agent), **Set up** for an agent installed after
-trocar (only what that agent is missing), and **a traffic class's level** (the storage page: everything or log
-only). Where the board cannot make the change (not installed, or running as root), it shows no control and
-puts the command in the row's technical details. `trocar install` and `trocar uninstall` stay in the CLI: the
-board has no control for them. Replay keys: ← → (Shift: ten steps), Home, End, n / p (next / previous step with a
-problem), [ / ] (previous / next compaction), f (follow latest), ? (the key list), Esc. Selecting text never opens or closes a row, a click inside an expanded row leaves it open, and a refresh keeps your selection and the Technical details you opened. On the capture page and the capture log a row opens and closes only from its head (a click, Enter or Space), and the rows keep their order while one is open. Following latest keeps the newest step in view as calls arrive, showing it within 150 ms of its arrival even when its reply text is still on its way (the text fills in when it comes),
-and the context window ends with that step's reply: its text, thinking and tool calls, all open, so it reads as one message (reasoning with no plaintext stays closed). An open block shows its stored bytes (Raw) by default. Readable is one click away, or `v` on the block, and draws its content: messages, system prompts and thinking as Markdown, a shell call as `$ command`, an edit as a diff, a tool definition as its description and its parameters, JSON as a tree; Shift+V switches every block. The copy button follows the view: Copy text copies the block's whole text in Readable, Copy bytes copies those bytes in Raw. A cell with nothing parsed to show (a request parameter, the whole raw reply) has Raw only. The address bar reproduces what you see: while following it names no step, otherwise the step on screen. A replay link without a step follows the session live and is still following after a reload, and a link with a step stays on that step, with following off. A session opens at once, also from cold (a new tab, an empty browser cache, no query worker running): the daemon sends a small summary of the session that the worker wrote earlier, and from it the page draws the header with its totals, the whole-session overview, the bars of the part you are in, the step number, the lane names and an empty context frame of the right size; the step's blocks fill in a moment later. On a live session of 3,621 steps in 19 parts, that first page was drawn within 59 ms (p95). A session is cut into parts at its compactions: the row above the trace says **Since compaction k · steps a–b**, or **Before the first compaction · steps a–b** for the first part, adds **· showing a–b** when the view is narrower than the part (with **(inferred)** after the part when the boundary is a guess), ‹ and › or [ and ] go to the part before or after, the overview marks every boundary, and the bars stay inside the part you are in. Going to the next part took 14 ms (p95) on that session. The rest of the session is read in the background, at most three pieces at a time: first the piece holding your step, then the pieces next to it, then the rest of its part, then everything else from newest to oldest. A step whose piece has not arrived keeps its shape and costs on screen and fills in when its piece comes, with no load button anywhere; a link that names a step reads that step's piece first. A piece that arrives is taken in in short slices between your inputs, so a lane jump, a scrub or following does not wait for it. While the desk follows a session it asks every 1.5 s only for the bytes added since its last look to the two files of the part still growing; when nothing new was captured, nothing comes back and no worker starts. The worker rewrites the session's summary only when a group of calls is sealed, a new chapter starts or the reading state changes; the newest calls, the lane names and the counts travel in the growing part's files, so a settled file is never written again because a lane grew. Replaying the last 150 calls of a live session of about 30,000 records, following cost the worker about 22 ms of CPU per call and at most 175 MB of memory between calls. When the worker stops and a new one starts, it carries those growing files on instead of writing them afresh, so a desk that comes back keeps reading from where it was; if a file was replaced in the meantime, the desk notices (each growing file carries a tag that changes only when the file is replaced) and reads it again whole. Leave the replay desk and come back to the same session (from Sessions, Back, the sidebar or a link) and it shows the step you left and asks for nothing but one such look. One quiet line under the header says how current the view is: **Reading this session for the first time · N %** while the worker reads a session it has never read (until then the overview shows calls over time only, with no bars per step and no parts), **Updating to this version · N %** while a new version of trocar reads a session again in the background (the session stays on screen as the old version read it until then), **Catching up · N new calls** while the worker reads calls it has not read yet, and **N newer calls are not shown yet** when the capture holds calls newer than the newest one the desk holds; it goes away once they arrive. When the background reading of a session stops (it no longer fits in the worker's memory, or it failed), the line says that reading stopped and why in plain words; the details are under **Technical details**. The Resources tab shows each group's count once the lane's whole list of files and resources has been read; until then the count is left blank, never a partial number. A refresh that fails keeps the
-last good view on screen, says it is out of date, and tries again with a growing pause. When an agent is not captured, its row says why in the same sentence `trocar status` prints in its NOTE column (one
-catalog, `src/cli/words.mjs`, a sentence for every reason).
-
-The replay page is one desk in two splits: the main area and the right sidebar, and inside the main area the scope
-and the reading column; the sizes you drag are remembered. The scope's **Whole session** strip is the time axis.
-The right sidebar has the tabs **Overview**, **Resources** and **Rules** (Rules only when something is registered)
-and a button that collapses it. Overview has one row per chapter, the current one open, with its Tools, System
-prompt, Prompts, Sub-agents and **Jump to change**. A resource name opens that block in the context window. There is
-no left outline and no separate panel of raw data: what only that panel showed is in **Call details**, folded after the reply in
-the context window (what the capture changes in the agent is not folded). On a narrow window, below 1200 px the
-sidebar becomes a row at the bottom whose panel rises over the desk, below 900 px the track names fold and their
-controls (the problem pager, the track folds) move into the **Tracks** menu, and below 600 px only the whole-session
-strip and the reading column remain.
-
-Per call, on one board: **context replay** (the full assembled request, block by block, plus
-**Call details**) · **cache overlay** (real `cache_read` / `cache_write` counts, the marked break, its cause
-and fix hint) · **reconstructed streamed reply** with usage and an estimated cost · **resource
-lifecycle** — which files entered context, when, via which tool *(Claude Code only — see Limits)*; a
-file printed by a shell command (`cat`, `sed -n`, `grep`, `jq` and the like) counts as read, one entry per file.
-
-Cost is a local, editable estimate in `~/.trocar/pricing.json` (or the file `TROCAR_PRICING` names;
-`trocar query pricing` prints the table in effect and says where it came from); providers return
-usage, never dollars.
-
-What the board cannot vouch for, it labels on the call (the line at the top of the context window; **Call details**,
-folded after the reply in the context window, holds the detail):
-- **Context incomplete: earlier records are missing** (naming the record when it is known; **Context incomplete ·
-  cause unknown** when it is not): what is shown is not the whole context the model saw. When the request body itself
-  was stored incomplete, the request's own label says exactly how instead.
-- **reconstructed from earlier records**: the context was reassembled from earlier records of the same
-  connection; every block is still verbatim.
-- **the server edited the context; this is not everything the model received**: the response says so.
-- What trocar's trust injection changes in that agent (e.g. request gzip off, a different TLS stack) is one
-  line each in **Call details** (not folded); legacy captures carry none.
-- **What this provider's cache numbers mean is not certain**: the upstream host is not a known vendor, so no
-  cache claim is made for it.
-- **request: truncated at the capture limit** / **request: incomplete** / **reply: not decompressed** /
-  **Compressed request not decoded**: which bytes of this record are missing or were not decoded. A request the
-  agent sent compressed is decoded by trocar when it reads it and labelled **The request body was compressed on
-  the wire (gzip); this is the exact decompressed text** — its blocks are the text after decompression, not the
-  wire bytes. **Compressed request not decoded** then means trocar could not decode it either (e.g. zstd on a
-  Node without zstd).
-- **Response: compressed on the wire; only the decompressed text is stored**: the reply arrived compressed and the record keeps only its
-  decompressed text, not the compressed bytes that were on the wire. Records captured since trocar keeps those
-  bytes do not carry it.
-- **Agent closed the connection after the reply**: the reply arrived whole, up to its own last event, and the agent
-  then closed the connection before the server ended the exchange. The call is not failed: its reply, usage and cost
-  are read as usual. A reply that stopped before its last event says **Reply never finished** and stays failed.
-- **N records no parser can read; not drawn** (in the session's own fidelity line): records no dissector reads are
-  counted, never drawn as something else — also when only some records of a session are unrecognized. One
-  session may mix wire formats; each call is read by its own.
-- Request keys that are not context blocks are listed one by one, each opening its verbatim bytes.
-  A token-count probe's request body is kept verbatim like any other (D40; `trocar classes` can turn that into a log
-  line), and its detail says which: **(retention: full)**, **(retention: log only)**, or captured before D40 and
-  kept as a length only (**(retention: an older capture, length only)**).
-- **What is stored** (Settings → Storage): one row per traffic class with its level (**Everything** or
-  **Log only**), the calls and the bytes stored over 24 hours / 7 days / All, so you can see which class costs what
-  before you change it. A level is changed there (switching model calls or token counts to log only asks first) or with
-  `trocar classes`, and applies to calls that start later; the sealed compression ratio is marked **estimate**.
-  A call kept as log only says so on the call: **Logged only (your setting for** *harness* **·** *class***)**.
-- **The reply as captured** is listed in **Call details** with a locator per piece — the whole decoded
-  stream of an HTTP call, each server message of a WebSocket call — each opening its verbatim bytes. A
-  piece that cannot be opened says why (a JSON reply stored parsed only — one from before D40, or one that re-serializes to itself — a message kept as
-  base64 or past the size cap, no reply at all).
-- **Codex over WebSocket** (its default transport): each turn sends only its new input, so the board
-  rebuilds the context the model saw from the earlier calls on the same connection, following
-  `previous_response_id`. Every block still opens its verbatim bytes, also when they sit in an earlier
-  call's reply. Such a call is labelled **reconstructed from earlier records**; if an earlier call it builds
-  on was not captured, it is labelled **Context incomplete** and says which one, and no cache claim is made over it. A warm-up (`generate:false`) sits
-  in the probe lane, not on the turn axis; messages the agent sent while a call was open (an interrupt)
-  are listed on that call.
-- **Claude Code on Message Threads** (the server keeps the conversation): each call after the first
-  sends only its new messages, so the board rebuilds the context from the earlier calls of the same
-  thread, following `thread.previous_message_id`, with the earlier replies in between. The main
-  conversation and each subagent are their own threads and their own lanes. Request blocks open their
-  verbatim bytes in the call that sent them; an earlier reply says it was rebuilt from that call's
-  stream. If an earlier call of the thread was not captured or its reply did not fully arrive, the call and the
-  rest of the thread are labelled **Context incomplete** and say which call and why. Background calls (request class
-  `auxiliary`) go to the background lane.
-- **Kimi Code**: one session key holds the main conversation and the agents it opens, and no call says whose it is.
-  The calls whose system prompt is the one of the longest history in the session are the main conversation, also
-  after Kimi compacts that history; each history of another system prompt is a background lane of its own, so a short
-  side call no longer reads as a compaction of the main conversation. On Kimi's Anthropic-compatible API every call
-  still sits in the main lane.
-
-Reading the records across sessions is `trocar query <name>` — the one core that reads data, of which
-the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
-daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
-session you are looking at answers in milliseconds; the board's answers come gzipped. The board's session list opens at once even when the worker is not running: the worker keeps its last answer for that list
-on disk, the daemon answers from it while the worker works out a fresh one, and the page says how old the list is and that it is
-being refreshed, then swaps in the fresh list without a reload. The worker stays warm while
-someone asks (an open board's look for new calls is answered from files and does not wake it) and leaves two minutes after the last query, newly captured model
-call or piece of background reading, giving its memory back; the next query starts a new one. So a first read longer
-than two minutes is finished, not cut off and started over, and a stop or crash in the middle of one loses at most its
-last minute: the worker saves its place at least once a minute while it reads. While the daemon captures, it hands the worker each batch
-of newly captured model calls, and the worker reads them, and works out their sessions itself, in the background at low
-priority, so a running session of any harness is already read when you open it. The cost: while an agent is being
-captured the worker stays resident. On a generated 5,000-call session this build spends about 39 ms of CPU on each newly
-captured call, twice the 20 ms of the previous build on the same data, and holds 138 MB of memory between calls, at most
-199 MB: the target is about 12 ms and 160 MB, and neither is met yet. The first new call of a session that was never read
-starts its whole first read in the background (about a minute on a 25k-call session). The worker keeps the segment index's rows in a compact form outside its JavaScript
-heap, so how much of a session it can read barely shrinks as the capture home grows. A session is read call by call:
-each call is taken apart once, and the session's summary rows are written down as they are worked out, both into the
-session's own directory `~/.trocar/index/ctx/<k>/`, so reopening a session reads those files and does not take the
-records apart again. The worker writes the board's answers there as well: the session's summary (`head.json.gz`), one
-pair of files per 512 calls once they are settled (`p<n>.main` for the main conversation, `p<n>.rest` for everything
-else), and the two files of the part still growing (`open.main`, `open.rest`), which only ever grow at the end. The
-daemon sends these files as they are, never parsing them; a file that is not there yet is asked of the worker, which
-writes it and answers.
-`trocar query session --id <id>` gives the newest page of call rows (at most 1,000 rows and 1 MB) with every lane's
-header; `--before <call>` gives the page just before that call, `--limit <n>` makes pages smaller, and
-`--since <mark>` gives only what changed since the `mark` of an earlier answer, and `--head` gives the session's summary,
-the same bytes the board opens from. A lane header's `parts` is the lane's number of parts, and each entry of `chapters`
-in `--head` gives its number of prompts as `prompts`.
-`trocar query lane --id <id> --lane <key>` gives one lane's steps: the last page by default, `--from <call>` the
-steps after that call, `--to <call>` the page that ends just before it. Each step is its block list as changes
-against the step before, with the definitions of the blocks the page brings, the files the lane has seen and
-the resources it holds; a compaction is one `compaction` event, and the step where its history was replaced a
-`compaction-landed` event with `from` and `to`. When those do not all fit in the 1 MB page beside the steps, the answer's `ledger_next`
-names the rest: `--ledger <ledger_next>` gives the next part, until `ledger_next` is null. A lane of an agent whose
-records keep no resource information (any OpenAI-style wire) answers `resources` and `seen` as `null` with
-`resources_note: "no-ledger"`, which means not known; an empty list means none were recorded. A lane where only
-some calls keep that information answers what they kept with `resources_note: "partial-ledger"`. `--pack <n>.main` (or
-`.rest`) gives the board's file for the session's n-th settled group of 512 calls (counting from 0), and `--tail main` (or `rest`) the file
-of the part still growing. `trocar query block --ref <ref>` opens one block's verbatim bytes, and beside them, in `view`, the parsed block and how to
-draw it (parsed, not verbatim: for a reply, its assembled content); give `--ref` more than
-once to get several in one answer, in the order asked (a ref that cannot be read says why in `errors`).
-A session the worker has not finished reading answers at once with what it has, and says how far it got
-(`pending: {done, total, work}`, where `work` counts what the worker has read and folded so far and grows while it
-works, even when `done` cannot move yet); the worker reads on in the background, and the CLI asks again until the answer is
-complete (it reads the records itself if the worker stops making progress for 5 s, or no daemon runs). When no worker is
-running yet, a read is answered at once from what is already on disk; a session the worker must still read is
-not read a second time beside it: the CLI waits on the worker instead. Without `--json`, the CLI says on stderr when it waits on the worker and when it answers by itself, and why; with `--json`, stderr stays empty. The first open of a very large session
-takes a while: about 4 minutes in the background for a 16k-call session, during which the board shows it filling
-in. The worker's memory is bounded: a session too large for it shows its newest calls that fit and says so
-(**Showing only the latest N / M calls (file X MB)**); a cut session always shows at least half of what fits, and
-the cut moves by a tenth of the budget at a time, so between moves each refresh reads on with the new calls only.
-Where the cut falls is decided only by the memory the worker measures while it reads, never by an estimate made
-beforehand, so a session is never read until the worker runs out of memory and never cut shorter than it needs:
-a generated 210k-call session, ten times a large live one, is read whole in the background in about 4 minutes and
-answers every read, where cutting by the estimate left it unreadable. A session that cannot be read says so in one sentence with
-**Retry**; the reason is under **Technical details**. Every other board screen that cannot read something
-(overview, traffic, settings, session list, capture log) does the same. It is not a prerequisite: with no
-daemon — or none that answers yet — the command reads the records itself and gives the same document, only
-slower. Long results page with
-`--limit` and `--after <cursor>`, where the cursor is the `page.next` of the document before it.
-`trocar query traffic` is one line per agent and host, with requests and bytes sent and received (sums over
-the calls that recorded a size, so they are a floor). `trocar query overview` is the board's stats card: sessions,
-calls, bytes and token usage over a `--since` / `--until` window; its token usage comes from small per-segment
-files the query worker writes beside the index, so the first look may cover only the newest sessions
-(`usage.coverage` says how far) and later looks cover the whole window. `trocar query calls --host <host>` lists the
-calls to one host, newest first, and `--ref <segment>:<line>` opens one call. Documents read from the segment index carry
-`as_of`, the time of the newest call they were counted over.
-
-## What it touches, and what lands on disk
-
-Every record lives under `~/.trocar/raw/`, and trocar's own files under `~/.trocar/`. What it changes outside that
-folder (your agents' configs, your user trust store, an autostart entry) is in the table further down. Nothing an
-earlier build left — its home under the old name, the v0 `~/.atrace` — is read, moved or touched. If you still want
-what is in them, keep a copy yourself.
-
-`trocar on` arranges a local, observe-only tap **on your user account only**. It never changes your
-system proxy, never adds machine-wide trust, never needs root (Linux's one-time `setup-helper` is the
-only `sudo`, and it only sets capability bits on one root-owned file). What it changes, file by file,
-and what undoes each change, is in the table further down.
-
-`trocar doctor` answers four questions: am I capturing, is it correct, did credentials leak, is machine
-TLS intact (the CA is user-level only, with zero machine-wide trust).
-
-**Your captures are full plaintext transcripts.** Credential headers (`authorization`, `x-api-key`,
-`cookie`, `proxy-authorization`) are stored **verbatim**, like the request bodies: a byte-faithful
-capture that blanked them would no longer be the wire. They sit in files only you can read (0600),
-and `trocar doctor` checks that: a capture file others can read is exit 1
-(`x capture files others can read`). Your prompts, every file the agent read, all tool output, and any secret you
-pasted into a chat land on disk in the clear. Treat `~/.trocar/**` as sensitive; on a shared machine,
-`chmod -R go-rwx ~/.trocar`. The dashboard binds loopback and enforces a Host/Origin allowlist, so a
-website you visit cannot reach it.
-
-### `trocar install` / `on` / `off` / `status` / `uninstall`, and the per-user process collector (Linux · Windows · macOS, preview)
-
-Certificates belong to `install` / `uninstall`, routing belongs to `on` / `off` (D55): `on` and `off` never write a
-certificate byte. `off` works when trocar itself is broken — no daemon, no source tree, no `node_modules`:
-`~/.trocar/bin/trocar-off` is one file that needs only `node`, and `install` writes it (on Windows with a
-`trocar-off.cmd` beside it, run as `cmd --% /c @"<path>\trocar-off.cmd"`, a line PowerShell and cmd both run as
-printed). Every command that changes something lists what it changed (each file, its backup, how to undo it) and takes
-`--json`; before it changes a file of yours it keeps a copy in `~/.trocar/backup/`. `on` never restarts an agent or a
-capture that is running: the processes that need a restart are listed. Name an agent (`trocar off claude-code`) to
-switch only that one; `on; on` and `off; off` write nothing the second time (D54).
-
-`trocar status` and `trocar doctor` show, per agent, whether it is captured and why not, and where trocar forwards its
-connections — agent → door → upstream, and where the upstream comes from: the agent's own proxy, the system proxy, or a
-direct connection, with the value trocar wrote beside your own. A program an agent starts (a tool such as `curl`) is passed on, not captured, through the proxy that agent uses. A process trocar has not seen use its door, and whose
-start history is incomplete, is `not-seen`: never a reason to call the agent not captured, and no restart is asked
-(`yes` with "N not seen yet" beside captured ones, `unknown` when it is all there is). So is a process started after `on`
-whose config place depends on an environment variable (Codex's `CODEX_HOME`): macOS and Windows do not show another
-process's environment, so trocar cannot tell whether it read the file `on` wrote. A `Login` line appears when the
-login entry `install` registered is gone, switched off or cannot be read (`autostart-missing`, fix: `trocar install`),
-since without it nothing of trocar starts after the next restart. A certificate block says whether the root is installed,
-its key is still in custody and the daemon could make its intermediate (`cert-not-installed`, `cert-key-missing`,
-`cert-intermediate-unavailable`), and which certificate files trocar did not append to because they are not yours
-(`not-users-file`). `trocar status <harness>` prints these per form (a `certificate:` and a `proxy:` line, then trocar's value beside
-yours), then each note a harness carries, such as a way of starting the agent that skips trocar's hook and so is not
-captured; `status --json` has them under `forms`. trocar only reads your proxy settings and never writes anything into a VPN.
-
-The collector has descriptors for eight harnesses (D37) — `claude-code`, `codex` (its WebSocket transport is recorded
-call by call), `opencode`, `deepseek-dsh`, `kimi-code`, `hermes`, `z-code` and `pi` — on all three platforms. Which form of
-which one has been shown to capture verbatim on which platform is the table at the top of this README.
-
-**Linux** is driver mode (RFC 4.6, D31): an eBPF helper steers only the connections of agent processes you run to a
-loopback engine, which decrypts only for agents that trust the collector CA. Everything else, including other users,
-goes direct. `install` writes the CA under `~/.trocar/collector/ca/` and the trust entry of each agent on this machine (table below).
-Kimi Code's VS Code extension is not captured on Linux: VS Code's own certificate list takes trocar's only through your login
-environment, which trocar does not change. When the extension is installed, `install`, `on` and `status` say so.
-trocar can also run in a pid namespace of its own, as it does inside a container. The helper then numbers processes in
-that namespace, on kernels whose cgroup programs can read a process's pid there (6.8 can). Inside a container the
-helper also needs `cap_bpf`, `cap_net_admin` and `cap_perfmon` in the container's bounding set, a seccomp profile that
-allows `bpf()`, and no user namespace of the container's own. Where the helper cannot number processes the way the daemon sees them, it
-refuses to start (helper exit `namespace`, with the reason) instead of capturing nothing.
-
-**macOS and Windows** run one model (RFC 4.11, D57). The proxy is the collector's own engine: one loopback door per
-agent group, loopback only, no TUN, never the system proxy, nothing written into your VPN.
-
-- `install` makes this machine's own root, whose private key cannot be exported (macOS: a login-keychain key used only
-  by trocar's signing helper; Windows: a non-exportable CNG key, in the TPM when there is one), and adds it as a
-  **user-level** root — the one OS prompt (macOS asks for your login password, Windows asks yes / no). That alone covers
-  Claude Code (Desktop included), Codex, Hermes, OpenCode and Kimi's VS Code extension. Where the root does not reach,
-  the certificate goes into what the agent itself reads: Z-Code's `network.caCertFile` (a bundle of Node's roots, the
-  CAs you added through `NODE_EXTRA_CA_CERTS`, `ZCODE_AGENT_CA_CERT` or the desktop CA setting, and trocar's), a wrapper in Kimi's install directory, DeepSeek `dsh`'s plugin, pi's extension, and Claude Code's settings
-  only if you set `CLAUDE_CODE_CERT_STORE=bundled`. When you already point a setting at a certificate file of your own, trocar appends a
-  marked block to that file and leaves the setting alone. Nothing needs administrator rights and no launcher is added.
-  The one thing that reaches your login environment is the `PATH` item a copy from the install script adds (see
-  [Install](#install)); a copy from npm or git adds nothing there. Each harness's carrier is in its
-  descriptor (`proxyMode` in `src/collector/harness/<harness>.mjs`), one entry per form. The root's key cannot be taken,
-  but it can be used: any program running as you can have it sign (on Windows by calling the key, on macOS through
-  trocar's signing helper, as often as it asks), so a program you do not trust could make certificates your apps accept
-  until the root is replaced. If you suspect that, make a new root: `trocar off`, `trocar uninstall`, `trocar install`,
-  `trocar on`.
-- `on` asks the daemon to open the doors, then writes only proxy entries: a proxy key in the agent's own config
-  (Claude Code's `settings.json` and Codex's and Hermes's `.env` get every proxy variable the agent reads, `HTTPS_PROXY`,
-  `HTTP_PROXY` and for Codex and Hermes `ALL_PROXY`, in both spellings, so the programs they start reach the door too,
-  which captures an agent and only forwards anything else; Z-Code's CLI config, an OpenCode plugin, Kimi VS Code's `http.proxy`, Claude Desktop's config library) or a switch file in `~/.trocar/collector/switch/` that Kimi's wrapper,
-  dsh's plugin and pi's extension read. The door connects onward through the proxy the agent would have used without trocar.
-- `off` removes those entries and switch files; your edits to unrelated keys during `on` stay, and a proxy key you
-  changed yourself keeps your value. It kills and restarts nothing: a process started while capture was on keeps its
-  door, which now only forwards (no decryption, no record), and `trocar status` says how many are left (its
-  Connections line counts every connection open through trocar, and how many of them are still closing). The daemon
-  itself stays up with its doors closed — the same idle state as right after a login, so the next `on` is a door
-  opening (about 0.2 s) and not a daemon start. On Linux the daemon and the board stay up too: `off` takes trocar's
-  links off, and once the connections it was relaying are through (at once with `--now`) the capability helper exits,
-  so no trocar eBPF program stays loaded; the next `on` starts the helper again without a daemon start. A login with
-  nothing on starts the daemon with no helper, and a helper that crashed is not restarted until the daemon restarts.
-- *macOS*: the autostart unit is the LaunchAgent `com.trocar.collector` in `~/Library/LaunchAgents` (`RunAtLoad` +
-  `KeepAlive` — logout stops it — and `ProcessType` `Interactive`, because agent connections wait on it). *Windows*: a scheduled task run by a supervisor that re-pulls the daemon. `install`
-  registers the entry and `uninstall` removes it; `on` and `off` leave it alone, so on and off both survive a reboot.
-
-What it keeps (D40): for a trusted agent it decrypts **every** host it talks to by default (policy `all`), not just the
-model API, and stores every call verbatim — telemetry, uploads, account calls, session sync, downloads — so you can see
-what an agent harness does besides calling the model. Where that is too much, `trocar classes` sets, per harness and
-traffic class (`llm` · `token-count` · `session-sync` · `telemetry` · `files` · `account` · `other`), whether to keep
-the whole call (`full`, bodies capped at 64 MiB with a label) or only a line per call (`log`: headers and sizes, no
-body). A change reaches the calls that start after it, within a second, and never touches what is already stored.
-The cost of `all`, honestly: a child process of an agent that does not trust the collector CA (a sandboxed tool's
-`npm` or `git`) fails up to two connections per host before that host passes through untouched; each is a line in
-`flows/`. A state file that already says `auto` keeps `auto` (known API hosts only).
-
-| what | where | undo |
-|---|---|---|
-| capability helper (Linux, once per machine, `sudo`) | `/usr/local/libexec/trocar/trocar-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove` |
-| root / CA (per user) | Linux: `~/.trocar/collector/ca/` (key 0600), in **no** trust store · macOS: login keychain key + user trust · Windows: CNG key + `CurrentUser\Root`; `~/.trocar/collector/ca/trocar-ca.pem` is the public certificate | `trocar uninstall` |
-| certificate carriers (`install`) | Linux: the trust entry of each agent on this machine, written by `install` (Claude Code `env.NODE_EXTRA_CA_CERTS`, OpenCode / dsh plugins, pi's extension, Codex / Hermes `.env` blocks, Z-Code `network.caCertFile` and a marked block in the CA file its desktop setting names, combined bundles `combined-<agent>.pem`) · macOS / Windows: the carriers above | `trocar uninstall` |
-| proxy entries (`on`) | macOS / Windows: the proxy keys and switch files above; Linux: none (the helper steers) | `trocar off` |
-| autostart unit (per user) | Linux: `~/.config/systemd/user/trocar-collector.service` · macOS: `~/Library/LaunchAgents/com.trocar.collector.plist` · Windows: the scheduled task `\trocar\collector`; each runs `trocar daemon` | registered and enabled by `trocar install` (it exits 1 when it cannot, e.g. with no systemd --user on Linux, and `on` then refuses); `on` and `off` never touch it (D61), `trocar uninstall` removes it |
-| `PATH` item (install script only) | one marked line at the end of your shell's start file; Windows: one element of your user `Path` | `trocar uninstall` |
-| install manifest | `~/.trocar/collector/install-manifest.json` — every file and key it changed, never a copy of your file; the local proxy password only as a fingerprint | removed last by `trocar uninstall` |
-| backups of your files | `~/.trocar/backup/` (0700, files 0600): the file as it was before trocar changed it, one per file each time a command changes it — API keys included | `off` leaves them; `uninstall` deletes them all |
-| the standalone undo | `~/.trocar/bin/trocar-off`, written by `install`; `trocar doctor` checks it is current | `trocar uninstall` |
-| captures | `~/.trocar/raw/<segment>.ndjson` and its `<segment>.sealed` (0600); `~/.trocar/index/` is a deletable accelerator; `flows/` holds connection metadata and failure records | kept unless `trocar uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
-
-```sh
-make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux" && sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # Linux, once per machine: build the helper, then install it
-trocar install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
-trocar on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
-trocar status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
-trocar off                    # stops routing and capture (off claude-code: only that one)
-trocar board                  # opens the board in your browser; the captures appear there
-```
-
-#### Which processes are captured: the name list (D51)
-
-trocar decides which processes are agents **by executable name**, the same way on Linux, macOS and Windows, not by
-install path: a `claude` is Claude Code wherever it is installed (native, npm, Homebrew, an editor extension, the copy
-inside Claude Desktop). The name comes from the real executable and from `argv[0]`, lower-cased, without `.exe`
-or a version number (`…/claude/versions/2.1.296` is `claude`). An interpreter (`node`, `python`, `bun`, …) only
-counts together with its script's arguments — `node …/dsh` is dsh, a `node` MCP server is not. Each agent's
-helper processes (its sandbox, updater or plugin host) are listed as exclusions. Being on the list only makes a
-process a candidate: its connections are decrypted only when it also trusts the collector CA.
-
-The presets ship with trocar, in each harness's descriptor (`processes` in `src/collector/harness/<harness>.mjs`).
-To add a name, or to stop capturing one, write `~/.trocar/agents.json`:
-
-```json
-{ "version": 1,
-  "agents": [
-    { "harness": "claude-code", "name": "claude-nightly" },
-    { "harness": "deepseek-dsh", "name": "node", "args": "my-fork/bin\\.js" },
-    { "harness": "codex", "name": "codex", "ignore": true } ] }
-```
-
-`harness` is one of the harness ids; `name` is a bare executable name (no path); `args` is a regular expression
-tested against the arguments, and an interpreter name must have one. `ignore: true` removes that harness's preset
-items with this name (with `args`, only the item with exactly that pattern). The daemon picks up a changed file
-within seconds, without a restart. A broken item is skipped and the rest are used; a broken file is ignored as a
-whole. Either way trocar records `agent-list-invalid` with the item and the reason. `on` and `off` never write
-this file. `off` adds your names to the list it uses to judge which agents are still running.
-
-`trocar status <harness>` shows the names in effect (preset or yours), the presets you ignored, the problems in
-`agents.json`, and the processes that came through that agent's entry but are on no list (those connections are
-forwarded, not captured). The command line is never recorded, only the name. For each such process,
-`trocar doctor` prints the exact line to add to `agents.json`; for an interpreter it says the item needs `args`.
-`trocar status --json` carries the same data: the file once, at the top level, as `agent_list` (its path, state and
-problems), and per harness an `identity` with the names in effect, the ignored presets and the processes on no list.
-
-When a process trocar decrypted refuses the collector's certificate anyway, trocar writes a critical
-`trust-rejected` record: the harness, the entry group, the process name and pid, the host, the client's alert
-and the trust entry trocar believed was in effect. It goes to the daemon's log too, and `trocar status` names it on its own
-**Not captured** row (`critical` in `--json`).
-
-A relay or proxy with a private CA keeps working. On Linux `install` carries the CA you already gave Claude Code into
-`extra-cc.pem` (the other agents' CAs into their bundles), and the daemon verifies upstreams with Node's store plus
-`NODE_EXTRA_CA_CERTS` (the login entry — the Linux unit, the macOS LaunchAgent — carries the value of the shell you install from; when `on` has to start the
-daemon itself because the login mechanism refused, it carries the value of the shell you run `on` in). On macOS and Windows the door verifies an upstream with that agent's own trust set —
-the OS roots, Node's, and the files its certificate variables name — never with the trocar root (RFC 4.11 §3 ⑭).
-trocar does not count on a Claude Code process that was already
-running at install picking up the new trust entry (not verified for every mode), so `status` reports it
-untrusted (`config-after-start`, with a hint to restart it) and its connections go direct, unrecorded,
-until you restart it.
-
-After `off`, the programs listed as still connected are those started while it was on, those seen going through trocar,
-and, for a program that re-reads its trocar setting while running (OpenCode, Z-Code), any copy still running at `off`.
-`off` lists no program as still trusting the certificate (that is `uninstall`'s report). A machine installed by an older
-trocar gets this rule from its next `trocar update` or `trocar install`.
-
-After `off`, connections the engine was still relaying end at the next response boundary (a WebSocket at its
-turn's end); `trocar off --now` cuts them at once. The one byte of its own that trocar ever adds is the
-`Connection: close` header line that ends such a connection, and a call that carries it is labelled
-**trocar added Connection: close** on the board.
-
-Capture failures are never silent: a refused or failed install step, a file `off` could not undo, a
-helper or engine error, a failed heartbeat or attach, an envelope that could not be written, an agent
-judged untrusted, an unusable CA, connections the proxy let go direct (forwarded only), links lost
-behind the daemon's
-back — each leaves a line with its reason and a closed code in `~/.trocar/collector/flows/`, and
-`trocar status` prints the recent ones, also when the daemon is not running (it then judges
-the daemon from its lock: not running, or stuck). One exception: an install refused before it wrote
-anything (nothing installed yet, or run as root) has no collector directory to write into, so the
-command's output is its only report. An `off` or `uninstall` that cannot undo something exits 1 and
-keeps the install manifest for the next run. The Linux helper is a root-owned copy of the build, so after upgrading
-build it again and install it again (the two lines under Install) to replace it.
-
-## Shrinking the raw logs — sealed segments (D35, D60)
-
-Raw captures grow with the square of a conversation (every call re-sends the whole history), so they
-dwarf the agent's own logs. The daemon appends records to a segment under `~/.trocar/raw/` and closes
-it at 128 MB or when the daemon stops. It then seals each closed segment by itself, one at a time: a
-lossless re-encoding that stores each repeated piece of the segment once, keeps for every record the
-list of pieces that make it up, and packs both into brotli frames with an index. On 12 segments of a
-long live session this came to 7.3 % of the original, about 38 % smaller than the format earlier
-builds wrote (11.7 %), and sealing took 29 % less time. Every reader reads sealed segments directly
-and shows exactly the same records; the plain copy is deleted only after every record decodes back byte for byte. Segments sealed by earlier
-builds stay as they are and remain readable. An older trocar refuses a segment sealed by this build
-and says why, so going back to an older build is not supported. A segment that fails to seal
-keeps its plain copy, is tried again at the next daemon start, and shows in `trocar status`. There is
-no manual seal command.
-
-What the board reads beside the records is kept small the same way. Each session has one directory under
-`~/.trocar/index/ctx/`, and the settled part of its two working files is stored as brotli pieces of about 8 MiB, with
-only the end that still grows kept plain. On the 21k-call live session everything trocar keeps for it (its share of
-the raw segments and of the segment index, plus that directory) came to 498 MB, 0.84× the 590 MB of Claude Code's own
-log for it; before this build it was 972 MB, 2.0×. The derived files alone (the directory, its share of the segment index and the usage
-files) are 0.26× of that log, above the 0.1× target. The directories together are capped at 512 MiB: past that, the sessions
-used longest ago lose theirs, never one that is open or followed, and it is rebuilt from the records the next time.
-
-```sh
-trocar raw <segment>[:<from>[-<to>]]   # print records byte for byte, sealed or not
-```
-
-What earlier builds left (the home under the old name, the v0 `~/.atrace`) is neither read nor moved nor
-touched. Segments hold
-the same plaintext and credentials as the traffic and are owner-only (0600).
-
-## Claude Desktop
-
-Desktop ignores `settings.json`, and its model traffic runs in the Chromium network service, which ignores every proxy
-environment variable. On macOS and Windows the model covers it without anything of its own: the user-level root from
-`install` is what Desktop trusts, and `on` sets `egressProxyPacUrl` in the entry in effect of Desktop's user-level
-config library (creating a one-key entry when none is in effect; `off` removes it and restores the entry in effect). The
-PAC is served by the daemon on loopback: loopback and your bypass list go direct, the rest goes through the door, and
-when the door does not answer, the way Desktop would go without trocar: your system proxy, or direct when none is set.
-The door itself also leaves through your system proxy, and follows it when you change it. A process trocar cannot
-confirm is yours still gets a PAC, with your system proxy and no door; one that leaves before trocar could tell is
-only counted, never reported as refused. It takes effect at the next start of the app;
-no administrator rights. Desktop's own first-party hosts (sign-in, the updater, the Code tab's download) are forwarded,
-not decrypted.
-
-Whether Desktop's own model calls come out decrypted verbatim is not claimed here.
-
-## Limits
-
-- **Very large sessions may show only their newest calls.** When a session does not fit in the query worker's
-  memory, the board shows the newest calls that fit and says so (**Showing only the latest N / M calls**);
-  nothing is dropped silently. The raw NDJSON always holds everything.
-- **Resource lifecycle is Claude Code only.** It is built on Claude Code's tool vocabulary. Codex, OpenCode
-  and the other harnesses get context replay, blocks, cache analysis and usage — their resource lanes render empty
-  rather than guessing.
-- **DeepSeek's cache semantics on its Anthropic endpoint are not settled.** `dsh` (that endpoint) and
-  DeepSeek's Chat Completions API are read like any other wire, but calls to the Anthropic endpoint show
-  **What this provider's cache numbers mean is not certain** until a real capture settles them (3.3 OPEN).
-- **Some sessions are grouped by guess.** pi on the Anthropic Messages and Chat Completions APIs, Hermes on a custom
-  endpoint, and Kimi without a body key send no session id at all. Each of their calls joins the conversation whose
-  history it continues (never by process or connection), so each agent is its own session, also across a pause of up
-  to a day; calls whose system prompt
-  changes between turns stay separate sessions. A compaction stays in the session it compacts when the agent's own
-  compaction signal is present: a keyless summary request (pi's, for one) joins the session whose user text it shares,
-  and Hermes's compaction marker is read the same way. A history rewritten without such a signal starts a new session.
-  These sessions are marked **session boundary inferred**; a session with an id stays unmarked. The rule is provisional
-  until checked on a real capture.
-- **A session's project is what its requests state.** It is the working directory written in the session's first
-  calls; a session whose first calls state none shows no project.
-- **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
-  reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and it is
-  marked **inferred** (from the request headers, not the process). Sessions from the per-process collector are named by process, never by UA.
-- **The read side is a fixed set of questions, not an analytics product.** `trocar query <name>` has
-  the named queries the board asks (sessions, session, lane, calls, block, traffic, overview, classes,
-  segments, pricing, status, doctor) and no query language. For anything else, read the segments: `trocar raw <segment>` prints
-  the records byte for byte.
-- **Non-verbatim data is labelled in place.** The raw segments are the only source of truth; the
-  segment index under `~/.trocar/index/` is a deletable accelerator, rebuilt from them. SSE replies are faithful reconstructions of the streamed frames. Data imported
-  from the v0 demo kept the request only as a parsed object: each of its steps says **This step's content cannot be
-  traced back to the raw bytes (it was parsed again)** and none of its blocks is called verbatim; fresh
-  captures are byte-exact with full tool schemas. A request body the collector stored only in part is
-  labelled on its call with the exact reason: **request: truncated at the capture limit** (cut at the 64 MiB
-  capture cap) or **request: incomplete** (the capture did not get it whole, e.g. the upstream answered 413 before
-  it was sent).
-- **Personal research instrument.** Single-user, loopback-only. Your traffic goes on as it was: the one
-  byte of its own trocar adds is the `Connection: close` line after `off` (labelled on the call), and a
-  request is only ever changed or re-sent by you, on purpose (D30; not built yet). No cloud, no alerting.
+[Installing, updating and removing](docs/install.md) · [The board](docs/board.md) ·
+[What trocar captures and touches](docs/capture.md) · [Changelog](CHANGELOG.md) · [Design](spec/01-trocar-rfc/0.0-overview.md) ·
+[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 ## Commands
 
-`trocar help` prints the same, in three sections; `trocar help <command>` says one command, and
-`trocar query <name> --help` one query. `trocar help --json` gives all of it as one document.
-
-```sh
-# common
-trocar install [--yes] [--dry-run] [--json]   # once: the certificates (D55); prints the plan and asks first
-trocar on [<harness>...] [--yes] [--dry-run] [--json]
-trocar off [<harness>...] [--now] [--yes] [--dry-run] [--json]
-trocar status [<harness>...] [--failures] [--json]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
-trocar uninstall [--purge-data] [--yes] [--dry-run] [--json]
-trocar doctor [<harness>...] [--json]
-
-# data
-trocar query <name> [--<param> <value>...] [--json]   # the one way to read the records; the board is its HTTP shell (D59)
-trocar classes [<class>] [--json]
-trocar classes set <class> full|log
-trocar classes add <class> <host-regex> [<path-regex>] [--harness <harness>]
-trocar classes rm <class> [<rule>]
-trocar classes reset
-trocar board [--json]         # prints the board's address with your key and opens it; exit 1 when the board is not there
-
-# maintenance
-trocar update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)
-trocar raw <segment>[:<from>[-<to>]]
-sudo trocar setup-helper [--remove] [--binary <path>]   # Linux, once per machine
-trocar daemon [--supervise]   # the daemon in the foreground; the autostart unit runs it (Windows's task with --supervise)
-                              # another daemon already answering: exits 0, nothing to do. The control endpoint held by
-                              # something silent: records `control-endpoint-held` and exits 1.
-trocar help [<command>] [--json]   # also --help · -h · --version
-```
-
-Exit codes: 0 done · 1 not done, or a problem was found · 2 a usage error (nothing was touched) · 3 `status` /
-`doctor` could not judge · 70 the daemon crashed. `--version` prints the version.
-
-Design authority: [`spec/01-trocar-rfc/`](spec/01-trocar-rfc/) (entry `0.0-overview.md`). This README is
-the operator's quickstart, not the spec. `npm test` runs the test suite.
+Every command: `trocar help`, or [docs/commands.md](docs/commands.md).
 
 ## License
 
-trocar is licensed under the [Functional Source License, version 1.1, with Apache-2.0 as the future license](LICENSE)
-(FSL-1.1-ALv2). It is source-available: you may use, copy, modify and redistribute it for any purpose except making
-it available to others in a commercial product or service that competes with it. Each released version becomes
-Apache-2.0 two years after its release. One part is licensed differently: the kernel-side eBPF program in
-`src/collector/arch/linux/bpf/` is GPL-2.0-only OR MIT, as its license string declares, because the Linux kernel lets
-only a program under a GPL-compatible license use the kernel helpers it needs. The rest of trocar's own code is
-FSL-1.1-ALv2.
-
-This license does not cover what trocar does not own. The agents' names and icons in `src/off/harness-icons/` and
-`src/web/board/assets/harness/` belong to their owners and only identify those agents (see
-[SOURCES.md](src/off/harness-icons/SOURCES.md)); trocar is not affiliated with or endorsed by any of them. The packages
-bundled into `src/web/board/assets/` keep their own licenses, listed in
-[licenses.md](src/web/board/assets/licenses.md).
-
-Report a vulnerability privately as [SECURITY.md](SECURITY.md) says. How to contribute is in
-[CONTRIBUTING.md](CONTRIBUTING.md); what changed in each release is in [CHANGELOG.md](CHANGELOG.md).
+trocar is under the [FSL-1.1-ALv2](LICENSE): source-available, for any use except a competing commercial product or
+service, and Apache-2.0 two years after each release. The kernel-side eBPF program is GPL-2.0-only OR MIT. Details,
+and what the license does not cover: [docs/license.md](docs/license.md).

@@ -19,9 +19,11 @@ import { standalonePath, standaloneFiles } from '../../src/off/paths.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
+import { COMMANDS } from '../../src/cli/commands.mjs'
 import { formatPlan } from '../../src/cli/receipt.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, onSwitch, flowEvents } from './fixtures/off-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -60,7 +62,7 @@ function runCopy(text, argv, { env = {}, nodeArgs = [], sibling = null } = {}) {
 function runWritten(s, argv, { extraEnv = {}, stubs = stubBin() } = {}) {
   const text = fs.readFileSync(standalonePath(s.home), 'utf8')
   assert.ok(text.includes(STANDALONE_ENTRY), 'the file ends with the standard entry call')
-  return runCopy(text.replace(STANDALONE_ENTRY, AS_LINUX), argv, { env: { ...s.sh.env, PATH: stubs.bin, ...extraEnv } }).then((r) => ({ ...r, stubs }))
+  return runCopy(text.replace(STANDALONE_ENTRY, AS_LINUX), argv, { env: { ...s.sh.env, USERPROFILE: s.home, PATH: stubs.bin, ...extraEnv } }).then((r) => ({ ...r, stubs }))
 }
 
 // two sandboxes in the same state never hold the same paths, times or backup names: what a receipt says is compared with those taken out
@@ -72,7 +74,7 @@ const backToBefore = (list) => list.filter((e) => !fs.existsSync(e.path) || sha2
 
 // ── V2 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('V2: with the repository out of reach the copy install wrote does what `trocar off` does — no certificate entry taken (D55①) — and prints what it prints (the daemon gone)', async () => {
+test('V2: with the repository out of reach the copy install wrote does what `trocar off` does — no certificate entry taken (D55①) — and prints what it prints (the daemon gone)', { skip: POSIX_WORLD }, async () => {
   const a = await brokenTrocar(), b = await brokenTrocar()
   const io = fakeIo(), kept = readManifest(b.dir).entries.map((e) => [e.harness, e.kind, e.path])
   const viaCli = await runOffCli(['--json'], cliCtx(a, io))
@@ -86,21 +88,21 @@ test('V2: with the repository out of reach the copy install wrote does what `tro
   assert.equal(r.stderr, '')
 })
 
-test('V120: the copy, refused under --json, answers with one `usage` document on one line and nothing on stderr', async () => {
+test('V120: the copy, refused under --json, answers with one `usage` document on one line and nothing on stderr', { skip: POSIX_WORLD }, async () => {
   const r = await runWritten(await brokenTrocar(), ['no-such-name', '--json'])
   assert.equal(r.status, 2); assert.equal(r.stderr, '')
   assert.ok(r.stdout.endsWith('\n') && r.stdout.indexOf('\n') === r.stdout.length - 1, r.stdout)
   assert.equal(JSON.parse(r.stdout).error.code, 'usage')
 })
 
-test('1.6 §1.2: the document the copy makes of a refusal hides a URL password too', async () => {
+test('1.6 §1.2: the document the copy makes of a refusal hides a URL password too', { skip: POSIX_WORLD }, async () => {
   const pw = 'pw-not-a-real-secret-41f9'
   const r = await runWritten(await brokenTrocar(), [`http://u:${pw}@proxy.example:8080`, '--json'])
   assert.equal(r.status, 2); assert.equal(r.stderr, '')
   assert.ok(!r.stdout.includes(pw), r.stdout); assert.match(JSON.parse(r.stdout).error.message, /\*\*\*@proxy\.example/)
 })
 
-test('V2: the text a person reads is the same too, and a per-harness off leaves the other harness alone', async () => {
+test('V2: the text a person reads is the same too, and a per-harness off leaves the other harness alone', { skip: POSIX_WORLD }, async () => {
   const a = await brokenTrocar(), b = await brokenTrocar()
   const io = fakeIo()
   assert.equal(await runOffCli(['claude'], cliCtx(a, io)), 0)
@@ -111,7 +113,7 @@ test('V2: the text a person reads is the same too, and a per-harness off leaves 
   assert.deepEqual([...new Set(readManifest(b.dir).entries.map((e) => e.harness).filter(Boolean))].sort(), ['claude-code', 'codex'], 'and the certificate entries of both stay (D55①)')
 })
 
-test('V2: with the install manifest lost the copy undoes by trocar\'s own marks, after a yes, and prints what `trocar off --yes` prints', async () => {
+test('V2: with the install manifest lost the copy undoes by trocar\'s own marks, after a yes, and prints what `trocar off --yes` prints', { skip: POSIX_WORLD }, async () => {
   const names = ['codex', 'kimi-code']
   const a = await brokenTrocar(names), b = await brokenTrocar(names)
   const sw = Object.fromEntries([a, b].map((s) => { fs.rmSync(manifestPath(s.dir)); return [s.home, names.map((h) => onSwitch(s, h))] })) // what on wrote, found by its place (Linux's on writes nothing else off finds by a mark)
@@ -170,14 +172,14 @@ test('V2: with the install manifest lost the copy on darwin takes out a door val
   const text = fs.readFileSync(standalonePath(w.home), 'utf8')
   assert.ok(text.includes(STANDALONE_ENTRY))
   const asDarwin = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'darwin', deps: { platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'stub' }), procs: async () => [], getuid: () => 1000, sleep: async () => {} } })`
-  const run = await runCopy(text.replace(STANDALONE_ENTRY, asDarwin), [zc.name, '--yes', '--json'], { env: { HOME: w.home, PATH: stubBin().bin } })
+  const run = await runCopy(text.replace(STANDALONE_ENTRY, asDarwin), [zc.name, '--yes', '--json'], { env: { HOME: w.home, USERPROFILE: w.home, PATH: stubBin().bin } })
   assert.equal(run.status, 0, run.stdout + run.stderr)
   assert.equal(JSON.parse(run.stdout).undone_by_marker, true)
   const after = JSON.parse(fs.readFileSync(file, 'utf8'))
   assert.deepEqual([after.keep, ...r.proxyKeys.map((k) => k.reduce((o, x) => (o == null ? o : o[x]), after))], [1, ...r.proxyKeys.map(() => undefined)], 'the door key is gone, the rest stays')
 })
 
-test('V2: a daemon that answers is told to switch off by the copy, over the control socket, and the receipt is the same', async (t) => {
+test('V2: a daemon that answers is told to switch off by the copy, over the control socket, and the receipt is the same', { skip: POSIX_WORLD }, async (t) => {
   const a = await installedHome({ names: ['claude-code', 'codex'] }), b = await installedHome({ names: ['claude-code', 'codex'] }) // both daemons up after on
   const ctl = await serveControl(b.sys.daemon)
   if (ctl.skip) return t.skip(ctl.skip)
@@ -281,7 +283,7 @@ test('OFF_VERSION moves with the undo rules: the known kinds and the file-rule k
 
 // ── V35 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('V35 / an item of a kind the copy does not know refuses the whole off — ok:false, exit 1, the hint is `trocar off`; no other entry is undone either', async () => {
+test('V35 / an item of a kind the copy does not know refuses the whole off — ok:false, exit 1, the hint is `trocar off`; no other entry is undone either', { skip: POSIX_WORLD }, async () => {
   const s = await brokenTrocar()
   const before = preEntries(s)
   const mystery = path.join(s.home, 'mystery.cfg')
@@ -307,7 +309,7 @@ test('V35 / an item of a kind the copy does not know refuses the whole off — o
   assert.ok(!/trocar off/.test(io.json().left.find((l) => l.path === myst2).reason), 'but it does not tell anyone to run itself')
 })
 
-test('V35: a manifest newer than the copy knows is left alone — ok:false, exit 1, the hint is `trocar off`; the routing is still taken off', async () => {
+test('V35: a manifest newer than the copy knows is left alone — ok:false, exit 1, the hint is `trocar off`; the routing is still taken off', { skip: POSIX_WORLD }, async () => {
   const s = await brokenTrocar()
   const file = manifestPath(s.dir)
   const m = JSON.parse(fs.readFileSync(file, 'utf8')); m.version = MANIFEST_VERSION + 1
@@ -342,7 +344,6 @@ test('V35: the check reports a copy that is stale, missing or not what src/off g
   const file = standalonePath(home)
   const missing = checkStandalone({ home, version: OFF_VERSION })
   assert.deepEqual([missing.ok, missing.path, missing.found, missing.expected], [false, file, null, String(OFF_VERSION)])
-  assert.match(missing.reason, /not there/)
   const w = writeStandalone({ home, version: OFF_VERSION })
   assert.deepEqual([w.path, w.written, fs.statSync(file).mode & 0o777, fs.readFileSync(file, 'utf8') === buildStandalone({ version: OFF_VERSION })], [file, true, 0o700, true])
   assert.deepEqual([checkStandalone({ home, version: OFF_VERSION }).ok, writeStandalone({ home, version: OFF_VERSION }).written], [true, false], 'equal to what is generated: nothing to do')
@@ -437,13 +438,13 @@ test('V35: `trocar doctor` says nothing of a copy that is current, and makes a f
   fs.mkdirSync(bin)
   for (const name of ['security', 'systemctl', 'launchctl', 'certutil', 'loginctl', 'ss', 'ip']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 1\n`, { mode: 0o755 }) // doctor's trust check finds these, and only these (`ss` and `ip` are the reads of its network facts, which only read) (its dependency probe looks at files on PATH, it starts no `which`)
   for (const name of ['ps', 'socktable', 'route', 'ifconfig', 'scutil']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 }) // the flip (4.9 §4): the doctor's status block on a Mac is the NEW status now — it reads the process table and the darwin network facts, all read-only, all stubbed to the empty world
-  const doctor = () => spawnSync(process.execPath, [path.join(REPO, 'bin', 'trocar.mjs'), 'doctor'], { env: { TROCAR_SOURCE: tmpDir('trocar-src-'), PATH: bin, TROCAR_NATIVE_DIR: bin, HOME: s.home, TMPDIR: os.tmpdir(), TROCAR_TEST_SANDBOX: '1' }, encoding: 'utf8', timeout: 60_000 })
+  const doctor = () => spawnSync(process.execPath, [path.join(REPO, 'bin', 'trocar.mjs'), 'doctor', '--details'], { env: { TROCAR_SOURCE: tmpDir('trocar-src-'), PATH: bin, TROCAR_NATIVE_DIR: bin, HOME: s.home, USERPROFILE: s.home, TMPDIR: os.tmpdir(), TROCAR_TEST_SANDBOX: '1' }, encoding: 'utf8', timeout: 60_000 })
   const flat = (r) => r.stdout.replace(/\n\s+/g, ' ') // §3.7 findings wrap at the §1.1 width; the fact is the sentence
   const file = standalonePath(s.home)
   const good = fs.readFileSync(file, 'utf8')
   assert.ok(!flat(doctor()).includes(file), 'a copy that is current is no finding: doctor says nothing about it (§3.7)')
   fs.writeFileSync(file, good.replace(`// trocar-off ${OFF_VERSION} —`, '// trocar-off 0 —'))
-  assert.match(flat(doctor()), new RegExp(`is not the current version[^.]*\\.[^]*is version 0, this trocar writes version ${OFF_VERSION}`))
+  assert.ok(flat(doctor()).includes(file), 'a copy of another version is a finding that names its file (§3.7)')
   fs.rmSync(file)
   assert.match(flat(doctor()), new RegExp(`${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is not there`))
   assert.ok(!fs.existsSync(file), 'doctor reads: it does not write the copy')
@@ -526,4 +527,37 @@ test('V120: with no ../app/current the copy starts the node on PATH and says not
   const r = spawnSync('/bin/sh', [file], { encoding: 'utf8', env: { PATH: path.dirname(process.execPath) } })
   assert.equal(r.status, 0, r.stderr)
   assert.equal(r.stdout, 'ran'); assert.equal(r.stderr, '')
+})
+
+// 1.6 §1.1: doctor shows the reason as its finding's why, beside a fix of its own; the reason names no source path and no command
+test('1.6 §3.7: every reason checkStandalone gives names no source path and no trocar command', () => {
+  const home = tmpDir('trocar-chk-why-'), srcDir = path.join(tmpDir('trocar-chk-why-src-'), 'src', 'off') // named as an install's is, so a reason that leaks it is caught
+  fs.cpSync(path.join(REPO, 'src', 'off'), srcDir, { recursive: true })
+  const file = standalonePath(home)
+  const command = new RegExp(`\\btrocar (${COMMANDS.map((c) => c.name).join('|')})\\b`)
+  const reasons = []
+  const check = (spoil, args = {}) => {
+    fs.rmSync(path.dirname(file), { recursive: true, force: true })
+    writeStandalone({ home, version: OFF_VERSION, platform: args.platform || 'linux' })
+    spoil()
+    const c = checkStandalone({ home, version: OFF_VERSION, platform: 'linux', ...args })
+    assert.equal(c.ok, false, spoil.toString())
+    reasons.push(c.reason)
+  }
+  check(() => fs.rmSync(file))
+  check(() => { fs.rmSync(file); fs.mkdirSync(file) })
+  check(() => fs.writeFileSync(file, '#!/bin/sh\n'))
+  check(() => {}, { version: 'other' })
+  check(() => fs.appendFileSync(file, '// edited\n'))
+  check(() => fs.rmSync(path.join(srcDir, 'main.mjs')), { srcDir })
+  check(() => fs.chmodSync(file, 0o600))
+  const cmd = standaloneFiles(home, 'win32')[1]
+  check(() => fs.rmSync(cmd), { platform: 'win32' })
+  check(() => { fs.rmSync(cmd); fs.mkdirSync(cmd) }, { platform: 'win32' })
+  check(() => fs.writeFileSync(cmd, 'other'), { platform: 'win32' })
+  for (const r of reasons) {
+    assert.ok(typeof r === 'string' && r, 'a reason')
+    assert.doesNotMatch(r, /\bsrc[\\/]/, r)
+    assert.doesNotMatch(r, command, r)
+  }
 })

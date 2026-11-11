@@ -11,6 +11,7 @@ import { FOLD_STOPS } from '../../../../src/health/codes.mjs'
 import { reasonsWith } from '../../../../test/web-v2/visible.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
 import { DeskHead } from './DeskHead'
+import { titleText } from '../library/model.mjs'
 import { reactView } from './view'
 
 afterEach(() => { cleanup(); document.body.replaceChildren() })
@@ -65,6 +66,14 @@ test('1.2 #17: title_source unread reads the fixed word, not the untitled one', 
   expect(name.title).toContain(W.PROMPT_UNREAD_TIP)
 })
 
+test('1.2 #17: the head cuts a long title (one line, ellipsis): its hover carries the title as the server sent it, with the source and the id', () => {
+  const title = 'Refactor the session reader so '.repeat(9).trim() // ≤ 300 code points, the server's cap (4.4)
+  const name = head({ meta: { title, title_source: 'wire' } }).el.querySelector<HTMLElement>('.sh-name')!
+  expect(name.title).toContain(title)
+  expect(name.title).toContain(W.TITLE_FROM_WIRE)
+  expect(name.title).toContain('sid-1')
+})
+
 test('1.2 #3: with another session of the same title, the head is only the table\'s parts and names the title once', () => {
   const title = 'Same name'
   const other = { session_id: 'sid-2', title, harness: 'claude-code' }
@@ -92,6 +101,17 @@ test('1.2 #14: the fidelity row exists iff one of the five facts does; an unknow
   for (const [d, gap, expected] of cases) {
     const { el } = head({ desk: d, gap: gap ? [{ code: 'x' }] : null })
     expect(!!el.querySelector('.fidline:not(.readstate):not(.fidstale)'), JSON.stringify({ d, gap })).toBe(expected)
+    cleanup()
+  }
+})
+
+test('1.2 §会话保真行: capture files not re-indexed yet are their own fact, never counted as files not read in full', () => {
+  const pending = { where: 'index', code: 'index-pending', level: 'state', reason: 'r' }, lost = { where: 'segments/s', code: 'segment-unreadable', reason: 'gone' }
+  for (const [errors, files] of [[[pending], null], [[pending, lost], '1 capture file was']] as Array<[object[], string | null]>) {
+    const { el } = head({ desk: { errors } })
+    expect(el.querySelector('[data-fact="reindexing"]'), JSON.stringify(errors)).not.toBeNull()
+    const f = el.querySelector('[data-fact="files"]')
+    if (files) expect(f!.textContent!.startsWith(files)).toBe(true); else expect(f).toBeNull()
     cleanup()
   }
 })
@@ -171,6 +191,17 @@ test('1.5 K-31: a stopped fold\'s line is the stopped one; its code is in the te
   }
 })
 
+// 1.5 K-31: each way a read can stop draws a line of its own, so the reader sees which one stopped it
+test('1.5 K-31: every FOLD_STOPS code draws a stopped line of its own', () => {
+  const lines = new Map<string, string>()
+  for (const code of FOLD_STOPS) {
+    const { el } = head({ desk: { pending: { done: 2, total: 9, stopped: { code, reason: 'why-q' } }, firstPending: true } })
+    lines.set(code, el.querySelector('.readstate')!.textContent!)
+    cleanup()
+  }
+  expect(new Set(lines.values()).size, JSON.stringify([...lines])).toBe(FOLD_STOPS.length)
+})
+
 const STALE = (r: object) => ({ r, since: new Date(Date.now() - 5000).toISOString() })
 test('1.5 K-29: a stale desk draws a Retry outside the head row that reads again; no stale state, no line', () => {
   const poll = vi.fn()
@@ -227,3 +258,15 @@ test('1.2 #7: a declared parent is a link to #/session/<id>; the layer draws no 
   }
 })
 
+
+// 1.2 §会话头 标题 · 1.8 §标题规则: one title rule on two screens, so the replay head and the session list never say two things about one
+// session at one moment, whatever its title_source (a stored head from before an update may carry another value, or none)
+test('1.2 标题: the replay head\'s title is the session list row\'s for the same meta, for every title_source', () => {
+  const cases: object[] = [{ title: 'A title', title_source: 'wire' }, { title: null, title_source: null }, { title: null, title_source: 'unread' },
+    { title: null }, { title: null, title_source: 'pending' }]
+  for (const m of cases) {
+    const { s, el } = head({ meta: m })
+    expect(el.querySelector('.sh-name')!.textContent).toBe(titleText(s.meta))
+    cleanup()
+  }
+})

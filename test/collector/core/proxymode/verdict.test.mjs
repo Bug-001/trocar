@@ -258,18 +258,47 @@ test('P11 rule 4 · Hermes seed: a provider ssl_ca_cert without the root forward
   }
 })
 
-// 4.11 P4 `expand: 'env'`: Hermes reads `${NAME}` in config.yaml from its environment; an unset name stays as written, names no file, and Hermes falls back
-// to its default trust (trocar's root, once install put it there). The door reads the value the same way, from the process's environment.
-test('P11 rule 4 · Hermes ssl_ca_cert ${VAR}: set → its file is judged; unset → the setting is not in effect, decrypt', () => {
+// 4.11 P4 `expand: 'env'`: Hermes reads `${NAME}` and `${env:NAME}` in config.yaml from its environment (spaces inside trimmed), after it has loaded its
+// home .env over its start environment and $HERMES_MANAGED_DIR/.env over both (`expandFrom`). The door reads the value the same way: the process's start
+// environment with those files laid over it. A name still missing is not known, never unset (D38): Hermes may fill it from a file it loads that is not
+// listed (.op.env, the checkout .env), which the door cannot see.
+test('P11 rule 4 · Hermes ssl_ca_cert ${VAR}: read from the start env with the home .env and the managed .env over it; a name in none of them is not known', () => {
   const d = descs.find((x) => x.name === 'hermes'), f = d.proxyMode.forms.find((x) => x.id === 'hermes.cli')
-  const dir = tmpDir('trocar-hermes-var-'), ca = path.join(dir, 'corp.pem')
-  fs.writeFileSync(ca, OTHER.pem)
-  fs.writeFileSync(path.join(dir, 'config.yaml'), 'providers:\n  corp:\n    ssl_ca_cert: ${CORP_CA}\n')
+  const dir = tmpDir('trocar-hermes-var-'), managed = path.join(dir, 'managed'), lacks = path.join(dir, 'corp.pem'), holds = path.join(dir, 'corp-with-root.pem')
+  fs.mkdirSync(managed)
+  fs.writeFileSync(lacks, OTHER.pem); fs.writeFileSync(holds, pemBlock(OTHER.pem, ROOT.pem).text)
   const ctx = { os: 'darwin', home: '/nowhere', dirs: {}, env: {}, join: path.join, readFile: OWN(dir), readdir: () => [], policy: () => ({ set: false }) }
-  for (const [env, want] of [[{ CORP_CA: ca }, 'replace-without-ca'], [{}, null]]) {
-    const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir, ...env }, cwd: dir } })
-    assert.deepEqual([got.decrypt, got.code ?? null], [want === null, want], JSON.stringify(got))
+  const dotenv = (at, v) => (v ? fs.writeFileSync(path.join(at, '.env'), `CORP_CA=${v}\n`) : fs.rmSync(path.join(at, '.env'), { force: true }))
+  // [start env, home .env, managed .env (with HERMES_MANAGED_DIR set)] → the code (null: decrypt)
+  const cases = [
+    [lacks, null, null, 'replace-without-ca'], [holds, null, null, null],
+    [null, lacks, null, 'replace-without-ca'], [null, holds, null, null],
+    [holds, lacks, null, 'replace-without-ca'], // the home .env wins over the start env: judged by the file Hermes uses
+    [lacks, holds, null, null],
+    [null, holds, lacks, 'replace-without-ca'], [holds, lacks, holds, null], // the managed .env wins over both
+    [null, null, null, 'environ-unreadable'],
+  ]
+  for (const ref of ['${CORP_CA}', '${env:CORP_CA}', '${ CORP_CA }', '${env: CORP_CA }']) {
+    fs.writeFileSync(path.join(dir, 'config.yaml'), `providers:\n  corp:\n    ssl_ca_cert: ${ref}\n`)
+    for (const [start, home, man, want] of cases) {
+      dotenv(dir, home); dotenv(managed, man)
+      const env = { HERMES_HOME: dir, ...(start ? { CORP_CA: start } : {}), ...(man ? { HERMES_MANAGED_DIR: managed } : {}) }
+      const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env, cwd: dir } })
+      assert.deepEqual([got.decrypt, got.code ?? null], [want === null, want], `${ref} · ${JSON.stringify([start, home, man])}: ${JSON.stringify(got)}`)
+      if (want === 'environ-unreadable') assert.match(got.detail, /\$\{CORP_CA\}/, 'the record names the variable')
+    }
   }
+  // two references in one value: one held, one not → the one not held is named
+  dotenv(dir, null); dotenv(managed, null)
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'providers:\n  corp:\n    ssl_ca_cert: ${CA_DIR}/${CA_NAME}\n')
+  const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir, CA_DIR: dir }, cwd: dir } })
+  assert.deepEqual([got.decrypt, got.code], [false, 'environ-unreadable'], JSON.stringify(got))
+  assert.match(got.detail, /\$\{CA_NAME\}/)
+  // a home .env that exists but cannot be read: not known (D38)
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'providers:\n  corp:\n    ssl_ca_cert: ${CORP_CA}\n'); dotenv(dir, holds)
+  const deny = (p) => { if (p === path.join(dir, '.env')) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); return OWN(dir)(p) }
+  const no = ask({ d, f, ctx: { ...ctx, readFile: deny }, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir, CORP_CA: holds }, cwd: dir } })
+  assert.deepEqual([no.decrypt, no.code], [false, 'config-unreadable'], JSON.stringify(no))
 })
 
 // D38: with the process environment unread, a value read under `expand: 'env'` that names a variable is not known — never read as unset, which would

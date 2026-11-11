@@ -39,12 +39,11 @@ import { buildTopology } from '../netenv/topology.mjs'
 import { diagnose } from '../netenv/findings.mjs'
 import { codeId } from '../version.mjs'
 import { captureHealth } from '../health/read.mjs'
-import { trustReasonText, CODE } from '../collector/core/codes.mjs'
+import { CODE } from '../collector/core/codes.mjs'
 import { pacStale } from '../collector/core/proxymode/entries.mjs'
-import { formatStatus, formatHealth, failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
-import { colors, noColor, tildeText, unknown as unknownText2 } from './text.mjs'
+import { failuresBlock, statusSummary, statusDetail, restartNames } from './status-text.mjs'
+import { colors, tildeText } from './text.mjs'
 import { squashed } from './words.mjs'
-import { tilde } from './receipt.mjs'
 import { routeReadsEnv } from '../off/loc.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
 import { printJson } from './json.mjs'
@@ -61,7 +60,7 @@ const RESTART = new Set(RESTART_REASONS) // 「重启后才会被采集」(1.6 �
 
 /** One item of the manifest against the disk → { state: 'intact' | 'missing' | 'changed' | 'unknown', why? }. Nothing is written. An entry trocar wrote is intact when the file is byte for byte what it
  *  wrote, or trocar's value / text is still in it (Claude Code rewrites settings.json: the file differs, the entry is there); an owned file when its bytes are what the manifest recorded. */
-export function entryState(e, fs = nodeFs) {
+function entryState(e, fs = nodeFs) {
   const file = e.real_path || e.path
   try {
     const cur = readOrNull(fs, file)
@@ -270,7 +269,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const judged = judge()
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
     if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && att.attached === null) why.push(att.reason) // the path in is what the verdict waits for, and the daemon could not say
-    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, formsHere, ownHere, hosts, localUpstream, judged, judge, why: [...new Set(why.filter(Boolean))] })
+    // 4.11 P5: forms here that status does not judge (not measured on this system where a measured sibling exists) — on writes them no entry, and the finding says why
+    const unmeasured = formsHere === false && present ? present.filter((p) => !forms.some((x) => x.id === p)) : []
+    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, formsHere, ownHere, ...(unmeasured.length ? { unmeasured } : {}), hosts, localUpstream, judged, judge, why: [...new Set(why.filter(Boolean))] })
   }
   // how many connections are still relayed after an off (§1.3): the daemon says; with no daemon there is no engine, so none; with one that does not answer or does not say, not known
   const rc = reply && reply.relayed
@@ -387,7 +388,7 @@ function identityBlocks({ ids, merged, health }) {
  * arch and harness only through it, layering rule 5). → `{ facts, topology, diagnosed }` (topology = { <h>: HarnessTopology }, `diagnosed` = the finding list the codes came from, so `doctor` does not diagnose the same
  * facts a second time, D62), or `{ topology_error }`: a failure of the build is said, and does not change what `status` judged.
  */
-export async function gatherTopology(f, { home, env, platform, deps = {} }) {
+async function gatherTopology(f, { home, env, platform, deps = {} }) {
   try {
     const fs = deps.fs || nodeFs
     const mod = deps.netFactsDeps ? null : await (deps.daemon || import('../collector/net-deps.mjs'))
@@ -452,7 +453,7 @@ function failuresOf(f) {
   const groups = [...(c.failures || []).map(problem(null)), ...((h.raw && h.raw.failures) || []).map(problem('raw'))]
   const expected = Object.values(c.expected || {}).reduce((n, x) => n + (Number(x) || 0), 0)
   let latest = null
-  for (const g of groups) if (String(g.last_ts || '') >= String(latest || '')) latest = g.last_ts || null
+  for (const g of groups) if (g.level === 'problem' && String(g.last_ts || '') >= String(latest || '')) latest = g.last_ts || null // the newest of what `problem` counts
   const parts = [
     ...groups,
     ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ level: 'expected', where: ROW, code, ...g, reason: null })),
@@ -583,7 +584,7 @@ function findingsFor(f, ids) {
   try { return diagnose({ facts: f.facts, topology: f.topology, harnesses: ids, user: f.user }) } catch (e) { rethrowSandbox(e); return [] }
 }
 
-const USAGE = 'usage: trocar status [<harness>...] [--failures] [--json]'
+const USAGE = 'usage: trocar status [<harness>...] [--failures] [--details] [--json]'
 
 /** → the exit code (§3.5). `argv` is what follows `status`. `io` = { out, err }. */
 export async function runStatusCli(argv, ctx = {}) { return (await statusRun(argv, ctx)).exit }
@@ -591,10 +592,11 @@ export async function runStatusCli(argv, ctx = {}) { return (await statusRun(arg
 /** `runStatusCli` that also hands back what it read: `{ exit, f }`. `doctor` reads the same facts for its findings, so the daemon is asked once. */
 export async function statusRun(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const names = []
-  let json = false, failures = false
+  let json = false, failures = false, details = false
   for (const a of argv) {
     if (a === '--json') json = true
     else if (a === '--failures') failures = true
+    else if (a === '--details') details = true
     else if (a.startsWith('-')) { io.err(`trocar status: unknown option '${a}'\n${USAGE}`); return { exit: EXIT.usage, f: null } }
     else names.push(a)
   }
@@ -616,7 +618,8 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
       const finding = found.find((x) => x.harness === h && x.class !== 'note') || null
       for (const l of statusDetail(shown, h, { finding, now, colors: c, home })) io.out(l)
     })
-  } else for (const l of statusSummary(tildeAll(doc), { now, colors: c, home })) io.out(l)
-  if (failures) { io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now })) io.out(l) }
+  } else if (details || !failures) for (const l of statusSummary(tildeAll(doc), { now, colors: c, home, details })) io.out(l) // §3.5: --failures alone is its own screen
+  if (failures) { if (detail.length || details) io.out(''); const restart = restartNames(doc), alone = !detail.length && !details
+    for (const [i, l] of failuresBlock(doc.failures, effectiveHealth(f).health, { now, details, restart, more: alone && exit !== EXIT.ok && !restart.length }).entries()) io.out(i || !alone ? l : c.bold(l)) } // its own screen: the conclusion bold
   return { exit, f }
 }

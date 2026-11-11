@@ -80,7 +80,7 @@ function railHtml(l, s, { sub = false } = {}) {
 // the token 计数 row: mini bars stand for the measured context size; 「采样显示」 only when fewer were drawn than exist
 function tcRailHtml(l, s) {
   const col = s.collapsedRails.has(l.id)
-  const noSize = Math.max(0, (l.count || l.calls.length) - l.calls.length)
+  const noSize = Math.max(0, (l.count || l.calls.length) - (l.sized ?? l.calls.length)) // 2.1: count − series.length
   const hint = laneKind('token-count').hint + (noSize ? ` · ${TC_NO_SIZE(noSize)}` : '')
   const body = col ? '' : `<div class="tlane railbody" data-lane="token-count">${renderTicks(l, s)}${l.drawn != null && l.drawn < l.calls.length ? `<span class="tcsample" title="${esc(TC_SAMPLED_TIP(l.drawn, l.count || l.calls.length))}">${esc(L.SAMPLED)}</span>` : ''}</div>`
   return `<div class="rail k-token-count tkrow"><div class="tgut railname ${col ? 'col' : ''}" data-toggle="token-count" title="${esc(hint)}"><span class="tw">${discChev(!col)}</span> <span class="tn">${esc(TC_ROW(l.count || l.calls.length))}</span></div>${col ? '<div class="tlane"></div>' : body}</div>`
@@ -135,7 +135,8 @@ export function renderRails(el, s) {
       (open ? `<div class="bgkids">${bgs.map((l) => railHtml(l, s)).join('')}</div>` : '')
   }
   for (const l of tcs) html += tcRailHtml(l, s)
-  el.innerHTML = html || `<div class="railsonly">${esc(ONLY_MAIN)}</div>`
+  // a tier-0 head has read no lane: no claim about them, but the row keeps its place (1.5 K-31)
+  el.innerHTML = html || `<div class="railsonly">${s.desk && s.desk.head && !s.desk.head.tier ? '&nbsp;' : esc(ONLY_MAIN)}</div>`
   if (s.selTick) { const t = el.querySelector(`[data-rid="${attrSel(s.selTick)}"]`); if (t) t.classList.add('sel') }
 }
 
@@ -173,7 +174,7 @@ export function wireRails(el, s) {
     if (t) { const p = placeOf(s.lanes, t.dataset.rid); if (p) selectTick(s, p.lane, p.i); return }
     // anywhere on an open rail picks the nearest call IN the window, so every call is reachable, not just the drawn ticks
     const body = e.target.closest('.railbody[data-lane]')
-    if (body) { const lane = laneOf(body.dataset.lane); if (lane && lane.calls.length) selectTick(s, lane, nearestByX(lane, s.anchorTs, s.view, fracOf(body, e))) }
+    if (body) { const lane = laneOf(body.dataset.lane), i = lane && lane.calls.length ? nearestByX(lane, s.anchorTs, s.view, fracOf(body, e)) : -1; if (i >= 0) selectTick(s, lane, i) }
   }
   const onMove = (e) => {
     const body = e.target.closest && e.target.closest('.railbody[data-lane]')

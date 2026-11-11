@@ -1,6 +1,6 @@
 {
   "name": "trocar-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "Records every byte an AI agent app sends to and receives from its LLM, and replays each step on a local board.",
   "keywords": [
@@ -46,8 +46,8 @@
   "scripts": {
     "test": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs",
     "test:real": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs test/query/real-session.test.mjs",
-    "test:browser": "node scripts/test-browser.mjs",
-    "test:build": "node scripts/test-build.mjs",
+    "test:browser": "node scripts/browser-suite.mjs",
+    "test:build": "node scripts/build-check.mjs",
     "test:web": "vitest run --config web/vitest.config.mjs",
     "typecheck": "tsc -p web",
     "lint": "eslint --config web/eslint.config.mjs web/src",

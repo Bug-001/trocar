@@ -11,6 +11,7 @@ import { readNetenvFile } from './index.mjs'
 import { buildTopology } from './topology.mjs'
 import { renderCompact, BRANCH_SEP } from './topology-text.mjs'
 import { errnoReason } from '../cli/words.mjs'
+import { BIG, fileKey } from '../file-id.mjs'
 
 const errCode = (e) => (e && e.code) || String((e && e.message) || e)
 const unknown = (reason, detail) => ({ unknown: { reason, detail } })
@@ -154,7 +155,7 @@ export function readAdopted(home, { fs = nodeFs } = {}) {
 // ── what `on` found and drew, and the drift from it (§9.5) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** The facts as they will be once `on` has turned `ids` on: wanted on, a daemon that answers, a helper and the links there, the entry in place, and no process of it yet. The chain `on` prints and records is the
  *  topology of these facts: where a new connection of the agent will go. Driver mode only: another routing's chain depends on what its platform starts (proxy mode: the kernel), so it is drawn from the facts after `on`. */
-export function projectedOn(facts, ids) {
+function projectedOn(facts, ids) {
   const harnesses = { ...facts.harnesses }
   for (const h of ids) if (harnesses[h]) harnesses[h] = { ...harnesses[h], entry: { state: 'intact' }, installedAt: facts.at, procs: [], negatives: [] }
   return { ...facts, desired: { ...facts.desired, ...Object.fromEntries(ids.map((h) => [h, 'on'])) }, daemon: { ...facts.daemon, state: 'running' }, link: { ...facts.link, attached: true, helper: 'ok' }, harnesses }
@@ -223,7 +224,7 @@ export function driftCheck({ home, env = {}, harnesses, desired = () => null, ap
   for (const d of harnesses) {
     if (!adopted[d.name] || desired(d.name) === 'off') continue // a harness that is off has trocar nowhere on its path: what its settings do is not trocar's to report
     const paths = adopted[d.name].file_paths || proxyFilesOf(d, { home, env }) // the files `on` read: the daemon's own environment does not say where they are
-    const sig = paths.map((f) => { try { const st = fs.statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}` } catch { return 'gone' } }).join('|')
+    const sig = paths.map((f) => { try { return fileKey(fs.statSync(f, BIG)) } catch { return 'gone' } }).join('|')
     if (state.sigs.get(d.name) === sig) continue
     state.sigs.set(d.name, sig)
     const setting = readProxySetting(d, { home, env, fs, paths, vars: false })

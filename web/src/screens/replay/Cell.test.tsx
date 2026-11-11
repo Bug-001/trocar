@@ -45,11 +45,11 @@ async function enter() {
 }
 
 // the first case: the desk mode this page set is still unset (cell.mjs keeps the last one in memory when storage cannot)
-test('2.3 #14: storage that throws on every access draws the cell in Raw', () => {
+test('2.3 #14: storage that throws on every access draws a cell that has a view in Readable, the desk\'s start', () => {
   vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied') })
   const { container } = render(<Cell cell={inline('{"a":1}', { as: 'json' })} api={noApi} />)
-  expect((container.querySelector('.cell') as HTMLElement).dataset.mode).toBe('raw')
+  expect((container.querySelector('.cell') as HTMLElement).dataset.mode).toBe('read')
 })
 
 test('2.3 #1 · 1.4 #7 · AC-1: the Raw leaf without its .lay spans is the bytes', async () => {

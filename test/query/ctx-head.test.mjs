@@ -17,6 +17,7 @@ import { bigSession } from './big-session.mjs'
 import { FLAG, opensPart } from '../../src/view/head-cols.mjs'
 import { query, homeWith } from '../helpers/session-doc.mjs'
 import { laneOf, fateOf, askedOf, lanes, failLanes, SID } from '../helpers/compaction-lane.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 // 3.5 §会话读 `session --head`: the closed set of its keys; tier 0 has `buckets` besides
@@ -53,7 +54,7 @@ function folded() {
     const svc = createQueryService({ home, fork: workerFork })
     let answer
     try {
-      await within((async () => { for (;;) { answer = await ask(svc, 'session', { id: s.id, head: true }); if (JSON.parse(answer).pending == null) return } })(), 240_000, 'the session folded to its end')
+      await within((async () => { for (;;) { answer = await ask(svc, 'session', { id: s.id, head: true }); const d = JSON.parse(answer); if (d.pending == null && listed(d)) return } })(), 240_000, 'the session folded to its end')
       await until(() => fs.existsSync(headFileOf(home, s.id)) && readHead(home, s.id) === answer, 30_000, 'the worker wrote the head of the folded session')
     } finally { svc.stop() }
     return { home, id: s.id, answer }

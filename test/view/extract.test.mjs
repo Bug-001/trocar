@@ -52,7 +52,7 @@ function responsesSession(n = 6) {
 // records that are no call: a token-count probe and a call no dissector claims
 const nonCalls = () => [
   stamp({ id: 'p1', ts_request: '2026-10-20T16:47:38Z', is_llm_call: false, endpoint: '/v1/messages/count_tokens', req_headers: { 'x-api-key': SECRET }, req_body: '{}', resp: { status: 200, kind: 'json', body: { input_tokens: 12 } } }),
-  stamp({ id: 'u1', ts_request: '2026-10-20T16:47:39Z', is_llm_call: true, endpoint: '/v1beta/models/g:generateContent', req_headers: {}, req_body: '{"model":"g"}', resp: { status: 200, kind: 'json', body: {} } }),
+  stamp({ id: 'u1', ts_request: '2026-10-20T16:47:39Z', is_llm_call: true, endpoint: '/v9/foo:infer', req_headers: {}, req_body: '{"model":"g"}', resp: { status: 200, kind: 'json', body: {} } }),
 ];
 // Claude Code whose system block carries a per-call nonce (the billing header): one block in the middle changes every call
 const nonced = (n = 5) => Array.from({ length: n }, (_, i) => stamp({ id: `v${i}`, ts_request: `2026-10-20T16:01:0${i}Z`, is_llm_call: true, endpoint: '/v1/messages',

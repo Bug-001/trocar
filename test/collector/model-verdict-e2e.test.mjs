@@ -14,7 +14,7 @@ import http from 'node:http'
 import tls from 'node:tls'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
@@ -30,7 +30,7 @@ import { listenLocalhost } from '../helpers/localhost.mjs'
 const recordsOf = (raw) => (fs.existsSync(raw) ? fs.readdirSync(raw) : []).filter((n) => n.endsWith('.ndjson')).flatMap((n) => fs.readFileSync(path.join(raw, n), 'utf8').split('\n').filter(Boolean))
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: after a daemon restart, the door's durable row says the decrypted agent is captured (status), a holder (off) and online (uninstall, daemon down)`, { skip: await unservable(platform), timeout: 60_000 }, async () => {
+  test(`${platform}: after a daemon restart, the door's durable row says the decrypted agent is captured (status), a holder (off) and online (uninstall, daemon down)`, { skip: UNSERVABLE[platform], timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
@@ -51,7 +51,7 @@ for (const platform of ['darwin', 'win32']) {
     await withScratchCwd(platform, async () => {
       try {
         const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-        const onDeps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        const onDeps = { getuid: () => 501, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['codex', '--yes'], { io, env: w.env, home: w.home, platform, deps: onDeps }), 0)
         const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
         const door = Number(u.port), auth = Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')

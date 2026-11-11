@@ -3,7 +3,7 @@
 // relaxed, D64⑥). Shots: every screen × 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats, shoot, layoutFaults, timed, timerReads, stepKey } from './harness.mjs'
+import { probe, withBoard, stats, shoot, layoutFaults, timed, timerReads, stepKey, settle } from './harness.mjs'
 import { typeFaults } from './type-inventory.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { COMMANDS } from '../../../web/legacy/labels/capture.mjs'
@@ -33,7 +33,7 @@ async function driveEveryScreen(b, { width, theme }) {
   const first = async (name, sel, act) => {
     const ms = await timed(page, 'sel', sel, act)
     samples.button.push(ms)
-    await page.waitForLoadState('networkidle')
+    await settle(page)
     await page.mouse.move(width - 8, 880) // off the sidebar: no fly-out stays over the content (1.2 §侧栏: shown on hover / focus only)
     assert.equal(await page.locator('#sidebar .fly:visible').count(), 0, `${name}: a sidebar fly-out covers the content`)
     const clash = await page.evaluate(() => { // headings never sit on one another (a class shared across screens' css once did this)
@@ -64,7 +64,7 @@ async function driveEveryScreen(b, { width, theme }) {
     await fitsWindow(page, `session ${i + 1}`)
     if (i < 4) { await page.goBack(); await page.waitForSelector('.lrow') }
   }
-  await page.waitForLoadState('networkidle')
+  await settle(page)
   await shoot(page, 'replay', { width, theme })
   assert.deepEqual(await layoutFaults(page), { overlap: [], cut: [], untitled: [], emptyIcons: [] }, 'replay: layout')
 

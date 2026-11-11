@@ -21,6 +21,7 @@ import { world, door } from '../collector/core/proxymode/fixtures/entries-ctx.mj
 import { routeEntry, noProxyNames } from '../../src/collector/core/proxymode/entries.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 import { resolveLoc, dirsFor } from '../../src/off/loc.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 // these Linux cases look as `uninstall` does with its record lost: install's certificate carriers too (`off` spares them, tested below)
 const UNINSTALL = { phases: ['install', 'on'], platform: 'linux' }
@@ -44,7 +45,7 @@ async function lostManifest() {
   return { home, sh, original, dir, rel: (p) => path.relative(home, p) }
 }
 
-test('planByMarker finds, with no manifest, every change of every harness by trocar\'s own marks, and plans the values and blocks before the lines before the plugins', async () => {
+test('planByMarker finds, with no manifest, every change of every harness by trocar\'s own marks, and plans the values and blocks before the lines before the plugins', { skip: POSIX_WORLD }, async () => {
   const s = await lostManifest()
   const plan = planByMarker({ home: s.home, ...UNINSTALL })
   const rank = (p) => (p.how === 'owned-file' ? 2 : p.how === 'line' ? 1 : 0)
@@ -55,7 +56,7 @@ test('planByMarker finds, with no manifest, every change of every harness by tro
   assert.deepEqual(Object.keys(MARKER_PATHS).sort(), [...HARNESS_IDS].sort(), 'every harness has places to look')
 })
 
-test('undoByMarker takes trocar out of each file and nothing else: blocks and lines go and the commented user line comes back byte for byte; a replaced JSON value comes back from the newest backup, that key only; plugins and the shim go', async () => {
+test('undoByMarker takes trocar out of each file and nothing else: blocks and lines go and the commented user line comes back byte for byte; a replaced JSON value comes back from the newest backup, that key only; plugins and the shim go', { skip: POSIX_WORLD }, async () => {
   const s = await lostManifest()
   const cc = s.sh.files['claude-code'][0]
   const doc = JSON.parse(read(cc)); doc.theme = 'dark'; fs.writeFileSync(cc, JSON.stringify(doc, null, 2) + '\n') // the user edits the file after install (CC rewrites its settings)
@@ -190,7 +191,7 @@ for (const { h, loc, homes } of HOME_VARS) {
   const variants = [['unset'], ['absolute', abs], ['~/', tilde], ...(homes ? [['profile', (home) => path.join(home, 'elsewhere', loc.env, homes, 'p')]] : []),
     ['set since install, absolute', abs, true], ['set since install, ~/', tilde, true]]
   for (const [name, value, late] of variants) {
-    test(`on Linux, ${h} · ${loc.env} ${name}: install's carriers are found where install wrote them and undone by their marks with the manifest gone`, async () => {
+    test(`on Linux, ${h} · ${loc.env} ${name}: install's carriers are found where install wrote them and undone by their marks with the manifest gone`, { skip: MARKER_PATHS[h].some((x) => x.how === 'block') && POSIX_WORLD }, async () => {
       const home = tmpDir('trocar-marker-homevar-')
       const sh = sevenHomes(home)
       // a value of the user's own where trocar puts its key, a row of theirs in the dsh patch file: bytes to come back to (a key with no value before and
@@ -447,7 +448,7 @@ const quietDeps = (platform) => ({ platform, exec: () => ({ status: 1, stdout: '
 const carriersOf = (dir) => [...new Set(itemsOfPhase(readManifest(dir), 'install').filter((x) => x.harness).map((x) => x.path))]
 const bytesOf = (files) => Object.fromEntries(files.map((f) => [f, fs.existsSync(f) ? fs.readFileSync(f, 'latin1') : null]))
 for (const os of ['linux', 'darwin']) {
-  test(`${os}: off --yes with the manifest gone leaves every install-phase certificate carrier byte for byte; what on wrote goes`, async () => {
+  test(`${os}: off --yes with the manifest gone leaves every install-phase certificate carrier byte for byte; what on wrote goes`, { skip: os === 'linux' && POSIX_WORLD }, async () => {
     const { runOff } = await import('../../src/off/orchestrate.mjs')
     let home, dir, onFile, onKeys, carriers
     if (os === 'linux') {

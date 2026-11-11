@@ -18,6 +18,8 @@ import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { recordingExec } from '../cli/fixtures/on-ctx.mjs'
 import { hookFile } from '../../src/collector/harness/templates/index.mjs'
+import { verdictOf, carrierAt, judgedForms } from '../../src/collector/core/proxymode/verdict.mjs'
+import { userCertFilesOf } from '../../src/collector/core/proxymode/sources.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const put = (f, data) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, data) }
@@ -137,6 +139,23 @@ for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
   })
 }
 
+// a carrier is placed when install wrote one of its parts, intact when it wrote none: dsh's plug-in file gone (its loader row still there) is placed
+// again on the second install, while every other carrier is intact
+test('D54: the second install places only the carrier a part of which was gone; the others are intact', async () => {
+  const w = await everything()
+  const r1 = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r1.exit, 0, JSON.stringify({ c: r1.carriers, p: r1.problems }))
+  const plugin = readManifest(w.dir).files.find((f) => f.harness === 'deepseek-dsh' && f.role === 'plugin')
+  assert.ok(plugin, 'install wrote dsh\'s plug-in')
+  fs.rmSync(plugin.path)
+  const r2 = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r2.exit, 0, JSON.stringify({ c: r2.carriers, p: r2.problems }))
+  const states = r2.carriers.filter((c) => c.state === 'placed' || c.state === 'intact').map((c) => [c.harness, c.carrier, c.state])
+  assert.deepEqual(states.filter(([, , st]) => st === 'placed'), states.filter(([h, k]) => h === 'deepseek-dsh' && k === 'plugin').map(([h, k]) => [h, k, 'placed']), JSON.stringify(states))
+  assert.ok(states.some(([h, k, st]) => h === 'deepseek-dsh' && k === 'plugin' && st === 'placed') && states.some(([, , st]) => st === 'intact'), JSON.stringify(states))
+  assert.ok(fs.existsSync(plugin.path), 'and the file is back')
+})
+
 test('D54 · CM1: install; install changes no byte, makes no second key, raises no prompt — the fingerprint stays', async () => {
   const w = await everything()
   const r1 = await w.install({ wrapperKit: { renderWrapper } })
@@ -145,6 +164,11 @@ test('D54 · CM1: install; install changes no byte, makes no second key, raises 
   const calls = w.store.calls.length
   const r2 = await w.install({ wrapperKit: { renderWrapper } })
   assert.deepEqual(snapshot(w.home), snap, 'not one byte, mtime or inode changed')
+  // and the receipt says so: every carrier the first install placed is intact on the second, whatever its kind
+  const placed = r1.carriers.filter((c) => c.state === 'placed'), key = (c) => `${c.harness}|${c.form}|${c.carrier}`
+  assert.deepEqual(r1.carriers.filter((c) => c.state === 'intact').map(key), [], 'a fresh machine: nothing was there, so nothing is intact')
+  for (const kind of ['config-key', 'plugin', 'wrapper']) assert.ok(placed.some((c) => c.carrier === kind), `the first install placed a ${kind}: ${JSON.stringify(r1.carriers)}`)
+  assert.deepEqual(r2.carriers.filter((c) => placed.some((x) => key(x) === key(c))).map((c) => [key(c), c.state]), placed.map((c) => [key(c), 'intact']))
   assert.equal(w.custody.calls.filter((c) => c.verb === 'create').length, 1, 'one key')
   assert.deepEqual(w.store.calls.slice(calls), ['has'], 'read back by fingerprint, no add, no prompt')
   assert.equal(r2.fp256, r1.fp256)
@@ -535,6 +559,24 @@ for (const os of ['darwin', 'win32']) {
       if (!Object.keys(after).length) for (const d of old.created_dirs || []) assert.ok(recs[0].created_dirs.includes(d), `${d}: still owned`)
     })
   }
+  // the directory install made for the file stays trocar's when the record is retired over a file the agent rewrote: once that file is gone too,
+  // uninstall leaves the HOME as it was before install (invariant 5), the directory included
+  test(`4.11 P4b · ${os}: a directory install made stays trocar's across a retired record; uninstall takes it once the file is gone, keeps it with the file`, async () => {
+    for (const gone of [true, false]) {
+      const { w, cfg } = await zcode()
+      const made = path.dirname(cfg)
+      assert.ok(keyRecords(w, cfg)[0].created_dirs.includes(made), 'install made the directory of the file')
+      fs.writeFileSync(cfg, JSON.stringify({ theme: 'dark' })) // the agent rewrote its config without trocar's key
+      const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+      assert.equal(r2.exit, 0, JSON.stringify({ p: r2.problems, pe: r2.pending }))
+      if (gone) fs.rmSync(cfg) // later the agent's file is gone
+      const deps = { platform: os, exec: recordingExec().run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, ...(os === 'win32' ? { unit: { text: () => '' } } : {}) }
+      const { exit, receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps })
+      assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+      if (gone) assert.equal(fs.existsSync(made), false, `${made}: install made it, so uninstall takes it`)
+      else assert.deepEqual(json(cfg), { theme: 'dark' }, 'the agent\'s file stays, and with it the directory')
+    }
+  })
   test(`4.11 P4b · ${os}: an install key whose value the user replaced with their own is the user's: left, rule U, exit 0`, async () => {
     const { w, cfg } = await zcode()
     const mine = path.join(w.home, 'certs', 'z.pem'); put(mine, USER_PEM)
@@ -546,3 +588,23 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(r2.carriers.find((c) => c.harness === 'z-code' && c.carrier === 'pem-block').state, 'placed')
   })
 }
+
+// 4.11 P4 expand env + expandFrom, end to end: Hermes's provider ssl_ca_cert is `${CORP_CA}` and CORP_CA is set only in its home .env (Hermes loads it
+// after start). install's rule U reads the same setting the same way (readSrc), so it appends trocar's block to the file the .env names; the door,
+// with CORP_CA in no start environment, then reads that file through the .env too and decrypts the route.
+test('rule U · Hermes ssl_ca_cert ${CORP_CA} with CORP_CA only in ~/.hermes/.env: install appends the block there, and the door then decrypts', async () => {
+  const w = await modelWorld({ commands: ['hermes'] })
+  const hermes = path.join(w.home, '.hermes'), mine = path.join(w.home, 'certs', 'corp.pem')
+  put(mine, USER_PEM)
+  put(path.join(hermes, 'config.yaml'), 'providers:\n  corp:\n    ssl_ca_cert: ${CORP_CA}\n')
+  put(path.join(hermes, '.env'), `CORP_CA=${mine}\n`)
+  const r = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r.exit, 0, JSON.stringify(r.problems))
+  assert.equal(certBlocks(fs.readFileSync(mine, 'utf8')).filter((b) => b.fp === r.fp256).length, 1, 'install appended one block of the root to the file the .env names')
+  const d = w.harnesses.find((x) => x.name === 'hermes'), form = judgedForms(d, 'darwin')[0]
+  const facts = { name: d.name, pid: 4242, startedAt: Date.now() + 60_000, env: { HOME: w.home }, cwd: w.home }
+  const pctx = { ...w.ctx, env: facts.env, cwd: w.home }
+  const record = { carrierInstalledAt: carrierAt(readManifest(w.dir), d, form, () => userCertFilesOf(d, pctx)), rootFp256: r.fp256 }
+  const v = verdictOf({ desc: d, form, facts, record, issuer: { state: () => 'ready' }, host: d.hosts[0], ctx: w.ctx })
+  assert.deepEqual([v.decrypt, v.code ?? null], [true, null], JSON.stringify(v))
+})

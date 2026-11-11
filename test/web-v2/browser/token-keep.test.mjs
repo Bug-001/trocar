@@ -3,7 +3,7 @@
 // Asserted on the /api statuses, the address and the latched page's class, never on words. Browser suite only.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard } from './harness.mjs'
+import { probe, withBoard, settle } from './harness.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -15,7 +15,7 @@ async function open(context, url) {
   page.on('pageerror', (e) => errors.push(String(e)))
   await page.goto(url, { waitUntil: 'load' })
   await page.waitForFunction(() => document.querySelector('main.forbidden') || document.querySelector('#sidebar')?.children.length > 0, null, { timeout: 15_000 })
-  await page.waitForLoadState('networkidle')
+  await settle(page)
   return { page, statuses, errors, forbidden: await page.locator('main.forbidden').count() }
 }
 

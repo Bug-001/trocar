@@ -27,7 +27,6 @@ const iso = (t) => (typeof t === 'number' && Number.isFinite(t) ? new Date(t).to
  * `adopted` is what `~/.trocar/netenv.json` holds (`readNetenv`): the settings `on` found and the drift is measured against.
  */
 export async function gatherNetFacts({ platform = process.platform, home, env = process.env, harnesses, status, archFacts = null, adopted = null, now = Date.now, fs = nodeFs, deps = {} }) {
-  const unknowns = []
   // 4.11 §3 ㉓: only the harnesses this build has a descriptor for, in the order of `status`'s rows
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const rows = status.harnesses.filter((h) => byName.has(h.id)).map((h) => [byName.get(h.id), h])
@@ -60,7 +59,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     const pr = d.proxy, setting = settings[h.id]
     const procs = (part.procs && part.procs[h.id]) || []
     f.harnesses[h.id] = {
-      installed: h.installed, formsHere: h.formsHere ?? true, entry: { state: h.entry.state, ...(h.entry.code ? { code: h.entry.code } : {}) }, installedAt: iso(h.installedAt), setting, fileSetting: fileSettings[h.id],
+      installed: h.installed, formsHere: h.formsHere ?? true, ...(h.unmeasured ? { unmeasured: h.unmeasured } : {}), entry: { state: h.entry.state, ...(h.entry.code ? { code: h.entry.code } : {}) }, installedAt: iso(h.installedAt), setting, fileSetting: fileSettings[h.id],
       // every place it holds a proxy address now (not only the one that wins): the places a finding names for the user to remove by hand (1.6 附录 B)
       proxyPlaces: proxyPlaces(d, { home, env, fs }),
       // the places trocar itself wrote for it (its on-phase manifest items): a finding never asks the user to edit one of them (1.6 附录 B)

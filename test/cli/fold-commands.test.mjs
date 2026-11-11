@@ -34,7 +34,7 @@ const FORMATTERS = {
   }, { home: HOME, platform: 'linux', tense: 'past' }), ['trocar off']],
   failures: (v) => [failuresBlock({
     groups: [{ level: 'problem', count: 2, last_ts: new Date(NOW - 60e3).toISOString(), where: 'daemon', code: 'helper-down', harness: 'codex', reason: `${v.reason} run \`sudo trocar setup-helper\` and ${v.reason} then \`sudo trocar setup-helper --remove\` ${v.reason}` }],
-  }, { collector: { expected: {} } }, { now: NOW }).join('\n'), ['sudo trocar setup-helper', 'sudo trocar setup-helper --remove']],
+  }, { collector: { expected: {} } }, { now: NOW, details: true }).join('\n'), ['sudo trocar setup-helper', 'sudo trocar setup-helper --remove']],
 }
 
 for (const [name, render] of Object.entries(FORMATTERS)) {
@@ -56,7 +56,7 @@ test('1.6 §3.5 --failures: a reason with a path keeps the path and every word; 
   for (const depth of [2, 6]) {
     const bin = `/usr/local/libexec/${'trocar-helper-dir/'.repeat(depth)}trocar-redirector`
     const cmd = `sudo ${HOME}/.trocar/app/node/bin/node ${HOME}/.trocar/app/bin/trocar.mjs setup-helper`
-    const out = failuresBlock({ groups: [{ level: 'problem', count: 1, last_ts: new Date(NOW - 60e3).toISOString(), where: 'helper-down', code: 'helper-down', reason: `capability helper not found at ${bin}; install it once per machine with \`${cmd}\`` }] }, { collector: { expected: {} } }, { now: NOW })
+    const out = failuresBlock({ groups: [{ level: 'problem', count: 1, last_ts: new Date(NOW - 60e3).toISOString(), where: 'helper-down', code: 'helper-down', reason: `capability helper not found at ${bin}; install it once per machine with \`${cmd}\`` }] }, { collector: { expected: {} } }, { now: NOW, details: true })
     const text = out.join(' ').split(/\s+/)
     assert.ok(text.includes(bin) || text.includes(`${bin};`), `the path is whole\n${out.join('\n')}`)
     assert.ok(!out.join('\n').includes('...'), `nothing was cut\n${out.join('\n')}`)
@@ -71,7 +71,7 @@ test('1.6 §3.5 --failures: a reason with a path keeps the path and every word; 
 test('1.6 §3.5 --failures: a long reason folds whole inside 80 columns, nothing cut', () => {
   for (const g of [{ where: 'ingress', code: 'ingress-challenge-unanswered', process: 'Code Helper', pid: 4242 }, { where: 'engine', code: 'no-word-for-this-code' }]) {
     const reason = words(40, 'word')
-    const out = failuresBlock({ groups: [{ level: 'problem', count: 1, last_ts: new Date(NOW - 60e3).toISOString(), reason, ...g }] }, { collector: { expected: {} } }, { now: NOW })
+    const out = failuresBlock({ groups: [{ level: 'problem', count: 1, last_ts: new Date(NOW - 60e3).toISOString(), reason, ...g }] }, { collector: { expected: {} } }, { now: NOW, details: true })
     assert.ok(!out.join('\n').includes('...'), `nothing was cut\n${out.join('\n')}`)
     assert.ok(out.every((l) => l.length <= 80), `inside 80 columns\n${out.join('\n')}`)
     const text = out.join(' ').split(/\s+/), at = reason.split(' ').map((w) => text.indexOf(w))

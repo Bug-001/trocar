@@ -16,6 +16,7 @@ import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { applyOps, CHAIN_MAX, CANDIDATES } from './delta.mjs';
 import { readIndex, readVarint, unzigzag, R, FLAG_NL, FLAG_UNPARSEABLE, HEADER_LEN, KIND_CHUNK, KIND_SPLICE, REC_SPLICE } from './format.mjs';
+import { BIG, fileKey } from '../file-id.mjs';
 
 export const AMBIGUOUS = -2;
 
@@ -49,7 +50,7 @@ function byteLru(maxBytes, counted, keepNewest) {
   };
 }
 
-export const FRAME_CACHE_BYTES = 64 << 20;   // the frame budget of a reader: its shared cache, and the in-order window (4.2 「读」)
+const FRAME_CACHE_BYTES = 64 << 20;   // the frame budget of a reader: its shared cache, and the in-order window (4.2 「读」)
 export const createFrameCache = ({ bytes = FRAME_CACHE_BYTES } = {}) => byteLru(bytes, 'decodes', true);
 
 // Rebuilt LINES, shared the way the frame cache is. A record stored as a delta is rebuilt from its predecessor, which may
@@ -84,24 +85,24 @@ let fileSeq = 0;
 export function openSealed(file, { fs = nodeFs, frameCache = createFrameCache(), lineCache = createLineCache() } = {}) {
   const fd = fs.openSync(file, 'r');
   try {
-    const st = fs.fstatSync(fd);
+    const st = fs.fstatSync(fd), ident = fileKey(fs.fstatSync(fd, BIG));
     const { tables, indexOffset, version } = readIndex(fs, fd, st.size, path.basename(file));
-    return makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache, lineCache });
+    return makeReader({ fs, fd, file, st, ident, tables, indexOffset, version, frameCache, lineCache });
   } catch (e) { try { fs.closeSync(fd); } catch {} throw e; }
 }
 
 // Line instances whose sha256 has been checked (a line cache hit hands out the same instance again).
 const verified = new WeakSet();
 
-function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache, lineCache }) {
+function makeReader({ fs, fd, file, st, ident, tables, indexOffset, version, frameCache, lineCache }) {
   // close() releases only the fd: the tables stay, and the next frame read reopens the file and checks it is
   // still the file they describe (dev, ino, size, mtime), so a kept reader never reads another file's bytes.
   const fdOf = () => {
     if (fd !== null) return fd;
     const nfd = fs.openSync(file, 'r');
     let now;
-    try { now = fs.fstatSync(nfd); } catch (e) { try { fs.closeSync(nfd); } catch {} throw e; }
-    if (now.dev !== st.dev || now.ino !== st.ino || now.size !== st.size || now.mtimeMs !== st.mtimeMs) {
+    try { now = fileKey(fs.fstatSync(nfd, BIG)); } catch (e) { try { fs.closeSync(nfd); } catch {} throw e; }
+    if (now !== ident) {
       try { fs.closeSync(nfd); } catch {}
       throw new Error(`${path.basename(file)}: the sealed file changed since its reader was opened`);
     }
@@ -177,7 +178,7 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache
     return Buffer.concat(parts, r[R.len]);
   }
 
-  const key = `${++fileSeq}:${st.dev}:${st.ino}`;
+  const key = `${++fileSeq}:${ident}`;
 
   const frameAt = (f) => {
     const ck = key + ':' + f;
@@ -372,7 +373,7 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache
   function close() { if (fd === null) return; try { fs.closeSync(fd); } catch {} fd = null; }
 
   return {
-    file, size: st.size, dev: st.dev, ino: st.ino, indexOffset, frames, shards, streams, records, deltas,
+    file, size: st.size, ident, indexOffset, frames, shards, streams, records, deltas,
     get count() { return records.length; },
     entry, lineAt, warm, lines, find, close,
   };

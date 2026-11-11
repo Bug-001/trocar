@@ -10,6 +10,8 @@
 //        the base itself); `glob` matches entry names one level below that path ('*' = any run of characters). `perOs` picks ctx.os; a missing OS = no path.
 // <src>  { env } | { file: <loc>, format: 'json' | 'jsonc' | 'yaml' | 'dotenv', keys } | { policy: { <os>: spec } } | [<src>, …]
 //        '*' in keys matches any key or list index. A list is a precedence: the first source that is set answers (an error answers too: D38).
+//        A { file } source with `expand: 'env'` reads `${NAME}` in its values from the environment; its `expandFrom: [{ file: <loc>, format: 'dotenv' }]`
+//        lists the files the program loads over that environment after start, in load order (a later one wins): see expandEnv.
 // <cond> { src, equals? } — without `equals`: "is set".
 // A file that exists but cannot be read or parsed is { error }, never "unset" (D38).
 import path from 'node:path'
@@ -19,7 +21,7 @@ import { resolveLoc } from '../../../off/loc.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
 import { pathKey } from '../../../off/fsutil.mjs'
 
-const get = (env, k) => (env instanceof Map ? env.get(k) : env ? env[k] : undefined)
+const get = (env, k) => (env instanceof Map ? env.get(k) : env && Object.hasOwn(env, k) ? env[k] : undefined) // own names only: `${constructor}` is no variable
 const isSet = (v) => v !== undefined && v !== null && v !== ''
 const absent = (e) => e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')
 const why = (e) => `${(e && e.code) || 'error'}: ${(e && e.message) || e}`
@@ -47,11 +49,31 @@ const PARSE = {
   dotenv: (t) => Object.fromEntries(parseDotenv(t)),
 }
 
-// `expand: 'env'` (descriptor data): the program reads `${NAME}` in the value from its environment (`ctx.env`), as Hermes reads config.yaml. A reference
-// to a name that is not set stays as written there, names no file, and the program falls back to its default trust: that value is not in effect here
-const REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
-/** Whether a value read under `expand: 'env'` names the environment (`${NAME}`): with that environment unread, its file is not known (D38). */
-export const namesEnv = (value) => typeof value === 'string' && /\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(value)
+// `expand: 'env'` (descriptor data): the program reads `${…}` in the value from its environment (`ctx.env`), as Hermes reads config.yaml
+// (hermes_cli/config.py `_env_expand_match`): `${NAME}` and `${env:NAME}` read NAME, spaces inside trimmed; another source (`${vault:…}`) and an
+// empty `${env:}` read nothing and stay as written. A reference to a name that is not set stays as written too.
+const REF = /\$\{([^}]+)\}/g
+const refName = (inner) => { const s = inner.trim(); if (s.startsWith('env:')) return s.slice(4).trim() || null; return /^[a-z][a-z0-9_-]*:/.test(s) ? null : s }
+/** The environment names a value read under `expand: 'env'` references, in order. */
+export const envRefs = (value) => (typeof value === 'string' ? [...value.matchAll(REF)].map((m) => refName(m[1])).filter(Boolean) : [])
+/** Whether `env` (an object or a Map) sets `name` to a value. */
+export const envHas = (env, name) => isSet(get(env, name))
+/** The environment an `expand: 'env'` setting is read against: `ctx.env` with the setting's `expandFrom` dotenv files laid over it in order, a later
+ *  one over an earlier, as the program loads them after start (4.11 P4) → { env } (a Map) | { error, where }: a file that is absent is skipped, one
+ *  that exists and cannot be read or parsed is not known (D38). A loc whose variable is unset names no file (a relative path is skipped). */
+export function expandEnv(src, ctx) {
+  const env = new Map(ctx.env instanceof Map ? ctx.env : Object.entries(ctx.env || {}))
+  for (const from of src.expandFrom || []) {
+    let files
+    try { files = resolveLoc(from.file, ctx) } catch (e) { if (!absent(e)) return { error: why(e), where: String(from.file.path || '') }; files = [] }
+    for (const f of files.filter((p) => isAbs(p))) {
+      let text
+      try { text = ctx.readFile(f) } catch (e) { if (absent(e)) continue; return { error: why(e), where: f } }
+      try { for (const [k, v] of Object.entries(PARSE[from.format](String(text)))) env.set(k, v) } catch (e) { return { error: `unparsable ${from.format}: ${(e && e.message) || e}`, where: f } }
+    }
+  }
+  return { env }
+}
 /** The environment names the `expand: 'env'` settings of a descriptor reference now, read against `ctx` as written: what a reader asks a process for
  *  besides the names its data declares (the door asks for only the names it needs, 4.9 §5.2). A setting that cannot be read names none. */
 export function envRefsOf(desc, ctx) {
@@ -59,7 +81,7 @@ export function envRefsOf(desc, ctx) {
   for (const src of ((desc && desc.proxyMode) || {}).userCertFiles || []) {
     if (src.expand !== 'env') continue
     const r = readSrc({ ...src, expand: undefined }, ctx)
-    for (const x of (r.set && r.all) || []) if (typeof x.value === 'string') for (const m of x.value.matchAll(REF)) out.add(m[1])
+    for (const x of (r.set && r.all) || []) for (const n of envRefs(x.value)) if (!/[=\0]/.test(n)) out.add(n) // no variable is named so: asking would fail the whole read
   }
   return [...out].slice(0, MAX_REFS) // bounded: names only (`${NAME}` and nothing else of the text), at most MAX_REFS asked of a process
 }
@@ -67,7 +89,7 @@ const MAX_REFS = 32
 const expanded = (value, env) => {
   if (typeof value !== 'string') return value
   let unset = false
-  const v = value.replace(REF, (m, k) => { const x = get(env, k); if (!isSet(x)) { unset = true; return m } return x })
+  const v = value.replace(REF, (m, inner) => { const k = refName(inner); if (k == null) return m; const x = get(env, k); if (!isSet(x)) { unset = true; return m } return x })
   return unset ? undefined : v
 }
 
@@ -87,6 +109,8 @@ export function readSrc(src, ctx) {
   }
   let files
   try { files = resolveLoc(src.file, ctx) } catch (e) { if (!absent(e)) return { error: why(e), where: String(src.file.path || '') }; files = [] }
+  const x = src.expand === 'env' ? expandEnv(src, ctx) : null
+  if (x && x.error) return x
   const all = []
   for (const f of files) {
     let text
@@ -94,7 +118,7 @@ export function readSrc(src, ctx) {
     let data
     try { data = PARSE[src.format](String(text)) } catch (e) { return { error: `unparsable ${src.format}: ${(e && e.message) || e}`, where: f } }
     for (const m of walk(data, src.keys)) {
-      const value = src.expand === 'env' ? expanded(m.value, ctx.env) : m.value
+      const value = x ? expanded(m.value, x.env) : m.value
       if (value !== undefined) all.push({ value, where: `${f}#${m.keys.join('.')}` })
     }
   }
@@ -146,6 +170,15 @@ export const outOfScope = (form, os) => !!(form.verified && form.verified[os] &&
 
 /** The forms of a harness that are on this machine, the one answer install, on, setup and status take. */
 export const formsHere = (pm, os, ctx) => pm.forms.filter((f) => f.os.includes(os) && !outOfScope(f, os) && isPresent(f, ctx))
+
+/** The forms `on` writes entries for (4.11 P5): of the forms here, the ones measured on this system when the harness has any measured there; a form never
+ *  measured where a measured sibling exists gets no entry (writing an agent's config for it can break it). `status` judges the same set (verdict.mjs judgedForms). */
+export const measuredOn = (f, os) => !!(f && f.verified && f.verified[os] === true)
+export const routes = (pm, os) => {
+  const any = pm.forms.some((f) => f.os.includes(os) && measuredOn(f, os))
+  return (f) => !any || measuredOn(f, os)
+}
+export const routedForms = (pm, os, ctx) => formsHere(pm, os, ctx).filter(routes(pm, os))
 
 /** What `status` and `on` name as out of scope: of the harnesses with no covered form here, the out-of-scope forms that are present and say what they are (`scopeWhat`). */
 export const scopeNamed = (harnesses, os, ctx) => harnesses.filter((d) => d.proxyMode).flatMap((d) => {

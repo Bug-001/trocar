@@ -12,6 +12,8 @@ import { readHead } from '../../../src/query/ctx-files.mjs'
 import { bigSession } from '../../query/big-session.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { QUERY_WAIT_PROBLEMS } from '../../../src/health/codes.mjs'
+import { TC_ROW } from '../../../web/legacy/labels/replay.mjs'
+import { listed } from '../../helpers/head-done.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -52,7 +54,7 @@ async function folded(ms) {
     const r = await b.get('session', { id: s.id, head: '1' })
     head = r.doc
     const file = readHead(home, s.id)
-    if (file && file.tier === 1 && !file.pending && file.packs.length >= 3 && file.mark === head.mark) { head = file; break }
+    if (file && file.tier === 1 && !file.pending && listed(file) && file.packs.length >= 3 && file.mark === head.mark) { head = file; break }
     assert.ok(Date.now() < until, `the session was not folded with its files in 240 s (${JSON.stringify(head && { tier: head.tier, pending: head.pending, packs: head.packs && head.packs.length })})`)
     await new Promise((ok) => setTimeout(ok, 500))
   }
@@ -158,4 +160,18 @@ test('1.5 K-32: a head behind the tip ids says so in place, with the count; 1.5 
     assert.doesNotMatch(await el.textContent(), /%/)
     assert.deepEqual(boot.errors, [])
   } finally { await boot.context.close() }
+})
+
+test('1.3 #16 · 2.1 §token 计数行: the head\'s probes.series draws the token-count row, a bar per measured size; the row names the full count', { skip, timeout: 300_000 }, async () => {
+  const w = await folded(270_000), { head } = w
+  const at = Date.parse(head.markTs), series = [3, 2, 1].map((k, i) => ({ ts: new Date(at - k * 1000).toISOString(), tokens: 1000 * (i + 1), retention: 'full' }))
+  const probes = { count: series.length + 2, series } // two counts came back without a size: counted, not drawn
+  const c = await fresh(w, { route: (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...head, probes }) }) })
+  try {
+    await c.page.goto(`${w.b.url}/#/replay/${encodeURIComponent(w.project)}/${encodeURIComponent(w.id)}`)
+    const row = await c.page.waitForSelector('#rails .k-token-count', { timeout: 15_000 })
+    assert.equal(await row.$$eval('.pbar[data-lane="token-count"]', (e) => e.length), series.length, 'a bar per measured size')
+    assert.equal((await row.$eval('.railname .tn', (e) => e.textContent)).trim(), TC_ROW(probes.count), 'the row names probes.count, the full truth')
+    assert.deepEqual(c.errors, [])
+  } finally { await c.context.close() }
 })

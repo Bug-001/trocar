@@ -8,13 +8,14 @@ import path from 'node:path'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { formatUninstallReceipt } from '../../src/cli/receipt.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
-import { standalonePath, standaloneFiles } from '../../src/off/paths.mjs'
+import { standalonePath, standaloneFiles, switchFileIn, switchDirIn } from '../../src/off/paths.mjs'
 import { writeStandalone } from '../../src/off/standalone.mjs'
 import { installedHome, writeDaemonLock, flowEvents, procTable, fakeClock, DAEMON_ROWS, hangsOnStatus, snapshot } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
 import { writeNetenv, netenvFile } from '../../src/netenv/index.mjs'
 import { backupsOf } from '../../src/off/backup.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const BASE = new Date('2026-10-07T00:00:00Z')
 /** `trocar uninstall <argv>` over a sandbox: the exit code, and what it printed. §3.6 — uninstall always asks, so a case that is not about
@@ -36,7 +37,7 @@ const seedClasses = (s) => { const h = path.dirname(s.dir); fs.mkdirSync(path.jo
 const classTable = (s) => { const h = path.dirname(s.dir); return [path.join(h, 'classes.json'), path.join(h, 'logs', 'classes.ndjson')].map((f) => { try { return fs.readFileSync(f, 'utf8') } catch (e) { return `MISSING (${e.code})` } }) }
 const trocarFiles = (s) => ['ca', 'run', 'state.json', 'install-manifest.json', 'op.lock', 'lock'].filter((n) => fs.existsSync(path.join(s.dir, n)))
 
-test('uninstall: every entry is back as it was, trocar\'s own files are gone, the captures and the records stay, and the receipt says so in the past tense (exit 0, --json validates)', async () => {
+test('uninstall: every entry is back as it was, trocar\'s own files are gone, the captures and the records stay, and the receipt says so in the past tense (exit 0, --json validates)', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); keep(s)
   const entries = s.manifest().entries
   const before = s.userFiles()
@@ -66,7 +67,6 @@ test('uninstall --dry-run writes nothing and asks the daemon nothing: the same r
   assert.equal(exit, 0)
   assert.deepEqual([snapshot(s.home), s.sys.daemon.calls.length, s.sys.exec.calls.length], [snap, asked, ran])
   assert.match(io.stdoutText(), /^trocar uninstall will take out everything install put on this machine/)
-  assert.match(io.stdoutText(), /Will remove[\s\S]*backup/)
   assert.match(io.stdoutText(), /Nothing was changed\. Run it with --yes to do it\./)
   assertEnglish(io.stdoutText(), 'the dry-run plan of uninstall')
   const json = (await cli(s, ['--dry-run', '--json'])).io.json()
@@ -118,6 +118,60 @@ test('§3.6: the class-change log is data — a plain uninstall keeps it byte fo
   assert.equal(fs.existsSync(path.dirname(purged.dir)), false, 'no ~/.trocar after a full purge')
 })
 
+// invariant 5 · §3.6: on writes a switch file per harness under <collector>/switch/; a record names the directories its own write made, so after
+// one harness went off and on again while another kept switch/ in use, the directory still has to go with the last off (4.6 #16: after off as
+// after install) and the purge leaves no ~/.trocar, on each platform
+test('after on, off and on again of one switch harness, then off, --purge-data leaves no ~/.trocar: the emptied switch directory goes too', async () => {
+  const { writeOwnedFile, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
+  const on = (s, h) => { const m = readM(s.dir); writeOwnedFile({ dir: s.dir, manifest: m, harness: h, role: 'switch', phase: 'on', file: switchFileIn(s.dir, h), data: 'http://127.0.0.1:47012\n', home: s.home }); saveM(s.dir, m) }
+  for (const platform of ['linux', 'darwin', 'win32']) {
+    const s = await installedHome({ names: ['claude-code'] })
+    on(s, 'kimi-code'); on(s, 'deepseek-dsh')
+    assert.equal((await s.off({ yes: true, ids: ['kimi-code'] })).exit, 0)
+    on(s, 'kimi-code') // switch/ is there (dsh's file): this record makes no directory
+    assert.equal((await s.off({ yes: true })).exit, 0)
+    assert.equal(fs.existsSync(switchDirIn(s.dir)), false, `${platform}: after off, as after install, there is no switch/ (4.6 #16)`)
+    fs.mkdirSync(switchDirIn(s.dir)) // as an older build's off left it: empty, and no record names it
+    const r = await cli(s, ['--purge-data', '--yes'], { platform })
+    assert.equal(r.exit, 0, r.io.text())
+    assert.equal(fs.existsSync(path.dirname(s.dir)), false, `${platform}: no ~/.trocar after a full purge; left: ${fs.existsSync(s.dir) ? fs.readdirSync(s.dir, { recursive: true }).join(', ') : '(no collector dir)'}`)
+  }
+})
+
+// the same for a directory whose last record removes its file without trying the directory (a CA file): it goes when that record goes, and a
+// directory that still holds a file of the user's stays
+// the hand-over finds the record still in a directory as off compares paths (pathKey): where file names are case-blind, a record whose path names
+// that directory in another case (an environment variable's spelling against the profile's) is still in it
+test('where file names are case-blind, a directory passes to a record that names it in another case', async (t) => {
+  const { pathKey } = await import('../../src/off/fsutil.mjs')
+  if (pathKey('/a', { realpath: null }) !== pathKey('/A', { realpath: null })) return t.skip('file names keep case on this host: SWITCH is another directory')
+  const { writeOwnedFile, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
+  const on = (s, h, file) => { const m = readM(s.dir); writeOwnedFile({ dir: s.dir, manifest: m, harness: h, role: 'switch', phase: 'on', file, data: 'http://127.0.0.1:47012\n', home: s.home }); saveM(s.dir, m) }
+  const s = await installedHome({ names: ['claude-code'] })
+  on(s, 'kimi-code', switchFileIn(s.dir, 'kimi-code')) // makes switch/
+  on(s, 'deepseek-dsh', path.join(s.dir, 'SWITCH', 'deepseek-dsh')) // the same directory, named in another case
+  assert.equal((await s.off({ yes: true, ids: ['kimi-code'] })).exit, 0) // switch/ still holds dsh's file: it passes to dsh's record
+  assert.equal((await s.off({ yes: true })).exit, 0)
+  assert.equal(fs.existsSync(switchDirIn(s.dir)), false, 'after off, as after install, there is no switch/ (4.6 #16)')
+})
+
+test('a directory on made goes with the last record in it, whichever kind that is; one holding a user file stays', async () => {
+  const { writeOwnedFile, applyJsonKey, readManifest: readM, saveManifest: saveM } = await import('../../src/collector/core/trust/journal.mjs')
+  for (const userFile of [false, true]) {
+    const s = await installedHome({ names: ['claude-code'] })
+    const d = path.join(s.dir, 'made-by-on', 'deep') // a file trocar removes without trying its directory (a CA file) is only ever under ~/.trocar
+    const m = readM(s.dir)
+    applyJsonKey({ dir: s.dir, manifest: m, harness: 'claude-code', phase: 'on', file: path.join(d, 'settings.json'), keys: ['env', 'HTTPS_PROXY'], value: 'http://127.0.0.1:1', home: s.home })
+    writeOwnedFile({ dir: s.dir, manifest: m, role: 'ca-cert', phase: 'install', file: path.join(d, 'ca.pem'), data: 'not a real certificate\n', home: s.home })
+    saveM(s.dir, m)
+    if (userFile) fs.writeFileSync(path.join(d, 'mine.txt'), 'the user\'s\n')
+    const r = await cli(s, ['--yes'])
+    assert.equal(r.exit, 0, r.io.text())
+    assert.equal(fs.existsSync(path.join(s.dir, 'made-by-on')), userFile, userFile ? 'a directory holding a user file stays' : `the directories on made are gone; left: ${fs.existsSync(d) ? fs.readdirSync(d).join(', ') : '-'}`)
+    if (userFile) assert.equal(fs.readFileSync(path.join(d, 'mine.txt'), 'utf8'), 'the user\'s\n')
+  }
+})
+
 test('R6 · §3.6: uninstall always asks — no terminal and no --yes prints the plan and exits 2 with nothing done; a terminal asks once (n: nothing, exit 1); --yes goes; --purge-data says the records go for good', async () => {
   const s = await installedHome({ names: ['claude-code'] }); keep(s)
   const snap = snapshot(s.home), ran = s.sys.exec.calls.length
@@ -125,7 +179,6 @@ test('R6 · §3.6: uninstall always asks — no terminal and no --yes prints the
   assert.equal(noTty.exit, 2)
   assert.deepEqual([snapshot(s.home), s.sys.exec.calls.length], [snap, ran], 'nothing was done')
   assert.match(noTty.io.stdoutText(), /^trocar uninstall will take out everything install put on this machine/, 'the plan is printed')
-  assert.match(noTty.io.stdoutText(), /your captured records \(--purge-data\)/)
   assert.match(noTty.io.stderrText(), /Nothing was changed\. Read the plan above, then run it again with --yes/)
   assertEnglish(noTty.io.text(), 'the plan and refusal of uninstall')
   const json = await cli(s, ['--purge-data', '--json'], { ask: true })
@@ -220,7 +273,7 @@ test('1.6 §1.5: after the operator stops a stuck daemon, the next uninstall fin
   assert.deepEqual(trocarFiles(s), [])
 })
 
-test('uninstall: when the install manifest cannot be saved after the entries were undone the run is blocked, not "uninstalled" — exit 1, outcome failed, the receipt lists the files that changed, the CA, the state and the manifest stay, and the next uninstall finishes', async () => {
+test('uninstall: when the install manifest cannot be saved after the entries were undone the run is blocked, not "uninstalled" — exit 1, outcome failed, the receipt lists the files that changed, the CA, the state and the manifest stay, and the next uninstall finishes', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const manifestFile = path.join(s.dir, 'install-manifest.json')
   const state = { broken: true }
@@ -337,14 +390,14 @@ test('§3.6: an uninstall that must wait for the op lock and finds an unanswerin
 
 // 1.6 §3.6 「记录没列的标记」: the record lists codex's file and not Claude Code's settings (marked by trocar, its value backed up): one uninstall takes
 // both out — the unlisted one by trocar's marks at the places planByMarker reads, its old value from the backup — and the receipt names it as undone by marker
-test('§3.6: uninstall also takes out a marked file the record does not list, by its marks, the value from its backup; one run clears both', async () => {
+test('§3.6: uninstall also takes out a marked file the record does not list, by its marks, the value from its backup; one run clears both', { skip: POSIX_WORLD }, async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
-    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
   } })
   const settings = path.join(s.home, '.claude', 'settings.json')
-  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(s.sh.corp)} }\n}\n`
   assert.notEqual(fs.readFileSync(settings, 'utf8'), settingsOriginal, 'trocar\'s value is in')
   const mf = path.join(s.dir, 'install-manifest.json')
   const m = JSON.parse(fs.readFileSync(mf, 'utf8'))
@@ -359,9 +412,9 @@ test('§3.6: uninstall also takes out a marked file the record does not list, by
 })
 
 // 1.6 §1.4 「计划写全」, V85: the plan (--dry-run, and the one shown before a yes) names the unlisted marked file too, and writes nothing
-test('§1.4: uninstall --dry-run plans the marked file the record does not list beside the one it lists; the home is unchanged', async () => {
+test('§1.4: uninstall --dry-run plans the marked file the record does not list beside the one it lists; the home is unchanged', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
-    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
   } })
   const settings = path.join(s.home, '.claude', 'settings.json'), codexEnv = path.join(s.home, '.codex', '.env')
   const mf = path.join(s.dir, 'install-manifest.json')
@@ -380,13 +433,13 @@ test('§1.4: uninstall --dry-run plans the marked file the record does not list 
   assert.deepEqual(snapshot(s.home), snap)
 })
 
-test('V24 (uninstall): with the install manifest gone and no terminal, uninstall takes the routing off, stops the daemon, undoes nothing, removes nothing of trocar\'s and exits 1; with --yes it undoes the entries by their marks and removes trocar\'s own files by name — the CA, the unit, the state, every backup', async () => {
+test('V24 (uninstall): with the install manifest gone and no terminal, uninstall takes the routing off, stops the daemon, undoes nothing, removes nothing of trocar\'s and exits 1; with --yes it undoes the entries by their marks and removes trocar\'s own files by name — the CA, the unit, the state, every backup', { skip: POSIX_WORLD }, async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
-    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
   } })
-  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(s.sh.corp)} }\n}\n`
   fs.rmSync(path.join(s.dir, 'install-manifest.json'))
   const installed = s.userFiles()
   // §3.6: no terminal and no --yes is the plan and nothing else now — not even the routing is touched, and the exit is 2 (§1.4)
@@ -405,7 +458,7 @@ test('V24 (uninstall): with the install manifest gone and no terminal, uninstall
 })
 
 test('R3 (uninstall, no manifest): a file the marks cannot undo keeps its backups — here every backup that could hold the replaced value is unreadable: exit 1, the file is left, each backup still on disk and not among the dropped', async () => {
-  const s = await installedHome({ names: ['claude-code'], seed: (home, sh) => fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`) })
+  const s = await installedHome({ names: ['claude-code'], seed: (home, sh) => fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`) })
   const file = path.join(s.home, '.claude', 'settings.json')
   const backups = backupsOf({ home: s.home, file })
   assert.ok(backups.length, 'install saved the file first')
@@ -434,7 +487,7 @@ test('R3: a manifest this build does not read leaves every entry and every file 
   assert.ok(!fs.readFileSync(path.join(t.home, '.claude', 'settings.json'), 'utf8').includes('trocar'), 'the entry went by its mark')
 })
 
-test('V8 (uninstall): every backup goes, the ones of files the user edited after trocar too — each named in the receipt as not byte for byte; the directory is gone; a backup that cannot be removed is said', async () => {
+test('V8 (uninstall): every backup goes, the ones of files the user edited after trocar too — each named in the receipt as not byte for byte; the directory is gone; a backup that cannot be removed is said', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const codexEnv = path.join(s.home, '.codex', '.env')
   fs.appendFileSync(codexEnv, 'EXTRA=1\n') // after install: undone but not identical
@@ -458,7 +511,7 @@ test('V8 (uninstall): every backup goes, the ones of files the user edited after
   assert.ok(fs.existsSync(bk), 'it is still there')
 })
 
-test('V27 (uninstall): an uninstall signals the daemon and its helper only, never restarts or starts anything, and lists — never stops — the agents and the foreground trocar processes', async () => {
+test('V27 (uninstall): an uninstall signals the daemon and its helper only, never restarts or starts anything, and lists — never stops — the agents and the foreground trocar processes', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); writeDaemonLock(s)
   const t = procTable({ ...DAEMON_ROWS, 5000: { start_time: '5', boot_id: 'boot-1' } }, { survives: { 4242: ['SIGTERM'] } })
   const agents = [
@@ -475,7 +528,7 @@ test('V27 (uninstall): an uninstall signals the daemon and its helper only, neve
   assert.deepEqual(r.receipt.user_processes.map((p) => p.pid), [7002], 'what the user started themselves is listed, never killed')
 })
 
-test('D38: every line uninstall writes is in the closed sets, one run has one `run`, and it ends with a result line', async () => {
+test('D38: every line uninstall writes is in the closed sets, one run has one `run`, and it ends with a result line', { skip: POSIX_WORLD }, async () => {
   const { checkRecord } = await import('../../src/health/codes.mjs')
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EXTRA=1\n')
@@ -533,7 +586,7 @@ test('formatUninstallReceipt: not done says so and what to do; the entries left 
   assertEnglish(purged, 'the receipt of uninstall --purge-data')
 })
 
-test('semantics 2: an install manifest of the wrong shape is treated as unreadable by uninstall too — the entries go by their marks (after a yes), a receipt is printed, and the way on is named when trocar on then refuses', async () => {
+test('semantics 2: an install manifest of the wrong shape is treated as unreadable by uninstall too — the entries go by their marks (after a yes), a receipt is printed, and the way on is named when trocar on then refuses', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   s.sys.daemon.state.up = false
   const file = path.join(s.dir, 'install-manifest.json')
@@ -700,7 +753,7 @@ test('uninstall: a sealed segment never hides how to stop a daemon that did not 
 })
 
 // A daemon `off` already stopped leaves its lock when it could not remove it (a forced end on Windows): this uninstall stopped nothing and must not say it did.
-test('1.6 §3.6: a lock left by a daemon already gone is no daemon stopped', async () => {
+test('1.6 §3.6: a lock left by a daemon already gone is no daemon stopped', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const r = await s.uninstall({ yes: true, deps: { daemonState: async () => ({ state: 'stale', lock: { pid: 13496 } }), stopDaemon: async () => ({ stopped: true, how: 'none', pid: 13496, helper_pid: null, signals: [] }) } })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))

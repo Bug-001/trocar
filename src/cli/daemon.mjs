@@ -19,7 +19,7 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 
 // SIGHUP (the terminal closed, SSH dropped, logout) and SIGQUIT stop it cleanly like SIGTERM / SIGINT — Node's default
 // for SIGHUP is to exit at once, leaving the lock behind and the next start recording a crash that never was (D-27).
-export const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT']
+const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT']
 // The handlers stay until the stop has run (1.6 §5.2, V99): a second signal while the stop runs (`trocar update` stopping the old daemon, a
 // launchd bootout followed by a SIGTERM) is ignored rather than taking the default action that cut the stop short. `release` then takes them off,
 // so a signal after the stop — the loop still held alive by something else — takes the default action instead of being ignored for good. They do
@@ -78,7 +78,7 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   const foreground = !env.INVOCATION_ID && !!(proc.stdin && proc.stdin.isTTY) // not under systemd, at a terminal: closing it stops the daemon
   const start = deps.startDaemon || D.startDaemon
   let d
-  try { d = await start({ dir, env, foreground, log: (where, e) => io.err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) {
+  try { d = await start({ dir, env, foreground, log: (where, e) => { io.err(`[${where}] ${e && e.message ? e.message : e}`); if (e && Array.isArray(e.detail)) for (const l of e.detail) io.err(`[${where}]   | ${l}`) } }) } catch (e) {
     io.err(`trocar daemon: ${e.message}`)
     // D62 ⑥: a daemon that finds another one answering is already as asked, not a failure. It says so once (the line above goes to the daemon log, D46)
     // and exits 0, because the platform retries a non-zero exit for as long as the other daemon lives — launchd's KeepAlive {SuccessfulExit: false} every

@@ -37,9 +37,9 @@ import { unseal } from '../../../off/seal.mjs'
 const realOf = (fs) => (d) => fs.realpathSync.native(d) // the file system the journal is handed decides what a path is (pathKey)
 export const samePath = (a, b, fs) => a === b || (typeof a === 'string' && typeof b === 'string' && pathKey(a, { realpath: realOf(fs) }) === pathKey(b, { realpath: realOf(fs) }))
 
-export { sha256, writeDurable, sweepTemps, missingDirs, removeEmptyDirs, editTarget } from '../../../off/fsutil.mjs'
+export { sha256, missingDirs } from '../../../off/fsutil.mjs'
 export { undoEntry, removeOwnedFile, describeEntry } from '../../../off/journal.mjs'
-export { MANIFEST, manifestPath, newManifest, readManifest, saveManifest } from '../../../off/manifest.mjs'
+export { manifestPath, newManifest, readManifest, saveManifest } from '../../../off/manifest.mjs'
 
 // 1.6 R2: a user's file is saved to ~/.trocar/backup/ before the first byte of it changes; no backup, no change. `before` null = trocar
 // creates the file: nothing to save (existed_before:false, backup:null). The throw is `backup-failed`, raised before the manifest or the
@@ -192,10 +192,10 @@ export function retireEntry({ dir, manifest, entry, now = new Date(), fs = nodeF
   saveManifest(dir, manifest, fs)
   return entry
 }
-/** A file trocar created (and the directories it made for it) that is gone and placed again: the new entry still owns those directories, so
- *  uninstall takes them away as it would have (invariant 5: nothing left behind). Only when the new write created the file too. */
+/** The directories a retired entry made pass to the entry placed again, whether the file is still there (rewritten by the agent) or gone: the
+ *  record that goes last takes them when they are empty (off's hand-over; invariant 5: nothing left behind). A directory holding the user's file stays. */
 export function inheritDirs({ dir, manifest, entry, from, fs = nodeFs }) {
-  if (entry.existed_before || from.existed_before !== false || !(from.created_dirs || []).length) return
+  if (!(from.created_dirs || []).length) return
   entry.created_dirs = [...new Set([...from.created_dirs, ...entry.created_dirs])]
   entry.undo_by_hand = undoByHand(entry)
   saveManifest(dir, manifest, fs)

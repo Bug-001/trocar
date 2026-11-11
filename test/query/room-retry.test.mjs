@@ -22,6 +22,8 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { rawHome } from './raw-home.mjs'
+import { listed } from '../helpers/head-done.mjs'
+import { bigSession } from './big-session.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
@@ -81,7 +83,7 @@ const watched = (spawn) => {
 }
 const until = async (r, what, ok) => { await whileMoving(ok, () => r.n, what) }
 const foldLog = (home, s) => path.join(sessionDir(home, s.id), 'fold.0.ndjson')
-const folded = (home, id) => { const h = readHead(home, id); return h?.tier === 1 && h.pending === null }
+const folded = (home, id) => { const h = readHead(home, id); return h?.tier === 1 && h.pending === null && listed(h) }
 const quiet = (r, since = 0) => until(r, 'the worker went quiet', () => r.last >= since && Date.now() - r.last >= QUIET_MS)
 const answer = () => { const a = { status: 0, chunks: [], writeHead(s) { a.status = s }, write: (b) => { a.chunks.push(Buffer.from(b)); return true }, end() {}, once() {} }; return a }
 const stoppedOn = (home, id) => readHead(home, id)?.pending?.stopped?.code === 'heap-no-room'
@@ -128,6 +130,50 @@ test('3.5 #37: a stop on an upgrade target leaves no upgrade.skip', { timeout: 1
   } finally { svc.stop() }
 })
 
+/** A `fork` for createQueryService: the worker as the service forks it, counting the opens of `log` for writing (`opens()`). */
+function counted(log) {
+  const dir = tmpDir('trocar-counted-'), count = path.join(dir, 'count'), preload = path.join(dir, 'count.cjs')
+  fs.writeFileSync(count, '')
+  fs.writeFileSync(preload, `const fs = require('node:fs'), openSync = fs.openSync
+fs.openSync = (f, ...a) => { if (String(f) === ${JSON.stringify(log)} && a[0] === 'r+') fs.appendFileSync(${JSON.stringify(count)}, 'x'); return openSync(f, ...a) }`)
+  return { fork: (h, ...argv) => fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, '--require', preload, ...heapFlags(HEAP_MB)], env: workerEnv() }),
+    opens: () => fs.statSync(count).size }
+}
+
+test('3.5 #37: a stop an earlier worker wrote does not hold the session in a new worker: a read of it is folded in the request, never asked again', { timeout: 180_000 }, async () => {
+  const { home, sessions: [s] } = await homeOf('trocar-room-disk-', 'room-a')
+  // an upgrade target big enough to keep the new worker's idle slices on it: the idle period that would fold every stopped session does not come
+  const U = 'room-disk-u000-4a1b-9c2d-000000000001', N = 'room-disk-n000-4a1b-9c2d-000000000002'
+  bigSession({ home, id: U, segment: '20261105T080000Z', growth: 300 }).append(400)
+  // the newest session, folded: the new worker's first look (the newest session's) takes it, not the stopped one
+  bigSession({ home, id: N, segment: '20261105T100000Z' }).append(2)
+  let r = watched(workerFork), svc = createQueryService({ home, fork: r.fork, idleMs: 20_000 })
+  try {
+    svc.kick([recordId('20261105T080000Z', 400), recordId('20261105T100000Z', 2)])
+    await until(r, 'the upgrade target and the newest session folded', () => folded(home, U) && folded(home, N))
+  } finally { svc.stop() }
+  for (const f of fs.readdirSync(sessionDir(home, U))) if (/^open\./.test(f)) fs.unlinkSync(path.join(sessionDir(home, U), f)) // no tail: an upgrade target
+  const b = ballasted(foldLog(home, s))
+  const first = await parked(home, s, b, { idleMs: 60_000 })
+  try { await until(first.r, 'the earlier worker wrote its stop', () => stoppedOn(home, s.id)) } finally { first.svc.stop() }
+  // the upgrade target's fold log as a worker killed before its save leaves it once the next one cuts it back to its sidecar: empty, and
+  // no sidecar. Whether the workers above saved it varies by run; a log folded to its end gives an upgrade that only renders the tails,
+  // and the new worker's idle slices are not on it. (The stopped session, this case's subject, is left as the earlier worker wrote it.)
+  fs.rmSync(path.join(sessionDir(home, U), 'fold.idx'), { force: true })
+  fs.truncateSync(foldLog(home, { id: U }), 0)
+  const c = counted(foldLog(home, { id: U }))
+  r = watched(c.fork)
+  svc = createQueryService({ home, fork: r.fork, idleMs: 60_000 })
+  try {
+    svc.sweep()
+    await until(r, 'the upgrade scan ended and the upgrade began', () => c.opens() > 0) // the scan read the stop on disk before it
+    const a0 = r.again, tail = answer()
+    await svc.relay({ name: 'lane', params: { id: s.id, tail: 'main' }, res: tail })
+    assert.equal(tail.status, 200)
+    assert.equal(r.again, a0, 'answered in the request: no ask again for room')
+  } finally { svc.stop() }
+})
+
 test('3.5 #37: memory that never lets go: the waiting session gets its heap-no-room stop once, then is not tried nor the heap looked at for it, however many idle periods pass', { timeout: 120_000 }, async () => {
   const { home, sessions: [s] } = await homeOf('trocar-room-wait-', 'room-a')
   const b = ballasted(foldLog(home, s))
@@ -143,6 +189,28 @@ test('3.5 #37: memory that never lets go: the waiting session gets its heap-no-r
     assert.equal(b.tries(), tries, 'an idle period with no room does not try it')
     assert.equal(b.stops(), 1, 'the stop is written once')
     assert.equal(r.kids.length, 1, 'one worker throughout')
+  } finally { svc.stop() }
+})
+
+test('3.5 #37: after its heap-no-room stop, a lane read asked again for many of the waiting timer\'s turns, a kick and a follow do not try the session while there is no room', { timeout: 120_000 }, async () => {
+  const { home, sessions: [s] } = await homeOf('trocar-room-reask-', 'room-a')
+  const b = ballasted(foldLog(home, s))
+  const { r, svc } = await parked(home, s, b, { idleMs: 60_000 })
+  try {
+    await until(r, 'the stop was written', () => stoppedOn(home, s.id))
+    const tries = b.tries()
+    const tail = answer(), asked = svc.relay({ name: 'lane', params: { id: s.id, tail: 'main' }, res: tail }).catch(() => {})
+    const a0 = r.again
+    await until(r, 'the lane read was asked again through four of the waiting timer\'s turns', () => r.again >= a0 + Math.ceil((4 * ROOM_MS) / 250))
+    svc.kick([s.last])
+    svc.follow(s.id)
+    await until(r, 'more asks after the kick and the follow', () => r.again >= a0 + Math.ceil((5 * ROOM_MS) / 250))
+    assert.equal(tail.status, 0, 'no answer while there is no room: asked again (102)')
+    assert.equal(b.tries(), tries, 'not tried: the stop stands while there is no room')
+    assert.equal(b.stops(), 1, 'the stop is written once')
+    b.release()
+    await asked
+    assert.equal(tail.status, 200, 'room, and the read is answered')
   } finally { svc.stop() }
 })
 

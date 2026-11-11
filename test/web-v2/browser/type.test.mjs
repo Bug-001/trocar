@@ -3,7 +3,7 @@
 // opened row and popovers in replay-shots.test.mjs. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard } from './harness.mjs'
+import { probe, withBoard, settle } from './harness.mjs'
 import { typeFaults } from './type-inventory.mjs'
 
 const gate = await probe()
@@ -24,7 +24,7 @@ test('the overview has no type fault, and each planted violation is its own faul
     const { page } = b
     await page.evaluate(() => { location.hash = '#/overview' })
     await page.waitForSelector('.ovcard .ovitem, .ovcard .ovempty')
-    await page.waitForLoadState('networkidle')
+    await settle(page)
     const clean = await typeFaults(page)
     console.log(`# type inventory (overview): ${JSON.stringify(clean.inventory)}`)
     assert.deepEqual(clean.faults, [])

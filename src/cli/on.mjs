@@ -11,7 +11,7 @@ import path from 'node:path'
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
-import { fit, formatOnReceipt, formatPlan, planItems, onlyRefused, formatRefusal, markedRefusal } from './receipt.mjs'
+import { fit, formatOnReceipt, formatOnText, formatOnPlan, formatPlan, planItems, onlyRefused, formatRefusal, markedRefusal } from './receipt.mjs'
 import { colors, noColor } from './text.mjs'
 import { renderCompact, BRANCH_SEP } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -24,7 +24,7 @@ import { runModelOn } from './on-model.mjs'
 import { printJson } from './json.mjs'
 
 const USAGE = usageLine(commandNamed('on'))
-const FLAGS = new Set(['--dry-run', '--yes', '--json'])
+const FLAGS = new Set(['--dry-run', '--yes', '--details', '--json']) // --details: every fact the default text leaves out (1.6 §1.1 ④)
 const chainText = (t) => renderCompact(t).join(BRANCH_SEP)
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
@@ -76,7 +76,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
       if (pf && pf.ok === false) {
         const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [pf.doctor] }
         if (json) printJson(io, receipt)
-        else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
+        else io.out((flags.has('--details') ? formatOnReceipt : formatOnText)(receipt, { tense: 'past', home }))
         return EXIT.incomplete
       }
     }
@@ -92,7 +92,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
         const cdir = path.join(home, '.trocar', 'collector')
         try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'start', code: refusal.code, reason: refusal.reason, ...(source ? { source } : {}) }) } catch { /* the receipt is the record then (R11) */ }
         if (json) printJson(io, receipt)
-        else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
+        else io.out((flags.has('--details') ? formatOnReceipt : formatOnText)(receipt, { tense: 'past', home }))
         return EXIT.incomplete
       }
     }
@@ -108,7 +108,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     }
     const adoption = await prepareAdoption({ home, env, platform, deps, parts, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once trocar is on
     const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
-    const planText = (raw) => formatPlan(raw, { home, platform, colors: c }) // the route each harness takes is the receipt's line (§3.3), said once
+    const planText = (raw) => (flags.has('--details') ? formatPlan(raw, { home, platform, colors: c }) : formatOnPlan(raw, { home, platform })) // the route each harness takes is the receipt's line (§3.3), said once
     // The combined bundles' OS roots are the arch's (the flip checklist ②, 4.9 §4 末): the plan asks it through the one resolver (tls/roots.mjs bundleRoots), so the FIRST
     // install's bundles carry them — not only the daemon's next rebuild — and a read that fails stops the on before one file of the agents' is touched (D38); `deps.roots` overrides them.
     let { receipt, exit, plan } = await install.turnOn({
@@ -117,7 +117,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
       roots: deps.roots || null, unit, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (p) => say(planText(p)),
-      request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
+      request: deps.request, exec: deps.exec || null, identity: deps.identity || null, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
     // 1.6 §3.3: a run whose only shortfall is a harness refused for setup turned the others on: their proxies are recorded as on any done run
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
@@ -135,7 +135,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
       // D46: the harnesses THIS run newly wired (their one-time 说明 notes print; a harness wired before keeps its notes in doctor and --json — the receipt object is untouched, R5/R11)
       const fresh = plan ? new Set((plan.targets || []).filter((id) => !(plan.installed || []).includes(id))) : null
       const topology = adoption && !adoption.error && receipt.adopted ? adoption.chains(receipt.harnesses || []) : null // the route lines degrade from it (A.1)
-      io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home, platform, fresh, topology, colors: c }))
+      io.out(flags.has('--details') ? formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home, platform, fresh, topology, colors: c }) : formatOnText(receipt, { tense: receipt.dry_run ? 'future' : 'past', home, colors: c }))
     }
     return exit
   } catch (e) {

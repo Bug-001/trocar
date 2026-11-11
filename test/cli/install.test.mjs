@@ -9,7 +9,7 @@ import path from 'node:path'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { commandNamed } from '../../src/cli/commands.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { unservable } from '../helpers/model-daemon.mjs'
+import { UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
@@ -28,6 +28,8 @@ import { runOnCli } from '../../src/cli/on.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
 import { formatRefusal, markedRefusal } from '../../src/cli/receipt.mjs'
+import { unsaidIn } from '../../src/cli/words.mjs'
+import { identityRunner, lockWrites, LSTART, BOOTED } from '../helpers/lock-probe.mjs'
 
 function fakeIo({ tty = false } = {}) {
   const out = [], err = []
@@ -38,8 +40,8 @@ function fakeLaunchctl() {
   const calls = []
   return { calls, run: (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: '', stderr: '' } } }
 }
-async function cli(argv, { tty = false, over = {}, setup = null, world = null } = {}) {
-  const w = world || await modelWorld({ commands: ['codex'] })
+async function cli(argv, { tty = false, over = {}, setup = null, world = null, commands = ['codex'] } = {}) {
+  const w = world || await modelWorld({ commands })
   if (setup) setup(w)
   const io = fakeIo({ tty })
   const launchctl = fakeLaunchctl()
@@ -79,7 +81,6 @@ test('1.6 §1.6: no terminal and no --yes → the plan (cost and residual-risk l
   assert.equal(a.exit, 2)
   assert.match(a.io.text(), /^While installed, programs you run trust certificates issued by this/m) // the cost line (§3.2)
   assert.match(a.io.text(), /^Any program running as you can ask trocar to issue a trusted certificate/m) // the residual risk of a same-user root
-  assert.match(a.io.text(), /^  codex +reads your user trust store$/m, 'every agent found is a line of the plan')
   assert.match(a.io.text(), /Nothing was changed\. Read the plan above, then run it again with --yes/)
   assertEnglish(a.io.text(), 'the install plan')
   assert.equal(fs.existsSync(path.join(a.w.home, '.trocar', 'collector', 'install-manifest.json')), false)
@@ -160,12 +161,12 @@ test('4.11 P4 · darwin: a plist under trocar\'s label that no record lists is b
 // the documented order — install, then on — through the CLI: install writes the root, its carriers and
 // the inert autostart unit; on enables the unit, which starts the REAL daemon (test/helpers/model-daemon.mjs), asks it for the doors and writes the entries.
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: install then on through the CLI (temp HOME, stub backends) — on starts: exit 0, the doors' entries written`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
+  test(`${platform}: install then on through the CLI (temp HOME, stub backends) — on starts: exit 0, the doors' entries written`, { skip: UNSERVABLE[platform], timeout: 30_000 }, async () => {
     const { runOnCli } = await import('../../src/cli/on.mjs')
     const { liveUnit, withScratchCwd } = await import('../helpers/model-daemon.mjs')
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     const box = await liveUnit({ w, platform })
-    const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: box.unit }
+    const deps = { getuid: () => 501, exec: recordingExec().run, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: box.unit }
     await withScratchCwd(platform, async () => { // install already starts the daemon (enable --now), so it runs in the scratch cwd too
       try {
         const io = fakeIo()
@@ -298,7 +299,7 @@ test('an install that waited behind another reads the key again under the lock: 
   const w = await modelWorld({ commands: ['codex'] })
   const run = async (custody) => {
     const io = fakeIo()
-    const deps = { getuid: () => 501, backends: { custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+    const deps = { getuid: () => 501, exec: recordingExec().run, backends: { custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
     return { exit: await runInstallCli(['--yes', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), io }
   }
   let a = null
@@ -319,7 +320,7 @@ test('an install that waited behind another reads the key again under the lock: 
 test('the install receipt prints each (agent, carrier, file) fact once, in words — never one row per form, never a form or carrier id', async () => {
   const w = await modelWorld({ os: 'darwin', commands: ['claude', 'codex', 'dsh', 'kimi', 'opencode', 'hermes'] })
   const io = fakeIo()
-  const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+  const deps = { getuid: () => 501, exec: recordingExec().run, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
   assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 0, io.text())
   const text = io.text().slice(io.text().indexOf('Installed.')) // the receipt alone: the plan above it is a screen of its own, printed before anything was written
   const rows = text.split('\n').filter((l) => /^ {2}\S/.test(l))
@@ -355,7 +356,7 @@ test('4.4 §Plan 「端口」 · V67: install records the board\'s port in ingre
   assert.ok(boardPort >= BOARD_RANGE[0] && boardPort <= BOARD_RANGE[1], String(boardPort))
   await new Promise((r) => setTimeout(r, 20))
   const io2 = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], { io: io2, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } }), 0, io2.text())
+  assert.equal(await runInstallCli(['--yes'], { io: io2, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501, exec: recordingExec().run, unit: null, backends: { custody: w.custody, rootStore: w.store, dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } }), 0, io2.text())
   assert.deepEqual([fs.readFileSync(file), fs.statSync(file).mtimeMs], [bytes, mtime])
 })
 
@@ -503,6 +504,17 @@ for (const platform of ['darwin', 'win32']) {
   })
 }
 
+// 4.11 P5: with no agent here that trocar sets up on this system, `trocar on` has nothing to capture, so the receipt does not name it as the next step
+test('install with no agent trocar sets up here: exit 0, and the receipt does not send the user to trocar on', async () => {
+  const some = await cli(['--yes'])
+  assert.equal(some.exit, 0, some.io.text())
+  assert.ok(some.io.text().includes('trocar on'), 'with an agent here, on is the next step')
+  const none = await cli(['--yes'], { commands: [], setup: (w) => { w.harnesses.length = 0 } }) // hermetic: no descriptor, so nothing of this machine's /Applications is an agent here
+  assert.equal(none.exit, 0, none.io.text())
+  assert.deepEqual(readManifest(none.w.dir).install.harnesses, [], 'no agent here')
+  assert.ok(!none.io.text().includes('trocar on'), none.io.text())
+})
+
 // 4.11 P4 (Windows): the scheduled task under trocar's name is no file under HOME — the run asks the unit what is registered (registeredBytes) and
 // backs it up before it replaces it, so the plan asks the same seam and says where the old bytes go; with nothing registered it says no replacement
 test('4.11 P4 · win32: the plan asks what is registered under trocar\'s task name and says where its bytes go', async () => {
@@ -614,7 +626,7 @@ for (const os of ['darwin', 'win32']) {
     const marked = [...new Set(JSON.parse(fs.readFileSync(manifest, 'utf8')).entries.filter((e) => e.kind === 'text').map((e) => e.path))] // trocar's text in the user's files
     assert.ok(marked.includes(w.env.NODE_EXTRA_CA_CERTS) && marked.length >= 2, JSON.stringify(marked))
     fs.rmSync(manifest); w.store.held.clear() // the record lost, and the root taken out by hand: only the marked text is left
-    const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+    const deps = { getuid: () => 501, exec: recordingExec().run, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
     const io = fakeIo()
     assert.equal(await runInstallCli(['--yes', '--json'], { io, env: w.env, home: w.home, platform: os, deps }), 1, io.text())
     const doc = io.json()
@@ -727,4 +739,37 @@ test('install plan · win32: the autostart row names the task and the Run value 
   assert.equal(exit, 0, io.text())
   const row = JSON.parse(io.text()).planned.find((p) => p.what === 'autostart')
   assert.ok(row && row.detail.includes(RUN_KEY.name), JSON.stringify(row))
+})
+
+// 1.6 §1.1 ④ · §3.2: the default receipt says no unsaid word; its rows — the fingerprint, each carrier and its file, the login entry — are --details'
+test('§1.1 ④: install\'s default receipt says no unsaid word, and --details holds the fingerprint, each carrier\'s file and the login entry', async () => {
+  const short = await cli(['--yes'])
+  assert.equal(short.exit, 0, short.io.text())
+  const plan = (await cli(['--dry-run'])).io.text().split('\n').filter(Boolean).length // the plan above it is the plan's own business (§1.4)
+  const receipt = short.io.text().split('\n').filter(Boolean).slice(plan).join('\n')
+  assert.deepEqual(unsaidIn(receipt), [], receipt)
+  const long = await cli(['--yes', '--details']), json = await cli(['--yes', '--json'], { world: long.w }) // the same machine: the same root and files
+  const r = json.io.json(), text = long.io.text().replace(/\s+/g, ' '), tilde = (p) => p.replace(long.w.home, '~')
+  const facts = [r.fp256, ...r.carriers.filter((c) => c.path).map((c) => tilde(c.path)), tilde(r.autostart.entry)]
+  for (const f of facts) assert.ok(text.includes(f), `--details says ${f}:\n${long.io.text()}`)
+})
+
+// 1.6 §1.4 · §3.2: the default plan lists every file of yours it changes by full path — the login item too — and says trocar's own in one sentence
+test('§1.4: install\'s default plan names each file of yours by full path, none of ~/.trocar, and no unsaid word; --details names every planned row', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  const plan = (await cli(['--dry-run'], { world: w })).io.text(), details = (await cli(['--dry-run', '--details'], { world: w })).io.text()
+  const r = (await cli(['--dry-run', '--json'], { world: w })).io.json()
+  const files = r.planned.flatMap((p) => p.paths || []).filter((p) => !p.startsWith(path.join(w.home, '.trocar')))
+  for (const f of [...files, r.planned.find((p) => p.what === 'autostart') && path.join(w.home, 'Library', 'LaunchAgents')]) if (f) assert.ok(plan.includes(f.replace(w.home, '~')), `${f}:\n${plan}`)
+  assert.doesNotMatch(plan, /~\/\.trocar\//, "trocar's own files are one sentence")
+  assert.deepEqual(unsaidIn(plan), [], plan)
+  for (const p of r.planned) assert.ok(details.replace(/\s+/g, ' ').includes(p.detail.replace(w.home, '~').replace(/\s+/g, ' ').slice(0, 30)), `--details has the row ${p.what}:\n${details}`)
+})
+
+test('R12 (darwin): install asks op.lock\'s question about itself through the runner it was given — ps and sysctl — and the lock records that start time', async () => {
+  const launchctl = fakeLaunchctl(), os = identityRunner(launchctl.run), lw = lockWrites()
+  const { exit, io } = await cli(['--yes', '--json'], { over: { exec: os.run, launchctl, fs: lw.fs } })
+  assert.equal(exit, 0, io.text())
+  assert.ok(lw.held.length > 0)
+  for (const h of lw.held) assert.deepEqual([h.pid, h.start_time, h.boot_id], [process.pid, LSTART, String(BOOTED / 1000)])
 })

@@ -21,7 +21,8 @@ type PriceRow = { id: string, input: unknown, output: unknown, write: unknown, r
 type Pricing = { source?: string, models?: unknown }
 type Overview = { as_of?: string, usage?: { rows?: unknown } }
 const priceRows = priceRowsJs as (doc: unknown) => PriceRow[] | null
-const unpricedModels = unpricedJs as (rows: unknown[], table: unknown) => Array<{ model: string | null, sessions: number }>
+type UnpricedList = Array<{ model: string | null, sessions: number }>
+const unpricedModels = unpricedJs as (rows: unknown[], table: unknown) => UnpricedList | null
 const failOf = failOfJs as (what: string, r: unknown) => { line: string, pairs: Array<[string, string]> }
 
 const TECH: Array<[string, string]> = [[W.COL_KEY, W.TECH_MATCH], [W.COL_WRITE, W.TECH_WRITE_ONE], ['price table', W.TECH_PRICING_PATH]]
@@ -45,9 +46,7 @@ function PriceTable({ rows }: { rows: PriceRow[] }) {
   )
 }
 
-function Unpriced({ overview, rows, source }: { overview: Overview, rows: PriceRow[] | null, source: string | undefined }) {
-  const table = rows && Object.fromEntries(rows.map((r) => [r.id, [r.input, r.output, r.write, r.read]]))
-  const un = unpricedModels(overview.usage!.rows as unknown[], table)
+function Unpriced({ overview, un, source }: { overview: Overview, un: UnpricedList, source: string | undefined }) {
   return (
     <div className="scard"><h2>{W.CARD_UNPRICED}</h2>
       {overview.as_of ? <p className="cap">{`${W.UNPRICED_AS_OF} ${fmtWhen(overview.as_of)}`}</p> : null}
@@ -79,6 +78,8 @@ export default function PricesScreen(_props: ScreenProps) {
   const fail = p && !p.ok ? failOf(W.PRICE_TABLE, p) : null
   const rows = priceRows(pricing)
   const overview = o && o.ok ? (o.data as Overview | null) : null
+  const table = rows && Object.fromEntries(rows.map((r) => [r.id, [r.input, r.output, r.write, r.read]]))
+  const un = overview && overview.usage && Array.isArray(overview.usage.rows) ? unpricedModels(overview.usage.rows, table) : null
   return (
     <div className="page">
       <PageHead name={SCREEN_NAME['settings-prices']} readAt={readAt} />
@@ -94,8 +95,7 @@ export default function PricesScreen(_props: ScreenProps) {
           </> : p ? (rows ? <PriceTable rows={rows} /> : <p className="err">{W.PRICE_BAD_SHAPE}</p>) : null}
           <TechDetails pairs={techOf(TECH)} copy={flatText(TECH)} />
         </div>
-        {overview && overview.usage && Array.isArray(overview.usage.rows)
-          ? <Unpriced overview={overview} rows={rows} source={pricing ? pricing.source : undefined} /> : null}
+        {un ? <Unpriced overview={overview!} un={un} source={pricing!.source} /> : null}
       </div>
     </div>
   )

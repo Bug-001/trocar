@@ -14,6 +14,7 @@ import { fakeIo, recordingExec } from './fixtures/on-ctx.mjs'
 import { reply, asDaemon, SOCK } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 /** A copy of trocar's shape: package.json with `version`, and `files` under it. */
 function tree(files, version = '1.2.3') {
@@ -73,17 +74,17 @@ const statusOf = async (s, code, argv) => {
   await runStatusCli(argv, { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { request: asDaemon(reply(code === undefined ? {} : { code })), socketPath: SOCK, procs: async () => [], lingerRead: () => ({ state: true }), spawn: absentSpawn, exec: recordingExec().run } })
   return io.stdoutText()
 }
-test('C.3 daemon.runs_this_code and the daemon line: the collector on this code, on other code (said, with trocar install), or saying no code', async () => {
+test('C.3 daemon.runs_this_code and the daemon line: the collector on this code, on other code (said, with trocar install), or saying no code', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const doc = async (code) => JSON.parse(await statusOf(s, code, ['--json'])).daemon
   assert.deepEqual([(await doc(codeId())).runs_this_code, (await doc('9.9.9+fffffff')).runs_this_code, (await doc(undefined)).runs_this_code], [true, false, null])
-  const other = await statusOf(s, '9.9.9+fffffff', [])
+  const other = await statusOf(s, '9.9.9+fffffff', ['--details']) // the codes are facts of --details (1.6 §1.1 ④)
   assert.ok(other.includes('9.9.9+fffffff') && other.includes(codeId()), `both codes named:\n${other}`)
   assert.match(other, /trocar install/, 'with the way out')
   assert.ok(!(await statusOf(s, codeId(), [])).includes(codeId()), 'on this code: nothing said about it')
 })
 
-test('doctor: a collector on other code is a problem, daemon-other-code, fixed by trocar install; on this code it is not there', async () => {
+test('doctor: a collector on other code is a problem, daemon-other-code, fixed by trocar install; on this code it is not there', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const run = async (code) => {
     const io = fakeIo()

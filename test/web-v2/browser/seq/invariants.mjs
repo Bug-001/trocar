@@ -42,9 +42,9 @@ export const LIMITS = Object.freeze({
 
 const STACK = [/^\s*at \S.*:\d+:\d+\)?\s*$/m, /FATAL ERROR/, /<--- Last few GCs --->/, /\b(?:node|v8)::\w/]
 const CJK = /[぀-ヿ㐀-鿿豈-﫿가-힯]/
-// where the board draws captured bytes, not its own words: verbatim bodies (<pre>, blocks.mjs), block rows (tag + preview) and
-// outline entries. A stack the session itself holds (a tool_result's trace) is content; I-stack reads only what is left.
-const CAPTURED = 'pre, .cblk, .navsub'
+// where the board draws captured bytes, not its own words: verbatim bodies (<pre>, blocks.mjs), block rows (tag + preview), cells in
+// either view (the drawer's too) and outline entries. A stack the session itself holds (a tool_result's trace) is content; I-stack reads only what is left.
+const CAPTURED = 'pre, .cblk, .cell, .navsub'
 
 /** What tells one bug from another of the same `<id>:<screen>`: the detail's first item with every number (and hex run holding a
  *  digit) as `#`, whitespace folded. Saved with an open regression; a violation is known only when its sig AND this match. */
@@ -151,7 +151,7 @@ export function rateFaults(log, { actions = [], hidden = [] } = {}) {
     if (hiddenAt(e.start)) out.push(`${name} read at ${e.start} while hidden`)
     if (loadExempt.has(e)) { last.delete(key); continue }
     // an open tail read again in its own poll round (no head read since) is the round's whole read after a Range answer that was not
-    // the file's lines or a 416 (4.4 §答案文件, replay.mjs readTail): once per round
+    // the file's lines, a 206 not starting at the held line end, or a 416 (4.4 §答案文件, replay.mjs readTail): once per round
     if (p && /^d\/open/.test(name) && since <= p.start && !p.chained) { last.set(key, { ...p, chained: true }); continue }
     // a tail starts once its round's head has answered, and the redraw before it can queue: the rounds are what is paced, so a tail is judged by its round
     const tail = /^d\/open/.test(name) && since > -Infinity

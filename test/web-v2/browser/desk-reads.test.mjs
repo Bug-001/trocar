@@ -5,7 +5,7 @@
 // keeps the drawn window (2.3 §读失败); the anchor lane's ledger chain (3.5 §手里车道的页). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld } from './harness.mjs'
+import { probe, withBoard, serveWorld, settle } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { QUERIES } from '../../../src/query/named/index.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
@@ -41,10 +41,10 @@ test('2.3 #25: scrubbing the desk reads nothing before a 100 ms rest, keeps ≤ 
     await page.waitForFunction(() => !document.querySelector('#ctxwin [aria-busy="true"]'))
     for (const t0 = Date.now(); !historyIn && Date.now() - t0 < 15000;) await page.waitForTimeout(50) // the drag runs over a history all in hand
     assert.ok(files >= 4 && historyIn, `every pack came in (${got.size} of ${files})`)
-    await page.waitForLoadState('networkidle')
+    await settle(page)
     // from here the page's time moves only when the test moves it
     await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
-    await page.waitForLoadState('networkidle')
+    await settle(page)
     const n = await page.evaluate(() => window.__stepNo().m)
     assert.ok(n >= 6, `the world's main lane has steps to scrub (${n})`)
 
@@ -258,6 +258,29 @@ test('3.5 §手里车道的页: the anchor lane reads its ledger chain to the en
     assert.equal(exact, true, 'the explorer\'s counts became exact')
     assert.equal(await page.evaluate(() => window.__busyAgain), 0, 'no count went back to the busy box')
     assert.ok(most <= 1, `${most} lane reads were in flight at once`)
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
+// 4.4 live-poll: an open session with nothing new is read round after round; each round's tail read answers 206 (no error status, so
+// the browser logs no error: a 416 is logged as "Failed to load resource" on every round) and no tail is read whole again
+test('4.4 live-poll: the tail reads of an open session with nothing new answer 206 without a whole re-read, and log no console error', { skip }, async () => {
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  try {
+    const { page } = b, w = world(11, { calls: 30 }), logged = []
+    page.on('console', (m) => { if (m.type() === 'error') logged.push(m.text()) })
+    await serveWorld(page, w)
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
+    const tails = () => b.requests.filter((r) => r.url.startsWith('/api/d/open.'))
+    for (const t0 = Date.now(); tails().filter((r) => r.range != null).length < 6 && Date.now() - t0 < 20000;) await page.waitForTimeout(100)
+    const ranged = tails().filter((r) => r.range != null)
+    assert.ok(ranged.length >= 6, `${ranged.length} tail reads after the first ones`)
+    assert.deepEqual(ranged.filter((r) => r.status !== 206).map((r) => `${r.url} ${r.range} ${r.status}`), [], 'nothing new: a 206, no error status')
+    // and no read of a whole tail after its first: the held bytes are the file's prefix, round after round
+    const firstWhole = new Set()
+    assert.deepEqual(tails().filter((r) => r.range == null).filter((r) => { const k = r.url.split('?')[0]; return firstWhole.has(k) || !firstWhole.add(k) }).map((r) => r.url), [])
+    assert.deepEqual(logged, [])
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })

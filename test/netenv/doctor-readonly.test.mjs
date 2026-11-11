@@ -13,6 +13,7 @@ import { installedViaCli, snapshot } from '../cli/fixtures/dispatch-ctx.mjs'
 import { changedFiles } from '../cli/fixtures/on-ctx.mjs'
 import { driftCheck, newDriftState } from '../../src/netenv/adopt.mjs'
 import { claudeProc } from '../cli/fixtures/status-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const descs = await loadHarnesses()
@@ -43,7 +44,7 @@ async function world({ proxy = 'http://alice:pw@127.0.0.1:7897' } = {}) {
 }
 // `doctor` has no --source any more (1.6 §2): it reads the default location inside the sandbox HOME.
 
-test('V50 status and doctor only read: they write nothing at all, run only read-only queries, open no connection of their own — and `bpftool` / `netsh` are printed for the user, never run', async () => {
+test('V50 status and doctor only read: they write nothing at all, run only read-only queries, open no connection of their own — and `bpftool` / `netsh` are printed for the user, never run', { skip: POSIX_WORLD }, async () => {
   const w = await world()
   try {
     const before = snapshot(w.s.home)
@@ -58,7 +59,7 @@ test('V50 status and doctor only read: they write nothing at all, run only read-
     assert.deepEqual(connects, [], 'zero connections of their own: no VPN controller is asked, nothing goes online')
     // printed for the user, never run
     w.deps.netFactsDeps = async () => ({ harnesses: descs, archFacts: async (ctx) => ({ ...(await linuxNetFacts(ctx)), otherRedirector: true }) })
-    const out = (await w.s.run(['doctor'], { deps: w.deps })).io.stdoutText()
+    const out = (await w.s.run(['doctor', '--details'], { deps: w.deps })).io.stdoutText() // a note is --details'
     assert.ok(out.includes('sudo bpftool cgroup tree /sys/fs/cgroup'), 'doctor prints the command for the user') // the command is the fact; its label is wording
     assert.ok(!w.calls.some((c) => /bpftool|netsh|sudo/.test(c)), 'and never runs it')
     assert.ok(!(w.s.sys.exec.calls.some((c) => /bpftool|netsh|sudo/.test(c))))
@@ -105,7 +106,7 @@ async function everything(w) {
   return { printed, written }
 }
 
-test('V52 nothing secret in anything they print or write: not a proxy credential (the agent\'s own, in its settings file and in its process\'s environment) — in `status` (text and --json), `doctor` (text and --json), netenv.json and the events of flows/', async () => {
+test('V52 nothing secret in anything they print or write: not a proxy credential (the agent\'s own, in its settings file and in its process\'s environment) — in `status` (text and --json), `doctor` (text and --json), netenv.json and the events of flows/', { skip: POSIX_WORLD }, async () => {
   const w = await world()
   try {
     const { printed, written } = await everything(w)
@@ -118,7 +119,7 @@ test('V52 nothing secret in anything they print or write: not a proxy credential
 // A password may hold an `@` the URL does not escape (`http://carol:p@ssw0rd@host`): the credentials end at the LAST `@` of the authority, as every URL parser reads it, so the rest of the password is not a host.
 // The same password escaped (`%40`) must be hidden too. The assertion runs over everything: the text, the JSON, netenv.json, the events a drift writes (`from` / `to`) and the lines of flows/.
 for (const [label, proxy, secrets] of [['an unescaped @', 'http://carol:p@ssw0rd@127.0.0.1:7897', ['carol', 'ssw0rd', 'p@ss']], ['an escaped %40', 'http://carol:p%40ssw0rd@127.0.0.1:7897', ['carol', 'ssw0rd', 'p%40']]]) {
-  test(`V52 a password with ${label} is hidden whole: in status, doctor, \`on\`, netenv.json, flows/ and the events of a drift (from / to)`, async () => {
+  test(`V52 a password with ${label} is hidden whole: in status, doctor, \`on\`, netenv.json, flows/ and the events of a drift (from / to)`, { skip: POSIX_WORLD }, async () => {
     const w = await world({ proxy })
     try {
       const { printed, written } = await everything(w)

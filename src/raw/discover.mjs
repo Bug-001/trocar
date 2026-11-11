@@ -15,6 +15,7 @@ import path from 'node:path';
 import { readIndex } from './format.mjs';
 import { isCaptureFile, skipReason } from '../paths.mjs';
 import { parseSegment } from '../collector/core/record/segments.mjs';
+import { BIG, fileKey, inoHint } from '../file-id.mjs';
 
 // One sealed name: the raw layer's `<segment>.sealed` (D60 ①②, the only shape the daemon writes). The older
 // `<stream>.<NNNN>.sealed` of the per-shard sealer is an older location — neither read nor touched (D60 ②).
@@ -55,14 +56,14 @@ function unreadCapture(name) {
 const tableCache = new Map();
 function sealedSources(file, { fs = nodeFs } = {}) {
   let st;
-  try { st = fs.statSync(file); } catch { return null; }
-  const k = `${st.size}:${st.mtimeMs}:${st.ino}`;
+  try { st = fs.statSync(file, BIG); } catch { return null; }
+  const k = fileKey(st);
   const hit = tableCache.get(file);
   if (hit && hit.k === k) return hit.v;
   let v = null, fd;
   try {
     fd = fs.openSync(file, 'r');
-    const { tables } = readIndex(fs, fd, st.size, path.basename(file));
+    const { tables } = readIndex(fs, fd, Number(st.size), path.basename(file));
     v = tables.shards.map((s) => ({ ...s, abs: path.resolve(path.dirname(file), s.path || s.name) }));
   } catch { v = null; } finally { if (fd != null) try { fs.closeSync(fd); } catch {} }
   tableCache.set(file, { k, v });
@@ -131,7 +132,7 @@ function resolveCoexistence(all, { fs = nodeFs } = {}) {
       const o = originals.get(s.abs);
       let st; try { st = o && fs.statSync(o); } catch { return null; }
       if (!st || st.size !== s.length) return null;
-      return (st.ino === s.ino ? st.mtimeMs === s.mtimeMs : Math.abs(st.mtimeMs - s.mtimeMs) < 1000) ? o : null;
+      return (inoHint(st) === inoHint(s) ? st.mtimeMs === s.mtimeMs : Math.abs(st.mtimeMs - s.mtimeMs) < 1000) ? o : null;
     });
     if (present.length && present.every(Boolean)) { drop.add(f); superseded.push({ sealed: f, original: present[0] }); }
   }

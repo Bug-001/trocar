@@ -32,7 +32,7 @@ import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
 
-export const PROJ_V = 20; // 20: the desk line's 14 (Readable reads the parsed block) joined; 19: the desk line's projection (its 13: the background kinds and shell reads) joined; 18: the reads line's projection (its 14) joined with the batch's (its 17); 17: Codex's additional_tools input item is tool definitions; 16: a security review's flagged is what the reply says; 15: a reply the agent closed after its own success terminal is read as that reply (3.5 §访问模式 ②)
+export const PROJ_V = 21; // 21: Gemini API calls are read (a dissector, 3.1); 20: the desk line's 14 (Readable reads the parsed block) joined; 19: the desk line's projection (its 13: the background kinds and shell reads) joined; 18: the reads line's projection (its 14) joined with the batch's (its 17); 17: Codex's additional_tools input item is tool definitions; 16: a security review's flagged is what the reply says; 15: a reply the agent closed after its own success terminal is read as that reply (3.5 §访问模式 ②)
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by what they weigh in the heap (a row grows with its context: a count let a long
@@ -62,7 +62,7 @@ export const projectionFile = (home, sessionKey) => path.join(sessionDir(home, s
  *  `<k>.fold.idx`) renamed into `ctx/<k>/` (4.3 §4 迁移): rename only, never a copy; offsets do not change, so the sidecars
  *  still hold. The directory may be there already with answer files only (the start-up sweep's tier-0 head comes before any read);
  *  one that holds a projection or fold log of its own makes the flat files an older copy, and they are deleted (derived, D69②). */
-export function migrateFlat({ home = trocarHome(), fs = nodeFs, key }) {
+function migrateFlat({ home = trocarHome(), fs = nodeFs, key }) {
   const flat = path.join(ctxDir(home), hashOf(key)), dir = sessionDir(home, key);
   if (!fs.existsSync(`${flat}.ndjson`)) return;
   const own = fs.existsSync(dir) && fs.readdirSync(dir).some((n) => /^(?:extract|fold)\./.test(n));
@@ -191,13 +191,22 @@ export function lru(max) {
   };
 }
 
+/** unsaved(home, e) → the one line said when a session read's files could not be saved under index/ (4.3 §4 盘满; D38): what went
+ *  wrong and, for a cause with one, the step that fixes it (`Next:`); any other error is said as the system or the code gave it.
+ *  The same line is the episode's record and the head's stop. */
+export function unsaved(home, e, platform = process.platform) {
+  const dir = indexDir(home), code = e && e.code, said = String((e && e.message) || e).split('\n')[0];
+  const owned = platform === 'win32' ? `give your user full control of "${dir}"` : `sudo chown -R "$(id -un)" "${dir}" && chmod -R u+rwX "${dir}"`;
+  const fix = { ENOSPC: ['the disk is full', `free space on the disk that holds "${dir}"`], EDQUOT: ['your disk quota is used up', `free space within your quota on the disk that holds "${dir}"`],
+    EACCES: ['your user may not write there', owned] }[code]; // EPERM has no one fix: a file another program holds (Windows), a privacy block or a locked flag (macOS)
+  return fix ? `trocar's files in ${dir} could not be saved: ${fix[0]}. Next: ${fix[1]}.` : `trocar's files in ${dir} could not be saved: ${said}`;
+}
 /** openProjection({home, fs, key, write, errors}) → the session's store (see the head of this file). `errors`: where notes go
  *  when an append names no other sink (an append of a later request passes that request's `errors`). */
 export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = true, errors = [] } = {}) {
   if (write) try { migrateFlat({ home, fs, key }); } catch { /* the flat files stay where they are; the store is extracted again */ }
   let sink = errors; // the errors of the request whose append is running
-  const lines = lineFile({ fs, base: path.join(sessionDir(home, key), 'extract'), write, onFail: (e) => sink.push({ where: 'projection', code: 'projection-write-failed', level: 'note',
-    reason: `The context projection could not be written (${e.code || e.message}); this session is kept in memory and extracted again next time.` }) });
+  const lines = lineFile({ fs, base: path.join(sessionDir(home, key), 'extract'), write, onFail: (e) => sink.push({ where: 'projection', code: 'projection-write-failed', level: 'note', reason: unsaved(home, e) }) });
   const at = lineIndex(); // bid → its line
   const rowAt = lineIndex(); // rid → its line
   const rowCache = lru(2 * ROW_HEAP); // rid → row, weighed in heap

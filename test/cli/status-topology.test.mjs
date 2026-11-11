@@ -9,6 +9,7 @@ import { validateReceipt, validateTopology, validateFinding } from '../../src/cl
 import { renderRoutes } from '../../src/netenv/topology-text.mjs'
 import { installedViaCli, snapshot } from './fixtures/dispatch-ctx.mjs'
 import { claudeProc } from './fixtures/status-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const ENGINE = { status: { engine: { port: 47123 } } } // what the daemon's /status says of its engine
 const SS_MIHOMO = 'LISTEN 0 4096 127.0.0.1:7897 0.0.0.0:* users:(("verge-mihomo",pid=11800,fd=7))'
@@ -19,7 +20,7 @@ const status = async (s, argv = [], deps = {}) => {
   return { ...r, text: r.io.stdoutText(), json: () => r.io.json() }
 }
 
-test('V43: the one-screen summary (§3.5) draws no chain — the paths live in `status <harness>` and in the document, so the summary stays one screen', async () => {
+test('V43: the one-screen summary (§3.5) draws no chain — the paths live in `status <harness>` and in the document, so the summary stays one screen', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const text = (await status(s)).text
   assert.ok(!/ -> /.test(text), text)
@@ -27,7 +28,7 @@ test('V43: the one-screen summary (§3.5) draws no chain — the paths live in `
   assert.match((await status(s, ['claude-code'])).text, /^ {2}Routes$/m, 'the named harness draws them')
 })
 
-test('V43: `--json` carries `topology` — one HarnessTopology per harness in the table, each valid, with the verdict the table gave; the receipt validates and stdout is the one document', async () => {
+test('V43: `--json` carries `topology` — one HarnessTopology per harness in the table, each valid, with the verdict the table gave; the receipt validates and stdout is the one document', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli()
   const r = await status(s, ['--json'], { procs: async () => [claudeProc(4121, Date.parse('2099-01-01T00:00:00Z'))] })
   const doc = r.json()
@@ -38,7 +39,7 @@ test('V43: `--json` carries `topology` — one HarnessTopology per harness in th
   assert.equal(r.io.stderrText(), '')
 })
 
-test('V43: every hop name in the text is some node\'s name — the `Routes` rows of `status <harness>` are made of the topology and of nothing else', async () => {
+test('V43: every hop name in the text is some node\'s name — the `Routes` rows of `status <harness>` are made of the topology and of nothing else', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli()
   const doc = (await status(s, ['--json'])).json()
   const ids = Object.keys(doc.topology)
@@ -52,7 +53,7 @@ test('V43: every hop name in the text is some node\'s name — the `Routes` rows
   }
 })
 
-test('§3.5: `status` writes nothing — no copy of the topology of its own (the board\'s netenv.json is the daemon\'s to write); the document carries the topology instead', async () => {
+test('§3.5: `status` writes nothing — no copy of the topology of its own (the board\'s netenv.json is the daemon\'s to write); the document carries the topology instead', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli()
   const doc = (await status(s, ['--json'])).json()
   assert.deepEqual(validateTopology(doc.topology), [])
@@ -61,7 +62,7 @@ test('§3.5: `status` writes nothing — no copy of the topology of its own (the
   assert.ok(!fs.existsSync(path.join(s.home, '.trocar', 'netenv.json')))
 })
 
-test('V44: `trocar net` and `trocar proxy codex http://x` are not commands: exit 2 and the HOME byte for byte what it was — the topology is a view of `status`, not a verb', async () => {
+test('V44: `trocar net` and `trocar proxy codex http://x` are not commands: exit 2 and the HOME byte for byte what it was — the topology is a view of `status`, not a verb', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli()
   const before = snapshot(s.home)
   for (const argv of [['net'], ['proxy', 'codex', 'http://x']]) {
@@ -73,7 +74,7 @@ test('V44: `trocar net` and `trocar proxy codex http://x` are not commands: exit
   assert.deepEqual(snapshot(s.home), before)
 })
 
-test('V44: `status codex` draws the detail — the path a hop to a line, `without trocar`, how to change the proxy — and `status` without a name does not', async () => {
+test('V44: `status codex` draws the detail — the path a hop to a line, `without trocar`, how to change the proxy — and `status` without a name does not', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const one = (await status(s, ['codex'])).text
   assert.match(one, /^codex: on, /m)
@@ -86,7 +87,7 @@ test('V44: `status codex` draws the detail — the path a hop to a line, `withou
   assert.doesNotMatch(one, /^ {4}(new processes|without trocar)[^\n]*claude-code/m, 'only the named harness is drawn in detail')
 })
 
-test('§9.2: the document carries when the paths were read (`at`), and the text prints no probe age of its own', async () => {
+test('§9.2: the document carries when the paths were read (`at`), and the text prints no probe age of its own', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   let t = Date.parse('2026-10-07T10:00:00Z')
   const r = await status(s, ['codex'], { ms: () => (t += 1000) }) // a second passes at every read of the clock: the paths are drawn before the text is
@@ -95,7 +96,7 @@ test('§9.2: the document carries when the paths were read (`at`), and the text 
   assert.match(doc.topology.codex.at, /^2026-10-07T10:00:/, doc.topology.codex.at)
 })
 
-test('V44/D49: with trocar on the path the detail says the one line about a VPN / proxy\'s per-process rules, product or none — and only there: not in `status`, not in `on --dry-run`', async () => {
+test('V44/D49: with trocar on the path the detail says the one line about a VPN / proxy\'s per-process rules, product or none — and only there: not in `status`, not in `on --dry-run`', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli()
   const line = 'If your VPN or proxy routes by process, it sees trocar, not codex.'
   const deps = { exec: withMihomo(s) }
@@ -106,7 +107,7 @@ test('V44/D49: with trocar on the path the detail says the one line about a VPN 
   assert.ok(!dry.io.text().includes('it sees trocar'), '`on`\'s plan does not print it')
 })
 
-test('a failure to build the topology is said in the text and in --json (`topology_error`), and changes neither the table nor the exit code; nothing is drawn in its place', async () => {
+test('a failure to build the topology is said in the text and in --json (`topology_error`), and changes neither the table nor the exit code; nothing is drawn in its place', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const plain = await status(s, ['codex'])
   const broken = await status(s, ['codex'], { netFactsDeps: async () => { throw new Error('boom: no facts') } })
@@ -121,7 +122,7 @@ test('a failure to build the topology is said in the text and in --json (`topolo
   assert.deepEqual(capturedOf(doc), capturedOf((await status(s, ['--json'])).json()))
 })
 
-test('V42: one hop that cannot be read changes no exit code and no verdict — it is said in the row (`unknown: owner-unreadable`, then `?`) and in --json, and `captured` stays what the rest of the facts say', async () => {
+test('V42: one hop that cannot be read changes no exit code and no verdict — it is said in the row (`unknown: owner-unreadable`, then `?`) and in --json, and `captured` stays what the rest of the facts say', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const before = await status(s)
   assert.equal(before.exit, 0)
@@ -139,7 +140,7 @@ test('V42: one hop that cannot be read changes no exit code and no verdict — i
   assert.equal((await status(s, ['--json'], { exec: nobody })).exit, before.exit)
 })
 
-test('1.6 §9.6: when the findings cannot be made `doctor --json` has `findings: null` and `findings_error` (the topology\'s reason), the text says unknown and not "no problems", and nothing else changes; when they were read and there are none, `findings` is []', async () => {
+test('1.6 §9.6: when the findings cannot be made `doctor --json` has `findings: null` and `findings_error` (the topology\'s reason), the text says unknown and not "no problems", and nothing else changes; when they were read and there are none, `findings` is []', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const none = path.join(s.home, 'none')
   const fine = await s.run(['doctor', '--json'], { env: { ...s.ctx().env, TROCAR_SOURCE: none } })
@@ -157,7 +158,7 @@ test('1.6 §9.6: when the findings cannot be made `doctor --json` has `findings:
   assert.doesNotMatch(text, /no problems/)
 })
 
-test('§3.5 / §3.7: neither `status` nor `doctor` writes a file — no rename of any kind in the HOME', async () => {
+test('§3.5 / §3.7: neither `status` nor `doctor` writes a file — no rename of any kind in the HOME', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const renamed = []
   const spy = new Proxy(fs, { get: (o, k) => (k === 'renameSync' ? (a, b) => { renamed.push(b); return o.renameSync(a, b) } : o[k]) })
@@ -166,7 +167,7 @@ test('§3.5 / §3.7: neither `status` nor `doctor` writes a file — no rename o
   assert.deepEqual(renamed, [])
 })
 
-test('V44: `doctor codex --json` gives `findings` and every one of them is codex\'s; `doctor --json` gives the findings of all of them; the topology of `status --json` carries the codes of its harness', async () => {
+test('V44: `doctor codex --json` gives `findings` and every one of them is codex\'s; `doctor --json` gives the findings of all of them; the topology of `status --json` carries the codes of its harness', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli(ENGINE)
   const deps = { exec: withMihomo(s) }
   const some = fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8')

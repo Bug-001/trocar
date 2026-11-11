@@ -20,6 +20,7 @@ import { appendJournal } from './journal.mjs';
 import { VERSION } from './format.mjs';
 import { parseSegment } from '../collector/core/record/segments.mjs';
 import { fsyncDir } from '../off/fsutil.mjs';
+import { BIG, fileId, inoHint } from '../file-id.mjs';
 
 export class SealRefused extends Error { constructor(m) { super(m); this.name = 'SealRefused'; this.code = 'SEAL_REFUSED'; } }
 
@@ -29,7 +30,7 @@ const CHUNK = 8 << 20;
 // The segment the live daemon is appending to, from its lock (4.6 §控制面 `lock`), or null when there is no readable
 // lock. A lock that cannot be read never licenses a seal: `sealOne` only compares, and an unknown live segment leaves
 // every segment sealable — which is why the queue's scan passes the live name it already knows as well.
-export function liveSegment(lockFile, { fs = nodeFs } = {}) {
+function liveSegment(lockFile, { fs = nodeFs } = {}) {
   try { return JSON.parse(fs.readFileSync(lockFile, 'utf8')).segment || null; } catch { return null; }
 }
 
@@ -64,7 +65,7 @@ async function sealOne(file, { lockFile, fs, frameBytes, onPhase, onProgress }) 
   const out = path.join(dir, seg.segment + SEALED_EXT);
   const tmp = path.join(dir, `.${seg.segment}.${process.pid}-${randomBytes(4).toString('hex')}.tmp`);
   const name = path.basename(file);
-  let fd = fs.openSync(tmp, 'wx', 0o600), renamed = false;
+  let fd = fs.openSync(tmp, 'wx', 0o600), renamed = false, id0 = null;
   try {
     // Pass 1: read the segment once, hash it whole, encode every line.
     const writer = createSealWriter({ fd, fs, frameBytes });
@@ -72,6 +73,7 @@ async function sealOne(file, { lockFile, fs, frameBytes, onPhase, onProgress }) 
     let lines = 0, length = 0;
     const src = fs.openSync(file, 'r');
     try {
+      id0 = fileId(fs.fstatSync(src, BIG)); // the file these bytes come from: changed() asks whether the path still names it
       for (const line of readLines(fs, src)) {
         if (typeof line === 'number') { await onProgress({ step: 'encode', done: line, total: st0.size }); continue; } // a chunk read: said, and the loop gets a turn
         whole.update(line); length += line.length;
@@ -91,14 +93,14 @@ async function sealOne(file, { lockFile, fs, frameBytes, onPhase, onProgress }) 
     } finally { fs.closeSync(src); }
     const sum = whole.digest('hex');
     await onProgress({ step: 'finish' });
-    const stats = writer.finish([{ name, sha256: sum, length, lines, path: name, dev: st0.dev, ino: st0.ino, mtimeMs: st0.mtimeMs }]);
+    const stats = writer.finish([{ name, sha256: sum, length, lines, path: name, dev: st0.dev, ino: inoHint(st0), mtimeMs: st0.mtimeMs }]);
     await onProgress({ step: 'fsync' });
     fs.fsyncSync(fd); fs.closeSync(fd); fd = null;
     await onPhase('written');
 
     // "Did it change?" is asked after the encode and once more right before the plaintext is deleted: a byte appended
     // in between is in no sealed copy, so the plaintext is kept and the segment sealed again later.
-    const changed = () => { const s = fs.statSync(file); return s.size !== st0.size || s.mtimeMs !== st0.mtimeMs || s.ino !== st0.ino ? s : null; };
+    const changed = () => { const s = fs.statSync(file); return s.size !== st0.size || s.mtimeMs !== st0.mtimeMs || fileId(fs.statSync(file, BIG)) !== id0 ? s : null; };
     let st1 = changed();
     if (st1) throw new SealRefused(`refusing to finish sealing ${file}: it changed while being sealed (size ${st0.size} → ${st1.size})`);
     await verifySealed(fs, tmp, { name, sum, length, lines, onProgress });
@@ -146,7 +148,7 @@ function* readLines(fs, fd) {
 // duplicate or mismatch throws. The bytes checked so far go to `onProgress` about every VERIFY_EVERY bytes: a check of a whole segment
 // is long, and an uninstall waiting on a sealer that says nothing stops it (1.6 §3.6).
 const VERIFY_EVERY = 8 * 2 ** 20;
-export async function verifySealed(fs, sealed, { name, sum, length, lines, onProgress = () => {} }) {
+async function verifySealed(fs, sealed, { name, sum, length, lines, onProgress = () => {} }) {
   const f = openSealed(sealed, { fs });
   try {
     const whole = createHash('sha256');

@@ -13,12 +13,14 @@ import { codeId } from '../version.mjs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { EXIT, newReceipt } from '../off/schema.mjs' // as in status.mjs: the keys and the exit codes, not ./schema.mjs's checker (D62)
-import { unknown, shellArg as shq } from './text.mjs' // shq: a path with a space or a quote stays one argument of the chmod line
+import { unknown, andList, wrap, colors, WIDTH, shellArg as shq } from './text.mjs'
+import { plainSentence } from './words.mjs' // shq: a path with a space or a quote stays one argument of the chmod line
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { statusFacts, statusDocOf } from './status.mjs'
-import { diagnose, renderFindings } from '../netenv/findings.mjs'
+import { diagnose, renderFindings, needsYou } from '../netenv/findings.mjs'
+import { RESTART_REASONS } from '../health/codes.mjs'
 import { serveSource } from '../paths.mjs'
-import { formatInstallNotes, windowWords } from './status-text.mjs'
+import { formatInstallNotes, windowWords, problemsWords } from './status-text.mjs'
 import { trocarHome, backupDir, collectorDir } from '../off/paths.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { rootName, rootStore as userRootStore, strayRoots } from '../off/root-store.mjs'
@@ -26,11 +28,10 @@ import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 import { printJson } from './json.mjs'
 
-const USAGE = 'usage: trocar doctor [<harness>...] [--json]'
+const USAGE = 'usage: trocar doctor [<harness>...] [--details] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 const errText = (e) => String((e && (e.code || e.message)) || e)
-const indent = (s) => String(s).split('\n').map((l) => `  ${l}`).join('\n')
 
 /** Is `bin` an executable on PATH? Looked up in the files (no `which`: no process to start), `PATHEXT` on Windows. */
 export function onPath(bin, { env = process.env, platform = process.platform, fs = nodeFs } = {}) {
@@ -190,11 +191,12 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
 
 /** → the exit code. `argv` is what follows `doctor`; `io` = { out, err }. */
 export async function runDoctor(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
-  let json = false
+  let json = false, details = false
   const names = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--json') json = true
+    else if (a === '--details') details = true
     else if (a.startsWith('-')) { io.err(`trocar doctor: unknown option '${a}'\n${USAGE}`); return EXIT.usage }
     else names.push(a)
   }
@@ -203,7 +205,40 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   const doc = await doctorDoc({ names: named.ids, home, env, platform, deps })
   const { exit } = doc
   if (json) { const { exit: _drop, ...out } = doc; printJson(io, out); return exit }
+  const c = colors(io) // the headline bold on a terminal (§1.1 颜色)
+  for (const [i, l] of (details ? doctorDetails : doctorShort)(doc).entries()) io.out(i ? l : c.bold(l))
+  return exit
+}
+
+/** `doctor` by default (1.6 §3.7, §1.1 ④): the problems, and the expected findings that ask something of you, numbered under a headline that counts
+ *  the problems and says what you must do; the rest is counted in one line that points at --details. The capture failures are one line and where to
+ *  see them. */
+export function doctorShort(doc, { now = Date.now() } = {}) {
   const s = doc.summary
+  if (s === null) return [plainSentence(`trocar doctor: findings are ${unknown(doc.findings_error)}.`), ...judged(doc).map(plainSentence)]
+  const fl = doc.status && doc.status.failures
+  const shown = (f) => f.class === 'problem' || needsYou(f)
+  const told = (doc.findings || []).filter(shown).map((f) => (f.code === 'capture-failures' ? { ...f, ...(fl ? { what: `${problemsWords(fl, now, 'capture failure')}.` } : {}), see: 'trocar status --failures' } : f))
+  const rest = (doc.findings || []).filter((f) => !shown(f))
+  const restart = [...new Set(told.filter((f) => f.class === 'expected' && RESTART_REASONS.includes(f.code)).map((f) => f.harness).filter(Boolean))]
+  const other = [...new Set(told.filter((f) => f.class === 'expected' && !RESTART_REASONS.includes(f.code)).map((f) => f.harness || 'trocar'))]
+  const todo = [restart.length && `${andList(restart)} need${restart.length === 1 ? 's' : ''} a restart`, other.length && `${andList(other)} need${other.length === 1 ? 's' : ''} a step from you`].filter(Boolean).join(', and ')
+  const n = s.problem
+  const head = n ? `trocar doctor: ${n} problem${n === 1 ? '' : 's'}${todo ? `, and ${todo}` : ''}.` : todo ? `trocar doctor: no problems, but ${todo}.` : 'trocar doctor: no problems.'
+  const lines = [head]
+  if (told.length) lines.push('', ...renderFindings(told, { short: true }))
+  lines.push(...judged(doc).map(plainSentence))
+  const hidden = renderFindings(rest).filter((l) => /^(?:\d+\.|Note:) /.test(l)).length // what --details prints of them, one per finding said,
+    + (doc.install_notes || []).filter((l) => !/^Notes of/.test(l)).length + doc.undetermined.filter((x) => x.reason === 'no captured data yet').length // and the notes only it prints
+  if (hidden) lines.push('', `${hidden} note${hidden === 1 ? '' : 's'}: trocar doctor --details`)
+  return lines
+}
+/** What doctor could not judge (exit 3): said in both texts, since it is why the exit is what it is. */
+const judged = (doc) => realUndetermined(doc.undetermined).map((u) => `Could not judge ${u.what}: ${u.reason}`)
+
+/** `doctor --details`: every finding with its why, its pids and every command, the notes, and what the last install noted. */
+export function doctorDetails(doc) {
+  const s = doc.summary, out = []
   // §3.7: the headline says what the list below it numbers — problems AND the expected findings (a Windows test machine 2026-10-18:
   // "1 problem." over three numbered entries). Notes are not numbered, so they are not counted here. The exit code is unchanged.
   const headline = (x) => {
@@ -213,10 +248,11 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
     if (x.expected) parts.push(`${x.expected} expected finding${x.expected === 1 ? '' : 's'}`)
     return `trocar doctor: ${parts.join(' and ')}.`
   }
-  io.out(s === null ? `trocar doctor: findings are ${unknown(doc.findings_error)}.` : headline(s))
-  if (doc.findings && doc.findings.length) { io.out(''); for (const l of renderFindings(doc.findings)) io.out(l) }
-  for (const u of realUndetermined(doc.undetermined)) io.out(`Could not judge ${u.what}: ${u.reason}`)
-  for (const u of doc.undetermined.filter((x) => x.reason === 'no captured data yet')) io.out(`${u.what.replace(/^./, (m) => m.toUpperCase())}: no captured data yet`)
-  if (doc.install_notes.length) { io.out(''); for (const l of doc.install_notes) io.out(l) }
-  return exit
+  out.push(s === null ? `trocar doctor: findings are ${unknown(doc.findings_error)}.` : headline(s))
+  if (doc.findings && doc.findings.length) out.push('', ...renderFindings(doc.findings))
+  out.push(...judged(doc))
+  for (const u of doc.undetermined.filter((x) => x.reason === 'no captured data yet')) out.push(`${u.what.replace(/^./, (m) => m.toUpperCase())}: no captured data yet`)
+  // a note folds inside 80 columns under its own text (§1.1⑥): the terminal would break it mid-word
+  if (doc.install_notes.length) out.push('', ...doc.install_notes.flatMap((l) => (/^\s/.test(l) ? wrap(l.trim(), WIDTH - 2, '      ').map((t) => `  ${t}`) : [l])))
+  return out
 }

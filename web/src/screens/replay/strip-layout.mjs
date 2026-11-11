@@ -73,7 +73,9 @@ export function stripLayout(chapters, W) {
 // the steps there are: the head's count may lag the lane's, and the lane's rows may be fewer than either
 export function stepCount(s) {
   const h = s.desk && s.desk.head, a = s.anchor
-  return Math.max((h && h.steps) || 0, (a && a.count) || 0, a ? a.calls.length : 0)
+  // the head's steps count its axis lane (a tier-0 head's, axis null, every model call): they are this lane's only on that axis
+  const own = h && (!a || (h.axis != null && a.id === h.axis)) ? h.steps || 0 : 0
+  return Math.max(own, (a && a.count) || 0, a ? a.calls.length : 0)
 }
 // the parts in global steps: the head's chapters, the last one holding every step written since; one part when they are another lane's
 export function partsOf(s) {
@@ -111,12 +113,15 @@ export function panSpan(prev, c, g, K) {
   const w = prev.hi - prev.lo, lo = Math.max(c.s0, Math.min(c.s1 - w, Math.round(g - w / 2)))
   return { lo, hi: lo + w }
 }
-// the span in the anchor lane's local indexes; `none` while a step of it is not held or the rows are not contiguous there
+// the span in the anchor lane's local indexes; `none` while a step of it is not held or the rows are not contiguous there. `cutBefore` /
+// `cutAfter`: steps of the lane lie before / after the span, so a call the held rows cannot place is not in it (windowCalls, 2.1 ③);
+// `cutTs`: the time of the step right after the span when the desk knows it (a chapter starting there), where the span's last column ends
 export function anchorSpan(s, { lo, hi }) {
   const a = s.anchor, none = { lo: 0, hi: 0, none: true }
   if (!a || hi <= lo) return none
   const first = a.ridLocal.get(ridAt(s.desk, a.id, lo))
   if (first == null) return none
   for (let g = lo + 1; g < hi; g++) if (a.ridLocal.get(ridAt(s.desk, a.id, g)) !== first + g - lo) return none
-  return { lo: first, hi: first + hi - lo }
+  const h = s.desk.head, next = h && a.id === h.axis && (h.chapters || []).find((c) => c.s0 === hi && c.ts0), cutTs = next ? Date.parse(next.ts0) : NaN
+  return { lo: first, hi: first + hi - lo, cutBefore: lo > 0, cutAfter: hi < Math.max(a.count || 0, a.calls.length), ...(Number.isNaN(cutTs) ? null : { cutTs }) }
 }

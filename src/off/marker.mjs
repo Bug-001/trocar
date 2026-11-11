@@ -26,7 +26,7 @@ import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { SENTINEL, BLOCK_OPEN, BLOCK_END, LINE_MARK, restoreOffLines } from './text-edit.mjs'
 import { foldsEnvNames } from './env-names.mjs'
-import { getPath, setKey, removeKey, removeItem, parseJsonText, unreadableJson, markLen } from './json-text.mjs'
+import { getPath, setKey, removeKey, removeItem, parseJsonText, unreadableJson, markLen, scanJson } from './json-text.mjs'
 import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.mjs'
 import { backupsOf } from './backup.mjs'
 import { trocarHome, collectorIn, switchFileIn } from './paths.mjs'
@@ -93,7 +93,7 @@ export const MARKER_PATHS = Object.freeze({
   pi: [{ how: 'owned-file', home: HOME_PLACES.pi, file: 'extensions/trocar-ca.js', ...INSTALLS }],
 })
 
-const under = (v, root) => typeof v === 'string' && v.startsWith(root + path.sep)
+const under = (v, root) => typeof v === 'string' && v.startsWith(root + path.sep) && !/(^|[\\/])\.\.([\\/]|$)/.test(v.slice(root.length)) // `..` leaves it
 // The text of a file by what its bytes prove (4.6「文件的编码」, text-codec.mjs): { text, charset } | { why }. A U+FEFF at offset 0 (the mark) is
 // before the first line, not part of it: linesOf starts after it, so a block or a line at the top of a marked file is found and the mark stays.
 const readText = (b) => { const d = decodeText(b); return d.ok ? { text: d.text, charset: d.charset } : { why: d.why } }
@@ -205,7 +205,7 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
         try { doc = parseJsonText(t) } catch { doc = undefined }
         if (!spec.door) { if (doc !== undefined) { const v = getPath(doc, spec.keys); if (under(v, root)) add({ keys: spec.keys, value: v }) } continue }
         ports = ports || doorPorts(collectorIn(root), fs)
-        const unknown = (where) => notes.push(`${file}: ${where} names a loopback proxy, and trocar cannot tell whether it is one of its doors (${ports.why}); it was left as it is`)
+        const unknown = (where) => notes.push(`${file}: ${where} names a loopback proxy, and trocar cannot tell whether it is trocar's own (${ports.why}); it was left as it is`)
         if (doc === undefined) { // no longer parses: a door URL anywhere in the text plans it, and the undo leaves it and says so (R3: exit 1)
           const urls = t.match(URL_IN_TEXT) || []
           if (ports.ports && urls.some((u) => isDoorValue(u, ports.ports))) add({ keys: null, door: true })
@@ -303,7 +303,9 @@ function undoOne(item, home, fs) {
   if (!keyList) return { result: 'error', reason: `${item.path} changed while off read it: run off again` } // planned as not parsing, parses now: judged key by key next time
   const mine = keyList.filter((k) => ours(getPath(doc, k)))
   if (!mine.length) return { result: 'already-clean' }
-  const pre = before(item.path, home, fs, (d) => mine.some((k) => { const v = getPath(d, k); return typeof v === 'string' && ours(v) }))
+  const doors = door ? null : doorPorts(collectorIn(root), fs).ports // a door value in a trust key's backup is trocar's too
+  const trocars = (v) => under(v, root) || ours(v) || (!!doors && isDoorValue(v, doors))
+  const pre = before(item.path, home, fs, (d) => mine.some((k) => { const v = getPath(d, k); return typeof v === 'string' && ours(v) }), trocars)
   const was = (k) => (pre.doc ? getPath(pre.doc, k) : undefined)
   // a value not found while a backup was skipped: the user's value may be in that one, so the file stays as it is and is said not undone (D38)
   if (pre.unread.length && mine.some((k) => typeof was(k) !== 'string')) return { result: 'left-unreadable', reason: `${item.path}: ${at} was left with trocar's value: trocar could not read ${pre.unread.length === 1 ? 'the backup' : 'the backups'} that may hold the value it replaced: ${pre.unread.map((u) => `${u.path} (${u.why})`).join('; ')}`, backups: pre.unread.map((u) => u.path) }
@@ -328,7 +330,10 @@ function undoOne(item, home, fs) {
   if (door || pre.doc) for (const k of [...mine, ...(route.noProxyKeys || [])]) for (let d = k.length - 1; d > 0; d--) { const c = getPath(now(), k.slice(0, d)); if (isEmptyObject(c) && was(k.slice(0, d)) === undefined) restore(k.slice(0, d), undefined) }
   // a file left holding nothing but empty objects, with no backup at all, is one trocar created: it goes, and with a door file the meta key that selects it
   // (the meta is judged before either file is written: when its backup cannot be read, both stay as they are)
-  if (!pre.any && emptyTree(now())) {
+  // …and only the objects trocar's keys sit in (or a trocar-only backup held): an empty object of the user's is a byte trocar did not write
+  const theirs = [...(keyList || []), ...(route.noProxyKeys || []), ...(route.arrayItems || []).map((a) => a.keys)]
+  const trocarsObject = (p) => theirs.some((k) => p.length < k.length && p.every((x, i) => x === k[i])) || pre.skipped.some((d) => objectPaths(d).some((q) => isDeepStrictEqual(q, p)))
+  if (!pre.any && emptyTree(strictTree(out)) && objectPaths(strictTree(out)).every(trocarsObject)) {
     const meta = route.select ? unselect(item.path, route.select, home, fs) : null
     if (meta && meta.result) return meta
     fs.rmSync(file, { force: true })
@@ -363,15 +368,34 @@ const emptyTree = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && Ob
 
 // the file as it was before `on`: the newest backup `isOn` does not say holds trocar's value. A backup that cannot be read (the read fails, its bytes prove no
 // encoding, it is not JSON) is skipped, never taken for "no value": an older one is looked at. → { doc (null: none), saved, unread: [{ path, why }], any }
-function before(file, home, fs, isOn) {
-  const all = backupsOf({ home, file, fs }), unread = []
+function before(file, home, fs, isOn, trocars = () => false) {
+  const all = backupsOf({ home, file, fs }), unread = [], skipped = []
+  let any = false
   for (const b of [...all].reverse()) {
-    let d
-    try { const s = readText(readOrNull(fs, b)); if (s.why) throw new Error(WHY_TEXT[s.why]); d = parseJsonText(s.text) } catch (e) { unread.push({ path: b, why: String((e && e.message) || e) }); continue }
-    if (!isOn(d)) return { doc: d, saved: b, unread, any: true }
+    let d, s
+    try { s = readText(readOrNull(fs, b)); if (s.why) throw new Error(WHY_TEXT[s.why]); d = parseJsonText(s.text) } catch (e) { unread.push({ path: b, why: String((e && e.message) || e) }); any = true; continue }
+    // a backup holding nothing but trocar's values (in objects) is of a file trocar created — `on` saved what `install` wrote: not the user's file
+    if (onlyTrocars(s.text, trocars)) { skipped.push(strictTree(s.text)); continue }
+    any = true
+    if (!isOn(d)) return { doc: d, saved: b, unread, any, skipped }
   }
-  return { doc: null, saved: null, unread, any: all.length > 0 }
+  return { doc: null, saved: null, unread, any, skipped }
 }
+// strict JSON with no key twice → its value, else null: a comment, or a duplicate key JSON.parse would hide, may be the user's bytes
+function strictTree(text) {
+  let d, root
+  try { d = JSON.parse(text); root = scanJson(text) } catch { return null }
+  const once = (n) => !n || (n.type === 'object' ? new Set(n.members.map((m) => m.key)).size === n.members.length && n.members.every((m) => once(m.value)) : n.type !== 'array' || n.items.every(once))
+  return once(root) ? d : null
+}
+// a backup that is strict JSON of objects holding nothing but trocar's strings (and at least one)
+const onlyTrocars = (text, trocars) => {
+  let seen = false
+  const walk = (v) => (typeof v === 'string' ? trocars(v) && (seen = true) : !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(walk))
+  return walk(strictTree(text)) && seen
+}
+// the key paths of every object below the top of a document
+const objectPaths = (v, at = []) => (!!v && typeof v === 'object' && !Array.isArray(v) ? Object.entries(v).flatMap(([k, x]) => (!!x && typeof x === 'object' && !Array.isArray(x) ? [[...at, k], ...objectPaths(x, [...at, k])] : [])) : [])
 
 // the entry trocar created is gone: the meta file's key that selects it comes back from the meta's backup (none there → it goes); a meta file left `{}`
 // with no backup is trocar's too and goes. Nothing is written here: → null (nothing to do), { apply } (writes the meta), or a left-unreadable result,

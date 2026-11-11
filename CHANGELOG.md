@@ -4,6 +4,15 @@ Keep a Changelog style, versions follow SemVer (in 0.x a minor version may break
 
 ## [Unreleased]
 
+- [2026-11-11](docs/release-notes/2026-11-11.md)
+
+## [0.2.1] - 2026-11-10
+
+Fixes since 0.2.0: the replay opens in Readable, pi sessions on the Gemini API show their steps, and the board and the CLI got a round of fixes.
+
+- [2026-11-10](docs/release-notes/2026-11-10.md)
+- [2026-11-09](docs/release-notes/2026-11-09.md)
+
 ## [0.2.0] - 2026-11-09
 
 The first published release.
@@ -42,6 +51,7 @@ The first tagged version: tagged in git, not published to npm.
 - [2026-10-07](docs/release-notes/2026-10-07.md)
 - [2026-10-06](docs/release-notes/2026-10-06.md)
 
-[Unreleased]: https://github.com/Bug-001/trocar/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Bug-001/trocar/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Bug-001/trocar/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Bug-001/trocar/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Bug-001/trocar/releases/tag/v0.1.0

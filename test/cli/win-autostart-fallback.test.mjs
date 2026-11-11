@@ -13,6 +13,7 @@ import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { statusDoc } from '../../src/cli/status.mjs'
 import { readManifest, saveManifest, manifestPath } from '../../src/off/manifest.mjs'
 import { acquireOpLock, tryOpLock } from '../../src/off/lock.mjs'
+import { identityFor } from '../../src/off/proc.mjs'
 import { autostartBlock } from '../../src/collector/install.mjs'
 import { opLockFile } from '../../src/off/paths.mjs'
 import { controlEndpoint } from '../../src/collector/arch/win32/control-path.mjs'
@@ -96,7 +97,7 @@ test('D38: a Run value that cannot be recorded is not written; install exits 1 n
   const win = windows()
   const w = await world(win)
   const enable = w.unit.enable
-  w.unit.enable = (o) => { const held = tryOpLock({ file: opLockFile(w.home) }); try { return enable(o) } finally { held.lock.release() } }
+  w.unit.enable = (o) => { const held = tryOpLock({ file: opLockFile(w.home), identity: identityFor({ platform: 'win32', exec: win.run }) }); try { return enable(o) } finally { held.lock.release() } }
   const r = await w.install()
   const doc = r.io.json()
   assert.deepEqual([r.exit, doc.ok, win.value, w.runKeys().length], [1, false, null, 0], r.io.text())
@@ -131,7 +132,7 @@ test('R12: the run-key entry is recorded under op.lock: another command that sav
     const b = fs.readFileSync(file, ...rest)
     if (armed && file === manifestPath(w.dir)) {
       armed = false
-      if (fs.existsSync(lockFile)) other = (async () => { const l = await acquireOpLock({ file: lockFile, waitMs: 5000 }); try { save() } finally { l.release() } })()
+      if (fs.existsSync(lockFile)) other = (async () => { const l = await acquireOpLock({ file: lockFile, identity: identityFor({ platform: 'win32', exec: win.run }), waitMs: 5000 }); try { save() } finally { l.release() } })()
       else save()
     }
     return b

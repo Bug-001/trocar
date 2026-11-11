@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
+import { withScratchCwd, UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { startDaemon } from '../../src/collector/daemon.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
@@ -21,7 +21,7 @@ const flowsOf = (dir) => {
 
 for (const platform of ['darwin', 'win32']) {
   for (const now of [true, false]) {
-    test(`${platform}: off {exit${now ? ', now' : ''}} while the model daemon still reads its identity stops it cleanly`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
+    test(`${platform}: off {exit${now ? ', now' : ''}} while the model daemon still reads its identity stops it cleanly`, { skip: UNSERVABLE[platform], timeout: 30_000 }, async () => {
       const w = await modelWorld({ os: platform, commands: ['codex'] })
       fs.mkdirSync(w.dir, { recursive: true })
       const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)

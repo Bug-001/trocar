@@ -19,8 +19,9 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { BIG, fileKey } from '../file-id.mjs';
 
-export const SIDECAR_V = 1;
+const SIDECAR_V = 1;
 const TYPES = { f64: Float64Array, u32: Uint32Array, i32: Int32Array, u8: Uint8Array };
 /** A line file's sidecar: `<name>.idx` beside its plain files `<name>.<T>.ndjson`. */
 export const sidecarOf = (file) => file.replace(/(\.\d+)?\.ndjson$/, '') + '.idx';
@@ -96,7 +97,7 @@ const held = new FinalizationRegistry(({ fs, fd }) => { try { fs.closeSync(fd); 
 
 
 /** Plain bytes a sealed part holds at least (4.3 §4 分片, about 8 MiB, SHOULD): seal() cuts at the first line end at or past it. */
-export const PART_BYTES = 8 << 20;
+const PART_BYTES = 8 << 20;
 // brotli q9 with the smallest window that covers the frame (10..24 bits): a decoder sizes its ring buffer by the stream's window, so a
 // 256 KiB frame written with a 16 MiB window would take that much memory at each decode for no smaller output (4.3 §4 分片)
 const Z = zlib.constants, brotliOf = (n) => ({ [Z.BROTLI_PARAM_QUALITY]: 9, [Z.BROTLI_PARAM_LGWIN]: Math.min(24, Math.max(10, Math.ceil(Math.log2(n + 16)))), [Z.BROTLI_PARAM_SIZE_HINT]: n });
@@ -116,7 +117,7 @@ const undecodable = new Set();
 export function releaseParts() { decoded.clear(); decodedBytes = 0; }
 /** Plain bytes a frame of a sealed part holds at least (4.3 §4 分片): seal() cuts a part into independently decodable frames, each at
  *  the first line end at or past it, so a line lies in one frame and reading it decodes that frame only. */
-export const FRAME_BYTES = 256 << 10;
+const FRAME_BYTES = 256 << 10;
 const MAGIC = 0x31465254; // "TRF1"
 // A sealed part's bytes are the brotli of each frame of its plain bytes `raw` (a frame cut at the first line end at or past frameBytes
 // from its start), then the frame table (per frame: compressed length, plain length; u32 LE), the frame count, MAGIC.
@@ -196,7 +197,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     try { names = fs.readdirSync(dir); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
     return names.flatMap((n) => { const m = NAMES.exec(n); return m ? [{ path: path.join(dir, n), a: m[1] && +m[1], b: m[2] && +m[2], t: m[3] && +m[3], tmp: !!m[4] }] : []; });
   };
-  const partAt = (f) => { const st = fs.statSync(f.path); return { path: f.path, a: f.a, b: f.b, key: `${f.path}|${st.ino}|${st.size}|${st.mtimeMs}` }; };
+  const partAt = (f) => ({ path: f.path, a: f.a, b: f.b, key: `${f.path}|${fileKey(fs.statSync(f.path, BIG))}` });
   let parts = [], C = 0, T = 0, end = 0; // the parts [0, C), the tail from T (T == C once a writer opened it), the disk's end
   let junk = false, unreadable = null, trunc = false; // trunc: the disk may hold bytes past `end`: made so before the next write
   let starts = [], bufs = [], arena = 0; // the arena: each append's text, by the offset of its first byte

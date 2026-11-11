@@ -13,7 +13,7 @@ import { posCmp } from './projection.mjs';
 import { QueryArgError } from './named/index.mjs';
 
 /** `--limit`: rows a page holds at most, its default and its ceiling (3.5 §会话读). */
-export const LIMIT_MAX = 1000;
+const LIMIT_MAX = 1000;
 // One page of rows holds at most this much serialized (3.5 §会话读 ①).
 export const PAGE_BYTES = 1048576;
 
@@ -36,7 +36,7 @@ function rowAt(log, rid, off) {
   return v ? log.read(...v) : null;
 }
 // the lane's line as it stood at byte `off`, or null
-export function laneAt(log, key, off) {
+function laneAt(log, key, off) {
   let at = log.lane(key);
   while (at && at[0] > off) { const p = log.read(...at).p; at = p == null ? null : [p]; }
   return at ? log.read(...at) : null;

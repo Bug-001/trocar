@@ -9,7 +9,7 @@ import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
@@ -27,12 +27,12 @@ const squat = (port) => new Promise((resolve, reject) => { const s = net.createS
 const events = (w) => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n')).filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return {} } }) : [])
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform} · G9: the door's port taken by another program while off → the next trocar on says engine-port-taken, moves the port, the entry follows`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
+  test(`${platform} · G9: the door's port taken by another program while off → the next trocar on says engine-port-taken, moves the port, the entry follows`, { skip: UNSERVABLE[platform], timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')
     const box = await liveUnit({ w, platform })
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+    const deps = { getuid: () => 501, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
     const offDeps = { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: () => ({ status: 0, stdout: '', stderr: '' }) }
     const doors = async () => { const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env }); return (await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status' })).doors }
     let held = null
@@ -50,7 +50,7 @@ for (const platform of ['darwin', 'win32']) {
         await within((async () => { for (;;) { if (!(await canConnect(port))) return true; await new Promise((r) => setTimeout(r, 100)) } })(), 10_000, 'the door closed, so the port can be taken')
         held = await squat(port)
         const io3 = fakeIo()
-        assert.equal(await runOnCli(['--yes'], { io: io3, env: w.env, home: w.home, platform, deps }), 0, io3.text())
+        assert.equal(await runOnCli(['--yes', '--details'], { io: io3, env: w.env, home: w.home, platform, deps }), 0, io3.text())
         const said = io3.text().split('\n').filter((l) => l.includes(String(port)))
         assert.ok(said.length && !/engine-port-taken/.test(io3.text()), `on names the taken port in words, not the code (1.6 \u00a71.1): ${io3.text()}`)
         assertEnglish(said.join('\n'), 'the engine-port-taken note (D58)')

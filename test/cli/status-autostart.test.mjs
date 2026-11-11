@@ -13,6 +13,7 @@ import { runDoctor } from '../../src/cli/doctor.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { entryState } from '../../src/collector/net-deps.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const unitAnswering = (q) => ({ name: 'trocar-collector.service', registered: () => q })
 const CASES = [
@@ -22,7 +23,7 @@ const CASES = [
   [{ state: 'unknown', err: 'no systemd --user answered: Failed to connect to bus' }, { code: null, command: 'trocar install' }, 3],
 ]
 
-test('D61: a masked unit: one way out, trocar install, which says it replaces the mask', async () => {
+test('D61: a masked unit: one way out, trocar install, which says it replaces the mask', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const q = { state: 'disabled', how: 'masked' }
   const r = await runStatus(s, ['--json'], { request: asDaemon(reply()), deps: { unit: unitAnswering(q) } })
@@ -34,7 +35,7 @@ test('D61: a masked unit: one way out, trocar install, which says it replaces th
   assert.doesNotMatch(entryState('linux', null, { state: 'disabled' }), /masked/)
 })
 
-test('D61: status --json says the login entry as registered() answers it; absent / disabled are a problem fixed by trocar install, unknown keeps its reason', async () => {
+test('D61: status --json says the login entry as registered() answers it; absent / disabled are a problem fixed by trocar install, unknown keeps its reason', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   for (const [q, want, exit] of CASES) {
     const j = await runStatus(s, ['--json'], { request: asDaemon(reply()), deps: { unit: unitAnswering(q) } })
@@ -63,7 +64,7 @@ test('D61: with no install record there is nothing to ask: autostart is null and
   assert.equal(asked, 0)
 })
 
-test('D61: doctor shows autostart-missing with trocar install when the entry is gone; none when it is there', async () => {
+test('D61: doctor shows autostart-missing with trocar install when the entry is gone; none when it is there', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const doc = async (q) => {
     const io = fakeIo()
@@ -79,7 +80,7 @@ test('D61: doctor shows autostart-missing with trocar install when the entry is 
   assert.deepEqual(await doc({ state: 'present' }), [])
 })
 
-test('D61 / D38: status <harness> exits 1 / 3 for the login entry and its detail says why, with trocar install', async () => {
+test('D61 / D38: status <harness> exits 1 / 3 for the login entry and its detail says why, with trocar install', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   for (const q of [{ state: 'absent' }, { state: 'unknown', err: 'launchctl print did not run (timeout)' }]) {
     const t = await runStatus(s, ['codex'], { request: asDaemon(reply()), deps: { unit: unitAnswering(q) } })
@@ -91,7 +92,7 @@ test('D61 / D38: status <harness> exits 1 / 3 for the login entry and its detail
   }
 })
 
-test('1.6 §3.5: the worker asks registered() once and again when the install record changes or after 60 s; the CLI asks every time', async () => {
+test('1.6 §3.5: the worker asks registered() once and again when the install record changes or after 60 s; the CLI asks every time', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   let asked = 0, now = Date.parse('2026-11-07T12:00:00Z')
   const unit = { name: 'trocar-collector.service', registered: () => { asked++; return { state: 'present' } } }

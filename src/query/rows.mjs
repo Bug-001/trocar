@@ -2,15 +2,16 @@
 //
 // `sessions` and `session` must agree on membership, so it is computed here once (3.4: membership is a
 // read-side decision) and both ask this module: `sessions` counts the rows, `session` reads back only the
-// records of the one session it was asked for. Nothing here parses a record: a row is what the segment
+// records of the one session it was asked for. Nothing here parses a record but a compaction request's own (headsReader below): a row is what the segment
 // index already stored (src/query/index-build.mjs), which is why `sessions` can meet its ≤ 1 s budget on
 // 1 GB (1.6 §4.1 速度目标) where reading every record back cost 4.5 s on Windows and 7 s on macOS.
 import nodeFs from 'node:fs';
 import path from 'node:path';
-import { createSynthAssigner } from '../dissect/synth-key.mjs';
+import { createSynthAssigner, headsFactOf } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { endpointClass } from '../dissect/endpoints.mjs';
-import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom } from './index-build.mjs';
+import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom, IndexPending } from './index-build.mjs';
+import { recordsAt } from './records.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag } from './warm.mjs';
 import { rowTable, heapOf, keysOf, wholeAt, cellAt } from './row-table.mjs';
@@ -36,23 +37,29 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 // (2026-10-30, node 22; charged once per part that holds the set, even when parts share it).
 // OPEN_HEAP: an open chain with its tail and its items, measured about 664 B (a keyed entry holds neither and is charged the same).
 // TAIL_HEAP: a chain held for extension only (its tail; 3.4 合成键 有界), copied at a part's end, measured 110 B (2026-11-08, node 22).
-const PART_HEAP = 450, OPEN_HEAP = 640, TAIL_HEAP = 140, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28;
+// REPLY_HEAP: a reply kept for kinship (its key with the item, its entry and its sessions' array; 3.4 按内容认亲 有界), measured 276 B,
+// charged once per list: the parts share the entry (copyOpen); REPLY_SLOT_HEAP: one more part's Map slot for it, measured 57 B (4,050
+// replies in the rule's state, liveHeap() before and after, then 8 copies of the state; 2026-11-08, node 22; × 1.25).
+const PART_HEAP = 450, OPEN_HEAP = 640, TAIL_HEAP = 140, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28, REPLY_HEAP = 350, REPLY_SLOT_HEAP = 72;
 const lists = warmCache({ max: 4, cost: (v) => v.heap, steady: true });
-const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, { ...v }])); // the rule moves `lastMs` in place (and replaces `fp`)
+// the rule moves a chain's `lastMs` in place (and replaces `fp`); a kept reply's entry it only replaces, so the copy shares it
+const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, v.owners ? v : { ...v }]));
 // the index keeps a call's kinship fingerprints as one space-joined string (index-build.mjs `kin_fp` / `kin_probe`; `kin_chain` the same way)
 const fpOf = (s) => (s == null ? null : s ? s.split(' ').map(Number) : []);
 const lineOf = (id) => Number(String(id).split(':').pop());
-const assignRow = (assign, r) => (r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
-  hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), late: r.kin_late, chain: r.kin_chain ? r.kin_chain.split(' ') : [], items: r.kin_items ? r.kin_items.split(' ') : [], mark: r.kin_mark === true }) : null);
+// `heads`: a compaction request's windows (its row has kin_probe), read back from its record before the rule takes the row (headsReader), never held (3.4 按内容认亲 有界)
+const assignRow = (assign, r, heads = null) => (r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
+  hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe), late: r.kin_late, chain: r.kin_chain ? r.kin_chain.split(' ') : [], items: r.kin_items ? r.kin_items.split(' ') : [], mark: r.kin_mark === true,
+  reply: r.kin_reply ?? null, heads }) : null);
 // A part keeps the rule's state at its end (`open`) only where a build resumes: the last part (the live segment grows from its own state)
 // and the one before it (a new segment, or the live one renamed or rewritten, starts from it), and every KEEP-th part; a build that starts
 // further back replays the rule from the nearest kept state (stateAt; at most KEEP - 1 parts, read from their warm index views)
 const KEEP = 16, kept = (j, n) => j >= n - 2 || j % KEEP === KEEP - 1;
-function stateAt(parts, j) {
+async function stateAt(parts, j, heads) {
   let m = j - 1;
   while (m >= 0 && !parts[m].open) m--;
   const open = copyOpen(m >= 0 ? parts[m].open : new Map()), assign = createSynthAssigner({ open });
-  for (let q = m + 1; q < j; q++) for (let k = 0; k < parts[q].view.length; k++) assignRow(assign, parts[q].view.at(k));
+  for (let q = m + 1; q < j; q++) for (let k = 0; k < parts[q].view.length; k++) { const r = parts[q].view.at(k); assignRow(assign, r, r.kin_probe != null ? await heads(r) : null); }
   return open;
 }
 
@@ -66,7 +73,7 @@ function stateAt(parts, j) {
  * function, is awaited after every segment and inside a long scan (index-build.mjs `easing`), so a read of every segment leaves the
  * event loop to others (3.5 §行表先读); the rows are the same with it or without.
  */
-export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null, ease = null } = {}) {
+export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null, ease = null, now = Date.now } = {}) {
   const segs = [];
   for (const [segment, at] of segmentFiles(home, fs, errors)) {
     const { records, problems } = await warmSegmentIndex({ home, segment, fs, at, progress, ease });
@@ -75,10 +82,69 @@ export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [],
     segs.push({ segment, records, entry: recordsId(records) });
     if (ease) await ease();
   }
-  const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
-  return lists.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old)).rows;
+  const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n'), key = `${fsTag(fs)}\n${home}`, heads = headsReader({ home, fs, errors, progress, ease });
+  let built = false;
+  const list = await lists.get(key, stamp, async (old) => {
+    built = true;
+    const prev = old ? await Promise.resolve(old).catch(() => null) : null, v = await rowList(segs, prev, false, heads);
+    // a list built while a read back failed, or grown from one, carries that failure: its state lacks what that read would have given
+    v.failed = heads.errors.length ? { at: now(), errors: heads.errors } : prev && prev.failed ? prev.failed : null;
+    return v;
+  });
+  // ...and says it on every read it answers (D38). It is kept, so one record that stays unreadable does not cost a whole build per read;
+  // the first read FAILED_RETRY_MS after it was built takes it out, so the next one builds it again and reads again (records.mjs: a failed
+  // read is never remembered for good)
+  if (list.failed) {
+    if (!built) errors.push(...list.failed.errors);
+    if (now() - list.failed.at >= FAILED_RETRY_MS) lists.take(key);
+  }
+  return list.rows;
 }
-function rowList(segs, old) {
+const FAILED_RETRY_MS = 60_000;
+/** A compaction request's windows, read back from its record (one seek), with a progress tick after each, and a yield where the caller gives
+ *  one (`ease`: the worker's boot pass, 3.5 后台抽取与归约). One that cannot be read decides nothing by its replies, and is said (D38):
+ *  `read.errors` holds what this build said. */
+const headsReader = ({ home, fs, errors, progress, ease }) => {
+  const read = async (r) => {
+    const segment = String(r.id).split(':').slice(0, -1).join(':'), errs = [];
+    const [rec] = recordsAt({ home, fs, rows: [{ id: r.id, segment, lineNo: lineOf(r.id), offset: r.offset, stored_bytes: r.stored_bytes }], errors: errs, remember: false });
+    if (!rec) { const e = { where: `segments/${segment}`, code: 'record-unreadable', reason: `${r.id}: a compaction request could not be read back, so its replies decide nothing: ${errs.map((x) => x.reason).join('; ') || 'no record'}` }; read.errors.push(e); errors.push(e); }
+    if (progress) progress();
+    if (ease) await ease();
+    return rec ? headsFactOf(rec) : null;
+  };
+  read.errors = [];
+  return read;
+};
+
+/**
+ * provisionalRows({home, fs, ready}) → {rows, errors, early: true}: the rows of the segments in `ready` (names) whose index is usable now, read as
+ * `indexRows` reads them (warmOnly: never built here), while the worker's boot pass rebuilds the rest (3.5 §行表先读「先答的会话」).
+ * A row is in a session only when the full list would put it in the same one whatever comes before it: it has a session key and no
+ * chain (`synth_hash` null) — then it is that key's, with no lane key, in the full list too. A row whose session the synthesized-key
+ * rule, kinship or a keyed session's chains decide has none here. `errors` says how many segments are left out (`index-pending`),
+ * so the answer says it may lack calls. null: a ready segment is not usable now (the caller asks again).
+ */
+export async function provisionalRows({ home = trocarHome(), fs = nodeFs, ready } = {}) {
+  const errors = [], segs = [], all = segmentFiles(home, fs, errors);
+  for (const [segment, at] of all) {
+    if (!ready.has(segment)) continue;
+    let got;
+    // a ready segment whose index left the warm cache and is not on disk in this version (a plain one): no early answer, never one that lost members
+    try { got = await warmSegmentIndex({ home, segment, fs, at, warmOnly: true }); } catch (e) { if (e instanceof IndexPending) return null; throw e; }
+    for (const pr of got.problems) errors.push(problemEntry(`segments/${segment}`, pr));
+    segs.push({ segment, records: got.records, entry: recordsId(got.records) });
+  }
+  // said while the list is provisional, every segment ready or not: the full list is still being built, and this answer is not its answer
+  errors.push({ where: 'index', code: 'index-pending', level: 'state', reason: `${all.length - segs.length} of ${all.length} capture files are still being re-indexed, then the session list is built; until that ends this read may lack calls.` });
+  const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
+  return { rows: (await early.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old, true))).rows, errors, early: true };
+}
+const early = warmCache({ max: 1, cost: (v) => v.heap });
+/** dropProvisional({home, fs}): the boot pass ended, the provisional list goes. */
+export const dropProvisional = ({ home = trocarHome(), fs = nodeFs } = {}) => { early.take(`${fsTag(fs)}\n${home}`); };
+async function rowList(segs, old, keyedOnly = false, heads = null) {
+  old = old ? await Promise.resolve(old).catch(() => null) : null; // a list still being built when its stamp moved: grown from once it is
   let i = 0;
   if (old) while (i < segs.length && i < old.parts.length && old.parts[i].segment === segs[i].segment && old.parts[i].entry === segs[i].entry) i++;
   // only the newest segment grew, and its records begin with the ones its rows were built from (index-build.mjs grownFrom): its
@@ -101,12 +167,16 @@ function rowList(segs, old) {
   for (let j = i; j < segs.length; j++) {
     const { segment, records: view, entry } = segs[j], was = grown && j === i ? old.parts[i] : null;
     const start = was ? was.start : j ? parts[j - 1].end : 0, k0 = was ? was.end - was.start : 0;
-    const open = was ? copyOpen(was.open) : stateAt(parts, j), assign = createSynthAssigner({ open });
+    // the part before, built here and kept by no one (shed below), hands its state on as it is: copying it for every segment
+    // churned every kept reply once per segment
+    const prev = !keyedOnly && j > i && !kept(j - 1, segs.length) ? parts[j - 1].open : null;
+    const open = keyedOnly ? null : was ? copyOpen(was.open) : prev || await stateAt(parts, j, heads), assign = open && createSynthAssigner({ open });
     const derived = [];
     for (let k = k0; k < view.length; k++) {
       const r = view.at(k);
-      const got = assignRow(assign, r);
-      const sid = r.session_key ?? (got && got.key) ?? null;
+      const got = assign ? assignRow(assign, r, r.kin_probe != null ? await heads(r) : null) : null;
+      // keyedOnly (provisionalRows): only a row whose session no rule before it decides
+      const sid = keyedOnly ? (r.synth_hash == null ? r.session_key ?? null : null) : r.session_key ?? (got && got.key) ?? null;
       // a keyed call's chain (3.4 带键会话里的消息链) is no synthesized key: the session stays as it was
       derived.push({ session_id: sid, synthesized: !!got && got.key != null && !got.kin, lane_key: (got && got.lane) ?? null });
       if (sid) place(sid, start + k); // a row with no session id is in no group (sessionGroups)
@@ -118,7 +188,11 @@ function rowList(segs, old) {
   const n = parts.length ? parts[parts.length - 1].end : 0;
   const rows = new RowList(parts, n, index);
   let heap = heapOf(...parts.map((p) => p.d)) + SESSION_HEAP * index.size + POSITION_HEAP * slots;
-  for (const p of parts) { heap += PART_HEAP; if (p.open) for (const v of p.open.values()) heap += v.fp ? OPEN_HEAP + FP_HEAP * v.fp.size : TAIL_HEAP; }
+  const replies = new Set();
+  for (const p of parts) {
+    heap += PART_HEAP;
+    if (p.open) for (const v of p.open.values()) heap += v.fp ? OPEN_HEAP + FP_HEAP * v.fp.size : !v.owners ? TAIL_HEAP : replies.has(v) ? REPLY_SLOT_HEAP : (replies.add(v), REPLY_HEAP);
+  }
   // the member arrays of the list before, while something holds them: a session that got no rows keeps its array (3.5:45), a grown
   // one is that array and its new members (sessionGroups below)
   const was = extend && built.get(old.rows);

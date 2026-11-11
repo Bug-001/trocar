@@ -3,7 +3,7 @@
 // D64⑥: acceptance numbers come from the test machines, not this one). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, stats, timed, timerReads, stepKey } from './harness.mjs'
+import { probe, withBoard, serveWorld, stats, timed, timerReads, stepKey, settle } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
@@ -26,7 +26,7 @@ async function openSession(page, id) {
   await row.click()
   await page.waitForSelector('#stepbar .sb-no')
   await page.waitForFunction(() => !document.querySelector('#ctxwin .cwload'))
-  await page.waitForLoadState('networkidle')
+  await settle(page)
 }
 
 // one step change by a click on the step bar or by ←/→, bouncing between the first and the last step; null when there is one step
@@ -59,7 +59,7 @@ test('D64②: 20 step changes by click and 20 by ←/→ send no request; a live
     const round = () => b.requests.some((r) => r.start >= t0 && isHead(r))
     for (const until = Date.now() + 20 * INTERVAL.session; !round() && Date.now() < until;) await stepOnce(b.page, 'key', bounce)
     for (let i = 0; i < 4; i++) await stepOnce(b.page, 'click', bounce)
-    await b.page.waitForLoadState('networkidle')
+    await settle(b.page)
     assert.ok(await b.page.isVisible('.ovw'), 'the Overview stayed open')
     const during = b.requests.filter((r) => r.start >= t0), timerRead = await timerReads(b)
     console.log(`# requests while stepping: ${during.length}, of them the timers': ${during.filter(timerRead).length}`)
@@ -131,7 +131,7 @@ test('2.3 #43 · D64②: ←/→ onto a step whose reply is 20,000 characters of
   })
   assert.ok(word.size >= 8, 'the world has steps with a reply')
   for (const t of text.values()) assert.ok(t.length > 19500 && t.length <= 20000, `the reply is ${t.length} characters`)
-  // the line is for Readable's markdown: the desk opens in it (the stored desk mode; Raw is the default, D70)
+  // the line is for Readable's markdown: the desk opens in it (stored, so the case holds whatever the desk starts in)
   const b = await withBoard({ bytes: 1e5, chromium: gate.chromium, setup: (page) => page.addInitScript((k) => { localStorage.setItem(k, 'read') }, DESK_KEY) })
   try {
     const { page } = b
@@ -143,7 +143,7 @@ test('2.3 #43 · D64②: ←/→ onto a step whose reply is 20,000 characters of
     await page.waitForSelector('#stepbar .sb-no')
     const go = async (key, n) => {
       await page.waitForTimeout(150) // the rest
-      await page.waitForLoadState('networkidle')
+      await settle(page)
       const prev = await stepKey(page), press = () => page.keyboard.press(key)
       if (word.has(n)) samples.longReply.push(await timed(page, 'reply', [prev, word.get(n)], press))
       else await timed(page, 'step', prev, press)
