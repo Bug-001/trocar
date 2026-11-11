@@ -173,6 +173,8 @@ const ENTRY = '(hermes_cli\\.main|acp_adapter\\.entry)'
 
 export default {
   name: 'hermes',
+  // the CA variables install reads from its environment to compose this harness's files (4.11 P4 ca_env: recorded, so a shell without one keeps it)
+  caEnv: COVERED,
   runtime: 'python',
   // Which processes are Hermes (D51 preset, every OS): python (any version: the normalizer folds python3.N into python) whose `-c` code
   // loads the entry module `hermes_cli.main` / `acp_adapter.entry` (after `import hermes_bootstrap`, as `from <module> import`, or through

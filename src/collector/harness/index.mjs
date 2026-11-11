@@ -178,6 +178,16 @@ function presentProblems(d) {
   return [...places(d.present, 'present'), ...bad]
 }
 
+/** 4.11 P4 `ca_env`: `caEnv` lists the CA variables install records for this harness; every variable its proxy-mode data reads a CA file from at
+ *  install (userCertFiles, a bundle's merges, an `add` config-key) is in it, so the record's names are the descriptors' own, never a list in code. */
+export function caEnvProblems(d) {
+  if (d.caEnv !== undefined && !(Array.isArray(d.caEnv) && d.caEnv.every(nonEmpty))) return ['shape: caEnv is not a list of variable names']
+  const have = new Set(d.caEnv || []), pm = obj(d.proxyMode) ? d.proxyMode : {}
+  const read = [...(Array.isArray(pm.userCertFiles) ? pm.userCertFiles : []), ...Object.values(obj(pm.certs) ? pm.certs : {}).flatMap((c) => (obj(c)
+    ? [...(Array.isArray(c.merges) ? c.merges : []), ...(c.kind === 'config-key' && c.semantics === 'add' && Array.isArray(c.keys) ? [{ env: c.keys.at(-1) }] : [])] : []))]
+  return [...new Set(read.filter((s) => obj(s) && nonEmpty(s.env) && !have.has(s.env)).map((s) => s.env))].map((n) => `ca-env: ${n} is read from the environment at install but is not in caEnv`)
+}
+
 export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
   const dir = fileURLToPath(dirUrl)
   const names = fs.readdirSync(dir).filter((n) => n.endsWith('.mjs') && n !== 'index.mjs' && !n.startsWith('_')).sort()
@@ -188,6 +198,7 @@ export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
     if (bad.length) throw new Error(`harness ${n}: its proxy export is wrong (RFC 4.11 §2.3, the proxy block): ${bad.join('; ')}`)
     const pmBad = d.proxyMode === undefined ? ['shape: no proxyMode (every harness says how proxy mode reaches it, spec 4.11 §2.4)'] : proxyModeProblems(d.proxyMode)
     pmBad.push(...presentProblems(d))
+    pmBad.push(...caEnvProblems(d))
     if (pmBad.length) throw new Error(`harness ${d.name || n} (${n}): its proxyMode is wrong (spec 4.11 §2.3): ${pmBad.join('; ')}`)
     out.push(d)
   }

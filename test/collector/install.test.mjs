@@ -804,12 +804,12 @@ test('daemonEnv: the install shell\'s NODE_EXTRA_CA_CERTS goes to the unit when 
   } finally { b.done() }
 })
 
-// 4.11 §3 ⑭: the login entry's NODE_EXTRA_CA_CERTS when this shell does not set it is the value the record says it carried, while that file is there
+// 4.11 §3 ⑭: the login entry's NODE_EXTRA_CA_CERTS when this shell does not set it is the value ca_env records (4.11 P4), while that file is there
 // (D38: a variable this shell does not set is unknown, not removed); one this shell sets replaces it, empty included; Linux and macOS share this
-test('daemonEnv: a shell without NODE_EXTRA_CA_CERTS keeps the value the login entry carried while its file is there; a value set replaces it', async () => {
+test('daemonEnv: a shell without NODE_EXTRA_CA_CERTS takes the value ca_env records while its file is there; a value set replaces it', async () => {
   const home = tmpDir('trocar-carried-'), dir = path.join(home, '.trocar', 'collector'), ca = path.join(home, 'corp.pem')
   fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(ca, 'x')
-  fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 3, entries: [], files: [{ kind: 'owned-file', role: 'unit', path: path.join(home, 'u'), carried: { NODE_EXTRA_CA_CERTS: ca } }] }))
+  fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 3, entries: [], files: [], ca_env: { NODE_EXTRA_CA_CERTS: ca } }))
   assert.deepEqual(daemonEnv({}, dir).env, { NODE_EXTRA_CA_CERTS: ca }, 'not set here: the carried value')
   assert.deepEqual(daemonEnv({ NODE_EXTRA_CA_CERTS: '/corp/other.pem' }, dir).env, { NODE_EXTRA_CA_CERTS: '/corp/other.pem' }, 'set: the new value')
   assert.deepEqual(daemonEnv({ NODE_EXTRA_CA_CERTS: '' }, dir).env, {}, 'set empty: none')
