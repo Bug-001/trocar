@@ -608,3 +608,87 @@ test('rule U · Hermes ssl_ca_cert ${CORP_CA} with CORP_CA only in ~/.hermes/.en
   const v = verdictOf({ desc: d, form, facts, record, issuer: { state: () => 'ready' }, host: d.hosts[0], ctx: w.ctx })
   assert.deepEqual([v.decrypt, v.code ?? null], [true, null], JSON.stringify(v))
 })
+
+// 4.11 P4 merges, §3 ⑭: a variable the install shell does not set is unknown, not removed (D38). The Z-Code bundle keeps the file the record holds for
+// that setting, and the login entry the NODE_EXTRA_CA_CERTS it carried, while that file is there; a value set replaces it; a file gone drops; a
+// file-sourced merge (the desktop setting) is read fresh. Without this an update from a shell lacking the variable broke Z-Code's TLS (invariant 5).
+test('4.11 P4 · §3 ⑭: install without NODE_EXTRA_CA_CERTS keeps the private CA it merged and carried; a new value replaces it; a file gone drops', async () => {
+  const other = await modelWorld(); await other.install()
+  const priv = fs.readFileSync(path.join(other.dir, 'ca', 'trocar-ca.pem'), 'utf8'), privFp = certBlocks(priv)[0].fp
+  const w0 = await modelWorld(), mine = path.join(w0.home, 'company.pem'), next = path.join(w0.home, 'next.pem')
+  put(mine, priv); put(next, USER_PEM)
+  const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
+  const unitPath = path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')
+  const unit = { path: unitPath, text: (env) => `${JSON.stringify(env)}\n` }
+  const run = (env) => w.install({ wrapperKit: { renderWrapper }, unit, env, ctx: { ...w.ctx, env } })
+  const bundleFps = () => certBlocks(fs.readFileSync(path.join(w.dir, 'ca', 'bundle-z-code.pem'), 'utf8')).map((b) => b.fp)
+  const carried = () => JSON.parse(fs.readFileSync(unitPath, 'utf8')).NODE_EXTRA_CA_CERTS ?? null
+  const without = Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS'))
+  assert.equal((await run(w.env)).exit, 0)
+  assert.ok(bundleFps().includes(privFp)); assert.equal(carried(), mine)
+  assert.equal((await run(without)).exit, 0, 'install from a shell without the variable')
+  assert.ok(bundleFps().includes(privFp), 'the bundle keeps the CA of the file the setting named last')
+  assert.equal(carried(), mine, 'the login entry keeps the value it carried')
+  await run({ ...without, NODE_EXTRA_CA_CERTS: next })
+  assert.ok(!bundleFps().includes(privFp), 'a value set replaces the old one: its file drops though it is still there')
+  assert.equal(carried(), next)
+  fs.rmSync(next); await run(without)
+  assert.equal(carried(), null, 'a file that is gone drops from the login entry')
+  assert.deepEqual(readManifest(w.dir).files.find((f) => f.role === 'bundle' && f.harness === 'z-code').merged_from ?? [], [], 'and from the bundle')
+  assert.ok(!bundleFps().includes(privFp), 'nor does the bundle hold the private CA')
+})
+
+// a file the setting named that cannot be read now (not gone: EACCES, a Windows lock) stays the setting's: the next install that can read it puts its CA back
+test('4.11 P4 merges: a merged file unreadable for one install stays in the record and its CA comes back once it reads', { skip: process.getuid && process.getuid() === 0 && 'root reads a 000 file' }, async () => {
+  const other = await modelWorld(); await other.install()
+  const priv = fs.readFileSync(path.join(other.dir, 'ca', 'trocar-ca.pem'), 'utf8'), privFp = certBlocks(priv)[0].fp
+  const w0 = await modelWorld(), mine = path.join(w0.home, 'company.pem'); put(mine, priv)
+  const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
+  const without = Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS'))
+  const run = (env) => w.install({ wrapperKit: { renderWrapper }, env, ctx: { ...w.ctx, env } })
+  const bundleFps = () => certBlocks(fs.readFileSync(path.join(w.dir, 'ca', 'bundle-z-code.pem'), 'utf8')).map((b) => b.fp)
+  await run(w.env)
+  fs.chmodSync(mine, 0o000)
+  try { await run(without) } finally { fs.chmodSync(mine, 0o600) }
+  assert.deepEqual(readManifest(w.dir).files.find((f) => f.role === 'bundle' && f.harness === 'z-code').merged_from, [{ src: 'env:NODE_EXTRA_CA_CERTS', file: mine }])
+  await run(without)
+  assert.ok(bundleFps().includes(privFp), 'readable again: its CA is back')
+})
+
+test('4.11 P4 merges: the desktop setting is read fresh — when it stops naming a file, that file\'s CA drops', async () => {
+  const other = await modelWorld(); await other.install()
+  const priv = fs.readFileSync(path.join(other.dir, 'ca', 'trocar-ca.pem'), 'utf8'), privFp = certBlocks(priv)[0].fp
+  const w = await everything(), mine = path.join(w.home, 'company.pem'), desk = path.join(w.home, '.zcode', 'v2', 'setting.json')
+  put(mine, priv); put(desk, JSON.stringify({ httpProxyCaCertPath: mine }))
+  const bundleFps = () => certBlocks(fs.readFileSync(path.join(w.dir, 'ca', 'bundle-z-code.pem'), 'utf8')).map((b) => b.fp)
+  await w.install({ wrapperKit: { renderWrapper } })
+  assert.ok(bundleFps().includes(privFp))
+  put(desk, JSON.stringify({}))
+  await w.install({ wrapperKit: { renderWrapper } })
+  assert.ok(!bundleFps().includes(privFp), 'not sticky: the setting no longer names the file')
+})
+
+// a record written before `carried` / `merged_from` were kept (0.2.x): an install whose bytes are intact teaches the record what it carried and merged,
+// writing no file, so the install after it, from a shell without the variable, keeps them
+test('4.11 P4 · §3 ⑭: an intact login entry and bundle from a record without carried / merged_from learn them; the next install without the variable keeps the CA', async () => {
+  const other = await modelWorld(); await other.install()
+  const priv = fs.readFileSync(path.join(other.dir, 'ca', 'trocar-ca.pem'), 'utf8'), privFp = certBlocks(priv)[0].fp
+  const w0 = await modelWorld(), mine = path.join(w0.home, 'company.pem'); put(mine, priv)
+  const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
+  const unitPath = path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist'), unit = { path: unitPath, text: (env) => `${JSON.stringify(env)}\n` }
+  const run = (env) => w.install({ wrapperKit: { renderWrapper }, unit, env, ctx: { ...w.ctx, env } })
+  await run(w.env)
+  const mf = path.join(w.dir, 'install-manifest.json'), m = JSON.parse(fs.readFileSync(mf, 'utf8'))
+  for (const f of m.files) { delete f.carried; delete f.merged_from } // the shape 0.2.x wrote
+  fs.writeFileSync(mf, JSON.stringify(m))
+  const bytes = () => [fs.readFileSync(unitPath, 'utf8'), fs.readFileSync(path.join(w.dir, 'ca', 'bundle-z-code.pem'), 'utf8')]
+  const was = bytes()
+  await run(w.env)
+  assert.deepEqual(bytes(), was, 'nothing rewritten')
+  const after = readManifest(w.dir).files
+  assert.deepEqual(after.find((f) => f.role === 'unit').carried, { NODE_EXTRA_CA_CERTS: mine })
+  assert.deepEqual(after.find((f) => f.role === 'bundle' && f.harness === 'z-code').merged_from, [{ src: 'env:NODE_EXTRA_CA_CERTS', file: mine }])
+  await run(Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS')))
+  assert.deepEqual(bytes(), was, 'from a shell without the variable: still the same bytes, the CA kept')
+  assert.ok(certBlocks(bytes()[1]).some((b) => b.fp === privFp))
+})
