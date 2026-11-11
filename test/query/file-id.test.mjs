@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { readIndex } from '../../src/query/index-build.mjs'
+import { BIG, fileId, fileKey } from '../../src/file-id.mjs'
 
 // fs whose inodes sit past 2^60 in the order it first sees them: a bigint stat tells them apart, a number one cannot (its ulp there is 256)
 function bigInodes(real = fs) {
@@ -35,4 +36,10 @@ test('readIndex: an index renamed over the one a read stopped in is read whole, 
   // a whole rewrite: temp file + rename, the same length and the same mark at the same offset
   fs.writeFileSync(`${file}.tmp`, index('2')); fs.renameSync(`${file}.tmp`, file)
   assert.equal(readIndex(f, file, V, first).records[0].k, '2')
+})
+
+test('fileId and fileKey take only a bigint stat: a number one, whose ino may be rounded, throws', () => {
+  const f = path.join(tmpDir(), 'a'); fs.writeFileSync(f, 'a')
+  assert.match(fileKey(fs.statSync(f, BIG)), /^\d+:\d+:1:\d+$/)
+  for (const id of [fileId, fileKey]) assert.throws(() => id(fs.statSync(f)), TypeError)
 })

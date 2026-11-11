@@ -2,8 +2,11 @@
 // a file and the one renamed over it can read as one number. So identity is taken from a stat made with BIG, and only here.
 export const BIG = { bigint: true }
 
-/** a BIG stat → 'dev:ino', exact */
-export const fileId = (st) => `${st.dev}:${st.ino}`
+/** a BIG stat → 'dev:ino', exact; a number stat throws, so one taken without BIG cannot pass for an identity */
+export const fileId = (st) => {
+  if (typeof st.ino !== 'bigint') throw new TypeError('a file identity needs a stat taken with BIG (src/file-id.mjs)')
+  return `${st.dev}:${st.ino}`
+}
 
 /** a BIG stat → 'dev:ino:size:mtimeNs': another string once the file is replaced, written or touched */
 export const fileKey = (st) => `${fileId(st)}:${st.size}:${st.mtimeNs}`
