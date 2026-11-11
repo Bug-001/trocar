@@ -18,12 +18,14 @@ const TMP_HELPER = fileURLToPath(new URL('./tmp.mjs', import.meta.url))
 const env = { ...process.env }
 delete env.NODE_TEST_CONTEXT
 delete env.NODE_OPTIONS
+// os.tmpdir() reads TMPDIR on POSIX and TMP / TEMP on Windows (the guard sets all three): a scratch dir is named in all three
+const tmpEnv = (d) => ({ TMPDIR: d, TMP: d, TEMP: d })
 
 /** Runs `node --test --test-force-exit --require <guard>` on a generated test file, TMPDIR pointing at a scratch dir of its own. */
 function run(body, scratch = tmpDir('trocar-guardtest-'), cwd = undefined, more = {}) {
   const file = path.join(scratch, 'fixture.test.mjs')
   fs.writeFileSync(file, `import test from 'node:test'\nimport fs from 'node:fs'\nimport os from 'node:os'\nimport path from 'node:path'\nimport { tmpDir } from ${JSON.stringify(pathToFileURL(TMP_HELPER).href)}\n${body}\n`)
-  const r = spawnSync(process.execPath, ['--test', '--test-force-exit', '--test-reporter=tap', '--require', GUARD, file], { cwd, env: { ...env, ...more, TMPDIR: scratch }, encoding: 'utf8', timeout: 60_000 })
+  const r = spawnSync(process.execPath, ['--test', '--test-force-exit', '--test-reporter=tap', '--require', GUARD, file], { cwd, env: { ...env, ...more, ...tmpEnv(scratch) }, encoding: 'utf8', timeout: 60_000 })
   return { ...r, scratch, left: fs.readdirSync(scratch).filter((n) => n !== 'fixture.test.mjs') }
 }
 
@@ -39,13 +41,14 @@ test('leak-guard: a test that leaves a directory behind fails the run, and the m
 
 // the cwd `npm test` runs in is the repo root: a test that binds or writes a relative path (a win32 pipe name served on a Mac, 2026-10-29) leaves it
 // there. The runner lists the cwd at its start and at its end; only a name that is new at the end is the run's — one there before, or one a test
-// made and removed (another file's temp entry, while files run in parallel), is not.
+// made and removed (another file's temp entry, while files run in parallel), is not. The name is a plain relative one: on Windows the pipe name
+// is no file in the cwd at all.
 test('leak-guard: an entry the run leaves in its cwd fails the run and is named; one there before, or made and removed, is not', () => {
   const root = tmpDir('trocar-guardroot-')
   fs.writeFileSync(path.join(root, 'was-here'), '')
   const clean = run(`test('made and removed', () => { fs.writeFileSync('passing-through', ''); fs.rmSync('passing-through') })`, undefined, root)
   assert.equal(clean.status, 0, clean.stderr)
-  const name = '\\\\.\\pipe\\trocar-0011223344556677'
+  const name = 'trocar-0011223344556677'
   const r = run(`test('leaves', () => { fs.writeFileSync(${JSON.stringify(name)}, '') })`, undefined, root)
   assert.equal(r.status, 1)
   assert.ok(r.stderr.includes(name), r.stderr)
@@ -138,7 +141,7 @@ async function waitingRunner(scratch, more = {}) {
   const [pidFile, goFile] = [path.join(sig, 'pid'), path.join(sig, 'go')]
   const file = path.join(sig, 'wait.test.mjs')
   fs.writeFileSync(file, `import test from 'node:test'\nimport fs from 'node:fs'\ntest('waits', async () => { fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); while (!fs.existsSync(${JSON.stringify(goFile)})) await new Promise((ok) => setTimeout(ok, 50)) })\n`)
-  const runner = spawn(process.execPath, ['--test', '--test-force-exit', '--require', GUARD, file], { env: { ...env, ...more, TMPDIR: scratch }, stdio: 'ignore' })
+  const runner = spawn(process.execPath, ['--test', '--test-force-exit', '--require', GUARD, file], { env: { ...env, ...more, ...tmpEnv(scratch) }, stdio: 'ignore' })
   const exited = once(runner, 'exit')
   const filePid = Number(await until('the waiting test to start', () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8')))
   const dir = fs.readdirSync(scratch).find((n) => n.startsWith('trocar-run-'))
