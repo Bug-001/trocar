@@ -11,6 +11,7 @@ import { readNetenvFile } from './index.mjs'
 import { buildTopology } from './topology.mjs'
 import { renderCompact, BRANCH_SEP } from './topology-text.mjs'
 import { errnoReason } from '../cli/words.mjs'
+import { BIG, fileKey } from '../file-id.mjs'
 
 const errCode = (e) => (e && e.code) || String((e && e.message) || e)
 const unknown = (reason, detail) => ({ unknown: { reason, detail } })
@@ -223,7 +224,7 @@ export function driftCheck({ home, env = {}, harnesses, desired = () => null, ap
   for (const d of harnesses) {
     if (!adopted[d.name] || desired(d.name) === 'off') continue // a harness that is off has trocar nowhere on its path: what its settings do is not trocar's to report
     const paths = adopted[d.name].file_paths || proxyFilesOf(d, { home, env }) // the files `on` read: the daemon's own environment does not say where they are
-    const sig = paths.map((f) => { try { const st = fs.statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}` } catch { return 'gone' } }).join('|')
+    const sig = paths.map((f) => { try { return fileKey(fs.statSync(f, BIG)) } catch { return 'gone' } }).join('|')
     if (state.sigs.get(d.name) === sig) continue
     state.sigs.set(d.name, sig)
     const setting = readProxySetting(d, { home, env, fs, paths, vars: false })

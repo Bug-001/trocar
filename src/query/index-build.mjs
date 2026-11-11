@@ -41,6 +41,7 @@ import { trocarHome, collectorHome } from '../paths.mjs';
 import { readDaemonLock } from '../off/daemon-stop.mjs';
 import { statKey, warmCache, fsTag } from './warm.mjs';
 import { rowTable, isRowTable, heapOf } from './row-table.mjs';
+import { BIG, fileId } from '../file-id.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
@@ -259,15 +260,15 @@ const markLine = (m) => `${JSON.stringify({ m, v: INDEX_V, fv: FACTS_V })}\n`;
 const fpDigest = (read, end) => { const h = createHash('sha256'); for (const [a, b] of fpRanges(end)) h.update(read(a, b)); return h.digest('base64'); };
 
 // The whole document, for a READER: everything up to the last complete mark line.
-// → { mark, records, problems, read } | null (no usable index). `read` is where this read stopped: the file (its ino), the byte
+// → { mark, records, problems, read } | null (no usable index). `read` is where this read stopped: the file (its id), the byte
 // just past the last complete mark line, and that line's bytes. Given an earlier answer over the same file (`past`), a reader
-// reads only the bytes past that mark while the file is still that one (same ino: a whole rewrite is a rename, a new file) and
+// reads only the bytes past that mark while the file is still that one (same file id: a whole rewrite is a rename, a new file) and
 // the mark line's bytes at its offset are unchanged (the keeper cuts a torn batch back to a mark, never before the last one it
 // wrote); else whole. The entries are the whole read's either way (4.2:49): keeping them current costs the new lines (D62).
 export function readIndex(fs, file, v = SEGMENT, past = null) {
   if (past && past.read) { const got = readPast(fs, file, v, past); if (got !== undefined) return got; }
-  let ino = null, buf;
-  try { ino = fs.statSync(file).ino } catch { /* read below says whether it is there */ }
+  let id = null, buf;
+  try { id = fileId(fs.statSync(file, BIG)) } catch { /* read below says whether it is there */ }
   try { buf = fs.readFileSync(file) } catch { return null; }
   // ONE JSON.parse over the document, not one per line: a JSON line never holds a raw newline, so the document is an
   // array once every newline is a comma (≈ 1.5× faster than per line on a 20 k-entry index — this is the path every
@@ -282,7 +283,7 @@ export function readIndex(fs, file, v = SEGMENT, past = null) {
     if (o.m) continue;
     if (o.p) got.problems.push(o.p); else got.records.push(o);
   }
-  got.read = readTo(buf, 0, upTo, ino);
+  got.read = readTo(buf, 0, upTo, id);
   return got;
 }
 // The index of the last complete mark line of `lines` (its mark into got.mark), -1 when none; null when a mark is of another
@@ -312,23 +313,23 @@ function priorIndex(fs, file, source) {
   for (let i = 0; i < upTo; i++) { const o = lines[i]; if (!o.m && !o.p && typeof o.id === 'string') byId.set(o.id, o); }
   return byId;
 }
-// Where a read of `buf` (the file's bytes from `base`) that ends with line `upTo` stopped: { ino, at, line }.
-function readTo(buf, base, upTo, ino) {
-  if (ino == null) return null;
+// Where a read of `buf` (the file's bytes from `base`) that ends with line `upTo` stopped: { id, at, line }.
+function readTo(buf, base, upTo, id) {
+  if (id == null) return null;
   let start = 0, at = 0;
   for (let i = 0; i <= upTo; i++) { const nl = buf.indexOf(NL, at); if (nl < 0) return null; start = at; at = nl + 1; }
-  return { ino, at: base + at, line: Buffer.from(buf.subarray(start, at)) };
+  return { id, at: base + at, line: Buffer.from(buf.subarray(start, at)) };
 }
 // The bytes past `past`'s mark → the answer a whole read gives, or undefined: the file is not the one `past` read (read whole).
 function readPast(fs, file, v, past) {
-  const { ino, at, line } = past.read;
+  const { id, at, line } = past.read;
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch { return undefined; }
   try {
-    const st = fs.fstatSync(fd);
+    const st = fs.fstatSync(fd, BIG), size = Number(st.size);
     const from = at - line.length;
-    if (st.ino !== ino || st.size < at) return undefined;
-    const buf = Buffer.alloc(st.size - from);
+    if (fileId(st) !== id || size < at) return undefined;
+    const buf = Buffer.alloc(size - from);
     let n = 0;
     while (n < buf.length) { const r = fs.readSync(fd, buf, n, buf.length - n, from + n); if (!r) break; n += r; }
     if (n < line.length || !buf.subarray(0, line.length).equals(line)) return undefined;
@@ -341,7 +342,7 @@ function readPast(fs, file, v, past) {
     for (let i = 0; i < upTo; i++) { const o = lines[i]; if (o.m) continue; if (o.p) problems.push(o.p); else records.push(o); }
     got.records = records.length ? past.records.concat(records) : past.records;
     got.problems = problems.length ? past.problems.concat(problems) : past.problems;
-    got.read = readTo(tail, at, upTo, ino);
+    got.read = readTo(tail, at, upTo, id);
     continued.add(got);
     return got;
   } catch { return undefined; } finally { try { fs.closeSync(fd); } catch { /* gone */ } }

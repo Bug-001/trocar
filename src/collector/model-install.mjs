@@ -23,12 +23,13 @@ import { placeWrapper, managedTree, targetOf } from './core/proxymode/hooks/wrap
 import { lineComment, removeTrocarText } from '../off/text-edit.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
-import { unitedLiveness, daemonEnv } from './install.mjs'
+import { unitedLiveness, daemonEnv, DAEMON_CA_VAR } from './install.mjs'
 import { CODE, EVENT } from './core/codes.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { writeBackup } from '../off/backup.mjs'
 import { certBlocks, certsOf, composeBundle } from '../off/pem.mjs'
 import { errnoWords } from '../cli/words.mjs'
+import { withCaEnv, caEnvRecord, caEnvNames, setCaEnv } from './core/trust/ca-env.mjs'
 
 /** The OSes the collector model (4.11) runs on — the one list `install`, `on`, `uninstall` and the arch backends ask. */
 export const MODEL_OS = Object.freeze(['darwin', 'win32'])
@@ -99,6 +100,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const dir = collectorHome(path.join(home, '.trocar'))
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
+  const shellEnv = ctx && ctx.env
+  if (ctx) ctx = { ...ctx, env: withCaEnv(ctx.env, dir, fs) } // a CA variable this shell does not set: the one ca_env records (4.11 P4)
   const stray = await strayRootRefusal({ os, m, rootStore }) // ㉔: before the first write
   if (stray) return { refusal: stray, manifest: null, fp256: null, items: [], carriers: [], pending: [], problems: [stray.reason], notes: [], exit: 1 }
   if (!m.install) m.created_at = now().toISOString() // a manifest an unclean uninstall kept (install: null): this install starts now (1.6 C.3 failures.since)
@@ -223,7 +226,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   // d · the autostart unit. It carries this shell's NODE_EXTRA_CA_CERTS: the door's upstream trust includes the daemon's own (4.11 §3 ⑭), and a
   // login-started daemon has no shell exports (its job environment, not the user's login environment, D56⑨); what cannot be carried is said and kept (D38)
   if (unit) {
-    const d = daemonEnv(env, dir)
+    const d = daemonEnv(env, dir, { fs })
     if (d.note) { notes.push(d.note); runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.installNote, where: 'install', kind: 'note', code: CODE.unitEnvNotCarried, reason: d.note }) }
     // 4.11 P4: a registration under trocar's name the record does not list (one the unit file does not hold: a scheduled task) is backed up before it is replaced
     const prior = !m.files.some((x) => samePath(x.path, unit.path, fs)) && typeof unit.registeredBytes === 'function' ? unit.registeredBytes() : null
@@ -249,6 +252,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     const skippedRec = { ...kept, ...Object.fromEntries(skips) }
     const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed, ...(Object.keys(skippedRec).length ? { skipped: skippedRec } : {}), ...(code ? { code } : {}) }
     if (JSON.stringify(next) !== JSON.stringify(m.install)) m.install = next
+    if (!only) setCaEnv(m, caEnvRecord({ names: caEnvNames(harnesses, [DAEMON_CA_VAR]), env: shellEnv, dir, fs })) // a Set up runs in the daemon's env, not the user's: it records nothing
     if (JSON.stringify(m) !== before) save()
     const skipped = carriers.filter((x) => x.state === 'skipped').length + items.filter((x) => x.state === 'skipped').length
     return { manifest: m, fp256: rootDer ? rootIdOf(rootDer).fp256 : null, items, carriers, pending, problems, notes, exit: pending.length || problems.length || skipped ? 1 : 0 }
@@ -454,6 +458,7 @@ export function planInstall({ os, harnesses, ctx, home, owns, hookFile = null, f
   const dir = collectorHome(path.join(home, '.trocar'))
   let m = null
   try { m = readManifest(dir, fs) } catch { /* an unreadable record: the run refuses it, the plan has nothing to add */ }
+  ctx = { ...ctx, env: withCaEnv(ctx.env, dir, fs) } // as the run reads it (4.11 P4 ca_env)
   // 4.11 P4: the plug-in file install would put where a file that is not trocar's already is — the run skips that carrier, so the plan says so
   const foreignPlugin = (c) => {
     const pdir = hookFile && resolveLoc(c.dir, ctx)[0]

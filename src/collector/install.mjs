@@ -20,6 +20,7 @@ import { loadOrCreateCa, caPaths, readCa } from './core/tls/ca-store.mjs'
 import { checkCa } from './core/tls/ca.mjs'
 import { bundleRoots } from './core/tls/roots.mjs'
 import { planTrust } from './core/trust/plan.mjs'
+import { carriedWhy, withCaEnv, caEnvRecord, caEnvNames, setCaEnv } from './core/trust/ca-env.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { patternsOf } from '../off/signature.mjs'
@@ -115,12 +116,15 @@ async function recorded(dir, where, fn, result = {}) { // result: what the faile
 // outside trocar's home only; anything else is said, never dropped silently (review 3 #1, D38). A daemon `on` starts directly
 // (the fallback when the OS mechanism refuses) is handed exactly the same (ensureDaemonUp → unit.start): without it capture breaks behind a corporate
 // MITM relay and nothing says so (review 2026-10-18).
-export function daemonEnv(env, dir) {
-  const v = env.NODE_EXTRA_CA_CERTS
+/** The daemon's own Node trust variable, which the login entry carries: trocar's, not any harness's, so ca_env records it whichever harnesses there are (4.11 §3 ⑭). */
+export const DAEMON_CA_VAR = 'NODE_EXTRA_CA_CERTS'
+// A shell that does not set it is unknown, not removed: the value `ca_env` records stands in (4.11 P4, §3 ⑭; D38, invariant 5)
+export function daemonEnv(env, dir, { fs = nodeFs } = {}) {
+  const v = withCaEnv(env, dir, fs)[DAEMON_CA_VAR]
   if (typeof v !== 'string' || v === '') return { env: {}, note: null }
-  const why = !path.isAbsolute(v) ? 'it is a relative path' : v.startsWith(path.dirname(dir) + path.sep) ? "it is trocar's own file" : null
+  const why = carriedWhy(v, dir)
   if (why) return { env: {}, note: `NODE_EXTRA_CA_CERTS of this shell (${v}) is not given to the daemon trocar starts (${why}); that daemon checks a relay's certificate with Node's roots only` }
-  return { env: { NODE_EXTRA_CA_CERTS: v }, note: null }
+  return { env: { [DAEMON_CA_VAR]: v }, note: null }
 }
 
 // ── `trocar on` (RFC 1.6 §1.6, R6, R9, R12; D39) ────────────────────────────────────────────────────────────────────────────────────────
@@ -202,7 +206,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const kept = asked.filter((d) => !held.has(d.name))
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
-  const userFiles = userFilesFor ? userFilesFor({ os: osName, home, env: new Map(Object.entries(env).filter(([, v]) => typeof v === 'string')), fs }) : null // rule U's finder (arch/model-backends.mjs), handed in by the caller
+  const userFiles = userFilesFor ? userFilesFor({ os: osName, home, env: withCaEnv(new Map(Object.entries(env).filter(([, v]) => typeof v === 'string')), dir, fs), fs }) : null // rule U's finder (arch/model-backends.mjs), handed in by the caller
   const ctxFor = (d) => ({ ...driverCtx({ os: osName, home, env, fs, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()) }), userFiles }) // the one inject ctx (status and on's setup judgement read the same)
   // only a harness whose own footprint is here gets carriers, and only it joins install.harnesses (4.6 「这个 harness 装好了没有」); one already in the
   // manifest stays a target below, its carriers kept until uninstall
@@ -233,7 +237,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     descs = descs.filter((d) => !unwritable.some((x) => x.harness === d.name))
     draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   }
-  const daemon = unit ? daemonEnv(env, dir) : null
+  const daemon = unit ? daemonEnv(env, dir, { fs }) : null
   if (daemon && daemon.note) draft.notes.push(daemon.note)
   // a form trocar cannot capture whose places are here: said for every harness asked, its own footprint here or not, refused or not (4.6 「不采的形态」, D38)
   const unseen = asked.flatMap((d) => uncapturedOf(d, ctxFor(d)).map((u) => ({ harness: d.name, code: CODE.harnessNote, reason: `${d.name}: ${u.why} (${u.paths.join(', ')})` })))
@@ -315,7 +319,9 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     uncaptured: unseen.map((r) => r.reason), // said by an install that has nothing to write too
     records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
     events: path.join(dir, 'flows', `${day}.ndjson`), // install-note lines are appended here (D-28)
-    _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit, unseen, drift },
+    _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit, unseen, drift,
+      // what install records in ca_env (4.11 P4): read here, written only by install
+      caEnv: caEnvRecord({ names: caEnvNames(harnesses, [DAEMON_CA_VAR]), env, dir, fs }) },
   }
 }
 
@@ -348,7 +354,7 @@ async function writeInstall(args) {
   const written = { entries: [], files: [], owned: [], unit: null, caCreated: false, intact: [], userChanged: [], needInstall: [] }
   try { return await writeInstallSteps(args, written) } catch (e) { if (e && e.stopsRun) e.written = written; throw e } // what was done before the stop is said
 }
-async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false, certs = true, keepCode = false }, written) {
+async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false, certs = true, keepCode = false, recordCaEnv = false }, written) {
   const { ca, descs, ctxFor, R, daemon, draft, unit, unseen, drift } = plan._
   const body = () => JSON.stringify(m)
   let saved = body()
@@ -360,6 +366,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   written.caCreated = !caThere
   if (m.engine_port == null) m.engine_port = await freePort()
   const final = planTrust({ descriptors: descs, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
+  if (recordCaEnv) setCaEnv(m, plan._.caEnv) // install's alone (4.11 P4 ca_env): not on, not the board's Set up
   if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
   for (const r of unseen) { final.notes.push(r.reason); final.records.push(r) }
   final.notes.push(...drift)
@@ -479,13 +486,16 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
       // a run that put the entry back or started the daemon changed something: its result is on record like any install's (1.6 §1.2)
       if (dmn && (dmn.started || (entryBefore && entryBefore !== 'present'))) put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: dmn.problems.length ? 'partial' : 'installed', reason: `the certificates were in place; the login entry was ${entryBefore}${dmn.started ? ' and the collector was started' : ''}${dmn.problems.length ? `; not done: ${dmn.problems.join('; ')}` : ''}` })
       // nothing to write but the record of which code ran install, when that is another code (1.6 §5.5): an npm copy's update finishes until it says this one
-      if (!opts.keepCode && plan._.prior.install.code !== codeId()) { plan._.prior.install = { ...plan._.prior.install, code: codeId() }; saveManifest(dir, plan._.prior, fs) }
+      const was = JSON.stringify(plan._.prior)
+      if (!opts.keepCode && plan._.prior.install.code !== codeId()) plan._.prior.install = { ...plan._.prior.install, code: codeId() }
+      if (!opts.keepCode) setCaEnv(plan._.prior, plan._.caEnv) // and what it read of the CA variables (4.11 P4 ca_env)
+      if (JSON.stringify(plan._.prior) !== was) saveManifest(dir, plan._.prior, fs)
       return { already: true, entryBefore, manifest: plan._.prior, plan: null, daemon: dmn, skipped: foreignRows(plan, put) }
     }
     const onPlan = opts.onPlan || (() => {})
     onPlan(plan)
     const m = openManifest({ dir, plan, now, fs })
-    const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs, keepCode: !!opts.keepCode })
+    const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs, recordCaEnv: !opts.keepCode, keepCode: !!opts.keepCode })
     const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
     const skipped = foreignRows(plan, put)
     const dmn = await register(put, written.unit === 'rewrite')
@@ -777,7 +787,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, exec = nul
       const record = (ledger, ours) => recordLoginEntry(dir, fs, { ledger, ours }, ms, lockIdentity)
       let rr = early && early.rr ? early.rr : register ? unit.enable({ now: !was.up, prior: held && held.entry ? held.entry.prior ?? null : null, record }) : (was.up ? null : unit.startNow())
       if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
-        const direct = unit.start(daemonEnv(env, dir)) // the direct start carries what the login entry's Environment= would carry
+        const direct = unit.start(daemonEnv(env, dir, { fs })) // the direct start carries what the login entry's Environment= would carry
         if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); trocar started it directly this run; the login entry starts it at the next login`); rr = direct }
       }
       started = !was.up

@@ -144,6 +144,7 @@ const proxy = {
 // alone trusts; trocar writes no SSL_CERT_FILE and no ssl_ca_cert). The block is written only into a Hermes home that exists.
 // The Hermes home per OS comes from the place `on` writes the proxy block (src/off/marker.mjs ROUTE_PLACES), the place the marker undo looks too.
 const HOME = (path) => perOs(Object.fromEntries(Object.entries(ROUTE_PLACES.hermes.file.perOs).map(([os, l]) => [os, { ...l, path }])))
+const EXPAND_FROM = [{ file: HOME('.env'), format: 'dotenv' }, { file: { base: 'abs', env: 'HERMES_MANAGED_DIR', path: '.env' }, format: 'dotenv' }]
 const form = (id, present, verified = { darwin: true, win32: true }) => ({ id, os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'root', present: [...present, HOME()], verified })
 const proxyMode = {
   forms: [
@@ -162,7 +163,9 @@ const proxyMode = {
   // rule U: a CA file the user already named (a route's own ssl_ca_cert replaces the roots for that route: the providers map, the custom_providers
   // list and the inline model block, as the Linux reader above; SSL_CERT_FILE for the rest). SSL_CERT_FILE is not marked replace: the main build
   // appends it and a release build replaces with it (the Linux chain above), and the door cannot tell the build here
-  userCertFiles: [...[['providers', '*', 'ssl_ca_cert'], ['custom_providers', '*', 'ssl_ca_cert'], ['model', 'ssl_ca_cert']].map((keys) => ({ file: HOME('config.yaml'), format: 'yaml', keys, semantics: 'replace', expand: 'env' })), { file: HOME('.env'), format: 'dotenv', keys: ['SSL_CERT_FILE'] }, { env: 'SSL_CERT_FILE' }],
+  // the .env files Hermes loads over its start environment before it expands config.yaml (env_loader): the home one, then $HERMES_MANAGED_DIR's last;
+  // .op.env and the checkout .env only fill a name not yet set, so a name set only there stays unknown to the door (D38)
+  userCertFiles: [...[['providers', '*', 'ssl_ca_cert'], ['custom_providers', '*', 'ssl_ca_cert'], ['model', 'ssl_ca_cert']].map((keys) => ({ file: HOME('config.yaml'), format: 'yaml', keys, semantics: 'replace', expand: 'env', expandFrom: EXPAND_FROM })), { file: HOME('.env'), format: 'dotenv', keys: ['SSL_CERT_FILE'] }, { env: 'SSL_CERT_FILE' }],
   blockers: [],
 }
 
@@ -170,6 +173,8 @@ const ENTRY = '(hermes_cli\\.main|acp_adapter\\.entry)'
 
 export default {
   name: 'hermes',
+  // the CA variables install reads from its environment to compose this harness's files (4.11 P4 ca_env: recorded, so a shell without one keeps it)
+  caEnv: COVERED,
   runtime: 'python',
   // Which processes are Hermes (D51 preset, every OS): python (any version: the normalizer folds python3.N into python) whose `-c` code
   // loads the entry module `hermes_cli.main` / `acp_adapter.entry` (after `import hermes_bootstrap`, as `from <module> import`, or through

@@ -19,6 +19,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { BIG, fileKey } from '../file-id.mjs';
 
 const SIDECAR_V = 1;
 const TYPES = { f64: Float64Array, u32: Uint32Array, i32: Int32Array, u8: Uint8Array };
@@ -196,7 +197,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     try { names = fs.readdirSync(dir); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
     return names.flatMap((n) => { const m = NAMES.exec(n); return m ? [{ path: path.join(dir, n), a: m[1] && +m[1], b: m[2] && +m[2], t: m[3] && +m[3], tmp: !!m[4] }] : []; });
   };
-  const partAt = (f) => { const st = fs.statSync(f.path); return { path: f.path, a: f.a, b: f.b, key: `${f.path}|${st.ino}|${st.size}|${st.mtimeMs}` }; };
+  const partAt = (f) => ({ path: f.path, a: f.a, b: f.b, key: `${f.path}|${fileKey(fs.statSync(f.path, BIG))}` });
   let parts = [], C = 0, T = 0, end = 0; // the parts [0, C), the tail from T (T == C once a writer opened it), the disk's end
   let junk = false, unreadable = null, trunc = false; // trunc: the disk may hold bytes past `end`: made so before the next write
   let starts = [], bufs = [], arena = 0; // the arena: each append's text, by the offset of its first byte

@@ -14,6 +14,7 @@
 // merged bundles are in place. The desired state of a harness the file says on but this daemon was not asked to turn on stays off here.
 import fs from 'node:fs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../../off/state.mjs'
+import { BIG, fileKey } from '../../file-id.mjs'
 
 // Decrypt policy of a harness whose entry names none (RFC 4.6 §引擎 解密策略, D40): `all` — every host of a trusted agent process — so what an
 // agent does besides calling the model is seen . `auto` (the known API hosts only) stays as an opt-down the operator chose.
@@ -37,7 +38,7 @@ function writeState(file, state) { writeStateAtomic(file, state) }
 
 export function createSwitch({ redirector, stateFile, known, installed = () => [], ensureReady = async () => {}, reconcile = null, onEvent = () => {} }) {
   const unreadable = (e) => onEvent({ event: 'failure', where: 'state', code: e.code || 'state-unparsable', reason: `${stateFile} is unreadable (${String((e && e.message) || e)}); the desired state reads as off until on/off rewrites it` })
-  const keyOf = () => { try { const s = fs.statSync(stateFile); return `${s.ino}:${s.size}:${s.mtimeMs}` } catch (e) { return `gone:${(e && e.code) || 'error'}` } } // a rename (new inode), an edit or a removal changes it
+  const keyOf = () => { try { return fileKey(fs.statSync(stateFile, BIG)) } catch (e) { return `gone:${(e && e.code) || 'error'}` } } // a rename (new inode), an edit or a removal changes it
   let diskKey = keyOf() // before the read: a change in between is seen by the next reload, never missed
   let dirty = false // the state in memory was made up because the file could not be read: the next on / off rewrites it
   let state = readState(stateFile, (e) => { dirty = true; unreadable(e) }, { installed: installed() })

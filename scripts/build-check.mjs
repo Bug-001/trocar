@@ -1,4 +1,4 @@
-// scripts/test-build.mjs — `npm run test:build`: the board build check (test/web/board-build.test.mjs) with TROCAR_BUILD_CHECK=1,
+// scripts/build-check.mjs — `npm run test:build`: the board build check (test/web/board-build.test.mjs) with TROCAR_BUILD_CHECK=1,
 // set here so the script line is the same on every OS.
 import { spawnSync } from 'node:child_process'
 
