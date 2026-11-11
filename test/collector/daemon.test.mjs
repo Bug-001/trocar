@@ -43,7 +43,7 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { recordId } from '../../src/collector/core/record/segments.mjs'
 import { openSealed } from '../../src/raw/reader.mjs'
-import { HOST_UID } from '../helpers/platform-shape.mjs'
+import { HOST_UID, NO_MODE_BITS } from '../helpers/platform-shape.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = HOST_UID
@@ -940,7 +940,7 @@ test('daemon: a plugin harness is marker-pending (not recorded) until its marker
     assert.equal((await clients[0].raw({ op: '__watched' })).watch['9191'], 1, 'decrypted from its next connection')
     assert.ok(!flowsOf(s).some((f) => f.event === 'agent-untrusted' && f.pid === 9191), 'a pending plugin is not a failure')
     const unreadable = flowsOf(s).find((f) => f.event === 'failure' && f.code === 'config-unreadable' && f.pid === 9191)
-    if (HOST_UID !== 0) assert.ok(unreadable && unreadable.reason.includes('locked.env'), 'the unreadable file is named, not taken for absent')
+    if (!NO_MODE_BITS) assert.ok(unreadable && unreadable.reason.includes('locked.env'), 'the unreadable file is named, not taken for absent')
     const unparsable = flowsOf(s).find((f) => f.event === 'failure' && f.code === 'config-unparsable' && f.pid === 9191)
     assert.ok(unparsable && unparsable.reason.includes('broken.json exists but does not parse'), 'a config file that does not parse is named too (review 3 #9)')
   } finally { await d.stop(); fs.chmodSync(locked, 0o600); p.done(); s.done() }

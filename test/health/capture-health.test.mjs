@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { captureHealth, HealthUnreadable, LOCK_FRESH_MS } from '../../src/health/read.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
+import { NO_MODE_BITS } from '../helpers/platform-shape.mjs'
 
 const NOW = Date.parse('2026-10-06T12:00:00Z')
 const H = 3600e3
@@ -100,7 +101,7 @@ test('an unreadable flows/ or collector directory throws (status: no health, an 
     fs.rmSync(path.join(b.c, 'flows'), { recursive: true }); fs.writeFileSync(path.join(b.c, 'flows'), 'x')
     assert.throws(() => b.health(), HealthUnreadable)
     fs.rmSync(path.join(b.c, 'flows'))
-    if (process.getuid && process.getuid() !== 0) { // root reads through 000
+    if (!NO_MODE_BITS) {
       fs.chmodSync(b.h, 0o000)
       try { assert.throws(() => b.health(), (e) => e instanceof HealthUnreadable && /EACCES/.test(e.message), 'a collector directory that cannot be looked at is not "not installed"') } finally { fs.chmodSync(b.h, 0o700) }
     }

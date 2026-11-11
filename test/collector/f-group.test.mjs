@@ -48,7 +48,7 @@ import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { seedFootprint } from '../helpers/footprint.mjs'
-import { HOST_UID } from '../helpers/platform-shape.mjs'
+import { HOST_UID, NO_MODE_BITS } from '../helpers/platform-shape.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = HOST_UID
@@ -505,7 +505,7 @@ test('F5 decoding and truncation of HTTP/1 calls: a response that cannot be fram
 // file, is a failure of its own that the endpoint lists with the harness and the path, and the resolver (which looks for
 // the trocar CA in the file the entry names) keeps that agent untrusted meanwhile. The daily timer calls the same function
 // as the start, so the start is what is driven here.
-test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and records it; a rebuild that fails (read-only dir) leaves the old file, a failure event, and the endpoint lists the harness and path', { skip: process.getuid && process.getuid() === 0 ? 'root ignores directory modes' : false }, async () => {
+test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and records it; a rebuild that fails (read-only dir) leaves the old file, a failure event, and the endpoint lists the harness and path', { skip: NO_MODE_BITS }, async () => {
   const s = sandbox(); const p = fakeProc()
   const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, createCa({ commonName: 'an OS root' }).certPem) // a machine with an OS bundle: none would be a bundle failure of its own (4.6 「合并包」)
   fs.mkdirSync(path.join(s.home, '.codex')); fs.writeFileSync(path.join(s.home, '.codex', 'config.toml'), 'model = "gpt-test-1"\n')

@@ -19,7 +19,7 @@ import { captureHealth } from '../../src/health/read.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { seedFootprint } from '../helpers/footprint.mjs'
-import { HOST_UID } from '../helpers/platform-shape.mjs'
+import { HOST_UID, NO_MODE_BITS } from '../helpers/platform-shape.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = HOST_UID
@@ -114,7 +114,7 @@ test('agent-list: a bad item is one agent-list-invalid with its index and code, 
   } finally { await d.stop() }
 })
 
-test('agent-list: no file writes nothing; an unreadable one is one failure, and removing it is agent-list-ok (R6, D38)', { skip: UID === 0 ? 'root reads a mode-000 file' : false }, async () => {
+test('agent-list: no file writes nothing; an unreadable one is one failure, and removing it is agent-list-ok (R6, D38)', { skip: NO_MODE_BITS }, async () => {
   const s = await sandbox(); const p = fakeProc(); const { arch } = fakeArch(p)
   const d = await start(s, arch)
   try {

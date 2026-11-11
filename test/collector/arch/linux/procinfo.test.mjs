@@ -6,6 +6,7 @@ import {
   readExe, readArgv, readEnviron, readComm, listPids, countDirectConnections, directConnections,
 } from '../../../../src/collector/arch/linux/procinfo.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
+import { NO_MODE_BITS } from '../../../helpers/platform-shape.mjs'
 
 // Build a synthetic /proc tree in a tmp dir so these run everywhere with no root.
 function makeProc() {
@@ -75,7 +76,7 @@ test('countDirectConnections counts non-engine ESTABLISHED sockets and excludes 
 // D-17 / review D1-3 (4.6 §开关语义): the count comes from /proc/<pid>/fd against /proc/net/tcp*; when a table that is
 // there cannot be read (EACCES, e.g. an LSM policy) the count is unknown with the errno — never 0. An absent tcp6 (IPv6
 // off) is not an error.
-test('directConnections: an unreadable /proc/net/tcp* is "unknown" with the errno, never 0; an absent tcp6 is fine (D1-3)', { skip: process.getuid && process.getuid() === 0 ? 'root reads a 0000 file' : false }, () => {
+test('directConnections: an unreadable /proc/net/tcp* is "unknown" with the errno, never 0; an absent tcp6 is fine (D1-3)', { skip: NO_MODE_BITS }, () => {
   const { root } = makeProc()
   assert.deepEqual(directConnections(100, { root, enginePort: 8443 }), { count: 1, error: null })
   fs.rmSync(path.join(root, 'net', 'tcp6'))
