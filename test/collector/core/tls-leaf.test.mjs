@@ -6,11 +6,12 @@ import { X509Certificate } from 'node:crypto'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
+import { NO_OPENSSL } from '../../lab/mock-upstream/lab-ca.mjs' // openssl is the independent verifier here
 
 const raw = createCa()
 const issuer = createLeafIssuer(loadCa(raw))
 
-test('leaf: strict openssl verify against the CA, 199-day validity, SAN matches', () => {
+test('leaf: strict openssl verify against the CA, 199-day validity, SAN matches', { skip: NO_OPENSSL }, () => {
   const { certPem } = issuer.issue('relay.example.test')
   const dir = tmpDir('trocar-leaf-')
   fs.writeFileSync(path.join(dir, 'ca.pem'), raw.certPem); fs.writeFileSync(path.join(dir, 'leaf.pem'), certPem)

@@ -9,7 +9,7 @@ import net from 'node:net'; import tls from 'node:tls'
 import { Duplex } from 'node:stream'
 import { startMockUpstream } from '../../lab/mock-upstream/server.mjs'
 import { startMockProxy } from '../../lab/mock-upstream/proxy.mjs'
-import { makeLabCa } from '../../lab/mock-upstream/lab-ca.mjs'
+import { makeLabCa, NO_OPENSSL } from '../../lab/mock-upstream/lab-ca.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
@@ -18,7 +18,7 @@ import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
 import { within, onceWithin as once } from '../../helpers/bounded.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
-const T = { timeout: 20000 }
+const T = { timeout: 20000, skip: NO_OPENSSL }
 const trocarCa = createCa()
 const HOST = 'api.anthropic.com'
 const body = JSON.stringify({ model: 'claude-sonnet-4-5', stream: true, messages: [{ role: 'user', content: 'via proxy' }] })
@@ -430,7 +430,7 @@ async function waitingServer(t, need) {
   await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close())
   return { port: s.address().port, got }
 }
-test('test rig · the waiting server answers once, however much its client sends after the answer (the TR-2 flake: REPLYREPLY)', T, async (t) => {
+test('test rig · the waiting server answers once, however much its client sends after the answer (the TR-2 flake: REPLYREPLY)', { timeout: 20000 }, async (t) => {
   const srv = await waitingServer(t, 4)
   const c = net.connect(srv.port, '127.0.0.1'); await once(c, 'connect')
   let got = ''; c.on('data', (d) => { got += d })

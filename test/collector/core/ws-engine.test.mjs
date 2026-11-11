@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { startMockUpstream } from '../../lab/mock-upstream/server.mjs'
-import { makeLabCa } from '../../lab/mock-upstream/lab-ca.mjs'
+import { makeLabCa, NO_OPENSSL } from '../../lab/mock-upstream/lab-ca.mjs'
 import { wsConnect, encodeFrame } from '../../lab/ws-client.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
@@ -18,7 +18,7 @@ import { createFailureRecorder, recentFailures } from '../../../src/collector/co
 import { request } from '../../lab/helpers.mjs'
 import { closeWithin } from '../../helpers/bounded.mjs'
 
-const T = { timeout: 20000 }
+const T = { timeout: 20000, skip: NO_OPENSSL }
 const TERMINAL = [{ pathSuffix: '/responses', patterns: ['^\\{"type":"(response\\.(completed|failed|incomplete)|error)"'] }]
 const user = (text) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text }] })
 const create = (fields) => JSON.stringify({ type: 'response.create', model: 'gpt-test-1', store: false, stream: true, ...fields })
@@ -27,7 +27,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const until = async (fn, what, ms = 3000) => { for (const end = Date.now() + ms; Date.now() < end; await sleep(5)) { const v = fn(); if (v) return v } throw new Error(`${what}: not within ${ms}ms`) }
 const trocarCa = createCa()
 const labCaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-ws-labca-'))
-const labCa = makeLabCa(labCaDir)
+const labCa = NO_OPENSSL ? null : makeLabCa(labCaDir) // at import: guarded, so the tests that need no lab CA still run
 process.on('exit', () => fs.rmSync(labCaDir, { recursive: true, force: true }))
 
 async function lab(t, { terminal = TERMINAL, recording, delays, describe } = {}) {

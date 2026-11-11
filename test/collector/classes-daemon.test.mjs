@@ -21,7 +21,7 @@ import cc from '../../src/collector/harness/claude-code.mjs'
 import { seedFootprint } from '../helpers/footprint.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { startMockUpstream } from '../lab/mock-upstream/server.mjs'
-import { makeLabCa } from '../lab/mock-upstream/lab-ca.mjs'
+import { makeLabCa, NO_OPENSSL } from '../lab/mock-upstream/lab-ca.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { BUILTIN } from '../../src/classes/table.mjs'
@@ -76,7 +76,7 @@ async function scene({ state = null } = {}) {
 }
 const lastRequest = (mock) => mock.state.log.filter((e) => e.type === 'request').at(-1)
 
-test('T17 default policy `all`: a trusted agent\'s connection to a host no harness lists is decrypted — request and response bytes are the mock\'s, class `other` — and the install writes policy all', async () => {
+test('T17 default policy `all`: a trusted agent\'s connection to a host no harness lists is decrypted — request and response bytes are the mock\'s, class `other` — and the install writes policy all', { skip: NO_OPENSSL }, async () => {
   const s = await scene()
   try {
     assert.equal((await req(s.sock, 'GET', '/status')).harnesses['claude-code'].policy, 'all', 'a fresh install runs `all`')
@@ -92,7 +92,7 @@ test('T17 default policy `all`: a trusted agent\'s connection to a host no harne
   } finally { await s.done() }
 })
 
-test('T17 an install whose state.json already says `auto` keeps it: the same connection is passed through and flows/ says not_captured:policy', async () => {
+test('T17 an install whose state.json already says `auto` keeps it: the same connection is passed through and flows/ says not_captured:policy', { skip: NO_OPENSSL }, async () => {
   const s = await scene({ state: { version: 1, desired: 'off', policy: 'auto', extra_hosts: [] } })
   try {
     assert.equal((await req(s.sock, 'GET', '/status')).harnesses['claude-code'].policy, 'auto', 'a version 1 file that wrote auto reads as auto for the installed harness')
@@ -104,7 +104,7 @@ test('T17 an install whose state.json already says `auto` keeps it: the same con
   } finally { await s.done() }
 })
 
-test('T17 a client that does not trust the trocar CA (a sandboxed child): two rows client-rejected-leaf, one negative-cache event, then byte-exact passthrough from the third connection on', async () => {
+test('T17 a client that does not trust the trocar CA (a sandboxed child): two rows client-rejected-leaf, one negative-cache event, then byte-exact passthrough from the third connection on', { skip: NO_OPENSSL }, async () => {
   const s = await scene()
   try {
     for (let i = 0; i < 2; i++) { const r = await s.call({ ca: s.labCaPem }); assert.equal(r.ok, false, `connection ${i + 1} is refused by the client`) }
@@ -122,7 +122,7 @@ test('T17 a client that does not trust the trocar CA (a sandboxed child): two ro
   } finally { await s.done() }
 })
 
-test('D60③ at the daemon: classes.json is read per call, hot (≤ 1 s); `telemetry` at `log` keeps headers and sizes only; an unparsable file keeps the builtin table, says so (⚠), and says when it is fine again', async () => {
+test('D60③ at the daemon: classes.json is read per call, hot (≤ 1 s); `telemetry` at `log` keeps headers and sizes only; an unparsable file keeps the builtin table, says so (⚠), and says when it is fine again', { skip: NO_OPENSSL }, async () => {
   const s = await scene()
   const file = path.join(s.home, '.trocar', 'classes.json')
   const setKeep = (keep) => fs.writeFileSync(file, JSON.stringify({ version: 1, classes: BUILTIN.map((c) => (c.class === 'telemetry' ? { ...c, keep } : c)) }))
