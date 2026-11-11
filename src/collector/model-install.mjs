@@ -344,7 +344,11 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       if (!path.isAbsolute(file)) { notes.push(`${desc.name}: ${where} (${file || typeof value}) is not an absolute path; its certificates are not in trocar's bundle`); return [] }
       if (inTrocar(file, home, ctx.os)) return []
       let buf
-      try { buf = fs.readFileSync(file) } catch (e) { notes.push(`${desc.name}: ${file} (${where}): ${errnoWords(e)}; its certificates are not in trocar's bundle`); return [] }
+      try { buf = fs.readFileSync(file) } catch (e) {
+        notes.push(`${desc.name}: ${file} (${where}): ${errnoWords(e)}; its certificates are not in trocar's bundle`)
+        // only a file that is gone leaves the record; one that cannot be read now (EACCES, a Windows lock) is still the setting's, read again next time
+        return e.code === 'ENOENT' || e.code === 'ENOTDIR' ? [] : [{ src: label, file, certs: [] }]
+      }
       const got = certsOf(file, buf)
       for (const k of got.skipped) notes.push(`${desc.name}: ${file}: ${k.type ? `block ${k.index} (${k.type})` : 'the file'} is not carried into trocar's bundle: ${k.why}`)
       return [{ src: label, file, certs: got.certs }]

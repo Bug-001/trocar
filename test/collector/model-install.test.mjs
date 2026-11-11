@@ -635,6 +635,24 @@ test('4.11 P4 · §3 ⑭: install without NODE_EXTRA_CA_CERTS keeps the private 
   fs.rmSync(next); await run(without)
   assert.equal(carried(), null, 'a file that is gone drops from the login entry')
   assert.deepEqual(readManifest(w.dir).files.find((f) => f.role === 'bundle' && f.harness === 'z-code').merged_from ?? [], [], 'and from the bundle')
+  assert.ok(!bundleFps().includes(privFp), 'nor does the bundle hold the private CA')
+})
+
+// a file the setting named that cannot be read now (not gone: EACCES, a Windows lock) stays the setting's: the next install that can read it puts its CA back
+test('4.11 P4 merges: a merged file unreadable for one install stays in the record and its CA comes back once it reads', { skip: process.getuid && process.getuid() === 0 && 'root reads a 000 file' }, async () => {
+  const other = await modelWorld(); await other.install()
+  const priv = fs.readFileSync(path.join(other.dir, 'ca', 'trocar-ca.pem'), 'utf8'), privFp = certBlocks(priv)[0].fp
+  const w0 = await modelWorld(), mine = path.join(w0.home, 'company.pem'); put(mine, priv)
+  const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
+  const without = Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS'))
+  const run = (env) => w.install({ wrapperKit: { renderWrapper }, env, ctx: { ...w.ctx, env } })
+  const bundleFps = () => certBlocks(fs.readFileSync(path.join(w.dir, 'ca', 'bundle-z-code.pem'), 'utf8')).map((b) => b.fp)
+  await run(w.env)
+  fs.chmodSync(mine, 0o000)
+  try { await run(without) } finally { fs.chmodSync(mine, 0o600) }
+  assert.deepEqual(readManifest(w.dir).files.find((f) => f.role === 'bundle' && f.harness === 'z-code').merged_from, [{ src: 'env:NODE_EXTRA_CA_CERTS', file: mine }])
+  await run(without)
+  assert.ok(bundleFps().includes(privFp), 'readable again: its CA is back')
 })
 
 test('4.11 P4 merges: the desktop setting is read fresh — when it stops naming a file, that file\'s CA drops', async () => {
