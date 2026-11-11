@@ -11,8 +11,8 @@ export const carriedWhy = (v, dir) => (!path.isAbsolute(v) ? 'it is a relative p
 const get = (env, k) => (env instanceof Map ? env.get(k) : env && Object.hasOwn(env, k) ? env[k] : undefined)
 const usable = (v, dir, fs) => typeof v === 'string' && !carriedWhy(v, dir) && fs.existsSync(v)
 
-/** The names install records: every descriptor's `caEnv`, once each. */
-export const caEnvNames = (descs) => [...new Set((descs || []).flatMap((d) => d.caEnv || []))].sort()
+/** The names install records: every descriptor's `caEnv` and trocar's own (`own`: the daemon's), once each. */
+export const caEnvNames = (descs, own = []) => [...new Set([...(descs || []).flatMap((d) => d.caEnv || []), ...own])].sort()
 
 /** The recorded values that count now → { NAME: file }. A manifest that cannot be read records nothing (install says what it cannot read). */
 export function recordedCaEnv(dir, fs = nodeFs) {

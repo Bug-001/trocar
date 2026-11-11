@@ -23,7 +23,7 @@ import { placeWrapper, managedTree, targetOf } from './core/proxymode/hooks/wrap
 import { lineComment, removeTrocarText } from '../off/text-edit.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
-import { unitedLiveness, daemonEnv } from './install.mjs'
+import { unitedLiveness, daemonEnv, DAEMON_CA_VAR } from './install.mjs'
 import { CODE, EVENT } from './core/codes.mjs'
 import { runEventWriter } from '../off/events.mjs'
 import { writeBackup } from '../off/backup.mjs'
@@ -252,7 +252,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     const skippedRec = { ...kept, ...Object.fromEntries(skips) }
     const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed, ...(Object.keys(skippedRec).length ? { skipped: skippedRec } : {}), ...(code ? { code } : {}) }
     if (JSON.stringify(next) !== JSON.stringify(m.install)) m.install = next
-    if (!only) setCaEnv(m, caEnvRecord({ names: caEnvNames(harnesses), env: shellEnv, dir, fs })) // a Set up runs in the daemon's env, not the user's: it records nothing
+    if (!only) setCaEnv(m, caEnvRecord({ names: caEnvNames(harnesses, [DAEMON_CA_VAR]), env: shellEnv, dir, fs })) // a Set up runs in the daemon's env, not the user's: it records nothing
     if (JSON.stringify(m) !== before) save()
     const skipped = carriers.filter((x) => x.state === 'skipped').length + items.filter((x) => x.state === 'skipped').length
     return { manifest: m, fp256: rootDer ? rootIdOf(rootDer).fp256 : null, items, carriers, pending, problems, notes, exit: pending.length || problems.length || skipped ? 1 : 0 }

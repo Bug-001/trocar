@@ -116,13 +116,15 @@ async function recorded(dir, where, fn, result = {}) { // result: what the faile
 // outside trocar's home only; anything else is said, never dropped silently (review 3 #1, D38). A daemon `on` starts directly
 // (the fallback when the OS mechanism refuses) is handed exactly the same (ensureDaemonUp → unit.start): without it capture breaks behind a corporate
 // MITM relay and nothing says so (review 2026-10-18).
+/** The daemon's own Node trust variable, which the login entry carries: trocar's, not any harness's, so ca_env records it whichever harnesses there are (4.11 §3 ⑭). */
+export const DAEMON_CA_VAR = 'NODE_EXTRA_CA_CERTS'
 // A shell that does not set it is unknown, not removed: the value `ca_env` records stands in (4.11 P4, §3 ⑭; D38, invariant 5)
 export function daemonEnv(env, dir, { fs = nodeFs } = {}) {
-  const v = withCaEnv(env, dir, fs).NODE_EXTRA_CA_CERTS
+  const v = withCaEnv(env, dir, fs)[DAEMON_CA_VAR]
   if (typeof v !== 'string' || v === '') return { env: {}, note: null }
   const why = carriedWhy(v, dir)
   if (why) return { env: {}, note: `NODE_EXTRA_CA_CERTS of this shell (${v}) is not given to the daemon trocar starts (${why}); that daemon checks a relay's certificate with Node's roots only` }
-  return { env: { NODE_EXTRA_CA_CERTS: v }, note: null }
+  return { env: { [DAEMON_CA_VAR]: v }, note: null }
 }
 
 // ── `trocar on` (RFC 1.6 §1.6, R6, R9, R12; D39) ────────────────────────────────────────────────────────────────────────────────────────
@@ -319,7 +321,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     events: path.join(dir, 'flows', `${day}.ndjson`), // install-note lines are appended here (D-28)
     _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit, unseen, drift,
       // what install records in ca_env (4.11 P4): read here, written only by install
-      caEnv: caEnvRecord({ names: caEnvNames(harnesses), env, running: facts.filter((f) => match(f).agent).map((f) => f.env || new Map()), dir, fs }) },
+      caEnv: caEnvRecord({ names: caEnvNames(harnesses, [DAEMON_CA_VAR]), env, running: facts.filter((f) => match(f).agent).map((f) => f.env || new Map()), dir, fs }) },
   }
 }
 

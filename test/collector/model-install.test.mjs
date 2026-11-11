@@ -703,3 +703,16 @@ test('4.11 P4 ca_env: an install over a 0.2.x record with intact files records t
   assert.deepEqual(bytes(), was, 'from a shell without the variable: still the same bytes, the CA kept')
   assert.ok(certBlocks(bytes()[1]).some((b) => b.fp === privFp))
 })
+
+// 4.11 §3 ⑭: the daemon's own NODE_EXTRA_CA_CERTS is trocar's, not any harness's: recorded in ca_env whichever harnesses there are, so a login
+// entry from a shell without it keeps the value — here with Codex alone, whose caEnv does not name it
+test('§3 ⑭ · ca_env: with Codex alone, an install without NODE_EXTRA_CA_CERTS after one with it keeps the login entry\'s value', async () => {
+  const codex = (await loadHarnesses()).find((d) => d.name === 'codex')
+  const w0 = await modelWorld(), mine = path.join(w0.home, 'corp.pem'); put(mine, USER_PEM)
+  const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
+  const unitPath = path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist'), unit = { path: unitPath, text: (env) => `${JSON.stringify(env)}\n` }
+  const run = (env) => w.install({ harnesses: [codex], wrapperKit: { renderWrapper }, unit, env, ctx: { ...w.ctx, env } })
+  await run(w.env)
+  await run(Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS')))
+  assert.equal(JSON.parse(fs.readFileSync(unitPath, 'utf8')).NODE_EXTRA_CA_CERTS, mine)
+})
