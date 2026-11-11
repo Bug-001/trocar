@@ -19,6 +19,7 @@ import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-
 
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 import { codeId, selfCommand } from '../../src/version.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const CODE = codeId() // D67⑥: the version with HEAD's first 7 in a git checkout
 /** The context of a run where every command is a spy that records `[name, ...argv]` and answers 0: what the dispatch did, not what the commands do. */
@@ -142,7 +143,7 @@ test('V20: install / on / off / uninstall / daemon and the subcommands that chan
   }
 })
 
-test('V9: status, off, on, doctor and uninstall with --json print one JSON value that passes validateReceipt, its `command` is the command, and what is said besides goes to stderr', async () => {
+test('V9: status, off, on, doctor and uninstall with --json print one JSON value that passes validateReceipt, its `command` is the command, and what is said besides goes to stderr', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli()
   for (const argv of [['status', '--json'], ['doctor', '--json'], ['off', '--json'], ['on', '--yes', '--json'], ['uninstall', '--yes', '--json']]) {
     const { exit, io } = await s.run(argv)
@@ -156,7 +157,7 @@ test('V9: status, off, on, doctor and uninstall with --json print one JSON value
   assert.equal(plan.exit, 2); assert.ok(plan.io.stdoutText() === '' || JSON.parse(plan.io.stdoutText()).command === 'install')
 })
 
-test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cannot judge, 70 the daemon crashed', async () => {
+test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cannot judge, 70 the daemon crashed', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli()
   assert.equal((await s.run(['status'])).exit, 0, 'on and every harness captured')
   const refused = async (q) => { if (q.path === '/off') throw Object.assign(new Error('400: no'), { status: 400 }); return s.deps().request(q) }
@@ -182,7 +183,7 @@ test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cann
   assert.equal((await s.run(['daemon'], { deps: { startDaemon: async () => { throw new Error('the port is taken') } } })).exit, 1)
 })
 
-test('D38: the daemon log carries a dying query worker\'s last stderr lines under its record line', async () => {
+test('D38: the daemon log carries a dying query worker\'s last stderr lines under its record line', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli()
   const died = Object.assign(new Error('the query worker exited (signal SIGABRT): FATAL ERROR: heap out of memory'), { code: 'query-failed', detail: ['<--- Last few GCs --->', 'FATAL ERROR: heap out of memory'] })
   const r = await s.run(['daemon'], { deps: { startDaemon: async ({ log }) => { log('daemon', died); throw new Error('the port is taken') } } })

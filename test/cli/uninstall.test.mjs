@@ -390,7 +390,7 @@ test('§3.6: an uninstall that must wait for the op lock and finds an unanswerin
 
 // 1.6 §3.6 「记录没列的标记」: the record lists codex's file and not Claude Code's settings (marked by trocar, its value backed up): one uninstall takes
 // both out — the unlisted one by trocar's marks at the places planByMarker reads, its old value from the backup — and the receipt names it as undone by marker
-test('§3.6: uninstall also takes out a marked file the record does not list, by its marks, the value from its backup; one run clears both', async () => {
+test('§3.6: uninstall also takes out a marked file the record does not list, by its marks, the value from its backup; one run clears both', { skip: POSIX_WORLD }, async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
@@ -412,7 +412,7 @@ test('§3.6: uninstall also takes out a marked file the record does not list, by
 })
 
 // 1.6 §1.4 「计划写全」, V85: the plan (--dry-run, and the one shown before a yes) names the unlisted marked file too, and writes nothing
-test('§1.4: uninstall --dry-run plans the marked file the record does not list beside the one it lists; the home is unchanged', async () => {
+test('§1.4: uninstall --dry-run plans the marked file the record does not list beside the one it lists; the home is unchanged', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
   } })
@@ -433,7 +433,7 @@ test('§1.4: uninstall --dry-run plans the marked file the record does not list 
   assert.deepEqual(snapshot(s.home), snap)
 })
 
-test('V24 (uninstall): with the install manifest gone and no terminal, uninstall takes the routing off, stops the daemon, undoes nothing, removes nothing of trocar\'s and exits 1; with --yes it undoes the entries by their marks and removes trocar\'s own files by name — the CA, the unit, the state, every backup', async () => {
+test('V24 (uninstall): with the install manifest gone and no terminal, uninstall takes the routing off, stops the daemon, undoes nothing, removes nothing of trocar\'s and exits 1; with --yes it undoes the entries by their marks and removes trocar\'s own files by name — the CA, the unit, the state, every backup', { skip: POSIX_WORLD }, async () => {
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
