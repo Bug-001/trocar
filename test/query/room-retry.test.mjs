@@ -153,9 +153,12 @@ test('3.5 #37: a stop an earlier worker wrote does not hold the session in a new
     await until(r, 'the upgrade target and the newest session folded', () => folded(home, U) && folded(home, N))
   } finally { svc.stop() }
   for (const f of fs.readdirSync(sessionDir(home, U))) if (/^open\./.test(f)) fs.unlinkSync(path.join(sessionDir(home, U), f)) // no tail: an upgrade target
-  const b = ballasted(foldLog(home, s))
+  const b = ballasted(foldLog(home, s)), uHead = path.join(sessionDir(home, U), 'head.json.gz'), uWas = fs.readFileSync(uHead)
   const first = await parked(home, s, b, { idleMs: 60_000 })
   try { await until(first.r, 'the earlier worker wrote its stop', () => stoppedOn(home, s.id)) } finally { first.svc.stop() }
+  // the earlier worker, its heap full, may have reached the upgrade target too and stopped it; its head as before, so the target is one
+  // the new worker upgrades, and the idle period that gives every stopped session to `follow` (s among them) does not come before the read
+  fs.writeFileSync(uHead, uWas)
   // the upgrade target's fold log as a worker killed before its save leaves it once the next one cuts it back to its sidecar: empty, and
   // no sidecar. Whether the workers above saved it varies by run; a log folded to its end gives an upgrade that only renders the tails,
   // and the new worker's idle slices are not on it. (The stopped session, this case's subject, is left as the earlier worker wrote it.)
