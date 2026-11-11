@@ -17,7 +17,7 @@ const box = () => {
 }
 const USER = '{\n  "model": "x",\n  "env": {\n    "API_KEY": "k"\n  }\n}\n'
 const planned = (file) => ({ harness: 'h', kind: 'json-key', path: file, keys: K })
-const stamp = (f) => { const s = fs.statSync(f); return [s.ino, s.mtimeMs, sha256(fs.readFileSync(f))] }
+const stamp = (f) => { const s = fs.statSync(f, { bigint: true }); return [s.ino, s.mtimeNs, sha256(fs.readFileSync(f))] }
 
 test('judgeEntry: not listed → write; intact → skip-intact and applying it again writes nothing (inode, mtime, installed_at stay); edited elsewhere but trocar\'s value still there → skip-intact; the key changed by the user → skip-user-changed, and apply refuses', () => {
   const b = box()
