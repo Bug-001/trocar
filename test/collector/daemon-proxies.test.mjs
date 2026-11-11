@@ -25,10 +25,11 @@ import { seedFootprint } from '../helpers/footprint.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { startMockUpstream } from '../lab/mock-upstream/server.mjs'
 import { startMockProxy } from '../lab/mock-upstream/proxy.mjs'
-import { makeLabCa } from '../lab/mock-upstream/lab-ca.mjs'
+import { makeLabCa, NO_OPENSSL } from '../lab/mock-upstream/lab-ca.mjs'
+import { HOST_UID } from '../helpers/platform-shape.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
-const UID = process.getuid()
+const UID = HOST_UID
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 const API = 'api.anthropic.com'
 const PROXY_HOST = 'proxy.asight.test' // the mock CA's leaf covers *.asight.test
@@ -56,7 +57,7 @@ test('toProxyEntry: scheme-less is http, credentials are never kept, unknown sch
   assert.deepEqual([toProxyEntry({ url: 'ftp://x', source: 's' }), toProxyEntry({ url: 'http://', source: 's' })], [null, null])
 })
 
-test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine through describe — outer TLS terminated, CONNECT recorded, the tunnelled call decrypted and recorded (W8 through the daemon)', { timeout: 20000 }, async () => {
+test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine through describe — outer TLS terminated, CONNECT recorded, the tunnelled call decrypted and recorded (W8 through the daemon)', { timeout: 20000, skip: NO_OPENSSL }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'as-dp-')) // short: unix socket paths are length-limited
   const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   const dir = path.join(home, '.trocar', 'collector'), sock = path.join(root, 'run', 'c.sock')
@@ -109,7 +110,7 @@ test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine th
   } finally { if (raw) raw.destroy(); await d.stop(); await proxy.close(); await mock.close(); p.done(); fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('daemon: describe that throws costs the connection nothing — it goes on without the proxy table (spliced, policy) and the failure is recorded under describe-error', { timeout: 20000 }, async () => {
+test('daemon: describe that throws costs the connection nothing — it goes on without the proxy table (spliced, policy) and the failure is recorded under describe-error', { timeout: 20000, skip: NO_OPENSSL }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'as-dp-'))
   const home = path.join(root, 'home'); fs.mkdirSync(home); seedFootprint(home, [cc]) // Claude Code is installed (4.6: its own footprint)
   const dir = path.join(home, '.trocar', 'collector'), sock = path.join(root, 'run', 'c.sock')

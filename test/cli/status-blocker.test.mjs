@@ -17,6 +17,7 @@ import { fakeIo } from './fixtures/on-ctx.mjs'
 import { SOCK } from './fixtures/status-ctx.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { darwinNetFacts } from '../../src/collector/arch/darwin/netfacts.mjs'
+import { NO_MODE_BITS } from '../helpers/platform-shape.mjs'
 
 const APP = '/Applications/ZCode.app' // the desktop app's place on macOS (the descriptor's `present`): the one path outside HOME this world says is there
 const SETTING = (home) => path.join(home, '.zcode', 'v2', 'setting.json')
@@ -54,7 +55,7 @@ const SHAPES = {
 
 for (const [shape, s] of Object.entries(SHAPES)) {
   test(`4.11 ⑩ · status: a blocked form (${shape}) — the harness verdict and the form's row say what the route plan found, never "captured" / "points at trocar"`, async (t) => {
-    if (shape === 'unreadable' && process.getuid && process.getuid() === 0) return t.skip('root reads a mode-000 file')
+    if (shape === 'unreadable' && NO_MODE_BITS) return t.skip(NO_MODE_BITS)
     const w = await zcodeWorld(s.write)
     try {
       const j = JSON.parse(await status(w, ['--json', 'z-code']))

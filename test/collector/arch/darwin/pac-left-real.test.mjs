@@ -18,10 +18,11 @@ import { ownerOfSocket } from '../../../../src/collector/arch/darwin/socktable.m
 import { NATIVE, nativePath } from '../../../../src/collector/arch/darwin/native.mjs'
 import { createIngress } from '../../../../src/collector/core/engine/ingress.mjs'
 import { peerAllowed } from '../../../../src/collector/core/proxymode/pac.mjs'
+import { HOST_UID } from '../../../helpers/platform-shape.mjs'
 
 const SKIP = { skip: process.platform !== 'darwin' && 'macOS only', timeout: 20_000 }
 const exec = (file, args, o = {}) => execTool(file, args, { ...o, run: runAsync }) // the daemon's runner (arch/model-backends.mjs doorPartsFor)
-const me = { uid: process.getuid() }
+const me = { uid: HOST_UID }
 
 /** A PAC door (auth:false) whose lookup asks the real socket table once `ready` settles, and answers as the PAC door does (peerAllowed, P10). */
 async function pacDoor(t, ready) {

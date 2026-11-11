@@ -8,6 +8,7 @@ import { contractWorld, daemonFor, placesOf, snapshot } from './contract-world.m
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { seeds, userEdits, readDotenv, readJsonc, PROXY_NAMES } from './file-shapes.mjs'
 import { resolveLoc, routes } from '../../src/collector/core/proxymode/sources.mjs'
+import { HOST_UID } from './platform-shape.mjs'
 
 export const OSES = ['darwin', 'win32']
 const BASE = { dotenv: ["# the user's own", 'OPENAI_API_KEY=sk-x', 'FOO_TIMEOUT=30'], json: ['{', '  "model": "m-1",', '  "env": {', '    "FOO_TIMEOUT": "30"', '  }', '}'] }
@@ -81,7 +82,7 @@ export const invariants = {
   },
   /** CM25: no file under HOME owned by anyone but the user, at any point; no admin step among the OS-tool calls. */
   cm25({ snaps }) {
-    const me = process.getuid()
+    const me = HOST_UID
     return [...snaps.flatMap((s) => Object.entries(s.files).filter(([, f]) => f.uid !== me).map(([p, f]) => `${p} is owned by uid ${f.uid}`)), ...snaps.at(-1).exec.filter((x) => ADMIN_EXEC.test(x)).map((x) => `an admin step: ${x}`)]
   },
   /** CM26: no login-environment variable — no rc / profile / environment.d file changes, no launchctl setenv, no HKCU\Environment write. */

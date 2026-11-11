@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { unitText, unitPath, wantsLink, removeWantsLinks, systemctl, userUnit, UNIT_NAME } from '../../../../src/collector/arch/linux/unit.mjs'
 import { commandNamed } from '../../../../src/cli/commands.mjs'
+import { NO_MODE_BITS } from '../../../helpers/platform-shape.mjs'
 
 test('unit: absolute quoted ExecStart, restart on failure, no capability-stripping directives', () => {
   const t = unitText({ program: ['/usr/bin/node', '/opt/my "trocar"/bin/trocar.mjs'] })
@@ -42,7 +43,7 @@ test('unit: wants/ symlinks left behind are removed; systemctl runs as --user an
     fs.symlinkSync(unitPath(home), path.join(wants, UNIT_NAME))
     assert.deepEqual(removeWantsLinks(home), [path.join(wants, UNIT_NAME)])
     assert.ok(!fs.existsSync(wants), 'the wants dir it emptied goes too')
-    if (process.getuid() !== 0) { // a link in a dir the user cannot write: reported, never swallowed (review 4 #9)
+    if (!NO_MODE_BITS) { // a link in a dir the user cannot write: reported, never swallowed (review 4 #9)
       fs.mkdirSync(wants); fs.symlinkSync(unitPath(home), path.join(wants, UNIT_NAME)); fs.chmodSync(wants, 0o555)
       const errs = []
       assert.deepEqual(removeWantsLinks(home, { onError: (p, e) => errs.push([p, e.code]) }), [])

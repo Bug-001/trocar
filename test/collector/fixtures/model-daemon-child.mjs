@@ -5,6 +5,7 @@
 // fixture TROCAR_E2E_FX). It runs only when started with `run`: `node --test` also loads this file, with no argument and the real HOME.
 import fs from 'node:fs'
 import path from 'node:path'
+import { HOST_UID } from '../../helpers/platform-shape.mjs'
 if (process.argv[2] !== 'run') process.exit(0)
 
 const { runDaemonCli } = await import('../../../src/cli/daemon.mjs')
@@ -26,7 +27,7 @@ const ctx = sourcesCtx({ os, home, env, cwd: home, dirs })
 ctx.exists = (p) => (p === home || p.startsWith(`${home}${path.sep}`)) && fs.existsSync(p)
 const harnesses = await loadHarnesses()
 const custody = custodyStub()
-const owns = (p) => { try { return fs.statSync(p).uid === process.getuid() } catch { return null } }
+const owns = (p) => { try { return fs.statSync(p).uid === HOST_UID } catch { return null } }
 const inst = await runInstall({ os, home, env, harnesses, custody, rootStore: rootStoreStub(), ctx, owns, renderHook, wrapperKit: { renderWrapper } })
 if (inst.exit !== 0) { console.error(`install: ${JSON.stringify(inst)}`); process.exit(3) }
 

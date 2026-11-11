@@ -33,7 +33,7 @@ import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
 import { envelopesOf } from '../helpers/record-store.mjs'
 import { appendEvent } from '../../src/collector/core/events.mjs'
-import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
+import { POSIX_WORLD, HOST_UID } from '../helpers/platform-shape.mjs'
 
 function box() {
   const home = tmpDir('trocar-inst-')
@@ -1096,12 +1096,12 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
   const sock = path.join(root, 'run', 'c.sock')
   const p = fakeProc(); const up = await relay()
   const clients = []
-  const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient: () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE_LOADER], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c }, procRoot: p.root, uid: process.getuid() }) }
+  const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient: () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE_LOADER], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c }, procRoot: p.root, uid: HOST_UID }) }
   const ticks = () => Math.ceil((Date.now() / 1000 - p.btime) * 100)
   const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
   const helper = () => clients[clients.length - 1] // off with nothing left on lets the helper go; the next on starts a new one (4.6 §开关语义)
   // exec: reported by the helper; with none running (off) the process is only in /proc, and the next on's rescan finds it
-  const start = async (pid, exec = true) => { p.add(pid, { uid: process.getuid(), exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: root, env: { HOME: home }, startTicks: ticks() }); if (exec) await helper().raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: 'claude', filename: CC_EXE, ts_ns: pid }) }
+  const start = async (pid, exec = true) => { p.add(pid, { uid: HOST_UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: root, env: { HOME: home }, startTicks: ticks() }); if (exec) await helper().raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: 'claude', filename: CC_EXE, ts_ns: pid }) }
   const ask = (method, path_, body) => controlRequest({ socketPath: sock, method, path: path_, body })
   const agentOf = async (pid) => (await ask('GET', '/status')).agents.find((a) => a.pid === pid)
   // the daemon below really binds the manifest's engine port: a free one, not onBase's fixed 47011 (two full runs at once collided there)

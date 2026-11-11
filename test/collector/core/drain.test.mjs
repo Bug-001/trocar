@@ -8,7 +8,7 @@ import net from 'node:net'
 import tls from 'node:tls'
 import { insertConnectionClose, createDrain } from '../../../src/collector/core/engine/drain.mjs'
 import { startMockUpstream } from '../../lab/mock-upstream/server.mjs'
-import { makeLabCa } from '../../lab/mock-upstream/lab-ca.mjs'
+import { makeLabCa, NO_OPENSSL } from '../../lab/mock-upstream/lab-ca.mjs'
 import { wsConnect } from '../../lab/ws-client.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
@@ -226,13 +226,13 @@ test('gate: bytes that do not start a status head (the head began before the gat
 })
 
 // ── the real engine, over TLS, against the mock upstream ───────────────────────────────────────────────────────────────
-const T = { timeout: 20000 }
+const T = { timeout: 20000, skip: NO_OPENSSL }
 const TERMINAL = [{ pathSuffix: '/responses', patterns: ['^\\{"type":"(response\\.(completed|failed|incomplete)|error)"'] }]
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const until = async (fn, what, ms = 4000) => { for (const end = Date.now() + ms; Date.now() < end; await sleep(5)) { const v = fn(); if (v) return v } throw new Error(`${what}: not within ${ms}ms`) }
 const trocarCa = createCa()
 const labCaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-drain-labca-'))
-const labCa = makeLabCa(labCaDir)
+const labCa = NO_OPENSSL ? null : makeLabCa(labCaDir) // at import: guarded, so the tests that need no lab CA still run
 process.on('exit', () => fs.rmSync(labCaDir, { recursive: true, force: true }))
 const BODY = JSON.stringify({ model: 'claude-x', max_tokens: 16, messages: [{ role: 'user', content: [{ type: 'text', text: 'drain me' }] }] })
 const SSE_BODY = (text = 'drain me') => JSON.stringify({ model: 'claude-x', max_tokens: 16, stream: true, messages: [{ role: 'user', content: [{ type: 'text', text: `${text} [[mock:slow-drip]]` }] }] })

@@ -183,7 +183,7 @@ test('no-real-os: no test process writes under the machine\'s own folders or the
   refused(() => fs.symlinkSync(t, INTO))
   refused(() => fs.rmSync(INTO, { force: true }))
   refused(() => fs.createWriteStream(INTO))
-  refused(() => fs.writeFileSync(new URL(`file://${INTO}`), ''))
+  refused(() => fs.writeFileSync(pathToFileURL(INTO), ''))
   refused(() => fs.writeFileSync(HOME_FILE, ''), HOME_FILE)
   for (const w of [() => fs.promises.writeFile(INTO, ''), () => fs.promises.mkdir(INTO), () => fs.promises.open(INTO, 'a')]) {
     await assert.rejects(w, { code: 'ESANDBOX' })

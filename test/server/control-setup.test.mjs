@@ -27,7 +27,7 @@ import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { installedHome, ROOTS } from '../off/fixtures/off-ctx.mjs'
 import { setKey } from '../../src/off/json-text.mjs'
 import { removeTrocarText } from '../../src/off/text-edit.mjs'
-import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
+import { POSIX_WORLD, NO_MODE_BITS } from '../helpers/platform-shape.mjs'
 import { MARKER_PATHS } from '../../src/off/marker.mjs'
 
 const dotenvCa = (h) => MARKER_PATHS[h].some((x) => x.how === 'block') // a harness whose Linux carrier is a dotenv block: its value is a POSIX path only
@@ -300,7 +300,7 @@ test('Linux · invariant 5: a file trocar created in a directory it made, delete
   assert.deepEqual([fs.existsSync(x.path), fs.existsSync(path.dirname(x.path))], [false, false])
 })
 
-test('Linux · 4.11 P4b · D38: a carrier file that cannot be read judges `unknown` with its reason, never ready; on goes on with a note, not a refusal', { skip: process.getuid && process.getuid() === 0 ? 'root reads a 000 file' : false }, async () => {
+test('Linux · 4.11 P4b · D38: a carrier file that cannot be read judges `unknown` with its reason, never ready; on goes on with a note, not a refusal', { skip: NO_MODE_BITS }, async () => {
   const s = await installedHome({ names: ['claude-code'] })
   const x = s.manifest().entries.find((e) => e.harness === 'claude-code' && e.phase === 'install')
   fs.chmodSync(x.path, 0o000)

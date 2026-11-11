@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import tls from 'node:tls'; import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { startMockUpstream } from '../../lab/mock-upstream/server.mjs'
-import { makeLabCa } from '../../lab/mock-upstream/lab-ca.mjs'
+import { makeLabCa, NO_OPENSSL } from '../../lab/mock-upstream/lab-ca.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
@@ -22,7 +22,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // Every wait here is bounded (test/helpers/bounded.mjs): the client's close, the engine's close, and the test itself, so a
 // failure is a failure and not a file that never finishes under --test-force-exit.
-test('byte transparency across mock scenarios', { timeout: 60_000 }, async (t) => {
+test('byte transparency across mock scenarios', { timeout: 60_000, skip: NO_OPENSSL }, async (t) => {
   const caDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-ca-'))
   const lab = makeLabCa(caDir)
   const mock = await startMockUpstream({ tls: { key: fs.readFileSync(lab.key), cert: fs.readFileSync(lab.cert) }, delays: { stallMs: 200, dripMs: 5 } })

@@ -11,6 +11,7 @@ import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { certsOf, composeBundle, rewriteBundles, rootsFingerprint, userCertsIn } from '../../../src/collector/core/trust/bundle.mjs'
 import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
 import { newManifest, readManifest } from '../../../src/collector/core/trust/journal.mjs'
+import { NO_MODE_BITS } from '../../helpers/platform-shape.mjs'
 
 const mk = (cn) => createCa({ commonName: cn })
 const TROCAR = mk('trocar collector CA'); const R1 = mk('root one'); const R2 = mk('root two'); const OS1 = mk('os root'); const CORP = mk('corp CA'); const OTHER = mk('other corp CA')
@@ -63,7 +64,7 @@ test('T14: roots that changed rebuild each bundle atomically (temp + rename) wit
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('T14 / D38 F1(d): a bundle that is missing or unreadable is rebuilt from the recorded user CA files; one that cannot be written is reported, its old file untouched, the other bundles still rebuilt', { skip: process.getuid && process.getuid() === 0 ? 'root ignores file modes' : false }, () => {
+test('T14 / D38 F1(d): a bundle that is missing or unreadable is rebuilt from the recorded user CA files; one that cannot be written is reported, its old file untouched, the other bundles still rebuilt', { skip: NO_MODE_BITS }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-b-'))
   try {
     const dir = path.join(root, 'collector'); const ca = path.join(dir, 'ca'); fs.mkdirSync(ca, { recursive: true })

@@ -7,7 +7,7 @@
 // serverAuth and an AKI. 397 days is the longest validity clients accept for a server cert.
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
@@ -41,6 +41,10 @@ subjectAltName = @alt
 ${LAB_HOSTS.map((h, i) => `DNS.${i + 1} = ${h}`).join('\n')}
 IP.1 = 127.0.0.1
 `
+
+// A test that needs the lab CA (or openssl as its verifier) spreads `skip: NO_OPENSSL`: false where `openssl version` runs, else the reason.
+// The lab CA stands in for a third party's upstream, so it is never made by the code under test (node crypto through src/).
+export const NO_OPENSSL = spawnSync('openssl', ['version'], { stdio: 'ignore' }).error ? "the lab CA is made with the openssl CLI, which is not on this host's PATH" : false
 
 // Writes ca.key, ca.crt, leaf.key, leaf.crt into dir and returns their paths.
 export function makeLabCa(dir, { days = 397 } = {}) {

@@ -6,6 +6,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { readTlv, int } from '../../../src/collector/core/tls/der.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
+import { NO_OPENSSL } from '../../lab/mock-upstream/lab-ca.mjs' // openssl is the independent verifier here
 
 test('DER: integers are minimal and positive', () => {
   assert.deepEqual(int(0n), Buffer.from([0x02, 0x01, 0x00]))
@@ -14,7 +15,7 @@ test('DER: integers are minimal and positive', () => {
   assert.deepEqual([t.tag, t.headerLen, t.len], [0x30, 4, 256])
 })
 
-test('createCa: a v3 CA that node parses and openssl verifies against itself', () => {
+test('createCa: a v3 CA that node parses and openssl verifies against itself', { skip: NO_OPENSSL }, () => {
   const { keyPem, certPem } = createCa({ now: new Date('2026-10-05T00:00:00Z') })
   const x = new X509Certificate(certPem)
   assert.equal(x.ca, true)

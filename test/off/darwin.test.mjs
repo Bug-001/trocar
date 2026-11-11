@@ -14,8 +14,9 @@ import { runOff } from '../../src/off/orchestrate.mjs'
 import { flowEvents } from './fixtures/off-ctx.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { HOST_UID } from '../helpers/platform-shape.mjs'
 
-const UID = process.getuid()
+const UID = HOST_UID
 const DOMAIN = `gui/${UID}`
 const LABEL = 'com.trocar.collector'
 const plistOf = (home) => path.join(home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')

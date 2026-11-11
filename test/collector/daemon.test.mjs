@@ -27,7 +27,7 @@ import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
 import { startMockUpstream } from '../lab/mock-upstream/server.mjs'
-import { makeLabCa } from '../lab/mock-upstream/lab-ca.mjs'
+import { makeLabCa, NO_OPENSSL } from '../lab/mock-upstream/lab-ca.mjs'
 import { wsConnect } from '../lab/ws-client.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
@@ -43,9 +43,10 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { recordId } from '../../src/collector/core/record/segments.mjs'
 import { openSealed } from '../../src/raw/reader.mjs'
+import { HOST_UID, NO_MODE_BITS } from '../helpers/platform-shape.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
-const UID = process.getuid()
+const UID = HOST_UID
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 const CODEX_EXE = '/home/u/.local/bin/codex'
 // an arch's osRoots over one PEM file: the Linux arch's own resolver (osBundleRoots) with its list cut to that file — the shape every real arch gives
@@ -939,7 +940,7 @@ test('daemon: a plugin harness is marker-pending (not recorded) until its marker
     assert.equal((await clients[0].raw({ op: '__watched' })).watch['9191'], 1, 'decrypted from its next connection')
     assert.ok(!flowsOf(s).some((f) => f.event === 'agent-untrusted' && f.pid === 9191), 'a pending plugin is not a failure')
     const unreadable = flowsOf(s).find((f) => f.event === 'failure' && f.code === 'config-unreadable' && f.pid === 9191)
-    if (process.getuid() !== 0) assert.ok(unreadable && unreadable.reason.includes('locked.env'), 'the unreadable file is named, not taken for absent')
+    if (!NO_MODE_BITS) assert.ok(unreadable && unreadable.reason.includes('locked.env'), 'the unreadable file is named, not taken for absent')
     const unparsable = flowsOf(s).find((f) => f.event === 'failure' && f.code === 'config-unparsable' && f.pid === 9191)
     assert.ok(unparsable && unparsable.reason.includes('broken.json exists but does not parse'), 'a config file that does not parse is named too (review 3 #9)')
   } finally { await d.stop(); fs.chmodSync(locked, 0o600); p.done(); s.done() }
@@ -1122,7 +1123,7 @@ test('daemon: the bundle rebuild runs under the op lock (1.6 R12) — while anot
 // The daemon hands the engine each process's harness data (describe, 4.6 §引擎 3): Codex's WebSocket terminators reach the
 // recorder, so a call is cut at response.completed and is on disk while the connection stays open (W10 through the
 // product path); without them it waits for the next message or the close. The same FlowExtras carry its own proxies.
-test('daemon: describe hands the engine the harness WebSocket terminators and the process\'s own proxies — a Codex WebSocket call is on disk at response.completed (W10)', { timeout: 20000 }, async () => {
+test('daemon: describe hands the engine the harness WebSocket terminators and the process\'s own proxies — a Codex WebSocket call is on disk at response.completed (W10)', { timeout: 20000, skip: NO_OPENSSL }, async () => {
   const s = sandbox(); const p = fakeProc()
   const labCa = makeLabCa(path.join(s.root, 'lab-ca'))
   const mock = await startMockUpstream({ tls: { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) } })

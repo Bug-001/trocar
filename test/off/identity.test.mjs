@@ -12,6 +12,7 @@ import { WIDE, normalizeName, processNames, name0, argRest, entryOf, compileIden
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { identityView, matchPattern, serializeSignature, reviveSignature } from '../../src/off/signature.mjs'
 import { matchHarness } from '../helpers/one-harness.mjs'
+import { NO_MODE_BITS } from '../helpers/platform-shape.mjs'
 
 test('normalizeName: quotes, (deleted), both separators, case, .exe, version-named files', () => {
   const table = [
@@ -202,7 +203,7 @@ test('readAgentList: whole-file problems have index null; not-there and unreadab
   fs.chmodSync(path.join(home, '.trocar', 'agents.json'), 0o000)
   try {
     const u = readAgentList({ home })
-    if (process.getuid && process.getuid() === 0) return // root reads a 000 file
+    if (NO_MODE_BITS) return
     assert.deepEqual([u.state, u.problems[0].index, u.problems[0].code], ['unreadable', null, 'EACCES'])
     assert.match(u.problems[0].detail, /permissions/)
   } finally { fs.chmodSync(path.join(home, '.trocar', 'agents.json'), 0o600) }
