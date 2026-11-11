@@ -81,8 +81,12 @@ const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base 
 // what the lists kept (keyframes and the lists asked last) and the facts read back may weigh in the heap: each a cache of two times
 // its figure (src/query/projection.mjs lru)
 const LIST_BYTES = 2 << 20, FACTS_BYTES = 2 << 20;
+/** withMember(m, rid, sign): the members a fold log's frontier folded, by identity (4.3 §4 折叠日志): the sum of each rid's num52 modulo 2⁵²,
+ *  so a member taken out is subtracted and the order the members were folded in does not count. Two member sets of one count
+ *  that differ give one digest with odds about 2⁻⁵² (a swap of one member: num52 of the two rids equal). */
+export const withMember = (m, rid, sign = 1) => (((m + sign * num52(String(rid))) % 2 ** 52) + 2 ** 52) % 2 ** 52;
 /** The shape of reduction().snapshot(): one more whenever what it holds changes. */
-export const REDUCE_V = 3;
+export const REDUCE_V = 4;
 /** What a store's reduction caches hold at most beside its block columns (src/query/named/session.mjs counts it with the store's). */
 export const REDUCE_HEAP = 2 * (LIST_BYTES + FACTS_BYTES);
 
@@ -265,8 +269,8 @@ export function reduce(store, members, { mark = undefined, resolve = null, error
  * input), what it did to its lane's ledger (analyze.mjs replayLedger), its record's facts. A line is appended only when its bytes
  * differ from the rid's latest (an 8-byte digest per rid). After each add, in order: the lines of calls whose lane key or spawned
  * lane changed, lane header lines that changed (3.5 lane-header closed set), lane-gone lines, item lines (members that are no call),
- * failed lines, and one frontier line `{f: the last rid in write order, n: members folded, pb: the projection's bytes, h: 1 while it
- * holds `t` rows, st: stats}`.
+ * failed lines, and one frontier line `{f: the last rid in write order, n: members folded, m: their rids by identity (withMember), pb: the
+ * projection's bytes, h: 1 while it holds `t` rows, st: stats}`.
  *   The heap keeps per member, by its row's slot in the store, its step-order ts and its latest line's digest; per lane its calls'
  * slots in step order, its base and last call (their lists through the bounded list cache), last composition, first prompt, the
  * sums its header and the stats read, and the analyzer's state (its lane ledgers among it); the spawns' 60-character prompt
@@ -287,9 +291,9 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   // are equal), the digest of its latest line (NaN: none yet; 0: an item); failed rid → its line's offset; the item lines' offsets;
   // lane key → its header line's digest; spawn → the child lane its call line names
   const st = from || { ts: [], cts: [], dig: new Float64Array(1024).fill(NaN), failed: new Map(), items: [], heads: new Map(), written: new Map(),
-    inStep: false, last: -1, top: null, n: 0, F: null, chains: { max: new Map(), main: null } };
+    inStep: false, last: -1, top: null, n: 0, m: 0, F: null, chains: { max: new Map(), main: null } };
   const { ts, cts, failed, items, heads, written, chains } = st;
-  let { dig, inStep, last, top, n } = st;
+  let { dig, inStep, last, top, n, m } = st;
   const ridAt = (k) => store.rows.keyAt(k), slotOf = (rid) => store.rows.slotOf(rid);
   const found = new Map(); // break details worked out by this reduction, written as `brk` lines once an add is done
   let pend = [], newItems = [], newFailed = [], F, taking = null;
@@ -478,7 +482,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
       if (!failed.has(rid)) { failed.set(rid, -1); newFailed.push(was ? { x: rid, reason: was.reason, code: was.code } : { x: rid, reason: x.unparsed, code: x.code || 'record-unparseable' }); }
       return null;
     }
-    n++;
+    n++; m = withMember(m, rid);
     if (x.chain && isCall(row)) noteChain(rid, x.chain.hash, x.msgCount || 0);
     ts[k] = x.item ? x.item.ts_request : null;
     const d = isCall(row) ? dOf(x.format) : null;
@@ -536,7 +540,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     } catch (e) {
       if (e instanceof BlockUnread && e.rid != null && !failed.has(e.rid)) {
         const k = slotOf(e.rid);
-        failed.set(e.rid, -1); n--; newFailed.push({ x: e.rid, reason: e.message, code: e.code });
+        failed.set(e.rid, -1); n--; m = withMember(m, e.rid, -1); newFailed.push({ x: e.rid, reason: e.message, code: e.code });
         if (((store.rows.get(e.rid) || {}).x || {}).chain) recount();
         if (dig[k] > 0 || dig[k] < 0) put(k, { g: e.rid }); // it had a call line: it is no call now
       } else if (!(e instanceof OrderBound) || inStep) throw e;
@@ -573,7 +577,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     if (all) { const keys = new Set(now.map((h) => h.lane)); for (const key of [...heads.keys()]) if (!keys.has(key)) { heads.delete(key); lines.push({ lg: key }); } }
     for (const k of newItems) { const x = store.rows.get(ridAt(k)).x || {}; lines.push({ i: ridAt(k), it: x.item || null, ...(x.unknown ? { u: x.unknown } : null) }); }
     lines.push(...newFailed);
-    if (top != null) lines.push({ f: top, n, pb: store.bytes, ...(store.held ? { h: 1 } : null), st: stats() });
+    if (top != null) lines.push({ f: top, n, m, pb: store.bytes, ...(store.held ? { h: 1 } : null), st: stats() });
     flush();
     if (lines.length) {
       const offs = log.append(lines, { errors });
@@ -692,7 +696,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     snapshot() {
       if (pend.length || found.size) throw new Error('a reduction is snapshotted between adds only');
       const { flat, firstText, an, inc, ...rest } = F;
-      return { v: REDUCE_V, store: store.id, rows: store.rows.size, ts, cts, dig, failed, items, heads, written, inStep, last, top, n, chains,
+      return { v: REDUCE_V, store: store.id, rows: store.rows.size, ts, cts, dig, failed, items, heads, written, inStep, last, top, n, m, chains,
         F: { ...rest, flat: [...flat].map(([fmt, f]) => [fmt, f.snapshot()]) } };
     },
     members: () => [...folded(), ...failed.keys()],

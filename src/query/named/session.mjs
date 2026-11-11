@@ -30,7 +30,7 @@
 // is an error.
 import nodeFs from 'node:fs';
 import v8 from 'node:v8';
-import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES, REDUCE_V } from '../../view/reduce.mjs';
+import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES, REDUCE_V, withMember } from '../../view/reduce.mjs';
 import { foldStale, openFoldLog, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
 import { extractMembers, extractSeed, blockAt, CHUNK_STORED, TAIL_HEAP, releaseTails } from '../../view/extract.mjs';
@@ -146,7 +146,9 @@ export function planOf(members, k, store, id, fit = fits.get(k) ?? Infinity) {
   let p = store.plan;
   if (p && p.members === members && p.n === members.length && p.fit === fit) return p;
   const n0 = p ? p.n : 0; // a member array grows in place (rows.mjs sessionGroups): the plan counts what it took
-  if (!p || n0 > members.length || String(members[0].id) !== p.first || String(members[n0 - 1].id) !== p.last) {
+  // another array is another list's: a member can have left or come before the end (a summary request the kinship rule moved), at
+  // the same count and ends, so the plan is made again (its `ids` then differ, and the state with it, grow)
+  if (!p || p.members !== members || n0 > members.length || String(members[0].id) !== p.first || String(members[n0 - 1].id) !== p.last) {
     p = store.plan = { store, members: [], first: String(members[0].id), last: null, all: sums(), byId: new Map(), facts: sessionFacts(String(id)),
       ex: 0, pos: new Int32Array(0), gen: 0, start: -1, read: [], shown: null };
   }
@@ -393,13 +395,16 @@ export function sinceAt(plan, M) {
   const i = M.indexOf('@');
   return (i < 0 ? null : M.slice(i + 1)) === markCut(plan) ? (i < 0 ? M : M.slice(0, i)) : null;
 }
-// Whether a fold log was folded under this plan's cut: its last frontier's `n` (the members folded) = the members of the cut up to
-// its `f` that did not fail. A log folded under another cut would serve a reader that must cut a log folded uncut.
+// Whether a fold log was folded over the members this plan has up to its last frontier's `f`: those of the cut that did not fail, by
+// identity (`m`, reduce.mjs withMember), and as many (`n`). A member swapped for another at equal count (a summary request the kinship rule
+// moved, 3.4) would otherwise be answered from the old fold; a log folded under another cut would serve a reader that must cut a log
+// folded uncut. A frontier with no `m` (a log of before) is not taken up (4.3 §4 折叠日志).
 function foldedUnder(log, plan, f) {
   if (!plan.byId.has(f)) return false;
-  let n = 0;
-  for (let i = 0, to = posOf(plan, f); i <= to; i++) { const r = plan.members[i]; if (inCut(plan, r) && !log.failures.get(String(r.id))) n++; }
-  return n === log.read(log.frontier).n;
+  let n = 0, m = 0;
+  for (let i = 0, to = posOf(plan, f); i <= to; i++) { const r = plan.members[i], rid = String(r.id); if (inCut(plan, r) && !log.failures.get(rid)) { n++; m = withMember(m, rid); } }
+  const fr = log.read(log.frontier);
+  return fr.m != null && n === fr.n && m === fr.m;
 }
 // A state from scratch: the session's fold log (the worker's file; the local path's opened write:false) when it was folded under this
 // cut, answered at its frontier (`target`) with no reduction yet, its step-order columns seeded from the log's sidecar when they
@@ -509,8 +514,11 @@ const pastOf = (plan, target, F) => { for (let i = posOf(plan, target) + 1; i < 
 function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress, errors }) {
   let st = box.old;
   box.old = null;
-  const same = st && st.store === store && st.cut === cutOf(plan);
-  if (st && !same) { closeState(st); st = null; }
+  // a plan made again is over another member list (planOf): the state folded over the old one is not grown, it is taken up from the
+  // fold log only when that was folded over these members (foldedUnder)
+  const same = st && st.store === store && st.cut === cutOf(plan) && (st.fp == null || st.fp === plan);
+  // over other members the head this worker wrote at its mark may be from before (putHead skips a head at the same mark)
+  if (st && !same) { closeState(st); st = null; heads.delete(String(id)); }
   if (!st) st = stateOf(ctx, id, store, plan);
   // a state grown across requests is held against the heap it began from; its meter is kept with it, so the live heap is looked at
   // by the stored bytes folded since the last look across slices, not once per slice

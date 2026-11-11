@@ -7,7 +7,7 @@
 // Lines, the kind = the line's first key, its value the line's rid or lane key: `{v: FOLD_V, pid}` the header (`pid` = the
 // projection header's id); `{c: rid, …, p}` a call; `{g: rid, p}` a rid that is no longer a call; `{l: key, …, p}` a lane's head;
 // `{lg: key, p}` a lane gone; `{i: rid, …}` an item (a member that is not a call); `{x: rid, …}` a member that failed; `{f: rid, n,
-// pb}` a frontier, after each fold step (`pb` = the projection's bytes then; `h: 1` when it held `t` rows then). `p` (set by append) = the offset of the previous line
+// m, pb}` a frontier (`m`: the members folded, by identity, src/view/reduce.mjs withMember), after each fold step (`pb` = the projection's bytes then; `h: 1` when it held `t` rows then). `p` (set by append) = the offset of the previous line
 // of the same rid (calls and gones) or lane key (lanes and lane gones), null for the first: versionAt walks it.
 //   In the heap: rid → its latest call / gone line, lane key → its latest line, rid → its latest item line and its latest failed line
 // (offset and length in typed columns, an index per kind, its slots also linked in the order of their latest offset so what changed
@@ -28,7 +28,7 @@ import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
 import { sessionDir, lineIndex, lru, staleHeader, unsaved, HEAP_PER_LINE_BYTE } from './projection.mjs';
 
-export const FOLD_V = 9; // past both lines that each moved it (the reads line's 8, the desk line's 2)
+export const FOLD_V = 10; // 10: the frontier's `m` (members by identity, 4.3 §4 折叠日志)
 /** The heap the read cache keeps of parsed lines (two times it): a K term of the reduction's bound (3.5 §内存有界). */
 export const LOG_BYTES = 4 << 20;
 const CHAIN = { c: 'rid', g: 'rid', l: 'lane', lg: 'lane' };
