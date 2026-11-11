@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { tmpDir } from './tmp.mjs'
 import guard from './leak-guard.cjs'
 
@@ -22,7 +22,7 @@ delete env.NODE_OPTIONS
 /** Runs `node --test --test-force-exit --require <guard>` on a generated test file, TMPDIR pointing at a scratch dir of its own. */
 function run(body, scratch = tmpDir('trocar-guardtest-'), cwd = undefined, more = {}) {
   const file = path.join(scratch, 'fixture.test.mjs')
-  fs.writeFileSync(file, `import test from 'node:test'\nimport fs from 'node:fs'\nimport os from 'node:os'\nimport path from 'node:path'\nimport { tmpDir } from ${JSON.stringify(TMP_HELPER)}\n${body}\n`)
+  fs.writeFileSync(file, `import test from 'node:test'\nimport fs from 'node:fs'\nimport os from 'node:os'\nimport path from 'node:path'\nimport { tmpDir } from ${JSON.stringify(pathToFileURL(TMP_HELPER).href)}\n${body}\n`)
   const r = spawnSync(process.execPath, ['--test', '--test-force-exit', '--test-reporter=tap', '--require', GUARD, file], { cwd, env: { ...env, ...more, TMPDIR: scratch }, encoding: 'utf8', timeout: 60_000 })
   return { ...r, scratch, left: fs.readdirSync(scratch).filter((n) => n !== 'fixture.test.mjs') }
 }

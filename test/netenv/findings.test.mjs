@@ -21,6 +21,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { readAgentList } from '../../src/off/identity.mjs'
 import { createRegistry } from '../../src/collector/core/registry.mjs'
 import path from 'node:path'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const row = (n) => ROWS.find((r) => r.n === n)
 const codesOf = (f, h, names = null) => diagnose({ facts: f, topology: buildTopology(f), harnesses: names, user: 'alice' }).filter((x) => !x.harness || x.harness === h).map((x) => x.code).sort()
@@ -462,7 +463,7 @@ test('V49 route-loop names where the setting that loops lives; a harness with no
   assert.match(gui(findingsOf(pac), 'not-routed'), /Put the line HTTPS_PROXY=.* in \/h\/\.codex\/\.env/)
 })
 
-test('V49 end to end, with the real descriptors: a proxy that came from the invoking shell\'s HTTPS_PROXY is `unset` there and no file is named; one from ~/.claude.json names that file', async () => {
+test('V49 end to end, with the real descriptors: a proxy that came from the invoking shell\'s HTTPS_PROXY is `unset` there and no file is named; one from ~/.claude.json names that file', { skip: POSIX_WORLD }, async () => {
   const descs = await loadHarnesses()
   const s = await installedViaCli({ status: { engine: { port: 47123 } } })
   const deps = { netFactsDeps: async () => ({ harnesses: descs, archFacts: linuxNetFacts }) }

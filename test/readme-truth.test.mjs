@@ -16,6 +16,10 @@ import { COMMANDS } from '../src/cli/commands.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
 const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+// the README is the product page; what it leaves to docs/ is held to the same bar (4.5 #5)
+const PAGES = ['README.md', 'docs/install.md', 'docs/board.md', 'docs/capture.md', 'docs/commands.md', 'docs/license.md'];
+const pages = PAGES.map((p) => ({ p, text: readFileSync(path.join(ROOT, p), 'utf8') }));
+const all = pages.map((x) => x.text).join('\n');
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 // what bin/trocar.mjs dispatches: the table of commands and the first word of each hidden alias (src/cli/commands.mjs, RFC 1.6 §2)
@@ -24,8 +28,8 @@ const implementedVerbs = new Set(COMMANDS.map((c) => c.name));
 // Only text the reader would actually TYPE counts as an instruction: fenced code blocks and inline
 // `code` spans. Prose like "trocar sits on the wire" is not a command, and the README's own
 // prose about a command must not read as an instruction to type it.
-const fenced = [...readme.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]).join('\n');
-const inlineCode = [...readme.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]).join('\n');
+const fenced = [...all.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]).join('\n');
+const inlineCode = [...all.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]).join('\n');
 const commandText = fenced + '\n' + inlineCode;
 
 test('every `trocar <verb>` the README tells you to run actually exists', () => {
@@ -38,11 +42,12 @@ test('every `trocar <verb>` the README tells you to run actually exists', () => 
     + `the table of src/cli/commands.mjs has: ${[...implementedVerbs].sort().join(', ')}`);
 });
 
-test('the README\'s Commands section lists every command of the table, in code the reader can copy (1.6 §8, R10)', () => {
-  const section = readme.slice(readme.indexOf('\n## Commands'), readme.indexOf('Design authority:'));
-  assert.ok(section.length > 100, 'sanity: found the Commands section');
-  const listed = new Set([...section.matchAll(/\btrocar[ \t]+([a-z-]+)/g)].map((m) => m[1]));
-  assert.deepEqual(COMMANDS.filter((c) => !c.hidden).map((c) => c.name).filter((n) => !listed.has(n)), [], 'a command of the table the README does not list');
+// the command table lives in docs/commands.md, one row per public command of src/cli/commands.mjs (4.5 #5); `trocar help` prints
+// the usage lines from the same table, so the page does not copy them
+test('docs/commands.md has one row per public command, and no other', () => {
+  const page = pages.find((x) => x.p === 'docs/commands.md').text;
+  const rows = [...page.matchAll(/^\| `trocar ([a-z-]+)` \|/gm)].map((m) => m[1]);
+  assert.deepEqual([...rows].sort(), COMMANDS.filter((c) => !c.hidden).map((c) => c.name).sort());
 });
 
 test('the README teaches no command that is gone (`collector …`, `etl`, `shard`, `keep`, `verify`), and not `trocar test`', () => {
@@ -52,17 +57,17 @@ test('the README teaches no command that is gone (`collector …`, `etl`, `shard
 });
 
 test('the README no longer says what D39 and the code made false: the steer of `trocar on`, <redacted> credentials, "observe-only: never rewrite", a test count', () => {
-  assert.doesNotMatch(readme, /`trocar on` writes the steer/, '`trocar on` is the collector now');
-  assert.doesNotMatch(readme, /`trocar (monitor|desktop|capture|mitm) /, 'the old capture\'s commands are retired (D39⑥ executed 2026-10-11): the README must not teach them');
-  assert.doesNotMatch(readme, /replaced with `<redacted>`/, 'credential headers are stored verbatim (files 0600; trocar doctor checks them)');
-  assert.doesNotMatch(readme, /never inject or\s+rewrite traffic/, 'D30: a request is changed or re-sent only by the operator, and the one `Connection: close` line is trocar\'s');
-  assert.doesNotMatch(readme, /\b\d+ passing\b/, 'a hard-coded test count is stale the day after');
-  assert.doesNotMatch(readme, /`monitor off --remove-ca` deletes it/, '--remove-ca takes the trust entry out; the CA files stay');
-  assert.doesNotMatch(readme, /trocar mitm\s+# :9899\ntrocar desktop on/, '`desktop on` installs its own MITM on 9898; a hand-started one on 9899 is not what its rule points at');
+  assert.doesNotMatch(all, /`trocar on` writes the steer/, '`trocar on` is the collector now');
+  assert.doesNotMatch(all, /`trocar (monitor|desktop|capture|mitm) /, 'the old capture\'s commands are retired (D39⑥ executed 2026-10-11): the README must not teach them');
+  assert.doesNotMatch(all, /replaced with `<redacted>`/, 'credential headers are stored verbatim (files 0600; trocar doctor checks them)');
+  assert.doesNotMatch(all, /never inject or\s+rewrite traffic/, 'D30: a request is changed or re-sent only by the operator, and the one `Connection: close` line is trocar\'s');
+  assert.doesNotMatch(all, /\b\d+ passing\b/, 'a hard-coded test count is stale the day after');
+  assert.doesNotMatch(all, /`monitor off --remove-ca` deletes it/, '--remove-ca takes the trust entry out; the CA files stay');
+  assert.doesNotMatch(all, /trocar mitm\s+# :9899\ntrocar desktop on/, '`desktop on` installs its own MITM on 9898; a hand-started one on 9899 is not what its rule points at');
 });
 
 test('every `npm run <script>` the README mentions exists in package.json', () => {
-  const used = [...readme.matchAll(/npm run ([a-z:-]+)/g)].map((m) => m[1]);
+  const used = [...all.matchAll(/npm run ([a-z:-]+)/g)].map((m) => m[1]);
   for (const s of used) {
     assert.ok(pkg.scripts?.[s], `README says "npm run ${s}" but package.json has no such script`);
   }
@@ -70,10 +75,9 @@ test('every `npm run <script>` the README mentions exists in package.json', () =
 
 test('every repo file the README links to exists', () => {
   // markdown links + bare image paths, relative only
-  const refs = [...readme.matchAll(/\]\((?!https?:)([^)#]+)\)/g)].map((m) => m[1].trim());
-  for (const r of refs) {
-    const p = path.join(ROOT, r.replace(/^\.\//, ''));
-    assert.ok(existsSync(p), `README links to ${r}, which does not exist`);
+  for (const { p: page, text } of pages) {
+    const refs = [...text.matchAll(/\]\((?!https?:)([^)#]+)\)/g)].map((m) => m[1].trim());
+    for (const r of refs) assert.ok(existsSync(path.join(ROOT, path.dirname(page), r)), `${page} links to ${r}, which does not exist`);
   }
 });
 
@@ -114,11 +118,14 @@ test('the README names every harness the collector has a descriptor for, by its 
   assert.deepEqual(missing, [], 'a harness the collector has that the README does not name as `<id>`');
 });
 
-test('the README\'s Commands block is the usage lines of src/cli/commands.mjs, flags included, one for one', () => {
-  const section = readme.slice(readme.indexOf('\n## Commands'), readme.indexOf('Design authority:'));
-  const block = /```sh\n([\s\S]*?)```/.exec(section);
-  assert.ok(block, 'sanity: the Commands section holds a ```sh block');
-  const shown = block[1].split('\n').map((l) => l.replace(/\s+#\s.*$/, '').trim()).filter((l) => l && !l.startsWith('#'));
-  const table = COMMANDS.filter((c) => !c.hidden).flatMap((c) => [c.usage, ...(c.also || []).map((a) => a.usage)]).flatMap((u) => u.split('\n'));
-  assert.deepEqual([...shown].sort(), [...table].sort(), 'each usage line of the table, exactly once, and nothing else');
+// a line pasted from a shell block runs as typed: macOS's default zsh, interactive, does not take `#` as a comment, so a
+// trailing `# macOS, Linux` becomes arguments (`sh '#' 'macOS,' 'Linux'`). What a line is for is said above its block (4.5 #5)
+test('no shell block of the README or the docs pages carries a # comment', () => {
+  const found = [];
+  for (const { p, text } of pages) {
+    for (const m of text.matchAll(/```(sh|shell|bash|console|zsh)\n([\s\S]*?)```/g)) {
+      for (const line of m[2].split('\n')) if (/(^|\s)#/.test(line)) found.push(`${p}: ${line.trim()}`);
+    }
+  }
+  assert.deepEqual(found, []);
 });

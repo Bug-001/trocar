@@ -19,6 +19,7 @@ import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { formatInstallNotes } from '../../src/cli/status-text.mjs'
 import { fakeDaemon, fakeIo } from './fixtures/on-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const codex = (await loadHarnesses()).find((d) => d.name === 'codex')
 const linux = await loadArch('linux')
@@ -58,7 +59,7 @@ async function onWith(disk) {
     home, bundle, held: certBlocks(fs.readFileSync(bundle, 'utf8')).map((b) => b.fp), flows }
 }
 
-test('Linux on: only the Fedora bundle exists → the combined bundle carries its CA, and nothing is said missing (4.6 「合并包」)', async () => {
+test('Linux on: only the Fedora bundle exists → the combined bundle carries its CA, and nothing is said missing (4.6 「合并包」)', { skip: POSIX_WORLD }, async () => {
   const r = await onWith({ [FEDORA_BUNDLE]: `# Fedora's extracted trust\n${FEDORA.certPem}` })
   assert.equal(r.exit, 0, r.text)
   assert.ok(r.held.includes(fpOf(FEDORA.certPem)), 'the CA installed system-wide is in combined-codex.pem')
@@ -66,7 +67,7 @@ test('Linux on: only the Fedora bundle exists → the combined bundle carries it
   assert.deepEqual(r.flows.filter((f) => /^system-roots-/.test(f.code)), [], 'no missing-roots record, nothing left out')
 })
 
-test('Linux on: a block of the OS bundle that does not parse is not in the combined bundle, and that is said once in the receipt and in flows/ (4.8 §6.2 / W20, D38)', async () => {
+test('Linux on: a block of the OS bundle that does not parse is not in the combined bundle, and that is said once in the receipt and in flows/ (4.8 §6.2 / W20, D38)', { skip: POSIX_WORLD }, async () => {
   const BROKEN = '-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n'
   const r = await onWith({ [FEDORA_BUNDLE]: `${FEDORA.certPem}${BROKEN}` })
   assert.equal(r.exit, 0, r.text)
@@ -81,7 +82,7 @@ test('Linux on: a block of the OS bundle that does not parse is not in the combi
   assert.deepEqual(r.flows.filter((f) => f.code === 'system-roots-unavailable'), [], 'the OS roots are there: not said missing')
 })
 
-test('Linux on: no OS bundle on the machine → the bundle has Node\'s roots and the trocar CA only, and that is said in the receipt and in flows/ (D38)', async () => {
+test('Linux on: no OS bundle on the machine → the bundle has Node\'s roots and the trocar CA only, and that is said in the receipt and in flows/ (D38)', { skip: POSIX_WORLD }, async () => {
   const r = await onWith({ '/etc/ssl/certs/ca-certificates.crt': '' }) // a Debian path that is there but holds no certificate counts as none, too
   assert.equal(r.exit, 0, r.text)
   const trocarCa = fpOf(fs.readFileSync(path.join(path.dirname(r.bundle), 'trocar-ca.pem'), 'utf8'))

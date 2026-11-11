@@ -9,7 +9,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { withScratchCwd, unservable } from '../helpers/model-daemon.mjs'
+import { withScratchCwd, UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { WITH_PARENT, watchEnv } from '../helpers/standin.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -22,7 +22,7 @@ const SEG = '20261003T000000Z'
 const until = async (ok, ms, what) => within((async () => { for (;;) { const v = ok(); if (v) return v; await new Promise((r) => setTimeout(r, 25)) } })(), ms, what)
 
 for (const platform of ['darwin', 'win32']) {
-  test(`V127 · ${platform}: uninstall's drain waits while the real daemon seals, hears its progress, and returns once the pid has exited`, { skip: await unservable(platform), timeout: 90_000 }, async () => {
+  test(`V127 · ${platform}: uninstall's drain waits while the real daemon seals, hears its progress, and returns once the pid has exited`, { skip: UNSERVABLE[platform], timeout: 90_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     const desc = w.harnesses.find((h) => h.name === 'codex')
     const a = agentOf({ w, name: desc.processes.names[0].name, env: {} })

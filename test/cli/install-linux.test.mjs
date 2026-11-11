@@ -17,6 +17,7 @@ import zcode from '../../src/collector/harness/z-code.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { unsaidIn } from '../../src/cli/words.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const fps = (text) => (String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((p) => new X509Certificate(p).fingerprint256)
 const certBytes = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([k]) => k.startsWith('.trocar/collector/ca/') || k === '.claude/settings.json'))
@@ -351,7 +352,7 @@ test('Linux install: codex on PATH with no Codex home is skipped, and its reason
 // the rewrite; afterwards the bundle holds that CA and status is ready again
 const codexHome = (home) => { fs.mkdirSync(path.join(home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(home, '.codex', 'config.toml'), '') } // a Codex that has run once
 for (const [name, seed] of [['codex', codexHome], ['hermes', (home) => { fs.mkdirSync(path.join(home, '.hermes', 'hermes-agent'), { recursive: true }); fs.writeFileSync(path.join(home, '.hermes', 'config.yaml'), 'model: {}\n') }]]) {
-  test(`Linux ${name}: a CA the install shell's SSL_CERT_FILE adds after install is bundle-lacks-ca; install --dry-run plans the rewrite, install makes it, status is ready`, async () => {
+  test(`Linux ${name}: a CA the install shell's SSL_CERT_FILE adds after install is bundle-lacks-ca; install --dry-run plans the rewrite, install makes it, status is ready`, { skip: POSIX_WORLD }, async () => {
     const desc = (await import(`../../src/collector/harness/${name}.mjs`)).default
     const home = tmpDir(`trocar-bundle-${name}-`)
     seed(home)
@@ -394,7 +395,7 @@ for (const [name, seed] of [['codex', codexHome], ['hermes', (home) => { fs.mkdi
 
 // 4.11 P4b (Linux): additions only — an install from a shell without the variable keeps a bundle that holds the CA, skip-intact, byte for byte (an install
 // or update from another shell must not take away what a working agent trusts; a CA no longer named stays until uninstall + install, 4.6 「合并包」)
-test('Linux codex: an install from a shell without the CA keeps the bundle that holds it, byte for byte', async () => {
+test('Linux codex: an install from a shell without the CA keeps the bundle that holds it, byte for byte', { skip: POSIX_WORLD }, async () => {
   const desc = (await import('../../src/collector/harness/codex.mjs')).default
   const home = tmpDir('trocar-bundle-keep-')
   codexHome(home)

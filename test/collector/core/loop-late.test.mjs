@@ -8,12 +8,11 @@ import { createLoopWatch, LOOP_LATE_MS } from '../../../src/collector/core/loop-
 import { checkRecord, isFailure } from '../../../src/health/codes.mjs'
 import { foldFlows } from '../../../src/health/flows.mjs'
 import { modelWorld } from '../../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, unservable } from '../../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, UNSERVABLE } from '../../helpers/model-daemon.mjs'
 import { renderWrapper } from '../../../src/collector/arch/darwin/wrapper.mjs'
 
 const EVERY = 100
 const PLATFORMS = ['darwin', 'win32']
-const cannot = Object.fromEntries(await Promise.all(PLATFORMS.map(async (p) => [p, await unservable(p)]))) // before the first test(): one registered after an await here never runs
 /** Runs the watch over `gaps` (the ms between two ticks of the lock timer), the clock starting at a time that is not zero → the records written. */
 function watched(gaps, opts = {}) {
   let t = 5000
@@ -48,7 +47,7 @@ test('MA20 a loop-late record is no failure in health: the fold has no group and
 })
 
 for (const platform of PLATFORMS) {
-  test(`${platform} · MA20: a real daemon whose loop is held for 1.3 s writes loop-late into flows/, late_ms ≥ 1 s`, { skip: cannot[platform], timeout: 60_000 }, async () => {
+  test(`${platform} · MA20: a real daemon whose loop is held for 1.3 s writes loop-late into flows/, late_ms ≥ 1 s`, { skip: UNSERVABLE[platform], timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const box = await liveUnit({ w, platform, daemon: { lockRefreshMs: EVERY } })

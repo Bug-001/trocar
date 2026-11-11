@@ -27,7 +27,7 @@ export function StepHead({ desk }: { desk: DeskView }) {
   useLayoutEffect(() => { if (vr > 0 && (!m || m.rough)) desk.roughDrawn('step') }, [desk, vr, m])
   if (!m) return <div id="stepbar" />
   if (m.rough) {
-    return <div id="stepbar"><span className="sb-nav"><b className="sb-at" data-n={m.n} data-m={m.m} title={m.label}><No n={m.n} m={m.m} read={m.read} /></b></span></div>
+    return <div id="stepbar"><span className="sb-nav"><b className="sb-at" data-n={m.n ?? undefined} data-m={m.m} title={m.label}>{m.n == null ? m.label : <No n={m.n} m={m.m} read={m.read} />}</b></span></div>
   }
   return <Drawn m={m} s={desk.s} />
 }
