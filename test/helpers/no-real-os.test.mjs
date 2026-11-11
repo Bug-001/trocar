@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync, execFile, execFileSync, exec, execSync } from 'node:child_process'
 import { tmpDir } from './tmp.mjs'
 import { takeRefusals } from './no-real-os.mjs'
@@ -127,7 +127,7 @@ delete childEnv.NODE_TEST_CONTEXT; delete childEnv.NODE_OPTIONS
 function runChild(body) {
   const dir = tmpDir('trocar-noreal-')
   const file = path.join(dir, 'child.mjs')
-  fs.writeFileSync(file, `import { execFileSync } from 'node:child_process'\nimport { takeRefusals } from ${JSON.stringify(HELPER)}\n${body}\n`)
+  fs.writeFileSync(file, `import { execFileSync } from 'node:child_process'\nimport { takeRefusals } from ${JSON.stringify(pathToFileURL(HELPER).href)}\n${body}\n`)
   return spawnSync(process.execPath, ['--require', GUARD, file], { env: childEnv, encoding: 'utf8', timeout: 30_000 })
 }
 
@@ -150,7 +150,7 @@ test('no-real-os: under node --test a file whose test swallows the refusal fails
   const scratch = tmpDir('trocar-noreal-')
   const fixture = (name, body) => {
     const file = path.join(scratch, `${name}.test.mjs`)
-    fs.writeFileSync(file, `import test from 'node:test'\nimport { execFileSync } from 'node:child_process'\nimport { takeRefusals } from ${JSON.stringify(HELPER)}\n${body}\n`)
+    fs.writeFileSync(file, `import test from 'node:test'\nimport { execFileSync } from 'node:child_process'\nimport { takeRefusals } from ${JSON.stringify(pathToFileURL(HELPER).href)}\n${body}\n`)
     return spawnSync(process.execPath, ['--test', '--test-force-exit', '--test-reporter=tap', '--require', GUARD, file], { env: { ...childEnv, TMPDIR: scratch }, encoding: 'utf8', timeout: 60_000 })
   }
   const bad = fixture('swallow', `test('swallows', () => { try { execFileSync('launchctl', ['${NOOP}']) } catch { /* carry on */ } })`)

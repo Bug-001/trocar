@@ -394,10 +394,10 @@ test('§3.6: uninstall also takes out a marked file the record does not list, by
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
-    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
   } })
   const settings = path.join(s.home, '.claude', 'settings.json')
-  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(s.sh.corp)} }\n}\n`
   assert.notEqual(fs.readFileSync(settings, 'utf8'), settingsOriginal, 'trocar\'s value is in')
   const mf = path.join(s.dir, 'install-manifest.json')
   const m = JSON.parse(fs.readFileSync(mf, 'utf8'))
@@ -414,7 +414,7 @@ test('§3.6: uninstall also takes out a marked file the record does not list, by
 // 1.6 §1.4 「计划写全」, V85: the plan (--dry-run, and the one shown before a yes) names the unlisted marked file too, and writes nothing
 test('§1.4: uninstall --dry-run plans the marked file the record does not list beside the one it lists; the home is unchanged', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
-    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
   } })
   const settings = path.join(s.home, '.claude', 'settings.json'), codexEnv = path.join(s.home, '.codex', '.env')
   const mf = path.join(s.dir, 'install-manifest.json')
@@ -437,9 +437,9 @@ test('V24 (uninstall): with the install manifest gone and no terminal, uninstall
   const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
   const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
     fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
-    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`)
   } })
-  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(s.sh.corp)} }\n}\n`
   fs.rmSync(path.join(s.dir, 'install-manifest.json'))
   const installed = s.userFiles()
   // §3.6: no terminal and no --yes is the plan and nothing else now — not even the routing is touched, and the exit is 2 (§1.4)
@@ -458,7 +458,7 @@ test('V24 (uninstall): with the install manifest gone and no terminal, uninstall
 })
 
 test('R3 (uninstall, no manifest): a file the marks cannot undo keeps its backups — here every backup that could hold the replaced value is unreadable: exit 1, the file is left, each backup still on disk and not among the dropped', async () => {
-  const s = await installedHome({ names: ['claude-code'], seed: (home, sh) => fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`) })
+  const s = await installedHome({ names: ['claude-code'], seed: (home, sh) => fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": ${JSON.stringify(sh.corp)} }\n}\n`) })
   const file = path.join(s.home, '.claude', 'settings.json')
   const backups = backupsOf({ home: s.home, file })
   assert.ok(backups.length, 'install saved the file first')

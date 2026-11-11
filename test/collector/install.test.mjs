@@ -69,7 +69,7 @@ test('install: an existing user CA in settings becomes extra-cc.pem (certificate
     const corp = createCa({ commonName: 'corp relay CA' })
     const corpFile = path.join(b.home, 'corp.pem'); fs.writeFileSync(corpFile, `-----BEGIN PRIVATE KEY-----\nSECRET\n-----END PRIVATE KEY-----\n${corp.certPem}`)
     fs.mkdirSync(path.join(b.home, '.claude'))
-    const before = `{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://relay.example.com",\n    "ANTHROPIC_API_KEY": "sk-ant-secret",\n    "NODE_EXTRA_CA_CERTS": "${corpFile}"\n  }\n}\n`
+    const before = `{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://relay.example.com",\n    "ANTHROPIC_API_KEY": "sk-ant-secret",\n    "NODE_EXTRA_CA_CERTS": ${JSON.stringify(corpFile)}\n  }\n}\n`
     fs.writeFileSync(settingsOf(b), before)
     await installCollector(base(b))
     const extra = path.join(b.dir, 'ca', 'extra-cc.pem')
