@@ -161,7 +161,9 @@ test('3.5 #37: a stop an earlier worker wrote does not hold the session in a new
   svc = createQueryService({ home, fork: r.fork, idleMs: 60_000 })
   try {
     svc.sweep()
-    await until(r, 'the upgrade scan ended and the upgrade began', () => c.opens() > 0) // the scan read the stop on disk before it
+    // the upgrade beginning, waited for itself (the scan read the stop on disk before it): the index build, the title sweep and the scan
+    // send no message while they run, so no stretch of silence says the worker is stuck; the test's timeout bounds the wait
+    while (c.opens() === 0) await sleep(50)
     const a0 = r.again, tail = answer()
     await svc.relay({ name: 'lane', params: { id: s.id, tail: 'main' }, res: tail })
     assert.equal(tail.status, 200)
