@@ -163,11 +163,12 @@ function cdpShot(bin, tmp, url, w, h, out) {
   })
   return Promise.race([run(), died]).finally(async () => {
     clearTimeout(timer)
-    if (!(await endGroup(chrome))) process.stderr.write(`cli-shot: a process of Chrome (pid ${chrome.pid}) outlived ${GROUP_LIMIT_MS / 1000}s\n`)
+    if (!(await endGroup(chrome))) { process.stderr.write(`cli-shot: a process of Chrome (pid ${chrome.pid}) outlived ${GROUP_LIMIT_MS / 1000}s\n`); stillWritten.add(tmp) }
   })
 }
 
 const GROUP_LIMIT_MS = 15000
+const stillWritten = new Set() // profiles a process of their Chrome may still write: left in place, never removed under it
 const GROUPS = process.platform !== 'win32' // process groups: win32 has none (no kill(-pid)), and a detached child there gets a console of its own
 /** Ends `child` (spawned detached where GROUPS, so it leads its own process group) and every process of its group, then waits until none is left,
  *  bounded → true when the group is gone. Chrome's renderers outlive the browser process under load and still write its profile, so the profile
@@ -209,7 +210,8 @@ async function shoot({ doc, w, h, out }) {
     await cdpShot(bin, tmp, pathToFileURL(page).href, w, h, out)
   } finally {
     // removed once every process of that Chrome has ended (endGroup); Node retries ENOTEMPTY / EBUSY (Windows), then says what stayed
-    try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) } catch (e) { process.stderr.write(`cli-shot: could not remove ${tmp} (${e.code ?? e.message}); remove it by hand\n`) }
+    if (stillWritten.delete(tmp)) process.stderr.write(`cli-shot: left ${tmp} in place (a process of Chrome may still write it); remove it by hand once it has ended\n`)
+    else try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) } catch (e) { process.stderr.write(`cli-shot: could not remove ${tmp} (${e.code ?? e.message}); remove it by hand\n`) }
   }
 }
 
