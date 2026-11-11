@@ -6,7 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { within } from '../helpers/bounded.mjs'
 
 const SERVICE = fileURLToPath(new URL('../../src/query/service.mjs', import.meta.url))
@@ -31,7 +31,7 @@ svc.stop()
 `
 
 test('a query written to a worker that was just killed fails with a recorded reason; the process survives', async () => {
-  const c = spawn(process.execPath, ['--input-type=module', '-e', SCENARIO, SERVICE], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const c = spawn(process.execPath, ['--input-type=module', '-e', SCENARIO, pathToFileURL(SERVICE).href], { stdio: ['ignore', 'pipe', 'pipe'] })
   let out = '', err = ''
   c.stdout.on('data', (b) => { out += b }); c.stderr.on('data', (b) => { err += b })
   const [code] = await within(new Promise((ok) => c.on('close', (...a) => ok(a))), 20000, 'the scenario process', () => c.kill('SIGKILL'))

@@ -12,6 +12,7 @@ import { SCHEMA_VERSION, EXIT, UNDO_LINE, newReceipt } from '../../src/cli/schem
 import { printJson, errorDoc, ERROR_CODES } from '../../src/cli/json.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo } from './fixtures/dispatch-ctx.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const ROWS = COMMANDS.filter((c) => optionsOf(c).has('--json')).map((c) => c.name)
 
@@ -125,7 +126,7 @@ test('V120: at a terminal the same document is indented two spaces', async () =>
   }
 })
 
-test('V120: on an installed machine the receipts and the readings are one line too', async () => {
+test('V120: on an installed machine the receipts and the readings are one line too', { skip: POSIX_WORLD }, async () => {
   const s = await installedViaCli()
   for (const argv of [['status', '--json'], ['doctor', '--json'], ['off', '--json'], ['on', '--yes', '--json'], ['uninstall', '--yes', '--json']]) {
     oneLine((await s.run(argv)).io.stdoutText(), argv.join(' '))

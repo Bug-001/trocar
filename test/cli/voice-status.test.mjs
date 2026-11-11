@@ -13,6 +13,7 @@ import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo, recordingExec } from './fixtures/on-ctx.mjs'
 import { reply, asDaemon, SOCK } from './fixtures/status-ctx.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const NOW = Date.parse('2026-11-09T05:30:00Z'), ago = (min) => new Date(NOW - min * 60e3).toISOString()
 const harness = (over = {}) => ({ desired: 'on', captured: true, reason: null, why: [], forms: [], processes: [], ...over })
@@ -84,7 +85,7 @@ test('doctor: no unsaid word and no pid for any finding; --details keeps every f
   }
 })
 
-test('doctor over a real document: the findings doctor makes of its own (a service on other code, the undo copy, the capture failures) are said in the default text\'s words too', async () => {
+test('doctor over a real document: the findings doctor makes of its own (a service on other code, the undo copy, the capture failures) are said in the default text\'s words too', { skip: POSIX_WORLD }, async () => {
   const s = await installedHome()
   const io = fakeIo()
   await runDoctor(['--json'], { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { spawn: absentSpawn, has: () => true, request: asDaemon(reply({ code: '9.9.9+fffffff' })), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice', exec: recordingExec().run } })

@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { tmpDir, removeTmp } from './tmp.mjs'
 import { EXIT_WITH_PARENT, watchEnv } from './standin.mjs'
 
@@ -47,7 +47,7 @@ for (const [name, [ending, status]] of Object.entries(ENDINGS)) {
   test(`tmpDir: the directory is removed when the process ${name}`, () => {
     const scratch = tmpDir('trocar-tmpchild-') // the children's dirs are made in here; this one goes at exit, mode-000 leftovers of a broken helper included
     const body = `
-      import { tmpDir } from ${JSON.stringify(HELPER)}
+      import { tmpDir } from ${JSON.stringify(pathToFileURL(HELPER).href)}
       import fs from 'node:fs'
       const dir = tmpDir('trocar-kid-')
       fs.writeFileSync(dir + '/f', 'x')
@@ -71,8 +71,8 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     const scratch = tmpDir('trocar-tmpchild-') // the children's dirs are made in here; this one goes at exit, mode-000 leftovers of a broken helper included
     const script = path.join(scratch, 'kid.mjs')
     fs.writeFileSync(script, `
-      import ${JSON.stringify(EXIT_WITH_PARENT)} // …and, if the test that started this one is killed, its parent being gone (a kill -9 leaves no cleanup to run)
-      import { tmpDir } from ${JSON.stringify(HELPER)}
+      import ${JSON.stringify(pathToFileURL(EXIT_WITH_PARENT).href)} // …and, if the test that started this one is killed, its parent being gone (a kill -9 leaves no cleanup to run)
+      import { tmpDir } from ${JSON.stringify(pathToFileURL(HELPER).href)}
       import fs from 'node:fs'
       const dir = tmpDir('trocar-kid-')
       fs.writeFileSync(dir + '/f', 'x')
@@ -91,8 +91,8 @@ test('tmpDir: the hung child of the signal tests (nothing but a signal ends it) 
   const scratch = tmpDir('trocar-tmpchild-')
   const kid = path.join(scratch, 'hung.mjs'), parent = path.join(scratch, 'parent.mjs'), report = path.join(scratch, 'dir.txt')
   fs.writeFileSync(kid, `
-    import ${JSON.stringify(EXIT_WITH_PARENT)}
-    import { tmpDir } from ${JSON.stringify(HELPER)}
+    import ${JSON.stringify(pathToFileURL(EXIT_WITH_PARENT).href)}
+    import { tmpDir } from ${JSON.stringify(pathToFileURL(HELPER).href)}
     import fs from 'node:fs'
     const dir = tmpDir('trocar-kid-')
     fs.writeFileSync(process.env.REPORT, dir)
@@ -123,7 +123,7 @@ test('tmpDir: a directory holding a mode-000 file and a mode-000 subdirectory is
   const scratch = tmpDir('trocar-tmpchild-')
   const script = path.join(scratch, 'kid.mjs')
   fs.writeFileSync(script, `
-    import { tmpDir } from ${JSON.stringify(HELPER)}
+    import { tmpDir } from ${JSON.stringify(pathToFileURL(HELPER).href)}
     import fs from 'node:fs'
     const dir = tmpDir('trocar-kid-')
     fs.mkdirSync(dir + '/sub'); fs.writeFileSync(dir + '/sub/f', 'x'); fs.writeFileSync(dir + '/g', 'y')
