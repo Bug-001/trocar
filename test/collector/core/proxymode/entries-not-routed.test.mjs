@@ -10,6 +10,7 @@ import { routeEntry, writeRoutes, planRoutes } from '../../../../src/collector/c
 import { resolveLoc } from '../../../../src/collector/core/proxymode/sources.mjs'
 import { undoEntry } from '../../../../src/off/journal.mjs'
 import { world, put } from './fixtures/entries-ctx.mjs'
+import { NO_MODE_BITS } from '../../../helpers/platform-shape.mjs'
 
 const harnesses = await loadHarnesses()
 const OSES = ['darwin', 'win32']
@@ -109,7 +110,7 @@ const notUndone = (res, rid) => res.results.filter((x) => x.route === rid && x.o
 const recordsLeft = (w, h, rid) => w.ctx.manifest.entries.concat(w.ctx.manifest.files).filter((x) => x.harness === h.name && x.route === rid)
 
 for (const { h, id, r } of pacRoutes) for (const os of OSES) {
-  test(`P5 ${h.name}.${id} · ${os} · not-routed system-pac with the door's file unwritable: on returns, the route says entry-not-undone, the record stays`, (t) => {
+  test(`P5 ${h.name}.${id} · ${os} · not-routed system-pac with the door's file unwritable: on returns, the route says entry-not-undone, the record stays`, { skip: NO_MODE_BITS }, (t) => {
     const w = world({ os })
     for (const f of h.proxyMode.forms.filter((x) => x.os.includes(os) && x.route === id)) w.present(f)
     ingress(w, [18002])
@@ -131,7 +132,7 @@ for (const { h, id, r } of pacRoutes) for (const os of OSES) {
 for (const h of harnesses) for (const os of OSES) {
   const forms = h.proxyMode.forms.filter((f) => f.os.includes(os))
   for (const [i, b] of (h.proxyMode.blockers || []).entries()) {
-    test(`P5 ${h.name} · ${os} · blocker ${i} set after an on, the door's file unwritable: on returns, the blocked route says entry-not-undone, the record stays`, (t) => {
+    test(`P5 ${h.name} · ${os} · blocker ${i} set after an on, the door's file unwritable: on returns, the blocked route says entry-not-undone, the record stays`, { skip: NO_MODE_BITS }, (t) => {
       const w = world({ os })
       for (const f of forms) w.present(f)
       const ids = Object.keys(h.proxyMode.routes), portOf = (rid) => 18100 + ids.indexOf(rid)

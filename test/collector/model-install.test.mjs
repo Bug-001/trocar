@@ -20,6 +20,7 @@ import { recordingExec } from '../cli/fixtures/on-ctx.mjs'
 import { hookFile } from '../../src/collector/harness/templates/index.mjs'
 import { verdictOf, carrierAt, judgedForms } from '../../src/collector/core/proxymode/verdict.mjs'
 import { userCertFilesOf } from '../../src/collector/core/proxymode/sources.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const put = (f, data) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, data) }
@@ -27,6 +28,8 @@ const json = (f) => JSON.parse(fs.readFileSync(f, 'utf8'))
 const snapshot = (root) => { const out = {}; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.lstatSync(p); if (st.isDirectory()) walk(p); else out[p] = `${st.mtimeMs}:${st.ino}:${fs.readFileSync(p).toString('base64')}` } }; walk(root); return out }
 const USER_PEM = `${tls.rootCertificates[1].trim()}\n`
 
+// A macOS world (modelWorld's default) on a Windows host holds `C:\…` paths, which a macOS path key reads as relative names: trocar's own
+// tree is taken for the user's file. Those tests skip there (POSIX_WORLD); the win32 worlds run.
 /** Every harness present: the commands on PATH, Kimi's native program, Z-Code's folder, the Claude Code bundled store. */
 async function everything(env = {}) {
   const w = await modelWorld({ commands: ['claude', 'codex', 'dsh', 'kimi'], env: { CLAUDE_CODE_CERT_STORE: 'bundled', ...env } })
@@ -39,7 +42,7 @@ async function everything(env = {}) {
 // V85 (install): every file install changes outside ~/.trocar is named by its plan — rule U's block in the file the user's NODE_EXTRA_CA_CERTS names
 // included (a Windows test machine 2026-11-04: the plan said only "reads your user trust store" for the two harnesses that read it)
 for (const shape of ['shared file', 'every harness']) {
-  test(`V85: the install plan names every file install then changes outside ~/.trocar (${shape})`, async () => {
+  test(`V85: the install plan names every file install then changes outside ~/.trocar (${shape})`, { skip: POSIX_WORLD }, async () => {
     const w = shape === 'shared file' ? await sharedCertFileWorld({ userPem: USER_PEM }) : await everything()
     const rows = planInstall({ os: 'darwin', harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns })
     const paths = rows.flatMap((r) => r.paths)
@@ -53,7 +56,7 @@ for (const shape of ['shared file', 'every harness']) {
   })
 }
 
-test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the trocar root, no system roots — written only while the key is unset; set, the user\'s file gets the block', async () => {
+test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the trocar root, no system roots — written only while the key is unset; set, the user\'s file gets the block', { skip: POSIX_WORLD }, async () => {
   const w = await everything()
   const r = await w.install({ wrapperKit: { renderWrapper } })
   const cfg = path.join(w.home, '.zcode', 'cli', 'config.json')
@@ -77,7 +80,7 @@ test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the troca
 // verifies upstream with Z-Code's own trust — cannot reach a private-CA host. The bundle's manifest item names the files and fingerprints it
 // merged, as the Linux bundles do: `off` / `uninstall` rebuild a bundle that is gone while a process holds it from those, or name what was lost (4.6)
 for (const via of ['NODE_EXTRA_CA_CERTS', 'ZCODE_AGENT_CA_CERT', 'desktop setting']) {
-  test(`CM9: a private CA named by ${via} → its certificate is in Z-Code's bundle, beside Node's roots and the trocar root; a non-certificate block is not`, async () => {
+  test(`CM9: a private CA named by ${via} → its certificate is in Z-Code's bundle, beside Node's roots and the trocar root; a non-certificate block is not`, { skip: POSIX_WORLD }, async () => {
     const other = await modelWorld(); await other.install() // another machine's root: a CA no Node root store holds
     const priv = fs.readFileSync(path.join(other.dir, 'ca', 'trocar-ca.pem'), 'utf8')
     const w0 = await modelWorld(); const mine = path.join(w0.home, 'company.pem')
@@ -99,7 +102,7 @@ for (const via of ['NODE_EXTRA_CA_CERTS', 'ZCODE_AGENT_CA_CERT', 'desktop settin
 // rule U, one file named by two harnesses' settings (Windows test machine 2026-10-17: Claude Code and Kimi Code both read NODE_EXTRA_CA_CERTS; the second
 // was refused "already holds trocar's text from an install this manifest does not list" and install exited 1): one block, one entry, both carriers in place
 for (const [variable, harnesses] of [['NODE_EXTRA_CA_CERTS', ['claude-code', 'kimi-code']]]) { // (Codex and Hermes share SSL_CERT_FILE the same way; this world has no Hermes)
-  test(`rule U: ${variable} names one user file for ${harnesses.join(' and ')} → one marked block, one entry, install exits 0; a second install changes nothing`, async () => {
+  test(`rule U: ${variable} names one user file for ${harnesses.join(' and ')} → one marked block, one entry, install exits 0; a second install changes nothing`, { skip: POSIX_WORLD }, async () => {
     const w0 = await modelWorld()
     const mine = path.join(w0.home, 'mine.pem')
     const w = await everything({ [variable]: mine })
@@ -120,7 +123,7 @@ for (const [variable, harnesses] of [['NODE_EXTRA_CA_CERTS', ['claude-code', 'ki
 }
 
 for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
-  test(`CM10: bundled Claude Code, NODE_EXTRA_CA_CERTS ${inSettings ? 'in' : 'not in'} the settings and ${inEnv ? 'in' : 'not in'} the install env → ${!inSettings && !inEnv ? 'settings env points at trocar-ca.pem' : 'settings untouched, the block appended to the named file'}`, async () => {
+  test(`CM10: bundled Claude Code, NODE_EXTRA_CA_CERTS ${inSettings ? 'in' : 'not in'} the settings and ${inEnv ? 'in' : 'not in'} the install env → ${!inSettings && !inEnv ? 'settings env points at trocar-ca.pem' : 'settings untouched, the block appended to the named file'}`, { skip: POSIX_WORLD }, async () => {
     const w0 = await modelWorld()
     const mine = path.join(w0.home, 'mine.pem')
     const w = await everything(inEnv ? { NODE_EXTRA_CA_CERTS: mine } : {})
@@ -141,7 +144,7 @@ for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
 
 // a carrier is placed when install wrote one of its parts, intact when it wrote none: dsh's plug-in file gone (its loader row still there) is placed
 // again on the second install, while every other carrier is intact
-test('D54: the second install places only the carrier a part of which was gone; the others are intact', async () => {
+test('D54: the second install places only the carrier a part of which was gone; the others are intact', { skip: POSIX_WORLD }, async () => {
   const w = await everything()
   const r1 = await w.install({ wrapperKit: { renderWrapper } })
   assert.equal(r1.exit, 0, JSON.stringify({ c: r1.carriers, p: r1.problems }))
@@ -156,7 +159,7 @@ test('D54: the second install places only the carrier a part of which was gone; 
   assert.ok(fs.existsSync(plugin.path), 'and the file is back')
 })
 
-test('D54 · CM1: install; install changes no byte, makes no second key, raises no prompt — the fingerprint stays', async () => {
+test('D54 · CM1: install; install changes no byte, makes no second key, raises no prompt — the fingerprint stays', { skip: POSIX_WORLD }, async () => {
   const w = await everything()
   const r1 = await w.install({ wrapperKit: { renderWrapper } })
   assert.equal(r1.exit, 0, JSON.stringify({ c: r1.carriers, p: r1.problems, pend: r1.pending }))
@@ -178,7 +181,7 @@ test('D54 · CM1: install; install changes no byte, makes no second key, raises 
 
 // 4.11 §1: a key helper kept (no terminal to answer the key's box, or the box not answered) still signs: install says so as a note and exits 0,
 // so an update goes on to on (a refusal there would leave every agent off)
-test('macOS: a key helper kept, not replaced, is a note: exit 0, the way out said', async () => {
+test('macOS: a key helper kept, not replaced, is a note: exit 0, the way out said', { skip: POSIX_WORLD }, async () => {
   const w = await everything()
   const why = 'the installed trocar-sign-helper keeps signing; run trocar install in a terminal to replace it'
   const r = await w.install({ wrapperKit: { renderWrapper }, installHelper: () => ({ replaced: false, kept: true, why }) })
@@ -186,7 +189,7 @@ test('macOS: a key helper kept, not replaced, is a note: exit 0, the way out sai
   assert.ok(r.notes.includes(why) && !r.problems.includes(why))
 })
 
-test('CM25 · CM26: no admin item, nothing root-owned under HOME, and no write to a login environment (rc / profile / environment.d) — a recording fs over every harness present', async () => {
+test('CM25 · CM26: no admin item, nothing root-owned under HOME, and no write to a login environment (rc / profile / environment.d) — a recording fs over every harness present', { skip: POSIX_WORLD }, async () => {
   const w = await everything()
   const wrote = []
   const rec = (name, i) => (...a) => { wrote.push(String(a[i])); return fs[name](...a) }
@@ -202,7 +205,7 @@ test('CM25 · CM26: no admin item, nothing root-owned under HOME, and no write t
 })
 
 for (const answer of ['declined', 'pending']) {
-  test(`1.6 §1.6: the root store prompt ${answer} → that item is ${answer}, the carriers are still placed, exit 1; the next install adds it`, async () => {
+  test(`1.6 §1.6: the root store prompt ${answer} → that item is ${answer}, the carriers are still placed, exit 1; the next install adds it`, { skip: POSIX_WORLD }, async () => {
     const w = await everything()
     w.store.answer = answer
     const r = await w.install({ wrapperKit: { renderWrapper } })
@@ -218,7 +221,7 @@ for (const answer of ['declined', 'pending']) {
 
 // 1.6 §1.6: an add the OS answers with success while the root is not trusted when read back (a box cancelled whose tool still exits 0)
 // is not "added": the item is pending, exit 1, the rest done; the next install, whose add takes, completes.
-test('1.6 §1.6 · an add that reports success but is not trusted when read back → root-store pending, exit 1; the next install completes', async () => {
+test('1.6 §1.6 · an add that reports success but is not trusted when read back → root-store pending, exit 1; the next install completes', { skip: POSIX_WORLD }, async () => {
   const w = await everything()
   const add = w.store.add
   w.store.add = () => ({ ok: true }) // the tool exits 0, the trust setting never lands
@@ -249,7 +252,7 @@ async function lostKeyWorld() {
 }
 const later = () => new Date(Date.now() + 3600e3)
 
-test('1.6 C.3 failures.since: an install over the manifest an unclean uninstall kept (install: null) starts now; one over a complete install keeps its start', async () => {
+test('1.6 C.3 failures.since: an install over the manifest an unclean uninstall kept (install: null) starts now; one over a complete install keeps its start', { skip: POSIX_WORLD }, async () => {
   const w = await everything()
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
   const first = readManifest(w.dir).created_at
@@ -281,7 +284,7 @@ function assertOnlyNewRoot(w, r1, r2, at1) {
   for (const k of Object.keys(at1)) assert.ok(at2[k] > at1[k], `${k}: installed_at moved (${at1[k]} → ${at2[k]})`)
 }
 
-test('CM35: the key lost → remove the old root once by its fingerprint, create once, add once; every carrier holds only the new root; exit 0', async () => {
+test('CM35: the key lost → remove the old root once by its fingerprint, create once, add once; every carrier holds only the new root; exit 0', { skip: POSIX_WORLD }, async () => {
   const { w, r1, at1 } = await lostKeyWorld()
   w.custody.switches.keyLost = true
   const calls = w.store.calls.length, creates = w.custody.calls.filter((c) => c.verb === 'create').length
@@ -294,7 +297,7 @@ test('CM35: the key lost → remove the old root once by its fingerprint, create
   assertOnlyNewRoot(w, r1, r2, at1)
 })
 
-test('CM35: the old root\'s removal refused → the new root is installed all the same, the old one reported as an orphan with its removal, exit 1', async () => {
+test('CM35: the old root\'s removal refused → the new root is installed all the same, the old one reported as an orphan with its removal, exit 1', { skip: POSIX_WORLD }, async () => {
   const { w, r1, at1 } = await lostKeyWorld()
   w.custody.switches.keyLost = true
   w.store.remove = () => ({ ok: false, reason: 'User canceled' })
@@ -308,7 +311,7 @@ test('CM35: the old root\'s removal refused → the new root is installed all th
 
 // 1.6 R2: the older root's block comes out of the user's file only after a copy of its bytes is in the backup folder, and through the link a
 // dotfiles setup has there (the link stays a link, the file it names is what changes)
-test('CM35 · R2: the older root\'s block leaves the user\'s file after a backup of its bytes, and through its link', async () => {
+test('CM35 · R2: the older root\'s block leaves the user\'s file after a backup of its bytes, and through its link', { skip: POSIX_WORLD }, async () => {
   const { w, r1 } = await lostKeyWorld()
   const real = w.env.SSL_CERT_FILE, link = path.join(w.home, 'certs', 'via-link.pem')
   fs.symlinkSync(real, link)
@@ -329,7 +332,7 @@ test('CM35 · R2: the older root\'s block leaves the user\'s file after a backup
 // the reverse: the key is there but trocar cannot read its root back — trocar-ca.pem gone, or the manifest's record gone — install must not crash on
 // the custody's 'exists'; it takes ㉒'s path (the custody has no verb that returns the root)
 for (const [what, lose] of [['trocar-ca.pem gone', (w) => fs.rmSync(path.join(w.dir, 'ca', 'trocar-ca.pem'))], ['the root-key record gone', (w) => { const m = readManifest(w.dir); m.entries = m.entries.filter((e) => e.kind !== 'root-key'); fs.writeFileSync(path.join(w.dir, 'install-manifest.json'), JSON.stringify(m)) }]]) {
-  test(`CM35 reverse: the key present, ${what} → no crash; the stray key goes, a new root is made and carried`, async () => {
+  test(`CM35 reverse: the key present, ${what} → no crash; the stray key goes, a new root is made and carried`, { skip: POSIX_WORLD }, async () => {
     const { w, r1 } = await lostKeyWorld()
     lose(w)
     const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
@@ -343,7 +346,7 @@ for (const [what, lose] of [['trocar-ca.pem gone', (w) => fs.rmSync(path.join(w.
   })
 }
 
-test('CM35 · 1.6 V67: the key present and readable → install calls create zero times', async () => {
+test('CM35 · 1.6 V67: the key present and readable → install calls create zero times', { skip: POSIX_WORLD }, async () => {
   const { w } = await lostKeyWorld()
   const creates = w.custody.calls.filter((c) => c.verb === 'create').length
   await w.install({ wrapperKit: { renderWrapper }, now: later })
@@ -351,7 +354,7 @@ test('CM35 · 1.6 V67: the key present and readable → install calls create zer
 })
 
 // CM37: a plugin cert with no loader (the host finds files in its folder) → install writes the hook file alone, no loader row; uninstall takes it out
-test('CM37: a loaderless plugin cert → one owned plugin file in its folder, no text entry there, uninstall leaves the folder as it was', async () => {
+test('CM37: a loaderless plugin cert → one owned plugin file in its folder, no text entry there, uninstall leaves the folder as it was', { skip: POSIX_WORLD }, async () => {
   const [eighth] = await loadHarnesses(new URL('./harness/fixtures/', import.meta.url))
   const w = await modelWorld()
   const ext = path.join(w.home, '.eighth', 'extensions')
@@ -375,7 +378,7 @@ test('CM37: a loaderless plugin cert → one owned plugin file in its folder, no
 // 4.11 rule U: a setting that names trocar's own tree is never the user's file; on the OSes whose file names ignore case, a setting spelled in
 // another case names the same file (a Windows test machine: trocar's own bundle, spelled in another case, took a rule U block)
 for (const os of ['win32', 'darwin']) {
-  test(`rule U (${os}): a setting naming trocar's own tree in another letter case is trocar's, not the user's file`, async () => {
+  test(`rule U (${os}): a setting naming trocar's own tree in another letter case is trocar's, not the user's file`, { skip: os === 'darwin' && POSIX_WORLD }, async () => {
     const own = (home) => path.join(home, '.TROCAR', 'Collector', 'ca', 'trocar-ca.pem')
     const w = await modelWorld({ os, env: (home) => ({ NODE_EXTRA_CA_CERTS: own(home), SSL_CERT_FILE: own(home) }) })
     const named = w.harnesses.filter((d) => d.proxyMode).flatMap((d) => ruleUFiles(d, w.ctx, { home: w.home, owns: w.owns }).map((x) => `${d.name}: ${x.file}`))
@@ -386,7 +389,7 @@ for (const os of ['win32', 'darwin']) {
 // 1.6 §3.2 / V85: plan and act come from one list — every carrier install records for a form or a file (a key that stays the user's, a rule U file
 // it leaves alone, as well as what it places) has its row in the plan, with the same state when it changes nothing
 for (const shape of ['the key is the user\'s', 'the file is not this user\'s']) {
-  test(`V85: every carrier install records is a row of its plan (${shape})`, async () => {
+  test(`V85: every carrier install records is a row of its plan (${shape})`, { skip: POSIX_WORLD }, async () => {
     let w, owns
     if (shape === 'the key is the user\'s') {
       w = await everything()
@@ -411,7 +414,7 @@ for (const shape of ['the key is the user\'s', 'the file is not this user\'s']) 
 }
 
 // 1.6 §3.6: Removed says what was taken out of every file of yours, a file trocar made by writing its key or line into it (and so deletes) included
-test('1.6 §3.6: an uninstall that deletes a file trocar made for its key or line says what it took out there, not the bare path', async () => {
+test('1.6 §3.6: an uninstall that deletes a file trocar made for its key or line says what it took out there, not the bare path', { skip: POSIX_WORLD }, async () => {
   const { formatUninstallReceipt, tilde } = await import('../../src/cli/receipt.mjs')
   const w = await everything()
   await w.install({ wrapperKit: { renderWrapper } })
@@ -446,7 +449,7 @@ test('win32 uninstall: a task under trocar\'s name that is not trocar\'s is left
 // 4.11 P4 「trocar 拥有的文件不写在别人的上面」: a file already at a plugin's path that the manifest does not list is written over only when it carries
 // trocar's sentinel; a file that is not trocar's, or cannot be read, is left byte for byte, unrecorded, its carrier skipped with the path and why (D38)
 for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earlier extension\n'], ['foreign', '// the user\'s own extension\n'], ['unreadable', 'x\n']]) {
-  test(`P4 · a loaderless plugin, ${at} at its path`, async () => {
+  test(`P4 · a loaderless plugin, ${at} at its path`, { skip: POSIX_WORLD }, async () => {
     const [eighth] = await loadHarnesses(new URL('./harness/fixtures/', import.meta.url))
     const w = await modelWorld()
     const file = path.join(w.home, '.eighth', 'extensions', 'trocar-pi-extension.js')
@@ -473,7 +476,7 @@ for (const [at, seed] of [['none', null], ['ours', '// trocar collector: an earl
 // that carrier in the plan, with marked-without-record and the file, as the run skips it
 // the same for rule U's block: the user's certificate file holding a block from an install whose record is gone — the plan skips it as the run does
 for (const os of ['darwin']) { // the plan's code is the same on both OSes; everything() builds a macOS world
-  test(`1.6 §3.2 · ${os}: the plan skips rule U's block in a file holding marked text no record lists, as the run does`, async () => {
+  test(`1.6 §3.2 · ${os}: the plan skips rule U's block in a file holding marked text no record lists, as the run does`, { skip: os === 'darwin' && POSIX_WORLD }, async () => {
     const w0 = await modelWorld({ os })
     const mine = path.join(w0.home, 'mine.pem')
     const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
@@ -487,7 +490,7 @@ for (const os of ['darwin']) { // the plan's code is the same on both OSes; ever
 }
 
 for (const os of ['darwin', 'win32']) {
-  test(`1.6 §3.2 · ${os}: the plan skips a carrier whose loader holds marked text no record lists, as the run does`, async () => {
+  test(`1.6 §3.2 · ${os}: the plan skips a carrier whose loader holds marked text no record lists, as the run does`, { skip: os === 'darwin' && POSIX_WORLD }, async () => {
     const w = await modelWorld({ os, commands: ['dsh'] })
     const loader = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile }).find((r) => r.carrier === 'plugin' && r.loader)
     assert.ok(loader && loader.paths[0])
@@ -501,7 +504,7 @@ for (const os of ['darwin', 'win32']) {
 }
 
 for (const os of ['darwin', 'win32']) {
-  test(`4.11 P4 · ${os}: a plug-in file that is not trocar's is skipped in the plan and the run, and on record`, async () => {
+  test(`4.11 P4 · ${os}: a plug-in file that is not trocar's is skipped in the plan and the run, and on record`, { skip: os === 'darwin' && POSIX_WORLD }, async () => {
     const w = await modelWorld({ os, commands: ['dsh'] })
     fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
     const plan0 = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns, hookFile })
@@ -545,7 +548,7 @@ for (const os of ['darwin', 'win32']) {
   const keyRecords = (w, cfg) => readManifest(w.dir).entries.filter((e) => e.kind === 'json-key' && e.path === cfg && e.phase === 'install')
   // the agent rewrote its config without trocar's key, or the file is gone (the directories install made for it stay owned: uninstall takes them away)
   for (const [how, gone, after] of [['rewrote its file without', (cfg) => fs.writeFileSync(cfg, JSON.stringify({ theme: 'dark' })), { theme: 'dark' }], ['removed its file with', (cfg) => fs.rmSync(cfg), {}]]) {
-    test(`4.11 P4b · ${os}: an install key the agent ${how} it is placed again by install, exit 0; the old record retired`, async () => {
+    test(`4.11 P4b · ${os}: an install key the agent ${how} it is placed again by install, exit 0; the old record retired`, { skip: os === 'darwin' && POSIX_WORLD }, async () => {
       const { w, cfg } = await zcode()
       const bundle = json(cfg).network.caCertFile
       const [old] = keyRecords(w, cfg)
@@ -561,7 +564,7 @@ for (const os of ['darwin', 'win32']) {
   }
   // the directory install made for the file stays trocar's when the record is retired over a file the agent rewrote: once that file is gone too,
   // uninstall leaves the HOME as it was before install (invariant 5), the directory included
-  test(`4.11 P4b · ${os}: a directory install made stays trocar's across a retired record; uninstall takes it once the file is gone, keeps it with the file`, async () => {
+  test(`4.11 P4b · ${os}: a directory install made stays trocar's across a retired record; uninstall takes it once the file is gone, keeps it with the file`, { skip: os === 'darwin' && POSIX_WORLD }, async () => {
     for (const gone of [true, false]) {
       const { w, cfg } = await zcode()
       const made = path.dirname(cfg)
@@ -577,7 +580,7 @@ for (const os of ['darwin', 'win32']) {
       else assert.deepEqual(json(cfg), { theme: 'dark' }, 'the agent\'s file stays, and with it the directory')
     }
   })
-  test(`4.11 P4b · ${os}: an install key whose value the user replaced with their own is the user's: left, rule U, exit 0`, async () => {
+  test(`4.11 P4b · ${os}: an install key whose value the user replaced with their own is the user's: left, rule U, exit 0`, { skip: os === 'darwin' && POSIX_WORLD }, async () => {
     const { w, cfg } = await zcode()
     const mine = path.join(w.home, 'certs', 'z.pem'); put(mine, USER_PEM)
     fs.writeFileSync(cfg, JSON.stringify({ network: { caCertFile: mine } }))
@@ -592,7 +595,7 @@ for (const os of ['darwin', 'win32']) {
 // 4.11 P4 expand env + expandFrom, end to end: Hermes's provider ssl_ca_cert is `${CORP_CA}` and CORP_CA is set only in its home .env (Hermes loads it
 // after start). install's rule U reads the same setting the same way (readSrc), so it appends trocar's block to the file the .env names; the door,
 // with CORP_CA in no start environment, then reads that file through the .env too and decrypts the route.
-test('rule U · Hermes ssl_ca_cert ${CORP_CA} with CORP_CA only in ~/.hermes/.env: install appends the block there, and the door then decrypts', async () => {
+test('rule U · Hermes ssl_ca_cert ${CORP_CA} with CORP_CA only in ~/.hermes/.env: install appends the block there, and the door then decrypts', { skip: POSIX_WORLD }, async () => {
   const w = await modelWorld({ commands: ['hermes'] })
   const hermes = path.join(w.home, '.hermes'), mine = path.join(w.home, 'certs', 'corp.pem')
   put(mine, USER_PEM)

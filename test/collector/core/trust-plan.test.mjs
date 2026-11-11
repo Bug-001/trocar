@@ -3,6 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
+import { POSIX_WORLD } from '../../helpers/platform-shape.mjs'
 
 const CA = createCa({ commonName: 'trocar collector CA' })
 const USER = createCa({ commonName: 'corp CA' })
@@ -13,7 +14,7 @@ const ctx = { readText: (f) => files[f] ?? null }
 const plan = (inject) => planTrust({ descriptors: [{ name: 'alpha', inject }], ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: DIR })
 const entry = (o) => ({ kind: 'json-key', path: '/h/.alpha/settings.json', keys: ['env', 'CA_FILE'], value: `${DIR}/ca/trocar-ca.pem`, semantic: 'append', ...o })
 
-test('trust plan: entries and trust files are listed before anything is written; trust files hold only certificates', () => {
+test('trust plan: entries and trust files are listed before anything is written; trust files hold only certificates', { skip: POSIX_WORLD }, () => {
   const p = plan(() => ({ entries: [entry({ value: `${DIR}/ca/extra-alpha.pem` })], files: [{ path: `${DIR}/ca/extra-alpha.pem`, certsFrom: ['/corp/ca.pem', '/corp/dup.pem', '/corp/gone.pem'] }], notes: ['n'] }))
   assert.deepEqual(p.paths, [`${DIR}/ca/extra-alpha.pem`, '/h/.alpha/settings.json'])
   assert.deepEqual(p.entries.map((e) => e.harness), ['alpha'])
@@ -25,7 +26,7 @@ test('trust plan: entries and trust files are listed before anything is written;
   assert.ok(!p.notes.join('\n').includes('SECRET'), 'a block is named by type and position, never by its contents')
 })
 
-test('trust plan: every block of a user CA file that is not carried over is reported by file, type and position — TRUSTED CERTIFICATE, a key, a broken certificate, a DER file (D-28, 4.6 合并包)', () => {
+test('trust plan: every block of a user CA file that is not carried over is reported by file, type and position — TRUSTED CERTIFICATE, a key, a broken certificate, a DER file (D-28, 4.6 合并包)', { skip: POSIX_WORLD }, () => {
   const broken = '-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydA==\n-----END CERTIFICATE-----\n'
   const trusted = USER.certPem.replace(/BEGIN CERTIFICATE/, 'BEGIN TRUSTED CERTIFICATE').replace(/END CERTIFICATE/, 'END TRUSTED CERTIFICATE')
   const more = { ...files, '/corp/mixed.pem': `${trusted}${broken}-----BEGIN RSA PRIVATE KEY-----\nSECRET\n-----END RSA PRIVATE KEY-----\n${OTHER.certPem}`, '/corp/ca.der': '0\u0082\u0003\u00a0binary' }
@@ -40,7 +41,7 @@ test('trust plan: every block of a user CA file that is not carried over is repo
 
 // review D1-7 (4.6 合并包: every block not carried over is reported by type and file): a block with no END line — a
 // user CA file cut short — is reported, and the blocks around it are still read.
-test('trust plan: a block with no END line is reported by type and position, and the complete blocks around it are carried over (D1-7)', () => {
+test('trust plan: a block with no END line is reported by type and position, and the complete blocks around it are carried over (D1-7)', { skip: POSIX_WORLD }, () => {
   const cut = (pem) => pem.slice(0, pem.indexOf('-----END'))
   const more = { '/corp/ab.pem': `${USER.certPem}${cut(OTHER.certPem)}`, '/corp/ba.pem': `${cut(OTHER.certPem)}${USER.certPem}` }
   for (const [file, idx] of [['/corp/ab.pem', 2], ['/corp/ba.pem', 1]]) {
@@ -60,7 +61,7 @@ test('trust plan: refuses login-environment files, forbidden keys, values outsid
 })
 
 const BUNDLE = { path: `${DIR}/ca/combined-alpha.pem`, bundle: true }
-test('trust plan: a replace-semantics entry may only point at its own harness\'s combined bundle, declared as one', () => {
+test('trust plan: a replace-semantics entry may only point at its own harness\'s combined bundle, declared as one', { skip: POSIX_WORLD }, () => {
   assert.throws(() => plan(() => ({ entries: [entry({ semantic: 'replace' })] })), /combined bundle/)
   assert.equal(plan(() => ({ entries: [entry({ semantic: 'replace', value: `${DIR}/ca/combined-alpha.pem` })], files: [BUNDLE] })).entries.length, 1)
   assert.throws(() => plan(() => ({ entries: [entry({ semantic: 'replace', value: `${DIR}/ca/combined-alpha.pem` })] })), /does not declare as its combined bundle/)
@@ -80,7 +81,7 @@ test('trust plan: a replace-semantics entry may only point at its own harness\'s
 // 4.8 §6.2 / W20, 4.9 §6.2, 4.6 「合并包」: what the OS roots reader left out — certificates that did not parse, a source whose read failed while others
 // gave roots — is in none of the combined bundles, and the plan (on's plan, receipt and install-notes) says it once, naming every bundle (D38); a plan
 // with no bundle has nothing to say, and roots with nothing left out add no line.
-test('trust plan: OS roots that did not parse, and a roots source that failed, are one note each naming every combined bundle — never per bundle, never when nothing is left out', () => {
+test('trust plan: OS roots that did not parse, and a roots source that failed, are one note each naming every combined bundle — never per bundle, never when nothing is left out', { skip: POSIX_WORLD }, () => {
   const two = [
     { name: 'alpha', inject: () => ({ files: [{ path: `${DIR}/ca/combined-alpha.pem`, bundle: true }] }) },
     { name: 'beta', inject: () => ({ files: [{ path: `${DIR}/ca/combined-beta.pem`, bundle: true }] }) },
@@ -104,7 +105,7 @@ test('trust plan: OS roots that did not parse, and a roots source that failed, a
   assert.deepEqual(noBundle.records.filter((x) => /^system-roots-/.test(x.code)), [], 'no combined bundle in the plan: nothing is missing from one')
 })
 
-test('trust plan: text entries — a dotenv block passes the same checks as a key; a login-environment file only ever gets the shim PATH line', async () => {
+test('trust plan: text entries — a dotenv block passes the same checks as a key; a login-environment file only ever gets the shim PATH line', { skip: POSIX_WORLD }, async () => {
   const { lineComment } = await import('../../../src/off/text-edit.mjs')
   const block = (vars, o = {}) => ({ kind: 'text', format: 'dotenv-block', path: '/h/.alpha/.env', vars, semantic: 'replace', ...o })
   assert.equal(plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/combined-alpha.pem` })], files: [BUNDLE] })).entries[0].format, 'dotenv-block')
@@ -121,7 +122,7 @@ test('trust plan: text entries — a dotenv block passes the same checks as a ke
   assert.throws(() => plan(() => ({ entries: [{ kind: 'text', format: 'ini', path: '/h/a.ini' }] })), /unknown entry kind text \/ format ini/)
 })
 
-test('trust plan: owned files — in an agent\'s directory only with "trocar" in the name and the sentinel inside; shims only in <collector>/bin, one per name; watch and notes are carried', () => {
+test('trust plan: owned files — in an agent\'s directory only with "trocar" in the name and the sentinel inside; shims only in <collector>/bin, one per name; watch and notes are carried', { skip: POSIX_WORLD }, () => {
   const P = { path: '/h/.config/alpha/plugins/trocar-ca.js', role: 'plugin', data: '// trocar collector: trust plugin\n' }
   const p = plan(() => ({ owned: [P, { path: `${DIR}/plugins/alpha/package.json`, role: 'plugin', data: '{"type":"module"}\n' }], watch: [{ path: '/h/.config/alpha/node_modules', why: 'npm install' }], notes: [{ code: 'harness-note', text: 'first run fetches a package' }, 'plain'] }))
   assert.deepEqual(p.paths, [P.path, `${DIR}/plugins/alpha/package.json`], 'owned files are listed before anything is written')
@@ -137,7 +138,7 @@ test('trust plan: owned files — in an agent\'s directory only with "trocar" in
   assert.throws(() => plan(() => ({ owned: [{ ...P, role: 'daemon' }] })), /unknown owned-file role/)
 })
 
-test('trust plan: a certificate block goes only into the user\'s own CA file — never a login file, trocar\'s own tree, or a package-manager or system file (4.11 rule U)', () => {
+test('trust plan: a certificate block goes only into the user\'s own CA file — never a login file, trocar\'s own tree, or a package-manager or system file (4.11 rule U)', { skip: POSIX_WORLD }, () => {
   const block = (p) => () => plan(() => ({ entries: [{ kind: 'text', format: 'pem-block', path: p }] }))
   const ok = block('/h/certs/corp.pem')()
   assert.deepEqual([ok.entries[0].path, ok.entries[0].pem], ['/h/certs/corp.pem', CA.certPem], 'the root is what is placed')

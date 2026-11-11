@@ -145,7 +145,7 @@ for (const [bad, write] of [['not JSON', (f) => fs.writeFileSync(f, '{ not json'
   }
 }
 
-test('a block whose close line the user deleted still goes (its variables under ~/.trocar with it), a dsh patch file with the user\'s rows keeps them, and the plugin manifest text is the collector\'s own', async () => {
+test('a block whose close line the user deleted still goes (its variables under ~/.trocar with it), a dsh patch file with the user\'s rows keeps them, and the plugin manifest text is the collector\'s own', { skip: POSIX_WORLD }, async () => {
   const home = tmpDir('trocar-marker-block-')
   const root = path.join(home, '.trocar')
   const env = path.join(home, '.codex', '.env'); fs.mkdirSync(path.dirname(env), { recursive: true })
@@ -191,7 +191,7 @@ for (const { h, loc, homes } of HOME_VARS) {
   const variants = [['unset'], ['absolute', abs], ['~/', tilde], ...(homes ? [['profile', (home) => path.join(home, 'elsewhere', loc.env, homes, 'p')]] : []),
     ['set since install, absolute', abs, true], ['set since install, ~/', tilde, true]]
   for (const [name, value, late] of variants) {
-    test(`on Linux, ${h} · ${loc.env} ${name}: install's carriers are found where install wrote them and undone by their marks with the manifest gone`, { skip: MARKER_PATHS[h].some((x) => x.how === 'block') && POSIX_WORLD }, async () => {
+    test(`on Linux, ${h} · ${loc.env} ${name}: install's carriers are found where install wrote them and undone by their marks with the manifest gone`, { skip: POSIX_WORLD }, async () => {
       const home = tmpDir('trocar-marker-homevar-')
       const sh = sevenHomes(home)
       // a value of the user's own where trocar puts its key, a row of theirs in the dsh patch file: bytes to come back to (a key with no value before and
@@ -277,7 +277,7 @@ for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries
 
 // 4.6 (undo by marker): install puts the rc line at the end, with a line end before it when the file had none. With no record, that line end cannot
 // be told from the user's own, so it stays: the file comes back with exactly one final line end more (the file's own: CRLF in a CRLF file).
-test('undo by marker of the Kimi rc line: a file with no final line end gets exactly one back, in its own line ending; one that had it comes back byte for byte', async () => {
+test('undo by marker of the Kimi rc line: a file with no final line end gets exactly one back, in its own line ending; one that had it comes back byte for byte', { skip: POSIX_WORLD }, async () => {
   const A = 'export PATH="$HOME/.kimi-code/bin:$PATH"'
   for (const [before, eol] of [[`${A}\nalias ll=ls`, '\n'], [`${A}\r\nalias ll=ls`, '\r\n'], [`if false; then\n  ${A}\nfi`, '\n'], [`${A}\nalias ll=ls\n`, ''], [`${A}\r\nalias ll=ls\r\n`, '']]) {
     const home = tmpDir('trocar-marker-eof-')
@@ -490,7 +490,7 @@ async function lostManifestKeep() {
 // Linux, the record lost: the Kimi launch shim and its rc PATH line are install's (4.6 Kimi row, D55①), in whichever rc file holds the installer's line.
 // `off --yes` leaves both byte for byte; `uninstall`'s marker undo (both phases) takes them, and the rc file is as it was before install.
 for (const rcName of MARKER_PATHS['kimi-code'].filter((x) => x.how === 'line').map((x) => x.file)) {
-  test(`linux, ${rcName}: off by marker leaves the Kimi shim and rc line byte for byte; uninstall by marker takes them`, async () => {
+  test(`linux, ${rcName}: off by marker leaves the Kimi shim and rc line byte for byte; uninstall by marker takes them`, { skip: POSIX_WORLD }, async () => {
     const { runOff } = await import('../../src/off/orchestrate.mjs')
     const home = tmpDir('trocar-marker-kimi-')
     sevenHomes(home)
@@ -517,7 +517,7 @@ for (const rcName of MARKER_PATHS['kimi-code'].filter((x) => x.how === 'line').m
 // A YAML list file trocar's row was the only item of (install replaced its `[]`, or appended to a file with no item): the marker undo leaves a valid
 // empty list — the user's comments and blank lines kept, `[]` where the row was — so dsh still starts; byte-exact where install replaced a `[]`.
 // A file with nothing left keeps today's delete; other items stay as they were.
-test('a YAML list whose only item was trocar\'s row comes back a valid empty list, comments and blanks kept; other items unchanged; an empty remainder is deleted', async () => {
+test('a YAML list whose only item was trocar\'s row comes back a valid empty list, comments and blanks kept; other items unchanged; an empty remainder is deleted', { skip: POSIX_WORLD }, async () => {
   const { insertLine } = await import('../../src/off/text-edit.mjs')
   const shapes = [
     ['comment only', '# my dsh patches\n[]\n', '# my dsh patches\n[]\n'],
