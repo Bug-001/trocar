@@ -115,12 +115,27 @@ async function recorded(dir, where, fn, result = {}) { // result: what the faile
 // outside trocar's home only; anything else is said, never dropped silently (review 3 #1, D38). A daemon `on` starts directly
 // (the fallback when the OS mechanism refuses) is handed exactly the same (ensureDaemonUp → unit.start): without it capture breaks behind a corporate
 // MITM relay and nothing says so (review 2026-10-18).
-export function daemonEnv(env, dir) {
-  const v = env.NODE_EXTRA_CA_CERTS
+// A shell that does not set the variable is unknown, not "removed" (D38): the value the record says the login entry carried stays while its file is
+// there and still passes carriedWhy — losing a relay's CA breaks capture (invariant 5). A value this shell sets replaces it, empty included (4.11 §3 ⑭).
+export function daemonEnv(env, dir, { fs = nodeFs } = {}) {
+  let v = env.NODE_EXTRA_CA_CERTS
+  if (v === undefined) {
+    const prior = carriedBefore(dir, fs)
+    if (typeof prior === 'string' && !carriedWhy(prior, dir) && fs.existsSync(prior)) return { env: { NODE_EXTRA_CA_CERTS: prior }, note: null }
+  }
   if (typeof v !== 'string' || v === '') return { env: {}, note: null }
-  const why = !path.isAbsolute(v) ? 'it is a relative path' : v.startsWith(path.dirname(dir) + path.sep) ? "it is trocar's own file" : null
+  const why = carriedWhy(v, dir)
   if (why) return { env: {}, note: `NODE_EXTRA_CA_CERTS of this shell (${v}) is not given to the daemon trocar starts (${why}); that daemon checks a relay's certificate with Node's roots only` }
   return { env: { NODE_EXTRA_CA_CERTS: v }, note: null }
+}
+/** Why a CA file may not be carried into the login entry (relative, or trocar's own), or null: the one user-file check of a carried value. */
+export const carriedWhy = (v, dir) => (!path.isAbsolute(v) ? 'it is a relative path' : v.startsWith(path.dirname(dir) + path.sep) ? "it is trocar's own file" : null)
+/** The NODE_EXTRA_CA_CERTS the record says the login entry carried, or undefined (no record, or one from before `carried` was kept). */
+function carriedBefore(dir, fs) {
+  let m
+  try { m = readManifest(dir, fs) } catch { return undefined } // an unreadable record carries nothing over; install says what it cannot read elsewhere
+  const unit = m && (m.files || []).find((f) => f.role === 'unit')
+  return unit && unit.carried ? unit.carried.NODE_EXTRA_CA_CERTS : undefined
 }
 
 // ── `trocar on` (RFC 1.6 §1.6, R6, R9, R12; D39) ────────────────────────────────────────────────────────────────────────────────────────
@@ -233,7 +248,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     descs = descs.filter((d) => !unwritable.some((x) => x.harness === d.name))
     draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   }
-  const daemon = unit ? daemonEnv(env, dir) : null
+  const daemon = unit ? daemonEnv(env, dir, { fs }) : null
   if (daemon && daemon.note) draft.notes.push(daemon.note)
   // a form trocar cannot capture whose places are here: said for every harness asked, its own footprint here or not, refused or not (4.6 「不采的形态」, D38)
   const unseen = asked.flatMap((d) => uncapturedOf(d, ctxFor(d)).map((u) => ({ harness: d.name, code: CODE.harnessNote, reason: `${d.name}: ${u.why} (${u.paths.join(', ')})` })))
@@ -421,7 +436,9 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
     const text = unit.text(daemon.env)
     const j = judgeOwned({ manifest: m, file: unit.path, planned: sha256(Buffer.from(text)), fs })
     if (isMasked(unit)) fs.rmSync(unit.path) // the link, not what it points at
-    if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', phase: 'install', file: unit.path, data: text, mode: 0o644, home, now: now(), fs }); written.unit = j.action }
+    if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', phase: 'install', file: unit.path, data: text, mode: 0o644, extra: { carried: daemon.env }, home, now: now(), fs }); written.unit = j.action }
+    // an intact entry the record does not yet say it carries this (one written before `carried` was kept): the record learns it, the file stays
+    else if (JSON.stringify(j.record.carried ?? null) !== JSON.stringify(daemon.env)) { guard(); j.record.carried = daemon.env; saveManifest(dir, m, fs) }
     // D46: the daemon's own log sinks the unit names — directory 0700, two files 0600, made here at unit-write time and listed in the manifest like
     // every file trocar owns; NEVER rewritten afterwards (a later on only lists what the manifest does not know yet, so no log line is ever truncated)
     if (typeof unit.ensureLogs === 'function') { guard(); unit.ensureLogs() }
@@ -777,7 +794,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, exec = nul
       const record = (ledger, ours) => recordLoginEntry(dir, fs, { ledger, ours }, ms, lockIdentity)
       let rr = early && early.rr ? early.rr : register ? unit.enable({ now: !was.up, prior: held && held.entry ? held.entry.prior ?? null : null, record }) : (was.up ? null : unit.startNow())
       if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
-        const direct = unit.start(daemonEnv(env, dir)) // the direct start carries what the login entry's Environment= would carry
+        const direct = unit.start(daemonEnv(env, dir, { fs })) // the direct start carries what the login entry's Environment= would carry
         if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); trocar started it directly this run; the login entry starts it at the next login`); rr = direct }
       }
       started = !was.up

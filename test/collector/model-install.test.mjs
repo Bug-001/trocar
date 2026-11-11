@@ -649,3 +649,28 @@ test('4.11 P4 merges: the desktop setting is read fresh — when it stops naming
   await w.install({ wrapperKit: { renderWrapper } })
   assert.ok(!bundleFps().includes(privFp), 'not sticky: the setting no longer names the file')
 })
+
+// a record written before `carried` / `merged_from` were kept (0.2.x): an install whose bytes are intact teaches the record what it carried and merged,
+// writing no file, so the install after it, from a shell without the variable, keeps them
+test('4.11 P4 · §3 ⑭: an intact login entry and bundle from a record without carried / merged_from learn them; the next install without the variable keeps the CA', async () => {
+  const other = await modelWorld(); await other.install()
+  const priv = fs.readFileSync(path.join(other.dir, 'ca', 'trocar-ca.pem'), 'utf8'), privFp = certBlocks(priv)[0].fp
+  const w0 = await modelWorld(), mine = path.join(w0.home, 'company.pem'); put(mine, priv)
+  const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
+  const unitPath = path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist'), unit = { path: unitPath, text: (env) => `${JSON.stringify(env)}\n` }
+  const run = (env) => w.install({ wrapperKit: { renderWrapper }, unit, env, ctx: { ...w.ctx, env } })
+  await run(w.env)
+  const mf = path.join(w.dir, 'install-manifest.json'), m = JSON.parse(fs.readFileSync(mf, 'utf8'))
+  for (const f of m.files) { delete f.carried; delete f.merged_from } // the shape 0.2.x wrote
+  fs.writeFileSync(mf, JSON.stringify(m))
+  const bytes = () => [fs.readFileSync(unitPath, 'utf8'), fs.readFileSync(path.join(w.dir, 'ca', 'bundle-z-code.pem'), 'utf8')]
+  const was = bytes()
+  await run(w.env)
+  assert.deepEqual(bytes(), was, 'nothing rewritten')
+  const after = readManifest(w.dir).files
+  assert.deepEqual(after.find((f) => f.role === 'unit').carried, { NODE_EXTRA_CA_CERTS: mine })
+  assert.deepEqual(after.find((f) => f.role === 'bundle' && f.harness === 'z-code').merged_from, [{ src: 'env:NODE_EXTRA_CA_CERTS', file: mine }])
+  await run(Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS')))
+  assert.deepEqual(bytes(), was, 'from a shell without the variable: still the same bytes, the CA kept')
+  assert.ok(certBlocks(bytes()[1]).some((b) => b.fp === privFp))
+})

@@ -223,12 +223,12 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   // d · the autostart unit. It carries this shell's NODE_EXTRA_CA_CERTS: the door's upstream trust includes the daemon's own (4.11 §3 ⑭), and a
   // login-started daemon has no shell exports (its job environment, not the user's login environment, D56⑨); what cannot be carried is said and kept (D38)
   if (unit) {
-    const d = daemonEnv(env, dir)
+    const d = daemonEnv(env, dir, { fs })
     if (d.note) { notes.push(d.note); runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.installNote, where: 'install', kind: 'note', code: CODE.unitEnvNotCarried, reason: d.note }) }
     // 4.11 P4: a registration under trocar's name the record does not list (one the unit file does not hold: a scheduled task) is backed up before it is replaced
     const prior = !m.files.some((x) => samePath(x.path, unit.path, fs)) && typeof unit.registeredBytes === 'function' ? unit.registeredBytes() : null
     if (prior) writeBackup({ home, file: unit.path, data: prior, now: now(), fs })
-    owned(unit.path, 'unit', null, unit.text(d.env), 0o644)
+    owned(unit.path, 'unit', null, unit.text(d.env), 0o644, { extra: { carried: d.env } })
   }
   const agentList = readAgentList({ home, fs }).entries
   for (const d of harnesses.filter((x) => installedHarnesses.includes(x.name))) m.liveness[d.name] = { ...unitedLiveness(m.liveness[d.name], livenessOf(d, { agentList, os })), ...pick(m.liveness[d.name], ['on_at', 'off_at', 'windows']) }
@@ -257,7 +257,11 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   // each → 'written' | 'intact' (the bytes it would write are already there: nothing written, D54); a carrier is placed when one of its parts was written
   function owned(file, role, harness, data, mode, { sources = null, extra = {} } = {}) {
     const j = judgeOwned({ manifest: m, file, planned: sha256(Buffer.from(data)), fs })
-    if (j.action === 'skip-intact') { said(role, 'intact', { path: file, harness }); return 'intact' }
+    if (j.action === 'skip-intact') {
+      // what the record keeps beside the bytes (a bundle's merged_from, the unit's carried) is learned for an intact file written before it was kept
+      if (Object.entries(extra).some(([k, v]) => JSON.stringify(j.record[k] ?? null) !== JSON.stringify(v))) { Object.assign(j.record, extra); save() }
+      said(role, 'intact', { path: file, harness }); return 'intact'
+    }
     writeOwnedFile({ dir, manifest: m, harness, role, phase: 'install', file, data, mode, sources, extra, home, now: now(), fs })
     said(role, 'written', { path: file, harness })
     return 'written'
@@ -289,11 +293,12 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         if (keyIsUsers(c, ctx, home)) return { state: 'rule-u' }
         if (c.semantics === 'replace') { // CM9: Node's own roots, the user CAs the key makes ineffective, the trocar root; no system roots
           const bundle = path.join(dir, 'ca', `bundle-${desc.name}.pem`)
-          const merged = (c.merges || []).flatMap((s) => userCertsOf(desc, s))
+          const before = ((m.files || []).find((f) => f.role === 'bundle' && f.path === bundle) || {}).merged_from || [] // what each setting gave last time
+          const merged = (c.merges || []).flatMap((s) => userCertsOf(desc, s, before))
           const own = new Set(certBlocks(rootPem).map((x) => x.fp)) // a merged file may already hold trocar's block (rule U of another harness): not a user CA
           const b = composeBundle({ nodeRoots, userCerts: merged.flatMap((x) => x.certs).filter((p) => !certBlocks(p).some((x) => own.has(x.fp))), caPem: rootPem })
           // the files and fingerprints it merged, as the Linux bundles record them: a rebuild of a bundle gone while a process holds it reads them (4.6 撤销 第 2 步)
-          return placedIf(owned(bundle, 'bundle', desc.name, b.data, 0o644, { sources: [...new Set(merged.map((x) => x.file))], extra: { user_fps: b.user_fps, roots_fp: b.roots_fp } }),
+          return placedIf(owned(bundle, 'bundle', desc.name, b.data, 0o644, { sources: [...new Set(merged.map((x) => x.file))], extra: { user_fps: b.user_fps, roots_fp: b.roots_fp, merged_from: merged.map((x) => ({ src: x.src, file: x.file })) } }),
             jsonKey(desc, file, c.keys, bundle))
         }
         return placedIf(jsonKey(desc, file, c.keys, ca.pem))
@@ -326,9 +331,13 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     }
   }
 
-  // the CERTIFICATE blocks of the files a `merges` source names, per file: [{ file, certs }] (4.11 P4); what is not carried over is said, never silent (D38)
-  function userCertsOf(desc, src) {
-    const r = readSrc(src, ctx)
+  // the CERTIFICATE blocks of the files a `merges` source names, per file: [{ src, file, certs }] (4.11 P4); what is not carried over is said, never silent (D38).
+  // An env-sourced setting this shell does not set is unknown, not removed (D38, invariant 5): the file `before` (the bundle record's merged_from) holds
+  // for it is read again, while it is the user's and there; a value this shell sets replaces it. A file-sourced setting is read fresh, never carried.
+  function userCertsOf(desc, src, before = []) {
+    const label = 'env' in src ? `env:${src.env}` : 'file'
+    const unset = 'env' in src && (ctx.env instanceof Map ? !ctx.env.has(src.env) : !Object.hasOwn(ctx.env || {}, src.env))
+    const r = unset ? { set: true, all: before.filter((x) => x.src === label && typeof x.file === 'string').map((x) => ({ value: x.file, where: label })) } : readSrc(src, ctx)
     if (r.error) { notes.push(`${desc.name}: ${r.where}: ${r.error}; the CA it names is not in trocar's bundle`); return [] }
     return (r.set ? r.all : []).flatMap(({ value, where }) => {
       const file = typeof value === 'string' ? value.trim() : ''
@@ -338,7 +347,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       try { buf = fs.readFileSync(file) } catch (e) { notes.push(`${desc.name}: ${file} (${where}): ${errnoWords(e)}; its certificates are not in trocar's bundle`); return [] }
       const got = certsOf(file, buf)
       for (const k of got.skipped) notes.push(`${desc.name}: ${file}: ${k.type ? `block ${k.index} (${k.type})` : 'the file'} is not carried into trocar's bundle: ${k.why}`)
-      return [{ file, certs: got.certs }]
+      return [{ src: label, file, certs: got.certs }]
     })
   }
 
