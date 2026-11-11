@@ -41,7 +41,7 @@ export async function replaceDaemon({ by, env, home, platform, deps, dir, root, 
   const unit = deps.unit !== undefined ? deps.unit : await loginUnit({ home, env, platform, deps })
   if (!unit) { problems.push('this platform has no login entry to start the collector through, so it was not replaced'); return { restarted: false, stopped: true, notes, from: running } }
   // a failure record it cannot write is a problem (D38)
-  const up = await ensureDaemonUp({ osName: platform, dir, env, fs, unit, register: true, put: (e) => { try { appendEvent(dir, e) } catch (err) { problems.push(`a failure record could not be written (${err.message}): ${e.reason}`) } }, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath ? { socketPath: deps.socketPath } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) })
+  const up = await ensureDaemonUp({ osName: platform, dir, env, fs, exec: deps.exec || null, unit, register: true, put: (e) => { try { appendEvent(dir, e) } catch (err) { problems.push(`a failure record could not be written (${err.message}): ${e.reason}`) } }, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath ? { socketPath: deps.socketPath } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) })
   notes.push(...up.notes)
   if (!up.up) { problems.push(`the collector did not come back up (${up.problems[0] || 'it does not answer'}). ${again}`); return { restarted: false, stopped: true, notes, from: running } }
   // a collector that answers is not yet one on THIS code: the login entry starts the copy install registered, and with npm another copy

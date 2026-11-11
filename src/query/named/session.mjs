@@ -37,7 +37,7 @@ import { extractMembers, extractSeed, blockAt, CHUNK_STORED, TAIL_HEAP, releaseT
 import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
 import { indexRows, isModelCall, sessionGroups, sessionFacts } from '../rows.mjs';
-import { dirUse, openProjection, projectionStale, sessionDir, STORE_HEAP } from '../projection.mjs';
+import { dirUse, openProjection, projectionStale, sessionDir, STORE_HEAP, unsaved } from '../projection.mjs';
 import { releaseParts } from '../line-file.mjs';
 import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yieldCaches } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
@@ -531,7 +531,7 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
 const unfolded = (st, plan, F) => { for (let i = st.fp === plan ? st.fc : 0; i < F; i++) { const r = plan.members[i]; if (inCut(plan, r) && !st.R.has(String(r.id))) return true; } return false; };
 /** Thrown on the local path when `ctx.handOff` is set and this read would extract or fold a member (3.5 §谁执行它): the caller asks
  *  the daemon's worker, which is building it, instead of building it a second time beside it. */
-export class HandOff extends Error {
+class HandOff extends Error {
   constructor(id) { super(`session ${id}: its projection or fold log does not cover every member yet`); this.name = 'HandOff'; this.code = 'hand-off'; }
 }
 // What a kept state weighs in the shared ledger: the heap it was measured to hold, and at least its rows at SPINE_PER_ROW, since the
@@ -656,7 +656,6 @@ export async function extendSession(ctx, id, budgetMs) {
       try { const at = endReread(home, s.id, fs); if (at) rereadAt.set(s.id, { home, fs, at }); } catch { /* the next worker reads it once more */ }
     }
   } else {
-    if (s.files) writeFails.delete(s.id);
     if (s.mark != null && !s.files) backlog(ctx, s.id, r); // a write that failed: no head lists what is not on disk, only `pending` moves
     else if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
   }
@@ -734,9 +733,19 @@ function headAt(ctx, s) {
 }
 // Answer files never go back (3.5): a fold's frontier at `read` members, below what the files reach (a log cut back to its sidecar), writes
 // neither head nor tail while a tier-1 head stands on disk. With none there is no answer to keep. The end of a fold writes all the same.
-const behind = (ctx, id, read, log, members) => read < reachOf(ctx, id, log, members) && readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs)?.tier === 1;
-/** stands(ctx, s) → whether the answer on disk stands, whatever the state `s`: while the session is re-read, and while its fold is behind the files. */
-export const stands = (ctx, s) => rereading(ctx, s.id) || (ctx.writer === true && behind(ctx, s.id, s.mark == null ? 0 : s.pos(s.mark) + 1, s.V.log, s.rows));
+// the head on disk when it is this version's (another CTX_V's is no answer of this one to keep: its files are written again)
+const headHere = (ctx, id) => { const h = readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs); return h?.v === CTX_V ? h : null; };
+const behind = (ctx, id, read, log, members) => read < reachOf(ctx, id, log, members) && headHere(ctx, id)?.tier === 1;
+// ...nor does an early answer (the boot pass still re-indexes: index-pending) over a whole tier-1 head: every worker's pass re-indexes the
+// live segment, and its early answer would write that head and every pack again under the pending doc head, then again once the pass ends
+function early(ctx, s) {
+  if (!s.indexErrors.some((e) => e.code === 'index-pending')) return false;
+  const h = headHere(ctx, s.id);
+  return h?.tier === 1 && h.pending == null;
+}
+/** stands(ctx, s) → whether the answer on disk stands, whatever the state `s`: while the session is re-read, while its fold is behind the
+ *  files, and while an early answer would stand over a whole head. */
+export const stands = (ctx, s) => rereading(ctx, s.id) || (ctx.writer === true && (behind(ctx, s.id, s.mark == null ? 0 : s.pos(s.mark) + 1, s.V.log, s.rows) || early(ctx, s)));
 /** files(ctx, s) → a request's turn at the answer files: toState(), or nothing while the answer on disk stands; whether they are at the
  *  state `s`, so a head of it may be written. */
 export function files(ctx, s) {
@@ -753,18 +762,27 @@ function toState(ctx, s, deadline = Infinity) {
   if (ctx.writer !== true || s.mark == null || s.st.gone) return true;
   try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch (e) { forget(s.V.log); if (e && e.code === 'ELINEPART') throw e; writeFailed(ctx, s.id, e); return true; }
   if (s.files && s.pending) s.pending.calls = callsPast(s.plan, reachOf(ctx, s.id, s.V.log, s.rows)); // they reach further now
+  if (s.files && !rereading(ctx, s.id)) writeFails.delete(s.id); // a whole write ends the episode (a re-read's, its head's write too)
   return s.files != null;
 }
 // What could not be written of a session, its store or an answer file or head, is one D38 record per episode, whatever turn tried it; a whole
-// write of the answer files ends the episode (3.5 §访问模式「版本变更的重读」②).
-const writeFails = new Set();
+// write of the answer files ends the episode (3.5 §访问模式「版本变更的重读」②). Session id → the record's reason, which the head the
+// session answers meanwhile says as its stop (headStanding): `projection-write-failed` for what the system refused, `fold-failed` for a
+// render that threw.
+const writeFails = new Map();
 function saidOnce(ctx, id, record) {
   if (writeFails.has(id)) return;
-  writeFails.add(id);
+  writeFails.set(id, { code: record.code, reason: record.reason });
   ctx.persist?.(record);
 }
+/** writeFailure(home, id, e) → the D38 record of a write of a session's answer files that failed with `e`. Its code is the head's stop. */
+export function writeFailure(home, id, e) {
+  const io = /^E[A-Z]+$/.test(e?.code ?? ''); // a system error (ENOSPC, EACCES, …); else the render threw
+  return io ? { where: 'projection', code: 'projection-write-failed', reason: unsaved(home, e) }
+    : { where: 'projection', code: 'fold-failed', reason: `The answer of session ${id} could not be built: ${String((e && e.message) || e).split('\n')[0]}` };
+}
 function writeFailed(ctx, id, e) {
-  saidOnce(ctx, id, { where: 'projection', code: 'projection-write-failed', reason: `The answer files of session ${id} could not be written (${String((e && (e.code || e.message)) || e).split('\n')[0]}); its old answer stands and the next turn tries again.` });
+  saidOnce(ctx, id, writeFailure(ctx.home ?? trocarHome(), id, e));
 }
 /** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs), the same bytes
  *  here and in the worker: the title is a function of the disk. */
@@ -865,8 +883,12 @@ function thenOf(s, M) {
 }
 
 const headKept = (ctx, id) => readHead(ctx.home ?? trocarHome(), id, ctx.fs || nodeFs);
-// the head a request answers while the disk's stands or a write failed: the file, else the tier-0 head (never a head that lists what is not on disk)
-const headStanding = (ctx, s) => pendingHead(ctx.home ?? trocarHome(), s.id, s.rows, s.indexErrors, (d) => d.pending, ctx.fs || nodeFs, s.title);
+// the head a request answers while the disk's stands or a write failed: the file, else the tier-0 head (never a head that lists what is not on
+// disk); while the session's files cannot be saved, its pending stops with why and the step that fixes it (4.3 §4 盘满)
+// shortcut: a head file already on disk is served by the daemon without asking here, so it does not show the stop; drop it or mark it when
+// a disk-full report shows a board stuck past its first head
+const headStanding = (ctx, s, stop = writeFails.get(s.id)) => pendingHead(ctx.home ?? trocarHome(), s.id, s.rows, s.indexErrors, (d, done) => (stop == null ? d.pending
+  : { ...d.pending, done, total: s.rows.length, ...seenOf(d), calls: callsNow(ctx, s.id, s.rows), stopped: stop }), ctx.fs || nodeFs, s.title);
 /** headAsked(params) → whether a `session` request asks for the head (`--head`). */
 export const headAsked = (p) => p.head != null && p.head !== false && p.head !== 'false' && p.head !== '0';
 export async function run(ctx) {

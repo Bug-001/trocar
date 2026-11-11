@@ -27,6 +27,9 @@ export async function unservable(platform, host = process.platform) {
 
 /** The platforms a model world is built for (modelWorld's `os`) whose daemon serves a control endpoint, in the order a test takes them. */
 const WORLDS = ['darwin', 'win32']
+/** platform → unservable(platform) on this host, settled while the test file imports this module: a test file's `skip` reads it, never awaits
+ *  between two test() calls — node:test, all registered tests done, ends the run, and a test registered after such an await is cancelled. */
+export const UNSERVABLE = Object.fromEntries(await Promise.all(WORLDS.map(async (p) => [p, await unservable(p)])))
 /** → { platform, renderWrapper }: the first of WORLDS this host can serve for real (unservable), and that platform's own renderWrapper (a
  *  win32 world's is win32's, never darwin's). renderWrapper only renders a wrapper's source: placing a win32 wrapper also takes a compile
  *  step (model-backends' wrapperKit), which this does not give, so it serves worlds whose harnesses place no wrapper. */

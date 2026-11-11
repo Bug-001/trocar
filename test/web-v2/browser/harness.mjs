@@ -87,7 +87,7 @@ const tailPart = (r) => (/^\/api\/d\/open\.(\w+)\?/.exec(r.url) || [])[1]
 /** → a predicate of the logged requests a timer sent by itself (4.4 §live-poll), not one a reader's action caused: the session list,
  *  status and price reads, and the open session's rounds, tied to the marks the poll engine sets as a timer round starts (core/poll.mjs
  *  TIMER_ROUND): a round's head is the first head read within a third of the period after its mark, and its tails are the first Range
- *  read of each open tail after that head and before the next mark (a read again after a 416, readTail's, too). Any other head or tail
+ *  read of each open tail after that head and before the next mark (readTail's whole read right after it, too). Any other head or tail
  *  read — one a step change sent, however long after the last round — is not the timer's. */
 export async function timerReads(b) {
   const marks = (await b.page.evaluate(() => globalThis.__timerRounds || [])).filter((m) => m.base === INTERVAL.session).map((m) => m.at).sort((x, y) => x - y)
@@ -102,7 +102,7 @@ export async function timerReads(b) {
     for (const r of tails) {
       if (r.start <= h.start || r.start >= end) continue
       const part = tailPart(r), prev = last[part]
-      if (prev === undefined ? r.range != null : prev.status === 416) { timer.add(r); last[part] = r } else last[part] = { status: 0 }
+      if (prev === undefined ? r.range != null : prev.range != null && r.range == null) { timer.add(r); last[part] = r } else last[part] = { range: null }
     }
   })
   return (r) => /^\/api\/(sessions|status|pricing)\b/.test(r.url) || timer.has(r)
@@ -165,6 +165,7 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
   try {
     browser = await launchChrome(chromium, pids)
     context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
+    trackRequests(context)
     page = await context.newPage()
     page.on('pageerror', (e) => errors.push(String(e)))
     // TROCAR_CPU_RATE=<n>: the page's CPU slowed n times (CDP), for report-only runs on a slower machine's footing
@@ -219,6 +220,29 @@ export function gapInPage() {
   return { gap: Math.max(gap, end - at), pitch }
 }
 export const windowGap = (page) => page.evaluate(gapInPage)
+
+// every page's requests in flight and the time the last one started or ended, from its context's events (a page withBoard's context opens)
+const NET = new WeakMap()
+function trackRequests(context) {
+  const net = (r) => { let p; try { p = r.frame().page() } catch { return null } if (!NET.has(p)) NET.set(p, { open: 0, last: Date.now() }); return NET.get(p) }
+  const end = (r) => { const n = net(r); if (n) { n.open = Math.max(0, n.open - 1); n.last = Date.now() } }
+  context.on('request', (r) => { const n = net(r); if (n) { n.open++; n.last = Date.now() } })
+  context.on('requestfinished', end)
+  context.on('requestfailed', end)
+}
+/** Until `page` has had no request in flight, and none started or ended, for `ms`: the board's own reads after an action are over (an
+ *  opened desk's 100 ms rest and its body reads, 2.3 §正文预取; a screen's first reads). Playwright's waitForLoadState('networkidle')
+ *  cannot say this after the page's load: the page reached that state once, and moving the hash does not reset it, so it returns at once.
+ *  Rejects after `deadline` ms with what is still open. A page made in a withBoard context only. */
+export async function settle(page, ms = 500, deadline = 30_000) {
+  const t0 = Date.now()
+  for (;;) {
+    const n = NET.get(page) || { open: 0, last: t0 }, wait = n.open ? ms : n.last + ms - Date.now()
+    if (!n.open && wait <= 0) return
+    if (Date.now() - t0 > deadline) throw new Error(`the page did not settle in ${deadline / 1000} s: ${n.open} request(s) in flight`)
+    await page.waitForTimeout(Math.max(20, Math.min(wait, ms)))
+  }
+}
 
 /** ms from the input `act` makes (its first pointerdown / keydown, marked by a listener armed and awaited before it, so the input can
  *  never outrun it) until `cond` holds and that frame has painted: 'replay' (a session's window drawn), 'step' (the step head no longer

@@ -40,12 +40,11 @@ import { diagnose } from '../netenv/findings.mjs'
 import { codeId, packageRoot } from '../version.mjs'
 import { refreshCommand } from './refresh.mjs'
 import { captureHealth } from '../health/read.mjs'
-import { trustReasonText, CODE } from '../collector/core/codes.mjs'
+import { CODE } from '../collector/core/codes.mjs'
 import { pacStale } from '../collector/core/proxymode/entries.mjs'
-import { formatStatus, formatHealth, failuresBlock, statusSummary, statusDetail, restartNames } from './status-text.mjs'
-import { colors, noColor, tildeText, unknown as unknownText2 } from './text.mjs'
+import { failuresBlock, statusSummary, statusDetail, restartNames } from './status-text.mjs'
+import { colors, tildeText } from './text.mjs'
 import { squashed } from './words.mjs'
-import { tilde } from './receipt.mjs'
 import { routeReadsEnv } from '../off/loc.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
 import { printJson } from './json.mjs'
@@ -62,7 +61,7 @@ const RESTART = new Set(RESTART_REASONS) // 「重启后才会被采集」(1.6 �
 
 /** One item of the manifest against the disk → { state: 'intact' | 'missing' | 'changed' | 'unknown', why? }. Nothing is written. An entry trocar wrote is intact when the file is byte for byte what it
  *  wrote, or trocar's value / text is still in it (Claude Code rewrites settings.json: the file differs, the entry is there); an owned file when its bytes are what the manifest recorded. */
-export function entryState(e, fs = nodeFs) {
+function entryState(e, fs = nodeFs) {
   const file = e.real_path || e.path
   try {
     const cur = readOrNull(fs, file)
@@ -390,7 +389,7 @@ function identityBlocks({ ids, merged, health }) {
  * arch and harness only through it, layering rule 5). → `{ facts, topology, diagnosed }` (topology = { <h>: HarnessTopology }, `diagnosed` = the finding list the codes came from, so `doctor` does not diagnose the same
  * facts a second time, D62), or `{ topology_error }`: a failure of the build is said, and does not change what `status` judged.
  */
-export async function gatherTopology(f, { home, env, platform, deps = {} }) {
+async function gatherTopology(f, { home, env, platform, deps = {} }) {
   try {
     const fs = deps.fs || nodeFs
     const mod = deps.netFactsDeps ? null : await (deps.daemon || import('../collector/net-deps.mjs'))

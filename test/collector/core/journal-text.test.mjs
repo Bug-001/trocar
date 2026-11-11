@@ -8,6 +8,7 @@ import path from 'node:path'
 import { applyJsonKey, applyTextEntry, previewTextEntry, undoEntry, newManifest, readManifest, sha256, manifestPath, writeOwnedFile, removeOwnedFile, describeEntry } from '../../../src/collector/core/trust/journal.mjs'
 import { lineComment, OFF_PREFIX } from '../../../src/off/text-edit.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
+import { POSIX_WORLD } from '../../helpers/platform-shape.mjs'
 
 function box() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-jt-'))
@@ -17,7 +18,7 @@ function box() {
 const ENV = 'OPENAI_API_KEY=sk-secret-123\nSSL_CERT_FILE="/corp/ca.pem"\n'
 const ROW = `- insert: [{ name: "/p/index.js" }] ${lineComment('dsh plugin')}`
 
-test('journal text: a dotenv block — manifest has the ops and the prior path, never the file; undo is byte-identical, then already-restored', () => {
+test('journal text: a dotenv block — manifest has the ops and the prior path, never the file; undo is byte-identical, then already-restored', { skip: POSIX_WORLD }, () => {
   const b = box()
   try {
     const file = path.join(b.root, '.codex', '.env'); fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, ENV, { mode: 0o600 })
@@ -76,7 +77,7 @@ test('journal text: an rc line — the user added lines before and after it; und
   } finally { b.done() }
 })
 
-test('journal text: a crash after the intent is undone; a refused edit writes nothing; trocar text from an unlisted install is refused', () => {
+test('journal text: a crash after the intent is undone; a refused edit writes nothing; trocar text from an unlisted install is refused', { skip: POSIX_WORLD }, () => {
   const b = box()
   try {
     const file = path.join(b.root, '.env'); fs.writeFileSync(file, ENV)

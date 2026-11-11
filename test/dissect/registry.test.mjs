@@ -48,9 +48,9 @@ test('wire formats are disjoint: no record is two formats', () => {
   }
 });
 
-test('count_tokens is a probe, not inference; Gemini/Bedrock/Vertex are unsupported', () => {
+test('count_tokens is a probe, not inference; Bedrock/Vertex are unsupported; the Gemini API is its own wire', () => {
   assert.equal(wireFormatOf(R('/v1/messages/count_tokens', ANTH)), null);
-  assert.equal(wireFormatOf(R('/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse', {})), null);
+  assert.equal(wireFormatOf(R('/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse', {})), 'gemini');
   assert.equal(wireFormatOf(R('/model/anthropic.claude-3/invoke-with-response-stream', ANTH)), null);
   assert.equal(wireFormatOf(R('/v1/projects/p/locations/us/publishers/anthropic/models/claude:streamRawPredict', ANTH)), null);
   assert.equal(wireFormatOf(R('/model/anthropic.claude-3/invoke', ANTH)), null, 'an unsupported wire is never claimed as Anthropic');

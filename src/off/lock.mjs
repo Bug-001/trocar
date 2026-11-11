@@ -95,8 +95,10 @@ export function tryOpLock({ file, identity = procIdentity, alive = pidAlive, fs 
 export async function acquireOpLock({ file, identity = procIdentity, alive = pidAlive, waitMs = 0, offFirst = null, fs = nodeFs, now = Date.now, sleep = lockSleep, pid = process.pid } = {}) {
   const end = now() + waitMs
   let asked = false
+  // each pid's identity once per wait: a poll every 25 ms asking again was a ps + sysctl storm on macOS; alive() still runs every poll, so an exit is seen
+  const ids = new Map(), id = (p) => { if (!ids.has(p)) ids.set(p, identity(p)); return ids.get(p) }
   for (;;) {
-    const got = tryOpLock({ file, identity, alive, fs, now, pid })
+    const got = tryOpLock({ file, identity: id, alive, fs, now, pid })
     if (got.lock) return got.lock
     if (offFirst && !asked) { asked = true; await offFirst(got.holder) }
     if (now() >= end) {

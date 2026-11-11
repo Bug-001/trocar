@@ -9,7 +9,8 @@ import { renderTicks, renderRails, railToggles, flipRail, wireRails, hasRails } 
 import { wireDetail } from '../../web/legacy/replay/detail.mjs'
 import { deskOf } from './desk-world.mjs'
 import { applySession } from '../../web/legacy/replay/model.mjs'
-import { LANE_KIND } from '../../web/legacy/labels/replay.mjs'
+import { LANE_KIND, TC_NO_SIZE, ONLY_MAIN } from '../../web/legacy/labels/replay.mjs'
+import { esc } from '../../web/legacy/core/fmt.mjs'
 import { laneMeta, eventOnly } from '../../src/view/analyze.mjs'
 import { HARNESSES } from '../../src/dissect/harnesses.mjs'
 
@@ -47,6 +48,27 @@ test('stepPos is the walked step position, and windowCalls is exactly the calls 
     for (let lo = 0; lo < n; lo++) for (let hi = lo + 1; hi <= n; hi++) {
       const want = calls.map((c, i) => ({ c, i })).filter(({ c }) => { const p = refPos(anchorTs, Date.parse(c.ts)); return p >= lo && p < hi })
       assert.deepEqual(windowCalls(lane, anchorTs, { lo, hi }).map((x) => x.i), want.map((x) => x.i), `seed ${seed} window [${lo}, ${hi})`)
+    }
+  }
+})
+
+// 2.1 ③: a window over held rows that do not reach the lane's first or last step draws exactly the calls whose place over the WHOLE lane
+// lies in it: none piled at an edge for a step whose row is not here. The oracle is the full anchor; the desk holds a slice [k, m) of it.
+// When the next step's time is unknown, the last column's tail waits for its row (dropped, never misplaced)
+test('2.1 ③ · windowCalls over a held slice draws exactly the calls whose place over the whole lane is in the window', () => {
+  for (let seed = 1; seed <= 40; seed++) {
+    const r = rng(seed), int = (lo, hi) => lo + Math.floor(r() * (hi - lo + 1))
+    const N = int(2, 30)
+    let t = T0
+    const full = Array.from({ length: N }, () => (t += int(1, 5000))) // strictly increasing: one place per time
+    const calls = Array.from({ length: int(1, 60) }, () => T0 - 20000 + Math.floor(r() * (t - T0 + 40000))).sort((x, y) => x - y).map((ms, i) => ({ rid: `r${i}`, ts: iso(ms) }))
+    const k = int(0, N - 1), m = int(k + 1, N), held = full.slice(k, m)
+    for (let g0 = k; g0 < m; g0++) for (let g1 = g0 + 1; g1 <= m; g1++) for (const known of [true, false]) {
+      const view = { lo: g0 - k, hi: g1 - k, cutBefore: g0 > 0, cutAfter: g1 < N, ...(known && g1 < N ? { cutTs: full[g1] } : null) }
+      const got = windowCalls({ calls }, held, view).map(({ c }) => c.rid)
+      const place = (c) => refPos(full, Date.parse(c.ts)), unsure = (c) => !known && g1 < N && g1 === m && Date.parse(c.ts) > full[m - 1]
+      const want = calls.filter((c) => place(c) >= g0 && place(c) < g1 && !unsure(c)).map((c) => c.rid)
+      assert.deepEqual(got, want, `seed ${seed} N ${N} held [${k}, ${m}) window [${g0}, ${g1}) next time ${known ? 'known' : 'unknown'}`)
     }
   }
 })
@@ -258,4 +280,47 @@ test('1.5 K-04 · 2.1:17: the token-count row is never the anchor (it is no lane
   const tc = buildLanes(deskOf([{ kind: 'main', rows: [{}] }]), { count: 3, series })
   assert.equal(anchorLane(tc).kind, 'main')
   assert.deepEqual(tc.find((l) => l.kind === 'token-count').calls.map((c) => c.retention), ['log', 'full'], 'the drawer says how each was kept (invariant 4)')
+})
+
+test('2.1 #20 · a token-count bar is known by its time: a count that gets its size later moves no other bar; timeless counts draw none', () => {
+  for (let seed = 1; seed <= 200; seed++) {
+    const r = rng(seed), n = 1 + Math.floor(r() * 30)
+    // times with ties, and some counts with no time at all
+    const full = Array.from({ length: n }, (_, i) => ({ ts: r() < 0.15 ? null : new Date(T0 + Math.floor(r() * 8) * 1000).toISOString(), tokens: 100 + i, retention: 'full' }))
+      .sort((a, b) => (a.ts ?? '~').localeCompare(b.ts ?? '~')) // the server's order: by time, the timeless last
+    const sized = full.filter(() => r() < 0.7) // the ones measured so far: the others get their size later
+    const row = (series) => buildLanes(deskOf([]), { count: n, series }).find((l) => l.kind === 'token-count')
+    const before = row(sized), after = row(full)
+    const want = full.filter((p) => p.ts != null)
+    if (!want.length) { assert.equal(after, undefined, `seed ${seed}: no count has a time, so no bar`); continue }
+    assert.deepEqual(after.calls.map((c) => c.ctx), want.map((p) => p.tokens), `seed ${seed}: the row holds exactly the counts with a time, in order`)
+    assert.equal(new Set(after.calls.map((c) => c.rid)).size, after.calls.length, `seed ${seed}: ids are distinct`)
+    assert.equal(after.count, n, `seed ${seed}: the row's number is every count`)
+    if (!before) continue
+    const now = new Map(after.calls.map((c) => [c.rid, c]))
+    for (const c of before.calls) {
+      const same = full.filter((p) => p.ts === c.ts).length === sized.filter((p) => p.ts === c.ts).length // no new count at its time
+      if (same) assert.equal(now.get(c.rid)?.ctx, c.ctx, `seed ${seed}: ${c.rid} still names the same count`)
+    }
+  }
+})
+
+test('2.1 §token 计数行: the row\'s "no size" number is probes.count − probes.series.length; a count with a size but no time is not one of them', () => {
+  const series = [{ ts: iso(T0 + 1000), tokens: 10, retention: 'full' }, { ts: null, tokens: 20, retention: 'full' }, { ts: iso(T0 + 2000), tokens: 30, retention: 'full' }]
+  const lanes = buildLanes(deskOf([{ kind: 'main', rows: [{}, {}] }]), { count: 5, series }), main = anchorLane(lanes)
+  const s = { lanes, anchor: main, anchorTs: main.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: main.calls.length }, selTick: null, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false }
+  const el = { innerHTML: '', querySelector: () => null }
+  renderRails(el, s)
+  assert.ok(el.innerHTML.includes(esc(TC_NO_SIZE(2))), 'two of five came back without a size')
+})
+
+// 1.3 无叠加轨 · 1.5 K-31: a tier-0 head has read no lane yet: the overlay area says nothing about the session's lanes, and still
+// takes its row; past tier 0, a main-only session says so
+test('1.3 无叠加轨: a tier-0 head draws no "only the main thread" line, but keeps the row; tier 1 draws it', () => {
+  for (const tier of [0, 1]) {
+    const s = { ...railDesk({ subs: 0, bgs: 0, tc: false }), desk: { head: { tier } } }, el = { innerHTML: '', querySelector: () => null }
+    renderRails(el, s)
+    assert.match(el.innerHTML, /class="railsonly"/)
+    assert.equal(el.innerHTML.includes(ONLY_MAIN), tier > 0)
+  }
 })

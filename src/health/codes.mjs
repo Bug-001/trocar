@@ -29,8 +29,8 @@ export const QUERY_WAIT_PROBLEMS = Object.freeze(['still-reading'])
 export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable',
   'record-missing', 'field-missing', 'index-pending']) // index-pending: answered while capture files are still re-indexed (3.5 §行表先读「先答的会话」), no loss // a member whose block the reduction could not read back (3.5 §读不全不静默)
 /** Why a session's background fold stopped (`pending.stopped.code` in its head, src/query/named/session.mjs; 3.5 §会话读「`session --head`」):
- *  not even one row of the session fits the heap's budget, or any other error a slice threw. */
-export const FOLD_STOPS = Object.freeze(['heap-no-room', 'fold-failed'])
+ *  not even one row of the session fits the heap's budget, any other error a slice threw, or its files cannot be saved (4.3 §4 盘满). */
+export const FOLD_STOPS = Object.freeze(['heap-no-room', 'fold-failed', 'projection-write-failed'])
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
@@ -51,7 +51,7 @@ export const UNFOLDED_CODES = Object.freeze(['negative-cache', 'trust-rejected']
 export const LEVELS = Object.freeze(['critical'])
 
 /** The part of trocar a record comes from. */
-export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
+const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
   // the old capture (RFC 4.1 过渡期, ~/.trocar/logs/mitm-events.ndjson; deleted with it)
   'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard',
   // the raw layer's sealer (D35 · D60②, RFC 4.2 §自动封存): the daemon's seal queue reports a segment it could not seal
@@ -82,10 +82,11 @@ export const RESTART_REASONS = Object.freeze(['config-after-start', 'env-frozen'
 /** Codes trocar names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
   daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'node-too-old', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
-    'query-failed', 'projection-write-failed', 'segment-unreadable', 'loop-late'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
+    'query-failed', 'projection-write-failed', 'fold-failed', 'segment-unreadable', 'loop-late'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
     // node-too-old — 4.9 §7 · 4.8 §7: macOS / Windows, the daemon's Node is below the arch's floor (`where:'start'`, the reason names that Node's path and version and `trocar install`)
     // query-failed — D63 (4.6 §事件与码): the query worker crashed, exited non-zero or did not answer in time; that query is still answered (a re-fork, or the caller's local path)
     // projection-write-failed — 4.3 §4 盘满: the query worker could not write a context projection; answers are unchanged, one record per episode
+    // fold-failed — 3.5 §会话读 `session --head`: rendering a session's answer files threw; its head says the same stop, one record per episode
     // segment-unreadable — 4.3 §4 回收: the query worker could not list raw/, so its projection GC deleted nothing that time
     // loop-late — 4.6 §记录: the code of the state event of that name; the event loop ran ≥ 1 s late, no failure
   record: ['record-error', 'file-replaced', 'late-write'], // late-write: a write that reached the record store after the stop made it final (1.6 §5.2); not written, said once per kind
@@ -171,7 +172,7 @@ const NET_STATUS_REASONS = Object.freeze(['not-routed', 'local-upstream', 'proxy
 
 // What `trocar status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. trocar's own, then every trust
 // reason above (the resolver's and the harnesses' own). A block of its own, as the ones above are. The Windows collector's reasons (ROUTE_STATUS_REASONS: what a form that is not captured says; ROUTE_TRUST_REASONS: why a running agent is not trusted) are part of it. `negative-cache` is also a code of the engine.
-export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache', 'not-seen',
+const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache', 'not-seen',
   'cert-not-installed', 'cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file', 'bundle-lacks-ca', 'marked-without-record', 'pac-address-stale']) // the cert group's status reasons that have a producer (1.6 §9.7, 4.11 §3 ⑱)
 export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...ROUTE_STATUS_REASONS, ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 

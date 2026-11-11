@@ -17,6 +17,7 @@ import { writeStandalone } from '../../src/off/standalone.mjs'
 import { runDoctor } from '../../src/cli/doctor.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
+import { POSIX_WORLD } from '../helpers/platform-shape.mjs'
 
 const KEY = '-----BEGIN PRIVATE KEY-----\nU0VDUkVULUtFWQ==\n-----END PRIVATE KEY-----\n'
 // a clean, owner-only capture: doctor's own verdicts (a vacuous scan is 无法判定, exit 3) are not what this file is about
@@ -32,7 +33,7 @@ const doctor = (home, source, args = []) => {
   return { status, out }
 }
 
-test('doctor reports the collector: a running-but-untrusted agent with its reason, and a CA block that was not carried into a bundle with its type and file; the failure status counts is doctor\'s problem too (D38)', async () => {
+test('doctor reports the collector: a running-but-untrusted agent with its reason, and a CA block that was not carried into a bundle with its type and file; the failure status counts is doctor\'s problem too (D38)', { skip: POSIX_WORLD }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-doc-'))
   try {
     const corp = path.join(home, 'corp.pem'); fs.writeFileSync(corp, KEY + createCa({ commonName: 'corp relay CA' }).certPem)

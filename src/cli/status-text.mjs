@@ -252,7 +252,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
 }
 
 /** A local loopback address prints as its port alone (§1.1⑤). */
-export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:[^@/]*@)?(?:127\.0\.0\.1|\[?::1\]?|localhost):(\d+)/.exec(String(url || '')); return m ? `:${m[1]}` : String(url || unknown('no address recorded')) }
+const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:[^@/]*@)?(?:127\.0\.0\.1|\[?::1\]?|localhost):(\d+)/.exec(String(url || '')); return m ? `:${m[1]}` : String(url || unknown('no address recorded')) }
 
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
 /** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the

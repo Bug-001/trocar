@@ -30,8 +30,8 @@
 // source comment, where it rots.
 import { segmentIndex, KEEPER_CHUNK_BYTES, indexEntryOf } from '../query/index-build.mjs'
 
-export const DEBOUNCE_MS = 1_000 // one pass per burst; the tail a query may still have to resume is this much traffic
-export const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of the event loop (a macOS machine: ~260 MB/s)
+const DEBOUNCE_MS = 1_000 // one pass per burst; the tail a query may still have to resume is this much traffic
+const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of the event loop (a macOS machine: ~260 MB/s)
 
 /**
  * createIndexKeeper({ home, failure, kick, tips }) → { wrote, flush, pause, idle, stop }

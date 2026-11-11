@@ -18,7 +18,7 @@ const read = (file) => { try { return fs.readFileSync(file, 'utf8') } catch { re
 export const packageRoot = () => path.resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 /** The git directory of the checkout at `root`: `<root>/.git`, or what a `.git` FILE names (a worktree, a submodule); null when there is none. */
-export function gitDir(root = packageRoot()) {
+function gitDir(root = packageRoot()) {
   const dot = path.join(root, '.git')
   let st
   try { st = fs.statSync(dot) } catch { return null }
@@ -31,7 +31,7 @@ const SHA = /^[0-9a-f]{40}$/
 
 /** The commit HEAD names in `dir`: a detached HEAD, a loose ref, or one line of packed-refs — in `dir` and, for a worktree, in the common
  *  directory its `commondir` names (a worktree keeps its own HEAD and the branches in the main checkout). null when none of that reads. */
-export function headSha(dir) {
+function headSha(dir) {
   const head = (read(path.join(dir, 'HEAD')) || '').trim()
   if (!head) return null
   const named = /^ref:\s*(\S+)/.exec(head)

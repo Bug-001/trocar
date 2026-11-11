@@ -21,7 +21,7 @@ import { DEF_BYTES, laneStepper, weigh } from './named/lane.mjs';
 /** The answer files' format version (3.5 `v`). */
 export const CTX_V = 5;
 /** The lane headers a head lists at most, the axis lane first, then the most recently active (3.5 `lanes`, SHOULD 64). */
-export const HEAD_LANES = 64;
+const HEAD_LANES = 64;
 // cells of `cols` at most (3.5 `bucket`), failed members `errors` names at most, tier-0 time buckets at most
 const CELLS = 32_768, FAILED_SHOWN = 64, BUCKETS = 240;
 
@@ -174,7 +174,7 @@ const spanOf = (s, rid) => { const p = s.pos(rid); return p < 0 ? -1 : Math.floo
 const isRow = (cols, rid) => { const k = cols.slotOf(rid); return k !== undefined && cols.ts[k] !== undefined; };
 /** axisSpans(s) → [s0, s1] per span 0..sealedOf(s): the axis steps its members cover (smallest, largest + 1); a span with none
  *  covers the empty range at the count of axis steps in the spans before it. */
-export const axisSpans = (s) => spansOf(s, axisSteps(s));
+const axisSpans = (s) => spansOf(s, axisSteps(s));
 // the span of each axis step, in step order; `sp` (the writer's, of the last slice) is kept below place `j`: the axis rows before it
 // did not move (dirtyOf), so a slice looks at the axis steps from its first changed one only
 function axisSteps(s, sp = [], j = 0) {
@@ -225,6 +225,9 @@ const lineBytes = (o) => Buffer.from(`${JSON.stringify(o)}\n`, 'utf8');
 export const renderSpan = (s, n, part, tail = false) => drain(rendering(s, n, part, tail)).buf.toString('utf8');
 // A generator's work to its end (the local path and the requests: no budget).
 const drain = (it) => { for (;;) { const r = it.next(); if (r.done) return r.value; } };
+// the errors a doc head carries (errorsOf, as docLine writes it), a state's by kind only: `index-pending`'s reason counts the capture files
+// still being re-indexed, and every pack re-rendered at each step of the boot pass would be work thrown away at its end
+export const docErrors = (s) => JSON.stringify(errorsOf(s.indexErrors, []).map((e) => (e.level === 'state' ? [e.where, e.code, e.level] : e)));
 // a span's doc-head line
 const docLine = (s, n, part, tail, [s0, s1] = axisSpans(s)[n]) => docOf(errorsOf(s.indexErrors, []), { id: s.id, ...(tail ? { tail: { n, part, s0 } } : { pack: { n, part, s0, s1 } }) }, 'lane');
 // → {buf, wrote}: the span's text, rendered a call at a time (it yields after each: the writer's unit, 3.5 后台抽取与归约). Its lane steppers
@@ -409,7 +412,8 @@ function* dirtyOf(s, off, open) {
  *  the offset its sidecar says the files stood at, takes the others from their files when whole and written under the axis it has
  *  (its checkpoint's; else renders them), and carries
  *  on the tails its sidecar's checkpoint vouches for (carried), writing the others afresh; later slices seal the spans the mark passed
- *  (and start the next tail), re-render the packs whose rows or doc head ([s0, s1]) changed and append to the tails.
+ *  (and start the next tail), re-render the packs whose rows or doc head ([s0, s1]) changed and append to the tails. When the read's state
+ *  in the doc heads moves (the boot pass ended: no `index-pending`), every pack is re-rendered and the tails are written afresh.
  *  A file is written only when its text differs. */
 export function writeFiles(ctx, s, deadline = Infinity) {
   if (s.mark == null) return { packs: [], open: null };
@@ -417,7 +421,7 @@ export function writeFiles(ctx, s, deadline = Infinity) {
   let it = jobs.get(log);
   if (!it) {
     const W = writers.get(log);
-    if (W && W.ax === ax && W.f === log.frontier) return W.files;
+    if (W && W.ax === ax && W.f === log.frontier && W.e === docErrors(s)) return W.files;
     jobs.set(log, (it = writing(ctx, s)));
   }
   for (;;) {
@@ -444,10 +448,14 @@ function* writing(ctx, s) {
     writers.set(log, W);
   }
   const c = W.c, d = yield* dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, Math.min(d.axis ?? Infinity, W.sp.length)));
+  // the read's state in every file's doc head (docLine: `index-pending` while the boot pass builds the list, 3.5 §行表先读): once it moves,
+  // every file was written under another doc head, and is written again
+  const e = docErrors(s), moved = W.e !== undefined && W.e !== e;
+  W.e = e;
   W.packs.length = Math.min(W.packs.length, N);
   for (let n = 0; n < N; n++) {
     const k = W.packs[n];
-    if (k && !d.packs.has(n) && k.s0 === spans[n][0] && k.s1 === spans[n][1]) continue; // its rows and its doc head as written
+    if (k && !moved && !d.packs.has(n) && k.s0 === spans[n][0] && k.s1 === spans[n][1]) continue; // its rows and its doc head as written
     W.packs[n] = yield* sealing(s, { home, fs, ax, memo: n >= W.open ? W.memo : null, uses: W.memo }, n, spans, c && c.ax === ax && !d.packs.has(n), k);
   }
   // a tail written afresh → its {size, defs}
@@ -460,7 +468,7 @@ function* writing(ctx, s) {
   const upTo = upToOf(s);
   if (N !== W.mn) { W.memo = lru(memoBytes()); W.mn = N; } // the sealed span's steps let go, once a seal
   // the tails are no checkpoint while they are written (W.tails null): a worker that starts again from a save between the units writes them afresh
-  const t = N !== W.open ? null : W.tails;
+  const t = N !== W.open || moved ? null : W.tails;
   W.tails = null;
   if (!t) { const t = {}; for (const p of PARTS) t[p] = yield* fresh(p); W.tails = t; }
   else { yield* appendTails(s, { ...W, tails: t }, d, N, upTo, fs, (part) => tailFile(home, id, part), fresh); W.tails = t; }

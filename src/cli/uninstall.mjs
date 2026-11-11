@@ -18,7 +18,7 @@ import { COMMAND_INDENT } from '../off/receipt.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath, AGENT_LABEL } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
-import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES, compileCacheDir, homeMismatch, accountHomeOf } from '../off/paths.mjs'
+import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES, compileCacheDir, homeMismatch, accountHomeOf, switchDirIn } from '../off/paths.mjs'
 import { rawHome, indexHome, classesLog, collectorHome } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
 import { backupsOf, dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -432,7 +432,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
           receipt.removed.push(manifestPath(w.dir))
           removeEmptyDirs(m.dirs, fs)
         }
-        removeEmptyDirs([trocarHome(home), w.dir, path.dirname(classesLog(trocarHome(home)))], fs) // `on` made them before the manifest listed any directory; gone only when empty (the captures keep them)
+        removeEmptyDirs([trocarHome(home), w.dir, switchDirIn(w.dir), path.dirname(classesLog(trocarHome(home)))], fs) // `on` made them before the manifest listed any directory, or no record names them any more (switch/); gone only when empty (the captures keep them)
       }
     }
     let list = []
@@ -564,7 +564,7 @@ const REMOVE_TRIES = 20000 // and a count, in case the clock cannot be read as h
  *  removes app\, retried while Windows releases node.exe's image for REMOVE_WITHIN_S seconds by the clock (and at most REMOVE_TRIES times). Only once
  *  app\ is gone do the launcher and the directories `dirs` left empty (innermost first) go; when it is still there, `failure.line` is appended to
  *  `failure.file` and the launcher stays, so the next `trocar uninstall` can be run. */
-export function deferredRemoval({ app, launcher, pointer, dirs, env, failure }) {
+function deferredRemoval({ app, launcher, pointer, dirs, env, failure }) {
   const v = Object.fromEntries(Object.entries(env).filter(([k]) => !/^TROCAR_RM_/i.test(k)))
   Object.assign(v, { TROCAR_RM_APP: app, TROCAR_RM_LAUNCHER: launcher, TROCAR_RM_POINTER: pointer, TROCAR_RM_FAILED: failure.line, TROCAR_RM_FLOW: failure.file, TROCAR_RM_FLOWS: path.win32.dirname(failure.file) }) // Windows only: win32 reads either separator
   ;[...dirs].reverse().forEach((dir, i) => { v[`TROCAR_RM_DIR${i}`] = dir })

@@ -49,7 +49,7 @@ function byteLru(maxBytes, counted, keepNewest) {
   };
 }
 
-export const FRAME_CACHE_BYTES = 64 << 20;   // the frame budget of a reader: its shared cache, and the in-order window (4.2 「读」)
+const FRAME_CACHE_BYTES = 64 << 20;   // the frame budget of a reader: its shared cache, and the in-order window (4.2 「读」)
 export const createFrameCache = ({ bytes = FRAME_CACHE_BYTES } = {}) => byteLru(bytes, 'decodes', true);
 
 // Rebuilt LINES, shared the way the frame cache is. A record stored as a delta is rebuilt from its predecessor, which may

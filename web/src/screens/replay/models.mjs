@@ -20,6 +20,7 @@ import { FLAG, cellsOf } from '../../../../src/view/head-cols.mjs'
 import { ENTRY, ENTRY_TIP } from '../../../legacy/labels/library.mjs'
 import { stepCount, partsOf, stepAt, placeSpan } from './strip-layout.mjs'
 import * as W from '../../../legacy/labels/replay.mjs'
+import { titleCase, titleText } from '../../../legacy/core/titles.mjs'
 // no price table yet, or an unreadable one: the one reason an unpriced number gives (2.2 §「≈ $」按钮), never "no unit price"
 const tableWhy = (s) => (s.pricingErr ? priceStateNote(null, s.pricingErr) : W.PRICES_LOADING)
 
@@ -88,12 +89,12 @@ export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {})
   const slugOk = meta.project_slug && meta.project_slug !== '_unresolved'
   const hs = Array.isArray(meta.harnesses) ? meta.harnesses : null // the `sessions` multi-harness field; provider:'mixed' is never this signal (D37 ①)
   const hk = meta.harness != null ? harnessKey(meta.harness) : null
-  const unread = meta.title_source === 'unread'
+  const tc = titleCase(meta)
   return {
     back: backOf(libraryHash),
     // the title never borrows the id or the start time (the start is its own part)
-    title: { text: meta.title ?? null, fallback: meta.title != null ? null : unread ? W.PROMPT_UNREAD : W.UNTITLED, id: meta.session_id || '',
-      sourceTip: meta.title != null ? W.TITLE_FROM_WIRE : unread ? W.PROMPT_UNREAD_TIP : W.TITLE_UNTITLED_NEXT_TIP }, // a title always comes from the wire (4.4)
+    title: { text: meta.title ?? null, fallback: tc === 'title' ? null : titleText(meta), id: meta.session_id || '', // the list's rule (1.8 §标题规则)
+      sourceTip: { title: W.TITLE_FROM_WIRE, unread: W.PROMPT_UNREAD_TIP, none: W.TITLE_UNTITLED_NEXT_TIP, pending: W.TITLE_PENDING_TIP }[tc] }, // a title always comes from the wire (4.4)
     chip: { key: hk, name: harnessName(meta.harness), raw: harnessRaw(meta.harness), icon: harnessIconUrl(meta.harness),
       href: hk ? `#/capture?h=${encodeURIComponent(hk)}` : '#/capture', inferred: !!meta.harness_inferred, synthesized: !!meta.session_synthesized,
       multi: hs && hs.length > 1 ? { text: W.MULTIPLE_AGENTS, tip: W.MULTIPLE_AGENTS_TIP, inferred: hs.some((x) => x && (x.inferred || x.harness_inferred)) } : null },
@@ -112,7 +113,7 @@ export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {})
 function readOf(desk, boot = false) {
   const p = desk && desk.pending, b = desk && desk.behind
   if (!p) return b ? { state: 'behind', n: b.n, more: !!b.more, text: W.behindBy(b.n, b.more) } : null
-  if (p.stopped) return { state: 'stopped', code: p.stopped.code ?? null, reason: p.stopped.reason ?? null, text: W.FOLD_STOPPED[p.stopped.code] || W.FOLD_STOPPED['fold-failed'] }
+  if (p.stopped) return { state: 'stopped', code: p.stopped.code ?? null, reason: p.stopped.reason ?? null, text: W.FOLD_STOPPED[p.stopped.code] || W.FOLD_STOPPED.other }
   const done = Number(p.done) || 0, total = Number(p.total) || 0
   const share = (x) => (total > 0 ? Math.floor((x / total) * 100) : 0)
   if (p.read != null) { const pct = share(Number(p.read) || 0), n = Number(p.calls) || 0; return { state: 'updating', pct, n, text: W.updatingTo(pct, n) } }
@@ -208,7 +209,7 @@ function firstRead(desk) {
 
 /**
  * @typedef {{done: number, total: number}|null} FirstRead
- * @typedef {{rough: true, n: number, m: number, read: FirstRead, label: string}} RoughStepHead
+ * @typedef {{rough: true, n: number|null, m: number, read: FirstRead, label: string}} RoughStepHead
  * @typedef {{rough: false, n: number|null, k: number|null, m: number, read: FirstRead, laneWord: string|null, label: string, model: string|null,
  *   ts: string|null, time: string, half: {tip: string|null}|null, compare: {sel: number|null, cacheRefK: number|null, M: number}|null,
  *   ctx: {word: string, value: number|null, comp: Array<[string, number]>|null}, cache: {word: string, label: string},
@@ -219,10 +220,13 @@ export function stepHeadModel(s) {
   const call = rowAt(s), read = firstRead(s.desk)
   if (!call) {
     const at = roughAt(s), h = s.desk && s.desk.head
+    // a tier-0 head (1.5 K-31): no step yet; its place holds the session's model-call total
+    if (h && !h.tier && h.steps) return { rough: true, n: null, m: h.steps, read: null, label: W.callsWord(h.steps) }
     return at != null && h.tier ? { rough: true, n: at + 1, m: h.steps, read, label: read ? W.stepRead(at + 1, read.done, read.total) : W.stepNo(at + 1, h.steps) } : null
   }
   const main = s.anchor.kind === 'main', r = stepRef(s.lanes, call.rid)
-  const no = r ? (r.step ? r.n : r.k) : s.playhead + 1, m = r ? r.m : s.anchor.calls.length
+  // a step's M is the session's step count, the strip's: a head ending a first read lands before the files that carry the lane's count (1.2 §编号)
+  const no = r ? (r.step ? r.n : r.k) : s.playhead + 1, m = main ? stepCount(s) : r ? r.m : s.anchor.calls.length
   const ref = refRowOf(s.anchor, s.playhead), fid = callFacts(call), model = modelOf(call)
   return {
     rough: false, n: main ? no : null, k: main ? null : no, m, read, laneWord: main ? null : W.laneWord(s.anchor.kind),

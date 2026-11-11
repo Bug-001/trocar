@@ -19,7 +19,7 @@ import { readHead } from '../../src/query/ctx-files.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, boardPortOf, unservable } from '../helpers/model-daemon.mjs'
+import { liveUnit, boardPortOf, UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -33,6 +33,7 @@ import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { BODY, REPLY, agentOf, darwinExec, freePort, through } from '../helpers/model-io.mjs'
 import { listenLocalhost } from '../helpers/localhost.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const CALLS = 1_100 // ≥ 2 sealed packs of 512 (3.5 PACK_MEMBERS)
 const pause = (ms) => new Promise((d) => setTimeout(d, ms))
@@ -85,7 +86,7 @@ function folded() {
     w.waits.fold = await whileMoving(async () => {
       const r = await w.d('head', gz), head = r.status === 200 ? JSON.parse(unzip(r.body)) : null
       done = head?.pending?.done ?? done
-      return head != null && head.pending == null && fs.existsSync(w.file('open.rest.ndjson'))
+      return head != null && head.pending == null && listed(head) && fs.existsSync(w.file('open.rest.ndjson'))
     }, () => `${w.reported.n} ${done}`, 'the worker folded the session and wrote its files')
     w.waits.left = await w.left('the worker is gone')
     return w
@@ -197,7 +198,7 @@ test('4.4 #16 folding head: polling a never-folded session\'s head, and nothing 
       tag = r.headers.etag
       const head = JSON.parse(unzip(r.body))
       done = head.pending?.done ?? done
-      return head.pending == null && fs.existsSync(w.file('head.json.gz')) && !fs.existsSync(w.file('head.pending.json.gz'))
+      return head.pending == null && listed(head) && fs.existsSync(w.file('head.json.gz')) && !fs.existsSync(w.file('head.pending.json.gz'))
     }, () => `${w.reported.n} ${done}`, 'the polled head reached the end of the fold')
     t.diagnostic(JSON.stringify({ waited }))
   } finally { await w.left('the worker is gone'); w.server.close() }
@@ -270,7 +271,7 @@ test('4.4 #17 tips: the keeper\'s new model calls of a keyed session ride on x-t
     // a just-forked worker answers within its slice budget and may stop at the reduction frontier (3.5 pending): read until it has none,
     // for as long as pending.done moves
     let doc = null
-    await whileMoving(async () => { doc = JSON.parse((await w.api(`/api/session?id=${KEY}&limit=200`)).body); return doc.pending == null },
+    await whileMoving(async () => { doc = JSON.parse((await w.api(`/api/session?id=${KEY}&limit=200`)).body); return doc.pending == null && listed(doc) },
       () => doc?.pending?.done, 'the keyed session folded to its last call')
     const rids = doc.calls.map((c) => c.rid)
     assert.equal(rids.length, N, 'the keyed session holds every call written')
@@ -287,7 +288,7 @@ test('4.4 #17 tips: the keeper\'s new model calls of a keyed session ride on x-t
   } finally { await keeper.stop(); store.close(); w.server.close(); w.svc.stop() }
 })
 
-test('4.4 #17 tier-0 heads: a daemon started on a home without heads writes a tier-0 head for every session, with no query made', { skip: await unservable('darwin'), timeout: 120_000 }, async () => {
+test('4.4 #17 tier-0 heads: a daemon started on a home without heads writes a tier-0 head for every session, with no query made', { skip: UNSERVABLE.darwin, timeout: 120_000 }, async () => {
   const w = await modelWorld({ os: 'darwin' })
   const trocar = path.join(w.home, '.trocar')
   generate({ home: trocar, seed: 5, bytes: 1_500_000, segmentBytes: 1 << 20 })
@@ -306,7 +307,7 @@ test('4.4 #17 tier-0 heads: a daemon started on a home without heads writes a ti
   } finally { await box.stop() }
 })
 
-test('4.4 #17 tips · daemon: a keyed call captured through the real door → the daemon\'s board serves /api/d/head as the worker\'s head file, with x-trocar-tip naming that call', { skip: await unservable('darwin'), timeout: 120_000 }, async () => {
+test('4.4 #17 tips · daemon: a keyed call captured through the real door → the daemon\'s board serves /api/d/head as the worker\'s head file, with x-trocar-tip naming that call', { skip: UNSERVABLE.darwin, timeout: 120_000 }, async () => {
   const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
   await boardPortOf(w.dir)
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
@@ -322,7 +323,7 @@ test('4.4 #17 tips · daemon: a keyed call captured through the real door → th
   const open = []
   try {
     const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+    const deps = { getuid: () => 501, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
     assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 0)
     const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
     const auth = Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')

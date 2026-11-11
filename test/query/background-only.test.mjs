@@ -33,9 +33,9 @@ const titleGen = (s, sid) => messages(sid, 'Generate one concise, searchable ses
 const turn = (s, sid) => messages(sid, 'You are a coding agent.', { tools: [TOOL],
   msgs: { s, list: [{ role: 'user', content: 'fix the build' }, { role: 'assistant', content: 'on it' }, { role: 'user', content: 'go on' }] } })
 // a wire the board has no dissector for: no call of it is placed in a lane
-const gemini = (s) => call({ s, host: 'generativelanguage.googleapis.com', target: '/v1beta/models/gemini-2.5-pro:generateContent',
-  headers: { 'x-claude-code-session-id': 'G' }, body: { contents: [{ role: 'user', parts: [{ text: 'hello' }] }] },
-  reply: { candidates: [{ content: { role: 'model', parts: [{ text: 'hi' }] } }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 1 } } })
+const unread = (s) => call({ s, host: 'llm.example', target: '/v9/foo:infer',
+  headers: { 'x-claude-code-session-id': 'G' }, body: { turns: [{ speaker: 'human', segments: [{ text: 'hello' }] }] },
+  reply: { tally: { in: 3, out: 1 } } })
 
 async function asWorker(home, params) {
   const after = []
@@ -48,7 +48,7 @@ const rowsById = (doc) => Object.fromEntries(doc.sessions.map((r) => [r.session_
 
 test('only a session of background calls alone is background_only; a main call after them, or a wire with no lanes, is not', async () => {
   const home = rawHome('trocar-bg-')
-  writeSegment(home, SEG, [titleGen(1, 'AUX'), turn(3, 'MAIN'), gemini(5), titleGen(7, 'LATE'), turn(9, 'LATE')])
+  writeSegment(home, SEG, [titleGen(1, 'AUX'), turn(3, 'MAIN'), unread(5), titleGen(7, 'LATE'), turn(9, 'LATE')])
   const params = { limit: '500' }
   const rows = rowsById(await asWorker(home, params))
   assert.deepEqual(Object.keys(rows).sort(), ['AUX', 'G', 'LATE', 'MAIN'])

@@ -10,7 +10,7 @@ import { once, EventEmitter } from 'node:events'
 import { createQueryService, CRASH_COOLDOWN_MS, FAILURE_BACKOFF_MAX_MS } from '../../src/query/service.mjs'
 import { createServer } from '../../src/server.mjs'
 import { TOKEN, withToken } from '../server/face.mjs'
-import { isCode, isWhere } from '../../src/health/codes.mjs'
+import { isCode, isWhere, FOLD_STOPS } from '../../src/health/codes.mjs'
 import { rawHome } from './raw-home.mjs'
 import { handWorld, recorder } from './hand-world.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
@@ -24,10 +24,12 @@ import { bigSession } from './big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
+import { sessionDir } from '../../src/query/projection.mjs'
 import { HEAD_FILES } from '../../src/query/ctx-key.mjs'
 import { lineFile, loadSidecar } from '../../src/query/line-file.mjs'
 import { REDUCE_V } from '../../src/view/reduce.mjs'
 import { heapFlags, workerEnv } from '../../src/query/warm.mjs'
+import { listed } from '../helpers/head-done.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 // A worker that answers one query (the warm-up's) and then dies on the next, which is how a caller WAITING for a
@@ -520,6 +522,49 @@ test('a projection the worker cannot write: both answers whole, one persisted pr
   } finally { svc.stop(); fs.chmodSync(ctxDir, 0o700) }
 })
 
+test('a session whose answer files cannot be saved: its head says why the read stopped and the step that fixes it, as the one record does; files that can be written again clear it (4.3 §4 盘满, 3.5 #37, D38)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-qsvc-unsaved-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home })
+  s.append(40)
+  const ctxDir = path.join(home, 'index', 'ctx')
+  fs.mkdirSync(ctxDir, { recursive: true, mode: 0o700 })
+  fs.chmodSync(ctxDir, 0o500)
+  const said = []
+  let lock = null
+  const svc = createQueryService({ home, failure: (where, e) => said.push({ where, code: e.code, reason: e.message }), fork: workerFork })
+  const head = async () => {
+    const res = recorder()
+    await within(svc.relay({ name: 'session', params: { id: s.id, head: true }, res }), 60_000, 'the head is answered')
+    assert.equal(res.status, 200)
+    return JSON.parse(res.text())
+  }
+  try {
+    let h = null
+    for (let i = 0; i < 300 && !(h = await head()).pending?.stopped; i++) await new Promise((r) => setTimeout(r, 100)) // its first answer may come before a write is tried
+    const stop = h.pending?.stopped
+    assert.ok(stop && FOLD_STOPS.includes(stop.code), 'the head says the read stopped, with a FOLD_STOPS code')
+    assert.match(stop.reason, /^[^\n]+ Next: [^\n]+$/, 'one line: the cause, then the one step that fixes it')
+    assert.ok(stop.reason.includes(path.join(home, 'index')), 'it names where trocar could not save')
+    // a record comes on the worker's IPC channel, an answer on its stdout: either may come first
+    const records = async (n) => { for (let i = 0; i < 50 && said.filter((x) => x.code === 'projection-write-failed').length < n; i++) await new Promise((r) => setTimeout(r, 100)); return said.filter((x) => x.code === 'projection-write-failed') }
+    const got = await records(1)
+    assert.equal(got.length, 1, 'one record for the episode')
+    assert.equal(got[0].reason, stop.reason, 'the record says what the head says')
+    fs.chmodSync(ctxDir, 0o700)
+    for (let i = 0; i < 300 && (h = await head()).pending?.stopped; i++) await new Promise((r) => setTimeout(r, 100))
+    assert.equal(h.pending?.stopped, undefined, 'saved again: no stop')
+    assert.equal(h.tier, 1, 'the fold\'s head')
+    // that write ended the episode: the next refusal is a record of its own and a stop again
+    lock = (d, f) => { const dir = sessionDir(home, s.id); fs.chmodSync(dir, 0o700); for (const n of fs.readdirSync(dir)) try { fs.chmodSync(path.join(dir, n), f) } catch (e) { if (e.code !== 'ENOENT') throw e } fs.chmodSync(dir, d) } // a temp file renamed meanwhile
+    lock(0o500, 0o400)
+    s.append(4)
+    for (let i = 0; i < 300 && !(h = await head()).pending?.stopped; i++) await new Promise((r) => setTimeout(r, 100))
+    assert.ok(h.pending?.stopped, 'stopped again')
+    assert.equal((await records(2)).length, 2, 'a record for each episode')
+  } finally { svc.stop(); fs.chmodSync(ctxDir, 0o700); lock?.(0o700, 0o600) }
+})
+
 // 3.5 #27 服务队列: one request in flight; the rest are served block, status, sessions, lane, session, then the others, first come
 // first served within a class; a caller gone before its turn is never written to the worker. The stub answers each line 100 ms after
 // it arrives (`worker`: what it does with a line instead) and the fork records every line the service writes to it.
@@ -816,7 +861,7 @@ test('kick: a kicked cold fold is folded to its frontier by the one worker it fo
 // from its start by a kick of its last record id alone, with no read: its head is tier 1 at its last member, nothing pending. The
 // worker's idle period (worker.mjs IDLE_SLICE_MS) writes the head the last slice left behind.
 test('kick: a never-folded session kicked by its last record id alone is folded to its end with no read (head tier 1, pending null)', { timeout: 180_000 }, async () => {
-  const atEnd = (head, last) => head != null && head.tier === 1 && head.pending === null && head.mark === last
+  const atEnd = (head, last) => head != null && head.tier === 1 && head.pending === null && listed(head) && head.mark === last
   const { members, log } = await kickedFold({ calls: 600, wire: 'http', kicked: (ms) => [String(ms.at(-1).id)], done: ({ log, last }) => atEnd(headOf(log), last) })
   assert.equal(lastFrontier(log)?.f, String(members.at(-1).id), 'the fold log stands at the last member')
   const head = headOf(log)

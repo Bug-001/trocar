@@ -19,7 +19,7 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 
 // SIGHUP (the terminal closed, SSH dropped, logout) and SIGQUIT stop it cleanly like SIGTERM / SIGINT — Node's default
 // for SIGHUP is to exit at once, leaving the lock behind and the next start recording a crash that never was (D-27).
-export const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT']
+const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT']
 // The handlers stay until the stop has run (1.6 §5.2, V99): a second signal while the stop runs (`trocar update` stopping the old daemon, a
 // launchd bootout followed by a SIGTERM) is ignored rather than taking the default action that cut the stop short. `release` then takes them off,
 // so a signal after the stop — the loop still held alive by something else — takes the default action instead of being ignored for good. They do

@@ -10,7 +10,7 @@ import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli, runOn } from '../../src/cli/on.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
-import { snapshot } from './fixtures/on-ctx.mjs'
+import { snapshot, recordingExec } from './fixtures/on-ctx.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
 import net from 'node:net'
@@ -19,6 +19,7 @@ import { restartOf, formatModelOnText } from '../../src/cli/on-model.mjs'
 import { daemonReader } from '../../src/off/daemon-read.mjs'
 import { controlRequest } from '../../src/off/control-client.mjs'
 import { readManifest, saveManifest } from '../../src/collector/core/trust/journal.mjs'
+import { identityRunner, lockWrites, STARTED, BOOTED } from '../helpers/lock-probe.mjs'
 
 function fakeIo() {
   const out = [], err = []
@@ -28,7 +29,7 @@ function fakeIo() {
 const neverStarts = { path: '/nowhere/unit', text: () => '', registered: () => ({ state: 'present' }), enable: () => { throw new Error('the unit must not be touched') }, start: () => { throw new Error('the unit must not be touched') }, startNow: () => { throw new Error('the unit must not be touched') } }
 const on = (w, os, argv, unit = neverStarts) => {
   const io = fakeIo()
-  const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+  const deps = { getuid: () => 501, exec: recordingExec().run, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
   return runOnCli(argv, { io, env: w.env, home: w.home, platform: os, deps }).then((exit) => ({ exit, io }))
 }
 
@@ -103,7 +104,7 @@ for (const os of ['darwin', 'win32']) {
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const lines = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')) : []).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.source === 'board')
     const gone = { ...neverStarts, registered: () => ({ state: 'absent' }) }
-    const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => gone } } } }
+    const deps = { getuid: () => 501, exec: recordingExec().run, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => gone } } } }
     const io = fakeIo()
     assert.equal(await runOn({ io, env: w.env, home: w.home, platform: os, deps, ids: null, flags: new Set(['--dry-run']), json: true, source: 'board' }), 0, io.text())
     assert.deepEqual(lines(), [], 'a dry run changed nothing and records nothing')
@@ -122,7 +123,7 @@ for (const os of ['darwin', 'win32']) {
     const w = await modelWorld({ os, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const results = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')) : []).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.kind === 'result')
-    const deps = (unit) => ({ getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, lockWaitMs: 30, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } })
+    const deps = (unit) => ({ getuid: () => 501, exec: recordingExec().run, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, lockWaitMs: 30, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } })
     fs.writeFileSync(path.join(w.dir, 'op.lock'), JSON.stringify({ pid: process.pid, start_time: null, boot_id: null }) + '\n')
     const io = fakeIo()
     assert.equal(await runOn({ io, env: w.env, home: w.home, platform: os, deps: deps(neverStarts), ids: null, flags: new Set(['--yes']), json: true }), 1, io.text())
@@ -152,7 +153,7 @@ test('V104 proxy (darwin): the daemon opens doors for the first harness only →
     'POST /on': async ({ body }) => { asked = body; return { doors: Object.fromEntries(Object.entries(body.groups).filter(([g]) => g.startsWith(`${body.harnesses[0]}:`)).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } },
   } })
   try {
-    const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const deps = { getuid: () => 501, exec: recordingExec().run, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
     const io = fakeIo()
     await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
     assert.ok(asked && asked.harnesses.length >= 2, JSON.stringify(asked))
@@ -178,7 +179,7 @@ test('V104 proxy (darwin): the manifest cannot be saved once an entry is written
     'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
   } })
   try {
-    const deps = { fs: full, getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const deps = { fs: full, getuid: () => 501, exec: recordingExec().run, procs: async () => [], backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
     const io = fakeIo()
     const exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
     assert.equal(wrote, true)
@@ -273,7 +274,7 @@ test('1.6 §1.6 (darwin): off writes off after on wrote its first harness → on
   } })
   let doc, exit
   try {
-    const deps = { fs: full, getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const deps = { fs: full, getuid: () => 501, exec: recordingExec().run, procs: async () => [], backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
     const io = fakeIo()
     exit = await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
     doc = io.json()
@@ -436,7 +437,7 @@ test('4.11 P6: on writes the user\'s persistent NO_PROXY into the entries it wri
   } })
   try {
     const facts = { persistentEnv: (names) => (names.includes('NO_PROXY') ? { NO_PROXY: 'corp.example,.wq.internal' } : {}) }
-    const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs, facts }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const deps = { getuid: () => 501, exec: recordingExec().run, procs: async () => [], backends: { dirs: w.ctx.dirs, facts }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
     const io = fakeIo()
     assert.equal(await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: ['codex'], flags: new Set(['--yes']), json: true }), 0, io.text())
     const line = fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8').split(/\r?\n/).find((l) => l.startsWith('NO_PROXY='))
@@ -479,7 +480,7 @@ test('1.6 §3.3 (darwin): on names the processes started before capture was on, 
   } })
   const codex = (pid, startedAt) => ({ pid, ppid: 1, uid: 501, startedAt, exe: '/usr/local/bin/codex', argv: ['codex'], cmdline: 'codex', env: () => null })
   const procs = async () => [codex(5530, 1), codex(5531, Date.now() + 60_000), codex(5532, null), { ...codex(77, 1), exe: '/bin/zsh', argv: ['zsh'], cmdline: 'zsh' }]
-  const run = async (argv) => { const io = fakeIo(); const deps = { getuid: () => 501, procs, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }; return { exit: await runOnCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps }), io } }
+  const run = async (argv) => { const io = fakeIo(); const deps = { getuid: () => 501, exec: recordingExec().run, procs, backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }; return { exit: await runOnCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps }), io } }
   try {
     const first = await run(['codex', '--yes', '--json'])
     assert.equal(first.exit, 0, first.io.text())
@@ -548,4 +549,15 @@ test('1.6 §3.3 · D38 (win32): a daemon that answers the ps read late or never 
       }
     } finally { timers.forEach(clearTimeout); conns.forEach((c) => c.destroy()); await new Promise((r) => server.close(r)) }
   }
+})
+
+test('R12 (win32 on any host): on asks op.lock\'s question about itself through the runner it was given, and the lock records that start time', async () => {
+  const w = await modelWorld({ os: 'win32', commands: ['codex'] })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const os = identityRunner(), lw = lockWrites()
+  const deps = { getuid: () => 501, exec: os.run, fs: lw.fs, daemonReader: null, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'win32', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+  await runOn({ io: fakeIo(), env: w.env, home: w.home, platform: 'win32', deps, ids: null, flags: new Set(['--yes']), json: true })
+  assert.ok(os.calls.some((c) => c.startsWith('powershell ')), os.calls.join('\n'))
+  assert.ok(lw.held.length > 0)
+  for (const h of lw.held) assert.deepEqual([h.pid, h.start_time, h.boot_id], [process.pid, String(STARTED), String(BOOTED)])
 })

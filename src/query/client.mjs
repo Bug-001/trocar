@@ -12,7 +12,7 @@ import { controlEndpointFor } from '../off/control-client.mjs'
 /** The control plane's read route (4.6 §控制面). */
 export const QUERY_PATH = '/query'
 /** Names that read the machine as it is right now, not the captured corpus: they stay in the asking process (D63④). */
-export const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
+const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
 /** Every query name there is (src/query/named/index.mjs QUERIES, which this list is checked against by
  *  test/query/docs.test.mjs — the query core is most of a CLI's load time, so the daemon must be able to refuse an
  *  unknown name without importing it, and before forking a worker for it). */
@@ -47,7 +47,7 @@ const PENDING_WAIT_MS = 200
 /** Which path a name and an environment take, without asking anything: `true` = this process must answer it.
  *  A caller that injects its own `fs` or `now` reads its own files on its own clock, which the daemon's worker
  *  cannot do for it, so that caller is local too (the one rule, in one place). */
-export const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_ENV.some((k) => env[k])
+const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_ENV.some((k) => env[k])
 
 /**
  * queryDocument(name, params, ctx) → { text, via }: `text` is the whole document, serialized with `indent` and

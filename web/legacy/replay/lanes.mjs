@@ -16,13 +16,18 @@ function laneObject(desk, h) {
 export function buildLanes(desk, probes, { prev = null, changed = null } = {}) {
   const old = new Map((prev || []).map((l) => [l.id, l]))
   const ls = [...desk.lanes.values()].map((h) => (changed && !changed.has(h.lane) && old.get(h.lane)) || laneObject(desk, h))
-  const series = (probes && probes.series) || []
+  // a count with no time has no place on the time axis: it is in `count`, never a bar (windowCalls searches the row by time)
+  const sized = ((probes && probes.series) || []).length, series = ((probes && probes.series) || []).filter((p) => p.ts != null)
   if (series.length) {
     // a count_tokens measurement is a ruler, not a conversation and not a lane of the server's: its own row key
     // 'token-count' (2.1's table) never collides with the server's `probe` lane (a warm-up request) — 1.3 #16.
     const count = (probes && probes.count) || series.length // the full truth: series only holds the ones with a size
-    const calls = series.map((p, i) => ({ rid: `token-count:${i}`, ts: p.ts, ctx: p.tokens || 0, probe: true, usage: null, retention: p.retention }))
-    ls.push({ id: 'token-count', kind: 'token-count', label: 'token count', calls, count, base: 0, events: [],
+    // a bar is known by its time (2.1:17), the n-th of a tie by its place: a count that gets its size later moves no other bar's id.
+    // shortcut: within one millisecond a late-sized count can still renumber the tie after it; name bars by record id if ties show up
+    const tie = new Map()
+    const calls = series.map((p) => { const k = tie.get(p.ts) || 0; tie.set(p.ts, k + 1)
+      return { rid: `token-count:${p.ts}${k ? `#${k}` : ''}`, ts: p.ts, ctx: p.tokens || 0, probe: true, usage: null, retention: p.retention } })
+    ls.push({ id: 'token-count', kind: 'token-count', label: 'token count', calls, count, sized, base: 0, events: [],
       ridLocal: new Map(calls.map((c, i) => [c.rid, i])), peakCtx: calls.reduce((m, c) => Math.max(m, c.ctx), 1), flagged: false })
   }
   return ls
@@ -99,8 +104,13 @@ export function windowCalls(lane, anchorTs, view) {
   const first = (pred) => { let a = 0, b = calls.length; while (a < b) { const m = (a + b) >> 1; if (pred(toMs(calls[m].ts))) b = m; else a = m + 1 } return a }
   const from = lo > 0 && lo < n ? first((t) => t >= anchorTs[lo]) : 0
   const to = hi < n ? first((t) => t > anchorTs[hi]) : calls.length
+  // a window past step 0, or before the lane's last step with no held step after it, has no place for a call outside its held rows:
+  // stepPos would pile it at the edge (2.1 ③). The last column ends at the next step's time when the view knows it (`cutTs`), else
+  // its tail waits for that step's row
+  const t0 = view.cutBefore ? anchorTs[lo] : -Infinity, tail = view.cutAfter && hi >= n
+  const kept = (t) => t >= t0 && (!tail || (view.cutTs != null ? t < view.cutTs : t <= anchorTs[n - 1]))
   const out = []
-  for (let i = from; i < to; i++) if (inWindow(anchorTs, view, calls[i].ts)) out.push({ c: calls[i], i })
+  for (let i = from; i < to; i++) if (kept(toMs(calls[i].ts)) && inWindow(anchorTs, view, calls[i].ts)) out.push({ c: calls[i], i })
   return out
 }
 // index of the lane call nearest in time (over EVERY call, not just the drawn ticks); `fallback` is kept when ts is unparsable
@@ -114,14 +124,15 @@ export function nearestByTs(lane, ts, fallback = 0) {
   return best
 }
 // the lane call nearest a click at fraction f of the rail, among the calls IN the window (out-of-window calls all clamp to an
-// edge and would hijack edge clicks); the whole lane when none is in the window. Always a real index, drawn tick or not.
+// edge and would hijack edge clicks); the whole lane when none is in the window and it holds every step there, else -1 (a call the window
+// culls is not drawn and is not picked). A real index otherwise, drawn tick or not.
 export function nearestByX(lane, anchorTs, view, f) {
   let b = -1, bd = Infinity
   for (const { c, i } of windowCalls(lane, anchorTs, view)) {
     const d = Math.abs(xOf(anchorTs, view, c.ts) - f)
     if (d < bd) { bd = d; b = i }
   }
-  if (b < 0) lane.calls.forEach((c, i) => { const d = Math.abs(xOf(anchorTs, view, c.ts) - f); if (d < bd) { bd = d; b = i } })
+  if (b < 0 && !view.cutBefore && !view.cutAfter) lane.calls.forEach((c, i) => { const d = Math.abs(xOf(anchorTs, view, c.ts) - f); if (d < bd) { bd = d; b = i } })
   return b
 }
 export const turnsReviewed = (anchorTs, ts) => { const t = toMs(ts); return anchorTs.filter((x) => x <= t).length }

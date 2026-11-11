@@ -5,7 +5,7 @@
 // Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, webkitGate } from './harness.mjs'
+import { probe, withBoard, webkitGate, settle } from './harness.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -20,7 +20,7 @@ async function openBusiest(b) {
   const r = [...rows].sort((x, y) => (y.calls || 0) - (x.calls || 0))[0]
   await b.page.evaluate((h) => { location.hash = h }, `#/replay/${encodeURIComponent(r.project_slug)}/${encodeURIComponent(r.session_id)}`)
   await b.page.waitForFunction(() => !!document.querySelector('#ctxwin') && !document.querySelector('#ctxwin .cwload'), null, { timeout: 15000 })
-  await b.page.waitForLoadState('networkidle')
+  await settle(b.page)
 }
 
 // the next closed row not tried: looked up and clicked in one task of the page, so a redraw cannot take it away in between (the desk

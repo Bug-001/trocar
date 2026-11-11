@@ -4,7 +4,7 @@
 // Shots: the library and its empty variant at 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot } from './harness.mjs'
+import { probe, withBoard, shoot, settle } from './harness.mjs'
 import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
 import { UNTITLED } from '../../../web/legacy/labels/common.mjs'
 
@@ -53,7 +53,7 @@ for (const width of [1280, 1024]) {
     test(`(7)(14) the library and its empty state at ${width} in ${theme}: one window control, no head numbers, titled truncation`, { skip }, async () => {
       const b = await withBoard({ bytes: BYTES, width, theme, chromium: gate.chromium })
       try {
-        await go(b.page, '#/sessions', '.lrow'); await b.page.waitForLoadState('networkidle')
+        await go(b.page, '#/sessions', '.lrow'); await settle(b.page)
         const l = await layout(b.page)
         assert.equal(l.hscroll, false); assert.deepEqual(l.untitled, [])
         assert.equal(l.segs, 1); assert.equal(l.segInHead, 1)
@@ -75,7 +75,7 @@ for (const width of [800, 600, 390]) {
   test(`(14) at ${width} px the page does not scroll sideways, every agent name is visible and titles keep half the row`, { skip }, async () => {
     const b = await withBoard({ bytes: BYTES, width, chromium: gate.chromium })
     try {
-      await go(b.page, '#/sessions', '.lrow'); await b.page.waitForLoadState('networkidle')
+      await go(b.page, '#/sessions', '.lrow'); await settle(b.page)
       const l = await layout(b.page)
       assert.equal(l.hscroll, false); assert.equal(l.hiddenNames, 0)
       const narrow = await b.page.evaluate(() => [...document.querySelectorAll('.lrow')]
@@ -136,7 +136,7 @@ test('(9)(10) a failed read keeps the old list with Retry and its reason out of 
     assert.ok(!(await visible()).includes(TOKEN), 'the reason is not in the visible text')
     await page.unroute('**/api/sessions?**')
     await page.route('**/api/sessions?**', (r) => r.fulfill({ json: EMPTY }))
-    await go(page, '#/settings/appearance', '[data-theme-choice]'); await page.waitForLoadState('networkidle') // a screen that reads no status
+    await go(page, '#/settings/appearance', '[data-theme-choice]'); await settle(page) // a screen that reads no status
     const from = b.requests.length
     await go(page, '#/sessions', '.libempty a[href="#/capture"]')
     await page.waitForTimeout(INTERVAL.sessions + 1000) // one more `sessions` poll: the empty state does not re-read status with it

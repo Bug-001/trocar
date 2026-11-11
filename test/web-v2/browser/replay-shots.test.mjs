@@ -5,10 +5,11 @@
 // the bottom sheet. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot, layoutFaults, stepKey } from './harness.mjs'
+import { probe, withBoard, shoot, layoutFaults, stepKey, settle } from './harness.mjs'
 import { typeFaults } from './type-inventory.mjs'
 import { CACHE_POPOVER_LABEL } from '../../../web/legacy/labels/replay.mjs'
 import { CT_ORDER } from '../../../web/legacy/replay/analysis.mjs'
+import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -18,7 +19,7 @@ const BYTES = 5e6
 async function openSession(b, r) {
   await b.page.evaluate((h) => { location.hash = h }, `#/replay/${encodeURIComponent(r.project_slug)}/${encodeURIComponent(r.session_id)}`)
   await b.page.waitForFunction((id) => location.hash.includes(encodeURIComponent(id)) && !!document.querySelector('#stepbar .sb-no') && !!document.querySelector('#ctxwin') && !document.querySelector('#ctxwin .cwload'), r.session_id, { timeout: 15000 })
-  await b.page.waitForLoadState('networkidle')
+  await settle(b.page)
 }
 // the sessions with calls, most calls first
 const byCalls = async (b) => (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0).sort((x, y) => (y.calls || 0) - (x.calls || 0))
@@ -258,16 +259,23 @@ test('a session whose first read failed: one sentence and Retry; the reason only
   } finally { await b.stop() }
 })
 
-// 1.2 §会话不存在 · 1.5 K-29: a head answered 503 still-reading has not answered yet: the desk waits and reads again, no failure line
-test('a first head answered 503 still-reading is a wait: no failure line or Retry, and the head is read again', { skip, timeout: 120_000 }, async () => {
+// 1.2 §会话不存在 · 1.5 K-29: a head answered 503 still-reading has not answered yet: the desk waits and reads again on its next poll
+// round, timed as a successful one (no back-off), its middle the ⑧ empty frame (aria-busy, no text), no failure line
+test('a first head answered 503 still-reading is a wait: the busy frame, no failure line or Retry, and the head read again each round', { skip, timeout: 120_000 }, async () => {
   const b = await withBoard({ bytes: BYTES, width: 1280, chromium: gate.chromium })
   try {
     let reads = 0
-    await b.page.route((u) => new URL(u).pathname === '/api/d/head', (r) => { reads++; return r.fulfill({ status: 503, json: { error: 'reading', errors: [{ code: 'still-reading' }] } }).catch(() => {}) }) // a round still out when the page closes
+    const at = []
+    await b.page.route((u) => new URL(u).pathname === '/api/d/head', (r) => { reads++; at.push(Date.now()); return r.fulfill({ status: 503, json: { error: 'reading', errors: [{ code: 'still-reading' }] } }).catch(() => {}) }) // a round still out when the page closes
     const rows = (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0)
     await b.page.evaluate((h) => { location.hash = h }, `#/replay/${encodeURIComponent(rows[0].project_slug)}/${encodeURIComponent(rows[0].session_id)}`)
-    for (const until = Date.now() + 15_000; reads < 2 && Date.now() < until;) await b.page.waitForTimeout(100)
-    assert.ok(reads >= 2, `the head is read again (${reads} reads)`)
+    for (const until = Date.now() + 15_000; reads < 4 && Date.now() < until;) await b.page.waitForTimeout(100)
+    assert.ok(reads >= 4, `the head is read again (${reads} reads)`)
+    // no back-off: a backed-off round doubles its wait (1.5 K-29), so the third gap would be 4 × the interval
+    const gaps = at.slice(1).map((t, i) => t - at[i])
+    assert.ok(gaps.every((g) => g < 2 * INTERVAL.session), `each head read follows the last by less than 2 × ${INTERVAL.session} ms (${gaps})`)
+    assert.equal(await b.page.locator('#ctxwin[aria-busy="true"], #ctxwin [aria-busy="true"]').count() > 0, true, 'the middle is the busy frame')
+    assert.equal((await b.page.locator('#ctxwin').textContent()).trim(), '', 'the busy frame has no text')
     // a count, not the handle: a failed assert prints its actual, and a Playwright handle prints as its whole connection
     assert.equal(await b.page.locator('#ctxwin [data-retry]').count(), 0, 'no failure line with Retry while the head is still being read')
     assert.deepEqual(b.errors, [])

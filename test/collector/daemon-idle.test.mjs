@@ -16,7 +16,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, boardPortOf, unservable } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf, UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
@@ -49,7 +49,7 @@ function ioFor(platform) {
 }
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: an idle daemon (one harness on, the door and the board listening, no traffic) arms no interval shorter than ${IDLE_FLOOR_MS} ms`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
+  test(`${platform}: an idle daemon (one harness on, the door and the board listening, no traffic) arms no interval shorter than ${IDLE_FLOOR_MS} ms`, { skip: UNSERVABLE[platform], timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')
@@ -60,7 +60,7 @@ for (const platform of ['darwin', 'win32']) {
       box = await liveUnit({ w, platform, io: ioFor(platform), daemon: { fork: workerFork } })
       await withScratchCwd(platform, async () => {
         const io = fakeIo()
-        const deps = { getuid: () => 501, procs: async () => [], backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        const deps = { getuid: () => 501, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), backends: { dirs: w.ctx.dirs }, ctx: w.ctx, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text())
         const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
         const st = await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status' })
