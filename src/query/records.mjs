@@ -15,6 +15,7 @@ import { R } from '../raw/format.mjs';
 import { plainWentSealed, warmSegmentIndex, segmentSource } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag, HEAP_PER_STORED } from './warm.mjs';
+import { BIG, fileKey } from '../file-id.mjs';
 
 // WARM (D63 ①, 1.6 §4.1 附近的查询; 3.5 §缓存): one entry per RECORD, keyed by its id. A record is appended once and never
 // rewritten (invariant 2), so its id is its stamp. A session's pages, the block of one of its steps and its calls ask for the same
@@ -165,20 +166,18 @@ const dropReader = (e) => { try { e.sf.close(); } catch { /* already closed: not
 function closeFds() { for (const e of shared.files.values()) dropReader(e); shared.armed = false; }
 /** releaseDecoded(): drops the kept sealed readers and empties the decoded frames and rebuilt lines (the worker's idle point). */
 export function releaseDecoded() { closeFds(); shared.files.clear(); decoded.frames.clear(); decoded.lines.clear(); }
-// the file's identity: a replaced file (rename, rewrite) is a different reader, even within one stretch
-const statKey = (st) => `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`;
 // an injected fs (tests) is another file system: its dev:ino may name another file
 const fsIds = new WeakMap();
 let fsSeq = 0;
 const fsId = (fs) => { let n = fsIds.get(fs); if (n === undefined) fsIds.set(fs, n = fsSeq++); return n; };
-// the reader keys its entries by its open (`<seq>:<dev>:<ino>:<n>`); the shared caches key them by the file's bytes
+// the reader keys its entries by its open (`<seq>:<file key>:<n>`); the shared caches key them by the file's bytes
 const byIdentity = (cache, id) => {
   const k = (ck) => id + ck.slice(ck.lastIndexOf(':'));
   return { get: (ck) => cache.get(k(ck)), set: (ck, v) => cache.set(k(ck), v), max: cache.max };
 };
 
 function sharedSealed(file, fs) {
-  const key = statKey(fs.statSync(file));
+  const key = fileKey(fs.statSync(file, BIG)); // a replaced file (rename, rewrite) is a different reader, even within one stretch
   let e = shared.files.get(file);
   if (e && (e.key !== key || e.fs !== fs)) { dropReader(e); shared.files.delete(file); e = undefined; }
   if (!shared.armed) { shared.armed = true; setImmediate(closeFds); }

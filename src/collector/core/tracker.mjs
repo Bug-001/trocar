@@ -23,6 +23,7 @@ import path from 'node:path'
 import { nodeReleaseVersion } from './config-read.mjs'
 import { effectiveEnv, markerLayer, MARKER_VAR } from './trust/confirm.mjs'
 import { unreachableTransports } from './transports.mjs'
+import { BIG, fileKey } from '../../file-id.mjs'
 
 const PROXY_SCHEMES = { 'http:': ['http', 80], 'https:': ['https', 443], 'socks:': ['socks5', 1080], 'socks4:': ['socks4', 1080], 'socks4a:': ['socks4a', 1080], 'socks5:': ['socks5', 1080], 'socks5h:': ['socks5h', 1080] }
 
@@ -57,7 +58,7 @@ export function watchDirNames(dir, onName, onWatchError = () => {}, watch = fs.w
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return !!e && e.code === 'EPERM' } }
 const usesMarker = (d) => !!(d && d.trust && d.trust.chain.some((e) => e.var === MARKER_VAR))
 // what a trust file is now: a rewrite (new inode), an edit (size, mtime) or its removal changes it (D-26)
-const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}` } catch (e) { return `gone:${(e && e.code) || 'error'}` } }
+const statKeyOf = (f) => { try { return fileKey(fs.statSync(f, BIG)) } catch (e) { return `gone:${(e && e.code) || 'error'}` } }
 
 // onVerdict(row, prev) is told every agent verdict (prev: the row this pid had before, or null), so the daemon can
 // leave a durable record when one is untrusted or its watch failed (D38).
