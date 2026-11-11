@@ -48,9 +48,10 @@ import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { seedFootprint } from '../helpers/footprint.mjs'
+import { HOST_UID } from '../helpers/platform-shape.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
-const UID = process.getuid()
+const UID = HOST_UID
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 // an arch's osRoots over one PEM file: the Linux arch's own resolver (osBundleRoots) with its list cut to that file — the shape every real arch gives
 // its OS roots in, asked through the one resolver (core/tls/roots.mjs bundleRoots), never a test-only arm (the platform-seam rule)

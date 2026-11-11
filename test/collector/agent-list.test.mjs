@@ -19,9 +19,10 @@ import { captureHealth } from '../../src/health/read.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { seedFootprint } from '../helpers/footprint.mjs'
+import { HOST_UID } from '../helpers/platform-shape.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
-const UID = process.getuid()
+const UID = HOST_UID
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 const NIGHTLY_EXE = '/home/u/.local/bin/claude-nightly'
 

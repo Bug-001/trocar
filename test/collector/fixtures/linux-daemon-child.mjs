@@ -3,6 +3,7 @@
 // also loads this file, with no argument and the real HOME.
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { HOST_UID } from '../../helpers/platform-shape.mjs'
 if (process.argv[2] !== 'run') process.exit(0)
 
 const { startDaemon } = await import('../../../src/collector/daemon.mjs')
@@ -17,6 +18,6 @@ const [home, socketPath, bundleMs] = process.argv.slice(3)
 const p = fakeProc(path.join(path.dirname(home), 'proc')) // in the test's own temp directory: this process ends by SIGKILL, so nothing of its own would remove it
 await installCollector({ home, env: { HOME: home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
 const makeClient = () => createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
-const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: process.getuid() }) }
+const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: HOST_UID }) }
 await startDaemon({ dir: path.join(home, '.trocar', 'collector'), socketPath, arch, harnesses: [cc], bundleMs: Number(bundleMs) })
 console.log('ready')

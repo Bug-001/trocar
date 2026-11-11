@@ -12,6 +12,7 @@ import { sourcesCtx } from '../../src/collector/arch/model-backends.mjs'
 import { dirsFor } from '../../src/off/loc.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { renderHook } from '../../src/collector/harness/templates/index.mjs'
+import { HOST_UID } from './platform-shape.mjs'
 
 /** An in-memory root store: `answer` is what an add says ('ok' | 'declined' | 'pending'); `calls` records every verb. `list` answers the held
  *  certificates whose subject is trocar's (a fingerprint put in `held` by hand counts as one). */
@@ -42,7 +43,7 @@ export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd =
   const ctx = sourcesCtx({ os, home, env: fullEnv, cwd: cwd || home, dirs: worldDirs(os, home) })
   ctx.exists = (p) => (p === home || p.startsWith(`${home}${path.sep}`)) && fs.existsSync(p) // hermetic: the dev machine's /Applications never makes a form present
   const harnesses = await loadHarnesses()
-  const owns = (p) => { try { return fs.statSync(p).uid === process.getuid() } catch { return null } }
+  const owns = (p) => { try { return fs.statSync(p).uid === HOST_UID } catch { return null } }
   const install = (over = {}) => runInstall({ os, home, env: fullEnv, harnesses, custody, rootStore: store, ctx, owns, renderHook, ...over })
   return { home, dir, env: fullEnv, custody, store, ctx, harnesses, owns, install }
 }

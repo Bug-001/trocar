@@ -26,9 +26,10 @@ import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { startMockUpstream } from '../lab/mock-upstream/server.mjs'
 import { startMockProxy } from '../lab/mock-upstream/proxy.mjs'
 import { makeLabCa } from '../lab/mock-upstream/lab-ca.mjs'
+import { HOST_UID } from '../helpers/platform-shape.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
-const UID = process.getuid()
+const UID = HOST_UID
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 const API = 'api.anthropic.com'
 const PROXY_HOST = 'proxy.asight.test' // the mock CA's leaf covers *.asight.test

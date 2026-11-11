@@ -25,9 +25,10 @@ import { makeLabCa } from '../lab/mock-upstream/lab-ca.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { BUILTIN } from '../../src/classes/table.mjs'
+import { HOST_UID } from '../helpers/platform-shape.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
-const UID = process.getuid()
+const UID = HOST_UID
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 const API = 'api.anthropic.com'
 const OTHER = 'telemetry.asight.test' // not a known API host of any harness: only the policy `all` decrypts it (the mock CA's leaf covers *.asight.test)

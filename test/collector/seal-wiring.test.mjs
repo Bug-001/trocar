@@ -21,6 +21,7 @@ import { rawHome } from '../../src/paths.mjs'
 import { openSealed } from '../../src/raw/reader.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
+import { HOST_UID } from '../helpers/platform-shape.mjs'
 
 // The sealer is a `fork` child, which inherits this process's execArgv — and `npm test`'s preloads are RELATIVE paths
 // (`--require ./test/helpers/...`), so a test that changes the cwd (withScratchCwd below, as the model daemon runs)
@@ -64,7 +65,7 @@ test('linux: runDaemon seals the last run\'s closed segment and leaves the older
   const p = fakeProc()
   const makeClient = () => createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
   await installCollector({ home, env: { HOME: home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
-  const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: process.getuid() }) }
+  const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: HOST_UID }) }
   const d = await startDaemon({ dir, socketPath: path.join(root, 'c.sock'), arch, harnesses: [cc] })
   try { await sealedLeftover(left) } finally { await d.stop({ reason: 'test' }) }
 })
