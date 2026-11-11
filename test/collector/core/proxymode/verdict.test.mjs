@@ -258,17 +258,21 @@ test('P11 rule 4 · Hermes seed: a provider ssl_ca_cert without the root forward
   }
 })
 
-// 4.11 P4 `expand: 'env'`: Hermes reads `${NAME}` in config.yaml from its environment; an unset name stays as written, names no file, and Hermes falls back
-// to its default trust (trocar's root, once install put it there). The door reads the value the same way, from the process's environment.
-test('P11 rule 4 · Hermes ssl_ca_cert ${VAR}: set → its file is judged; unset → the setting is not in effect, decrypt', () => {
+// 4.11 P4 `expand: 'env'`: Hermes reads `${NAME}` and `${env:NAME}` in config.yaml from its environment (spaces inside trimmed); another source
+// (`${vault:…}`) stays as written. The door reads the value the same way, from the process's environment. A name that environment lacks is not
+// known, never unset (D38): Hermes may have put it into its environment after start, from its .env, which the door cannot see.
+test('P11 rule 4 · Hermes ssl_ca_cert ${VAR}: in the process env → its file is judged; not in it → not known, environ-unreadable', () => {
   const d = descs.find((x) => x.name === 'hermes'), f = d.proxyMode.forms.find((x) => x.id === 'hermes.cli')
   const dir = tmpDir('trocar-hermes-var-'), ca = path.join(dir, 'corp.pem')
   fs.writeFileSync(ca, OTHER.pem)
-  fs.writeFileSync(path.join(dir, 'config.yaml'), 'providers:\n  corp:\n    ssl_ca_cert: ${CORP_CA}\n')
+  fs.writeFileSync(path.join(dir, '.env'), `CORP_CA=${ca}\n`)
   const ctx = { os: 'darwin', home: '/nowhere', dirs: {}, env: {}, join: path.join, readFile: OWN(dir), readdir: () => [], policy: () => ({ set: false }) }
-  for (const [env, want] of [[{ CORP_CA: ca }, 'replace-without-ca'], [{}, null]]) {
-    const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir, ...env }, cwd: dir } })
-    assert.deepEqual([got.decrypt, got.code ?? null], [want === null, want], JSON.stringify(got))
+  for (const ref of ['${CORP_CA}', '${env:CORP_CA}', '${ CORP_CA }', '${env: CORP_CA }']) {
+    fs.writeFileSync(path.join(dir, 'config.yaml'), `providers:\n  corp:\n    ssl_ca_cert: ${ref}\n`)
+    for (const [env, want] of [[{ CORP_CA: ca }, 'replace-without-ca'], [{}, 'environ-unreadable']]) {
+      const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir, ...env }, cwd: dir } })
+      assert.deepEqual([got.decrypt, got.code ?? null], [false, want], `${ref}: ${JSON.stringify(got)}`)
+    }
   }
 })
 
