@@ -156,14 +156,17 @@ test('3.5 #37: a stop an earlier worker wrote does not hold the session in a new
   const b = ballasted(foldLog(home, s))
   const first = await parked(home, s, b, { idleMs: 60_000 })
   try { await until(first.r, 'the earlier worker wrote its stop', () => stoppedOn(home, s.id)) } finally { first.svc.stop() }
+  // the upgrade target's fold log as a worker killed before its save leaves it once the next one cuts it back to its sidecar: empty, and
+  // no sidecar. Whether the workers above saved it varies by run; a log folded to its end gives an upgrade that only renders the tails,
+  // and the new worker's idle slices are not on it. (The stopped session, this case's subject, is left as the earlier worker wrote it.)
+  fs.rmSync(path.join(sessionDir(home, U), 'fold.idx'), { force: true })
+  fs.truncateSync(foldLog(home, { id: U }), 0)
   const c = counted(foldLog(home, { id: U }))
   r = watched(c.fork)
   svc = createQueryService({ home, fork: r.fork, idleMs: 60_000 })
   try {
     svc.sweep()
-    // the upgrade beginning, waited for itself (the scan read the stop on disk before it): the index build, the title sweep and the scan
-    // send no message while they run, so no stretch of silence says the worker is stuck; the test's timeout bounds the wait
-    while (c.opens() === 0) await sleep(50)
+    await until(r, 'the upgrade scan ended and the upgrade began', () => c.opens() > 0) // the scan read the stop on disk before it
     const a0 = r.again, tail = answer()
     await svc.relay({ name: 'lane', params: { id: s.id, tail: 'main' }, res: tail })
     assert.equal(tail.status, 200)
