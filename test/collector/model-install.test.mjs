@@ -139,6 +139,19 @@ for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
   })
 }
 
+// CM45 (4.11 P4 ca_env): a bundled Claude Code's key is the user's while the install shell sets NODE_EXTRA_CA_CERTS; an install from a shell without it
+// must not write trocar-ca.pem over it (settings env wins over the launch env: the user's CA would stop reaching Claude Code)
+test('CM45: bundled Claude Code — an install without NODE_EXTRA_CA_CERTS after one with it leaves the settings key alone', async () => {
+  const w0 = await modelWorld(), mine = path.join(w0.home, 'mine.pem'); put(mine, USER_PEM)
+  const w = await everything({ NODE_EXTRA_CA_CERTS: mine })
+  const settings = path.join(w.home, '.claude', 'settings.json')
+  const run = (env) => w.install({ wrapperKit: { renderWrapper }, env, ctx: { ...w.ctx, env } })
+  await run(w.env)
+  assert.equal(fs.existsSync(settings), false)
+  await run(Object.fromEntries(Object.entries(w.env).filter(([k]) => k !== 'NODE_EXTRA_CA_CERTS')))
+  assert.equal(fs.existsSync(settings), false, 'no key written over the user\'s value')
+})
+
 // a carrier is placed when install wrote one of its parts, intact when it wrote none: dsh's plug-in file gone (its loader row still there) is placed
 // again on the second install, while every other carrier is intact
 test('D54: the second install places only the carrier a part of which was gone; the others are intact', async () => {

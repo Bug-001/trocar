@@ -121,6 +121,36 @@ test('install: a CA exported only in the install shell is merged into extra-cc.p
   } finally { b.done() }
 })
 
+// CM45 (4.11 P4 ca_env, Linux): a CA variable install saw — in its shell or, failing that, in a running agent — is recorded. Linux install leaves an intact
+// carrier alone, so the record matters when one is placed again: extra-cc.pem gone, an install from a shell without the variable must not leave the
+// settings key pointing at nothing (settings env wins over the launch env: Claude Code loses the user's CA)
+test('CM45: Linux — the CA variable install saw is recorded; an extra-cc.pem placed again from a shell without it keeps the CA; set, empty, a running agent, a file gone', async () => {
+  const b = box()
+  try {
+    const one = createCa({ commonName: 'relay one' })
+    const f1 = path.join(b.home, 'one.pem'), f2 = path.join(b.home, 'two.pem'); fs.writeFileSync(f1, one.certPem); fs.writeFileSync(f2, createCa({ commonName: 'relay two' }).certPem)
+    const extra = path.join(b.dir, 'ca', 'extra-cc.pem'), rec = () => readManifest(b.dir).ca_env
+    const run = (env, o = {}) => installCollector(base(b, { env: { HOME: b.home, ...env }, ...o }))
+    await run({ NODE_EXTRA_CA_CERTS: f1 })
+    await run({})
+    assert.deepEqual(rec(), { NODE_EXTRA_CA_CERTS: f1 }, 'not set here: the recorded value stays')
+    fs.rmSync(extra)
+    await run({})
+    assert.equal(JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')).env.NODE_EXTRA_CA_CERTS, extra)
+    assert.ok(fs.existsSync(extra) && fs.readFileSync(extra, 'utf8').includes(one.certPem.trim().split('\n')[1]), 'placed again with the recorded CA')
+    await run({ NODE_EXTRA_CA_CERTS: f2 })
+    assert.deepEqual(rec(), { NODE_EXTRA_CA_CERTS: f2 }, 'a value set replaces it')
+    await run({ NODE_EXTRA_CA_CERTS: '' })
+    assert.equal(rec(), undefined, 'set empty: none')
+    const running = [{ pid: 4242, exe: '/x/claude/versions/2.1.289', argv: ['claude'], env: new Map([['NODE_EXTRA_CA_CERTS', f1]]) }]
+    await run({}, { scan: async () => running, match: (f) => ({ agent: f.pid === 4242 ? 'claude-code' : null }) })
+    assert.deepEqual(rec(), { NODE_EXTRA_CA_CERTS: f1 }, 'a value only a running agent had')
+    fs.rmSync(f1)
+    await run({})
+    assert.equal(rec(), undefined, 'its file gone: dropped')
+  } finally { b.done() }
+})
+
 test('uninstall: stops the daemon first, reports CC processes still trusting until restart, purges data only when asked, runs twice', async () => {
   const b = box()
   try {
