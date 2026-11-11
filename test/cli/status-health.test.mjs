@@ -136,3 +136,23 @@ test('D38: doctor counts the capture failures status counts, from the same read:
     if (n) { assert.ok(dr.summary && dr.summary.problem >= 1, JSON.stringify(dr.summary)); assert.notEqual(run.exit, EXIT.ok) }
   }
 })
+
+// 1.6 §3.7 发现算不出来时 · C.4: `findings` is always what was read, and `findings_error` marks the network part unknown. A problem doctor read itself
+// (a capture failure) is a problem with the network facts unreadable too: exit 1, listed in --json, and said under the "unknown" headline
+test('1.6 §3.7: with the network facts unreadable, a capture failure doctor read is still in findings, still exit 1, and said under the unknown headline', async () => {
+  const s = sandbox()
+  const recs = [{ ts: at(60), event: 'failure', where: 'engine', code: 'upstream-cert', reason: 'r' }]
+  for (const broken of [false, true]) {
+    const deps = { captureHealth: () => healthOver(recs), ...(broken ? { netFactsDeps: async () => { throw new Error('boom: no facts') } } : {}) }
+    const run = await s.run(['doctor', '--json'], { deps })
+    const dr = run.io.json()
+    assert.ok(Array.isArray(dr.findings), `findings is a list: ${JSON.stringify(dr.findings)}`)
+    assert.deepEqual(dr.findings.filter((x) => x.code === 'capture-failures').map((x) => x.class), ['problem'])
+    assert.equal(dr.findings_error, broken ? 'boom: no facts' : undefined)
+    assert.equal(run.exit, EXIT.incomplete, `broken=${broken}: a problem read is exit 1`)
+    const text = (await s.run(['doctor'], { deps })).io.stdoutText()
+    if (broken) assert.match(text, /^trocar doctor: findings are unknown \(boom: no facts\)\.$/m)
+    assert.doesNotMatch(text, /no problems/)
+    assert.match(text, /capture failure/)
+  }
+})
