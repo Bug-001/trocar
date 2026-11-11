@@ -138,7 +138,7 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
   const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors, platform })
   const status = statusDocOf(f)
-  let findings = null, findingsError = null
+  let findings = [], findingsError = null // what was read; findingsError: the network part could not be made, the rest is unknown (1.6 §3.7)
   // the same facts were already diagnosed once, to put each harness's codes on its topology (gatherTopology): with no harness named this is
   // that very list, and diagnosing it twice is one command asking one question twice (D62). A named harness asks its own, narrower question.
   if (f.facts) { try { findings = (!names || !names.length) && f.diagnosed ? f.diagnosed : diagnose({ facts: f.facts, topology: f.topology, harnesses: names, user: f.user }) } catch (e) { rethrowSandbox(e); findingsError = errText(e) } }
@@ -174,11 +174,11 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
       if (bytes.includes(secret)) extra.push({ code: 'backup-holds-door-password', class: 'note', what: `${file} holds trocar's local proxy password.`, why: 'An earlier trocar saved its own intermediate copy of a file there.', commands: [{ run: `If you no longer need it: rm ${shq(file)}`, shell: 'sh' }], verify: 'trocar doctor' })
     }
   }
-  const all = findings === null ? null : [...extra.filter((x) => x.class === 'problem'), ...findings, ...extra.filter((x) => x.class !== 'problem')]
-  const summary = all === null ? null : { problem: all.filter((x) => x.class === 'problem').length, expected: all.filter((x) => x.class === 'expected').length, note: all.filter((x) => x.class === 'note').length }
+  const all = [...extra.filter((x) => x.class === 'problem'), ...findings, ...extra.filter((x) => x.class !== 'problem')]
+  const summary = { problem: all.filter((x) => x.class === 'problem').length, expected: all.filter((x) => x.class === 'expected').length, note: all.filter((x) => x.class === 'note').length }
   const undetermined = undeterminedOf(res, c.readErrors, { files: c.files.length, records: c.records.length, root: (status.cert || {}).root || null })
   if (s && s.why) undetermined.push({ what: 'whether your trust store holds a trocar root no install record lists', reason: s.why })
-  const exit = summary && summary.problem ? EXIT.incomplete : realUndetermined(undetermined).length ? EXIT.unknown : EXIT.ok
+  const exit = summary.problem ? EXIT.incomplete : realUndetermined(undetermined).length ? EXIT.unknown : EXIT.ok
   let notes = []
   // the capture health `status` already read of the same files (gatherStatus): one command, one read (D62). A read that failed is `null` there and
   // is already reported in `status.errors` — it must not be tried again here, where its failure would have nowhere to go.
@@ -215,7 +215,6 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
  *  see them. */
 export function doctorShort(doc, { now = Date.now() } = {}) {
   const s = doc.summary
-  if (s === null) return [plainSentence(`trocar doctor: findings are ${unknown(doc.findings_error)}.`), ...judged(doc).map(plainSentence)]
   const fl = doc.status && doc.status.failures
   const shown = (f) => f.class === 'problem' || needsYou(f)
   const told = (doc.findings || []).filter(shown).map((f) => (f.code === 'capture-failures' ? { ...f, ...(fl ? { what: `${problemsWords(fl, now, 'capture failure')}.` } : {}), see: 'trocar status --failures' } : f))
@@ -224,7 +223,7 @@ export function doctorShort(doc, { now = Date.now() } = {}) {
   const other = [...new Set(told.filter((f) => f.class === 'expected' && !RESTART_REASONS.includes(f.code)).map((f) => f.harness || 'trocar'))]
   const todo = [restart.length && `${andList(restart)} need${restart.length === 1 ? 's' : ''} a restart`, other.length && `${andList(other)} need${other.length === 1 ? 's' : ''} a step from you`].filter(Boolean).join(', and ')
   const n = s.problem
-  const head = n ? `trocar doctor: ${n} problem${n === 1 ? '' : 's'}${todo ? `, and ${todo}` : ''}.` : todo ? `trocar doctor: no problems, but ${todo}.` : 'trocar doctor: no problems.'
+  const head = doc.findings_error ? plainSentence(`trocar doctor: findings are ${unknown(doc.findings_error)}.`) : n ? `trocar doctor: ${n} problem${n === 1 ? '' : 's'}${todo ? `, and ${todo}` : ''}.` : todo ? `trocar doctor: no problems, but ${todo}.` : 'trocar doctor: no problems.'
   const lines = [head]
   if (told.length) lines.push('', ...renderFindings(told, { short: true }))
   lines.push(...judged(doc).map(plainSentence))
@@ -248,7 +247,7 @@ export function doctorDetails(doc) {
     if (x.expected) parts.push(`${x.expected} expected finding${x.expected === 1 ? '' : 's'}`)
     return `trocar doctor: ${parts.join(' and ')}.`
   }
-  out.push(s === null ? `trocar doctor: findings are ${unknown(doc.findings_error)}.` : headline(s))
+  out.push(doc.findings_error ? `trocar doctor: findings are ${unknown(doc.findings_error)}.` : headline(s))
   if (doc.findings && doc.findings.length) out.push('', ...renderFindings(doc.findings))
   out.push(...judged(doc))
   for (const u of doc.undetermined.filter((x) => x.reason === 'no captured data yet')) out.push(`${u.what.replace(/^./, (m) => m.toUpperCase())}: no captured data yet`)
