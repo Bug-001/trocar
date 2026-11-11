@@ -51,6 +51,11 @@ test('4.2 归属表: the outcome is stored by the record of the session\'s lates
   const again = await build(home, reader(true)) // every record read back fails: none is made
   assert.deepEqual(again.errors, [])
   assert.deepEqual(again.sids, first.sids)
+  // the table is followed as stored: it names session 1's call, so the summary goes to session 1, which the rule would not pick
+  fs.writeFileSync(file(home), JSON.stringify({ v: KIN_V, d: { [first.ids[2]]: first.ids[0], [first.ids[3]]: '' } }))
+  const told = await build(home, reader(true))
+  assert.deepEqual(told.errors, [])
+  assert.equal(told.sids[2], first.sids[0], 'the session holding the stored call')
   fs.rmSync(file(home))
   assert.notEqual((await build(home, reader(true))).errors.length, 0, 'no table: the rule reads back')
 })
