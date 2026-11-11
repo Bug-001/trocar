@@ -272,6 +272,7 @@ test('P11 rule 4 · Hermes ssl_ca_cert ${VAR}: in the process env → its file i
     for (const [env, want] of [[{ CORP_CA: ca }, 'replace-without-ca'], [{}, 'environ-unreadable']]) {
       const got = ask({ d, f, ctx, facts: { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: { HERMES_HOME: dir, ...env }, cwd: dir } })
       assert.deepEqual([got.decrypt, got.code ?? null], [false, want], `${ref}: ${JSON.stringify(got)}`)
+      if (want === 'environ-unreadable') assert.match(got.detail, /\$\{CORP_CA\}/, 'the record names the variable')
     }
   }
 })
