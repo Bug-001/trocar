@@ -59,7 +59,7 @@ for (let was = -1, same = 0, p; (p = (await state()).pending); tick()) {
   was = p.done
   if (same >= 2_000) throw new Error('the fold stopped advancing at ' + p.done + ' of ' + p.total)
 }
-const s = await state()
+let s = await state()
 const base = liveHeap()
 let appends = 0
 const counted = new Proxy(fs, { get: (t, k) => (k === 'appendFileSync' ? (...a) => { appends++; return t.appendFileSync(...a) } : t[k]) })
@@ -80,11 +80,17 @@ for (let q = 0; q < upTo; q++) {
   S.release(-1)
   tick()
 }
-// the written term: the blocks each tail wrote, each a string in a Set
-const written = ['main', 'rest'].reduce((a, p) => a + fs.readFileSync(tailFile(home, id, p), 'utf8').split('\\n').reduce((b, l) => (l.startsWith('{"d":') ? b + weigh(JSON.parse(l).d.bid) : b), 0), 0)
 let lanes = 0, laneTerm = 0
 for (const m of kept.values()) { const t = [...m.values()].reduce((a, w) => a + w, 0); if (t > laneTerm) { laneTerm = t; lanes = m.size } }
-console.log(JSON.stringify({ base, peak, used, span, memo: memoBytes(), defs: DEF_BYTES, laneTerm, written, lanes, appends, packs: f.packs.length, truncated: s.truncated }))`
+// the measuring is done with the state: let it go before the tails are read, a line at a time, so this accounting does not sit on top of
+// the fold's heap (a whole tail as one string, split, outgrew a past-room heap on Node 22)
+const truncated = s.truncated
+s = null; steppers.clear(); liveHeap()
+// the written term: the blocks each tail wrote, each a string in a Set
+const { createInterface } = await import('node:readline')
+let written = 0
+for (const p of ['main', 'rest']) for await (const l of createInterface({ input: fs.createReadStream(tailFile(home, id, p)), crlfDelay: Infinity })) if (l.startsWith('{"d":')) written += weigh(JSON.parse(l).d.bid)
+console.log(JSON.stringify({ base, peak, used, span, memo: memoBytes(), defs: DEF_BYTES, laneTerm, written, lanes, appends, packs: f.packs.length, truncated }))`
 
 const tails = (home, id) => ['main', 'rest'].map((p) => fs.readFileSync(tailFile(home, id, p)))
 const SHAPES = {

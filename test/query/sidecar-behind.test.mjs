@@ -7,12 +7,12 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { gunzipSync } from 'node:zlib'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { runQuery } from '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
 import { extendSession, saveIndexes } from '../../src/query/named/session.mjs'
 import { openFoldLog } from '../../src/query/fold-log.mjs'
 import { openProjection, sessionDir } from '../../src/query/projection.mjs'
-import { readHead } from '../../src/query/ctx-files.mjs'
+import { readHead, CTX_V } from '../../src/query/ctx-files.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { drain, within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -53,6 +53,21 @@ const atLeast = (now, was, where) => { for (const k of ['tier', 'mark', 'steps',
 
 const SIDECARS = ['extract.idx', 'fold.idx']
 const sidecarsOf = (home, id) => SIDECARS.map((n) => [n, fs.readFileSync(path.join(sessionDir(home, id), n))])
+
+test('4.3 §4 旁索引: a head of another CTX_V on disk does not stand while the fold is behind: the first slice writes this version\'s', async () => {
+  const home = homeOf(), s = bigSession({ home, id: 'big-0000-4a1b-9c2d-000000000003', segment: '20261020T164731Z', growth: 120, compactAt: 6_000 }), { id } = s
+  s.append(300)
+  await fold(home, id, false)
+  const old = sidecarsOf(home, id)
+  s.append(600)
+  await fold(home, id, true)
+  for (const [n, b] of old) fs.writeFileSync(path.join(sessionDir(home, id), n), b)
+  const head = path.join(sessionDir(home, id), 'head.json.gz')
+  fs.writeFileSync(head, gzipSync(JSON.stringify({ ...readHead(home, id), v: CTX_V - 1 }))) // a release moved CTX_V since it was written
+  s.append(1)
+  await extendSession({ home, writer: true }, id, 20)
+  assert.equal(readHead(home, id).v, CTX_V, 'this version\'s head, while the fold is still behind the files')
+})
 
 for (const [axis, asks] of [['background slices alone', false], ['a request between two slices', true]]) {
   test(`4.3 §4 旁索引: killed far past the sidecar, a new member, ${axis}: the end is a fold never killed, and no answer on disk says less`, async () => {

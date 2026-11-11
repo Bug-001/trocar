@@ -10,7 +10,7 @@ import path from 'node:path'
 import net from 'node:net'
 import { once } from 'node:events'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, boardPortOf, unservable } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf, UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { depsFile } from '../helpers/board-world.mjs'
 import { request } from './face.mjs'
@@ -51,7 +51,7 @@ async function withBoard(platform, run) {
 }
 
 for (const platform of ['darwin', 'win32']) {
-  const skip = await unservable(platform) // a darwin world on a win32 host: its unix socket cannot be listened on there
+  const skip = UNSERVABLE[platform] // a darwin world on a win32 host: its unix socket cannot be listened on there
   test(`${platform} · 4.4 #11: on and off from the board — 409 with the plan and nothing written, a stale plan_id → a new plan, confirm → the CLI's receipt; off keeps the user's edit`, { skip, timeout: 60_000 }, async () => {
     await withBoard(platform, async ({ w, post, sameView }) => {
       const envFile = path.join(w.home, '.codex', '.env')

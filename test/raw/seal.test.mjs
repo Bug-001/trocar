@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sealSegment, SealRefused } from '../../src/raw/seal.mjs';
 import { recordId } from '../../src/collector/core/record/segments.mjs';
 import { tmpDir, e1Lines, writeShard, listFiles, decodeAll } from './helpers.mjs';
@@ -103,7 +103,7 @@ for (const phase of ['written', 'verified', 'renamed']) {
     const b = box();
     const before = fs.readFileSync(b.file);
     const script = `
-import { sealSegment } from ${JSON.stringify(SEAL)};
+import { sealSegment } from ${JSON.stringify(pathToFileURL(SEAL).href)};
 const [file, lock] = process.argv.slice(-2);
 await sealSegment(file, { lockFile: lock, journal: null, onPhase: (p) => { if (p === ${JSON.stringify(phase)}) process.kill(process.pid, 'SIGKILL'); } });
 `;

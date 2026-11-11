@@ -9,7 +9,7 @@ import path from 'node:path'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { commandNamed } from '../../src/cli/commands.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { unservable } from '../helpers/model-daemon.mjs'
+import { UNSERVABLE } from '../helpers/model-daemon.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
@@ -161,7 +161,7 @@ test('4.11 P4 · darwin: a plist under trocar\'s label that no record lists is b
 // the documented order — install, then on — through the CLI: install writes the root, its carriers and
 // the inert autostart unit; on enables the unit, which starts the REAL daemon (test/helpers/model-daemon.mjs), asks it for the doors and writes the entries.
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: install then on through the CLI (temp HOME, stub backends) — on starts: exit 0, the doors' entries written`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
+  test(`${platform}: install then on through the CLI (temp HOME, stub backends) — on starts: exit 0, the doors' entries written`, { skip: UNSERVABLE[platform], timeout: 30_000 }, async () => {
     const { runOnCli } = await import('../../src/cli/on.mjs')
     const { liveUnit, withScratchCwd } = await import('../helpers/model-daemon.mjs')
     const w = await modelWorld({ os: platform, commands: ['codex'] })
