@@ -530,3 +530,16 @@ test('4.2 §标题表: a long chain-split session is not read whole for its titl
   // the main text leads from the first call: that call and the 32 after it (4.2 §标题表), not the whole session
   assert.ok(reads <= 33 && reads < calls, `${reads} records read of ${calls}`)
 })
+
+// A summary request moved by the kinship rule (3.4) can swap a session's members at equal count: the entry is checked against the
+// members it was computed over, by identity (4.2 §标题表 `d`), not only by their count
+test('4.2 §标题表: a session whose first call is swapped for another at equal count is titled again', async () => {
+  const home = homeOf(), sid = 'swap-0000-4a1b-9c2d-000000000001', warm = cold()
+  append(home, [envelope(CC, sid, anth([{ role: 'user', content: 'the first prompt' }]), replyTo(CC, 0), stamp(1)),
+    envelope(CC, 'other-0000-4a1b-9c2d-000000000002', anth([{ role: 'user', content: 'an earlier prompt' }]), replyTo(CC, 0), stamp(0))])
+  const rows = [...await indexRows({ home, fs: warm })], [a, b] = rows
+  assert.equal(titleOf({ home, fs: warm, id: sid, members: [a] }).title, 'the first prompt')
+  // the same count, the first member another call: what a fresh table says of these members
+  const swapped = [{ ...b, session_id: sid }]
+  assert.equal(titleOf({ home, fs: warm, id: sid, members: swapped }).title, titleOf({ home, fs: cold(), id: sid, members: swapped }).title)
+})
