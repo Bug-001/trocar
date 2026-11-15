@@ -6,10 +6,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import tls from 'node:tls'
-import { modelWorld, sharedCertFileWorld } from '../helpers/model-world.mjs'
+import { modelWorld, sharedCertFileWorld, profileEnv } from '../helpers/model-world.mjs'
 import { planInstall, ruleUFiles } from '../../src/collector/model-install.mjs'
 import { BLOCK_OPEN, BLOCK_END } from '../../src/off/text-edit.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
+import { renderWrapper as renderWin32Wrapper } from '../../src/collector/arch/win32/wrapper.mjs'
+import { platformFacts as win32Facts } from '../../src/collector/arch/win32/policy.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { backupDir } from '../../src/off/paths.mjs'
 import { codeId } from '../../src/version.mjs'
@@ -27,24 +29,49 @@ const put = (f, data) => { fs.mkdirSync(path.dirname(f), { recursive: true }); f
 const json = (f) => JSON.parse(fs.readFileSync(f, 'utf8'))
 const snapshot = (root) => { const out = {}; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.lstatSync(p); if (st.isDirectory()) walk(p); else out[p] = `${st.mtimeMs}:${st.ino}:${fs.readFileSync(p).toString('base64')}` } }; walk(root); return out }
 const USER_PEM = `${tls.rootCertificates[1].trim()}\n`
+const PE = Buffer.from([0x4d, 0x5a, 0, 0])
+
+// The checks below run in a macOS and a Windows world; a macOS world skips on a Windows host (POSIX_WORLD, next note).
+const OSES = ['darwin', 'win32']
+const hostSkip = (os) => ({ skip: os === 'darwin' && POSIX_WORLD })
+// A world's install takes its OS's own parts, as backendsFor gives them: on Windows its platform facts (a program file is <command>.exe) and the
+// wrapper kit (wrapper.cs, compiled at install by csc, which a stub stands in for here: a PE header before the rendered source).
+const WIN32_KIT = { wrapperKit: { renderWrapper: renderWin32Wrapper, compile: (src) => Buffer.concat([PE, Buffer.from(src)]) }, facts: win32Facts() }
+const withOs = (w, os) => { if (os !== 'win32') return w; const install = w.install; return Object.assign(w, { install: (over = {}) => install({ ...over, ...WIN32_KIT }) }) }
+// A path install writes or names lives on this host's file system, so it has this host's shape: on Windows a drive letter and backslashes, elsewhere
+// a POSIX path; and it is the world's profile's (USERPROFILE on Windows), never relative to another HOME.
+const HOST_PATH = process.platform === 'win32' ? /^[A-Za-z]:\\[^/]*$/ : /^\/[^\\]*$/
+function inProfile(w, p) {
+  assert.match(p, HOST_PATH)
+  const profile = w.env.USERPROFILE ?? w.env.HOME // the profile the world's shell names
+  assert.ok(p.startsWith(profile + path.sep), `${p} is under the profile ${profile}`)
+}
+/** Every path the install record (and the plan, when given) holds is the profile's, in this host's shape. */
+function profilePaths(w, rows = []) {
+  const m = readManifest(w.dir)
+  const paths = [...m.entries, ...m.files].flatMap((x) => [x.path, x.cert_file, ...(x.created_dirs || []), ...(x.sources || [])]).filter(Boolean).concat(rows.flatMap((r) => r.paths))
+  assert.ok(paths.length > 0)
+  for (const p of paths) inProfile(w, p)
+}
 
 // A macOS world (modelWorld's default) on a Windows host holds `C:\…` paths, which a macOS path key reads as relative names: trocar's own
 // tree is taken for the user's file. Those tests skip there (POSIX_WORLD); the win32 worlds run.
 /** Every harness present: the commands on PATH, Kimi's native program, Z-Code's folder, the Claude Code bundled store. */
-async function everything(env = {}) {
-  const w = await modelWorld({ commands: ['claude', 'codex', 'dsh', 'kimi'], env: { CLAUDE_CODE_CERT_STORE: 'bundled', ...env } })
-  put(path.join(w.home, '.kimi-code', 'bin', 'kimi'), MACHO)
+async function everything(env = {}, os = 'darwin') {
+  const w = await modelWorld({ os, commands: ['claude', 'codex', 'dsh', 'kimi'], env: (home) => ({ ...profileEnv(os, home), CLAUDE_CODE_CERT_STORE: 'bundled', ...(typeof env === 'function' ? env(home) : env) }) })
+  if (os === 'win32') assert.deepEqual([w.env.USERPROFILE, w.env.HOME], [w.home, undefined], 'a Windows shell: USERPROFILE, no HOME')
+  put(path.join(w.home, '.kimi-code', 'bin', os === 'win32' ? 'kimi.exe' : 'kimi'), os === 'win32' ? PE : MACHO) // Kimi's native program (its descriptor's NATIVE)
   fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
   fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
-  return w
+  return withOs(w, os)
 }
 
 // V85 (install): every file install changes outside ~/.trocar is named by its plan — rule U's block in the file the user's NODE_EXTRA_CA_CERTS names
 // included (a Windows test machine 2026-11-04: the plan said only "reads your user trust store" for the two harnesses that read it)
-for (const shape of ['shared file', 'every harness']) {
-  test(`V85: the install plan names every file install then changes outside ~/.trocar (${shape})`, { skip: POSIX_WORLD }, async () => {
-    const w = shape === 'shared file' ? await sharedCertFileWorld({ userPem: USER_PEM }) : await everything()
-    const rows = planInstall({ os: 'darwin', harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns })
+for (const os of OSES) for (const shape of ['shared file', 'every harness']) {
+  test(`V85 · ${os}: the install plan names every file install then changes outside ~/.trocar (${shape})`, hostSkip(os), async () => {
+    const w = shape === 'shared file' ? withOs(await sharedCertFileWorld({ userPem: USER_PEM, os }), os) : await everything({}, os)
+    const rows = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns: w.owns })
     const paths = rows.flatMap((r) => r.paths)
     const mine = () => Object.fromEntries(Object.entries(snapshot(w.home)).filter(([k]) => !k.startsWith(path.join(w.home, '.trocar') + path.sep)).map(([k, v]) => [k, v.split(':').at(-1)]))
     const before = mine()
@@ -53,38 +80,44 @@ for (const shape of ['shared file', 'every harness']) {
     const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((k) => before[k] !== after[k])
     assert.ok(changed.length > 0)
     assert.deepEqual(changed.filter((f) => !paths.some((p) => f === p || f.startsWith(p + path.sep))), [], `changed but not in the plan: ${JSON.stringify(rows)}`)
+    profilePaths(w, rows)
   })
 }
 
-test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the trocar root, no system roots — written only while the key is unset; set, the user\'s file gets the block', { skip: POSIX_WORLD }, async () => {
-  const w = await everything()
+for (const os of OSES) test(`CM9 · ${os}: Z-Code's caCertFile → a bundle of Node's own roots plus the trocar root, no system roots — written only while the key is unset; set, the user's file gets the block`, hostSkip(os), async () => {
+  const w = await everything({}, os)
   const r = await w.install({ wrapperKit: { renderWrapper } })
   const cfg = path.join(w.home, '.zcode', 'cli', 'config.json')
   const bundle = json(cfg).network.caCertFile
+  assert.equal(bundle, readManifest(w.dir).files.find((f) => f.role === 'bundle' && f.harness === 'z-code').path, 'the key names the bundle install records')
+  profilePaths(w)
   const fps = certBlocks(fs.readFileSync(bundle, 'utf8')).map((b) => b.fp)
   const node = tls.rootCertificates.flatMap((p) => certBlocks(p).map((b) => b.fp))
   assert.deepEqual(fps.slice(0, -1), node, 'Node\'s roots, in order, nothing else')
   assert.equal(fps.at(-1), r.fp256, 'and the trocar root last')
   // the key already set by the user: config.json is not touched, the user's file takes the block
-  const w2 = await everything()
+  const w2 = await everything({}, os)
   const mine = path.join(w2.home, 'certs', 'z.pem'); put(mine, USER_PEM)
   put(path.join(w2.home, '.zcode', 'cli', 'config.json'), JSON.stringify({ network: { caCertFile: mine } }))
   const before = fs.readFileSync(path.join(w2.home, '.zcode', 'cli', 'config.json'))
   const r2 = await w2.install({ wrapperKit: { renderWrapper } })
   assert.deepEqual(fs.readFileSync(path.join(w2.home, '.zcode', 'cli', 'config.json')), before)
   assert.equal(r2.carriers.find((c) => c.harness === 'z-code' && c.carrier === 'pem-block').state, 'placed')
+  assert.deepEqual(readManifest(w2.dir).entries.filter((e) => e.harness === 'z-code' && e.format === 'pem-block').map((e) => e.path), [mine], 'the block is recorded in the file the key names')
+  profilePaths(w2)
 })
 
 // CM9: a CA the user added through a setting the descriptor merges (the install shell's NODE_EXTRA_CA_CERTS, which caCertFile makes ineffective;
 // ZCODE_AGENT_CA_CERT and the desktop CA setting, which override it while set) is in the bundle too: without it Z-Code — and the door, which
 // verifies upstream with Z-Code's own trust — cannot reach a private-CA host. The bundle's manifest item names the files and fingerprints it
 // merged, as the Linux bundles do: `off` / `uninstall` rebuild a bundle that is gone while a process holds it from those, or name what was lost (4.6)
-for (const via of ['NODE_EXTRA_CA_CERTS', 'ZCODE_AGENT_CA_CERT', 'desktop setting']) {
-  test(`CM9: a private CA named by ${via} → its certificate is in Z-Code's bundle, beside Node's roots and the trocar root; a non-certificate block is not`, { skip: POSIX_WORLD }, async () => {
+for (const os of OSES) for (const via of ['NODE_EXTRA_CA_CERTS', 'ZCODE_AGENT_CA_CERT', 'desktop setting']) {
+  test(`CM9 · ${os}: a private CA named by ${via} → its certificate is in Z-Code's bundle, beside Node's roots and the trocar root; a non-certificate block is not`, hostSkip(os), async () => {
     const other = await modelWorld(); await other.install() // another machine's root: a CA no Node root store holds
     const priv = fs.readFileSync(path.join(other.dir, 'ca', 'trocar-ca.pem'), 'utf8')
-    const w0 = await modelWorld(); const mine = path.join(w0.home, 'company.pem')
-    const w = await everything(via === 'desktop setting' ? {} : { [via]: mine })
+    const at = (home) => path.join(home, 'certs', 'company.pem')
+    const w = await everything(via === 'desktop setting' ? {} : (home) => ({ [via]: at(home) }), os)
+    const mine = at(w.home)
     put(mine, `${priv.trim()}\n-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n`)
     if (via === 'desktop setting') put(path.join(w.home, '.zcode', 'v2', 'setting.json'), JSON.stringify({ httpProxyCaCertPath: mine }))
     const r = await w.install({ wrapperKit: { renderWrapper } })
@@ -96,6 +129,7 @@ for (const via of ['NODE_EXTRA_CA_CERTS', 'ZCODE_AGENT_CA_CERT', 'desktop settin
     const item = readManifest(w.dir).files.find((f) => f.role === 'bundle' && f.harness === 'z-code')
     assert.deepEqual(item.sources, [mine], 'the merged file is the rebuild\'s source')
     assert.deepEqual(item.user_fps, certBlocks(priv).map((b) => b.fp), 'and its certificates are the user CAs a rebuild must keep')
+    profilePaths(w)
   })
 }
 
@@ -122,30 +156,31 @@ for (const [variable, harnesses] of [['NODE_EXTRA_CA_CERTS', ['claude-code', 'ki
   })
 }
 
-for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
-  test(`CM10: bundled Claude Code, NODE_EXTRA_CA_CERTS ${inSettings ? 'in' : 'not in'} the settings and ${inEnv ? 'in' : 'not in'} the install env → ${!inSettings && !inEnv ? 'settings env points at trocar-ca.pem' : 'settings untouched, the block appended to the named file'}`, { skip: POSIX_WORLD }, async () => {
-    const w0 = await modelWorld()
-    const mine = path.join(w0.home, 'mine.pem')
-    const w = await everything(inEnv ? { NODE_EXTRA_CA_CERTS: mine } : {})
-    const named = inEnv ? mine : path.join(w.home, 'settings-ca.pem')
+for (const os of OSES) for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
+  test(`CM10 · ${os}: bundled Claude Code, NODE_EXTRA_CA_CERTS ${inSettings ? 'in' : 'not in'} the settings and ${inEnv ? 'in' : 'not in'} the install env → ${!inSettings && !inEnv ? 'settings env points at trocar-ca.pem' : 'settings untouched, the block appended to the named file'}`, hostSkip(os), async () => {
+    const at = (home) => path.join(home, 'certs', 'mine.pem')
+    const w = await everything(inEnv ? (home) => ({ NODE_EXTRA_CA_CERTS: at(home) }) : {}, os)
+    const named = inEnv ? at(w.home) : path.join(w.home, 'settings-ca.pem')
     put(named, USER_PEM)
     const settings = path.join(w.home, '.claude', 'settings.json')
     if (inSettings) put(settings, JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: named } }))
     const before = inSettings ? fs.readFileSync(settings) : null
     await w.install({ wrapperKit: { renderWrapper } })
-    if (!inSettings && !inEnv) assert.equal(json(settings).env.NODE_EXTRA_CA_CERTS, path.join(w.dir, 'ca', 'trocar-ca.pem'))
+    if (!inSettings && !inEnv) assert.equal(json(settings).env.NODE_EXTRA_CA_CERTS, readManifest(w.dir).files.find((f) => f.role === 'ca-cert').path, 'the root file install records')
     else {
       if (inSettings) assert.deepEqual(fs.readFileSync(settings), before)
       else assert.equal(fs.existsSync(settings), false, 'no settings file made')
       assert.equal(certBlocks(fs.readFileSync(named, 'utf8')).length, 2, 'the user\'s file holds its own certificate and trocar\'s')
+      assert.ok(readManifest(w.dir).entries.some((e) => e.format === 'pem-block' && e.path === named), 'recorded at the file named')
     }
+    profilePaths(w)
   })
 }
 
 // a carrier is placed when install wrote one of its parts, intact when it wrote none: dsh's plug-in file gone (its loader row still there) is placed
 // again on the second install, while every other carrier is intact
-test('D54: the second install places only the carrier a part of which was gone; the others are intact', { skip: POSIX_WORLD }, async () => {
-  const w = await everything()
+for (const os of OSES) test(`D54 · ${os}: the second install places only the carrier a part of which was gone; the others are intact`, hostSkip(os), async () => {
+  const w = await everything({}, os)
   const r1 = await w.install({ wrapperKit: { renderWrapper } })
   assert.equal(r1.exit, 0, JSON.stringify({ c: r1.carriers, p: r1.problems }))
   const plugin = readManifest(w.dir).files.find((f) => f.harness === 'deepseek-dsh' && f.role === 'plugin')
@@ -157,10 +192,12 @@ test('D54: the second install places only the carrier a part of which was gone; 
   assert.deepEqual(states.filter(([, , st]) => st === 'placed'), states.filter(([h, k]) => h === 'deepseek-dsh' && k === 'plugin').map(([h, k]) => [h, k, 'placed']), JSON.stringify(states))
   assert.ok(states.some(([h, k, st]) => h === 'deepseek-dsh' && k === 'plugin' && st === 'placed') && states.some(([, , st]) => st === 'intact'), JSON.stringify(states))
   assert.ok(fs.existsSync(plugin.path), 'and the file is back')
+  inProfile(w, plugin.path)
+  profilePaths(w)
 })
 
-test('D54 · CM1: install; install changes no byte, makes no second key, raises no prompt — the fingerprint stays', { skip: POSIX_WORLD }, async () => {
-  const w = await everything()
+for (const os of OSES) test(`D54 · CM1 · ${os}: install; install changes no byte, makes no second key, raises no prompt — the fingerprint stays`, hostSkip(os), async () => {
+  const w = await everything({}, os)
   const r1 = await w.install({ wrapperKit: { renderWrapper } })
   assert.equal(r1.exit, 0, JSON.stringify({ c: r1.carriers, p: r1.problems, pend: r1.pending }))
   const snap = snapshot(w.home)
@@ -177,6 +214,11 @@ test('D54 · CM1: install; install changes no byte, makes no second key, raises 
   assert.equal(r2.fp256, r1.fp256)
   assert.equal(readManifest(w.dir).install.state, 'complete')
   assert.equal(readManifest(w.dir).install.code, codeId(), 'the record names the code that ran install (1.6 §5.5: what update compares)')
+  // the wrapper is the program the descriptor names, by this OS's program file name: <binDir>/<command><exeSuffix>
+  const cert = w.harnesses.find((d) => d.name === 'kimi-code').proxyMode.certs.wrapper
+  const exe = path.join(w.home, ...cert.binDir.path.split('/'), `${cert.command}${os === 'win32' ? win32Facts().exeSuffix : ''}`)
+  assert.deepEqual(readManifest(w.dir).files.filter((f) => f.role === 'wrapper').map((f) => f.path), [exe])
+  profilePaths(w)
 })
 
 // 4.11 §1: a key helper kept (no terminal to answer the key's box, or the box not answered) still signs: install says so as a note and exits 0,
@@ -241,8 +283,8 @@ test('1.6 §1.6 · an add that reports success but is not trusted when read back
 // CM35 (4.11 §3 ㉒): the lost-key install. The custody's key gone behind trocar's back (exists() false, the manifest records the old root) → the old
 // root leaves the store by its recorded fingerprint, one new key and root are made and added, and every carrier holding root bytes holds only the new
 // root: trocar-ca.pem, Z-Code's bundle, the pem-block in the user's file (the user's bytes outside the marks as they were); their installed_at moves.
-async function lostKeyWorld() {
-  const w = await modelWorld({ commands: ['codex', 'dsh'], env: (home) => ({ SSL_CERT_FILE: path.join(home, 'certs', 'mine.pem') }) })
+async function lostKeyWorld(os = 'darwin') {
+  const w = withOs(await modelWorld({ os, commands: ['codex', 'dsh'], env: (home) => ({ ...profileEnv(os, home), SSL_CERT_FILE: path.join(home, 'certs', 'mine.pem') }) }), os)
   put(w.env.SSL_CERT_FILE, USER_PEM)
   fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
   fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
@@ -282,10 +324,11 @@ function assertOnlyNewRoot(w, r1, r2, at1) {
   assert.deepEqual(m.entries.filter((e) => e.kind === 'root-key').map((e) => e.fp256), [r2.fp256])
   const at2 = carrierTimes(w)
   for (const k of Object.keys(at1)) assert.ok(at2[k] > at1[k], `${k}: installed_at moved (${at1[k]} → ${at2[k]})`)
+  profilePaths(w)
 }
 
-test('CM35: the key lost → remove the old root once by its fingerprint, create once, add once; every carrier holds only the new root; exit 0', { skip: POSIX_WORLD }, async () => {
-  const { w, r1, at1 } = await lostKeyWorld()
+for (const os of OSES) test(`CM35 · ${os}: the key lost → remove the old root once by its fingerprint, create once, add once; every carrier holds only the new root; exit 0`, hostSkip(os), async () => {
+  const { w, r1, at1 } = await lostKeyWorld(os)
   w.custody.switches.keyLost = true
   const calls = w.store.calls.length, creates = w.custody.calls.filter((c) => c.verb === 'create').length
   const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
@@ -297,8 +340,8 @@ test('CM35: the key lost → remove the old root once by its fingerprint, create
   assertOnlyNewRoot(w, r1, r2, at1)
 })
 
-test('CM35: the old root\'s removal refused → the new root is installed all the same, the old one reported as an orphan with its removal, exit 1', { skip: POSIX_WORLD }, async () => {
-  const { w, r1, at1 } = await lostKeyWorld()
+for (const os of OSES) test(`CM35 · ${os}: the old root's removal refused → the new root is installed all the same, the old one reported as an orphan with its removal, exit 1`, hostSkip(os), async () => {
+  const { w, r1, at1 } = await lostKeyWorld(os)
   w.custody.switches.keyLost = true
   w.store.remove = () => ({ ok: false, reason: 'User canceled' })
   const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
@@ -311,8 +354,8 @@ test('CM35: the old root\'s removal refused → the new root is installed all th
 
 // 1.6 R2: the older root's block comes out of the user's file only after a copy of its bytes is in the backup folder, and through the link a
 // dotfiles setup has there (the link stays a link, the file it names is what changes)
-test('CM35 · R2: the older root\'s block leaves the user\'s file after a backup of its bytes, and through its link', { skip: POSIX_WORLD }, async () => {
-  const { w, r1 } = await lostKeyWorld()
+for (const os of OSES) test(`CM35 · R2 · ${os}: the older root's block leaves the user's file after a backup of its bytes, and through its link`, hostSkip(os), async () => {
+  const { w, r1 } = await lostKeyWorld(os)
   const real = w.env.SSL_CERT_FILE, link = path.join(w.home, 'certs', 'via-link.pem')
   fs.symlinkSync(real, link)
   w.env.SSL_CERT_FILE = link
@@ -326,14 +369,15 @@ test('CM35 · R2: the older root\'s block leaves the user\'s file after a backup
   assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link stays a link')
   assert.deepEqual(fpsIn(real), [certBlocks(USER_PEM)[0].fp, r2.fp256])
   const dir = backupDir(w.home)
+  inProfile(w, dir)
   assert.ok(fs.readdirSync(dir).some((n) => fs.readFileSync(path.join(dir, n)).equals(before)), `the bytes with ${r1.fp256}'s block are in the backup folder`)
 })
 
 // the reverse: the key is there but trocar cannot read its root back — trocar-ca.pem gone, or the manifest's record gone — install must not crash on
 // the custody's 'exists'; it takes ㉒'s path (the custody has no verb that returns the root)
-for (const [what, lose] of [['trocar-ca.pem gone', (w) => fs.rmSync(path.join(w.dir, 'ca', 'trocar-ca.pem'))], ['the root-key record gone', (w) => { const m = readManifest(w.dir); m.entries = m.entries.filter((e) => e.kind !== 'root-key'); fs.writeFileSync(path.join(w.dir, 'install-manifest.json'), JSON.stringify(m)) }]]) {
-  test(`CM35 reverse: the key present, ${what} → no crash; the stray key goes, a new root is made and carried`, { skip: POSIX_WORLD }, async () => {
-    const { w, r1 } = await lostKeyWorld()
+for (const os of OSES) for (const [what, lose] of [['trocar-ca.pem gone', (w) => fs.rmSync(path.join(w.dir, 'ca', 'trocar-ca.pem'))], ['the root-key record gone', (w) => { const m = readManifest(w.dir); m.entries = m.entries.filter((e) => e.kind !== 'root-key'); fs.writeFileSync(path.join(w.dir, 'install-manifest.json'), JSON.stringify(m)) }]]) {
+  test(`CM35 reverse · ${os}: the key present, ${what} → no crash; the stray key goes, a new root is made and carried`, hostSkip(os), async () => {
+    const { w, r1 } = await lostKeyWorld(os)
     lose(w)
     const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
     assert.ok(w.custody.calls.some((c) => c.verb === 'remove'))
@@ -343,14 +387,16 @@ for (const [what, lose] of [['trocar-ca.pem gone', (w) => fs.rmSync(path.join(w.
     assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'root-key').map((e) => e.fp256), [r2.fp256])
     assert.ok(!w.store.held.has(r1.fp256), 'the old root left the store by the fingerprint its store record holds')
     assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'system-root').map((e) => e.fp256), [r2.fp256])
+    profilePaths(w)
   })
 }
 
-test('CM35 · 1.6 V67: the key present and readable → install calls create zero times', { skip: POSIX_WORLD }, async () => {
-  const { w } = await lostKeyWorld()
+for (const os of OSES) test(`CM35 · 1.6 V67 · ${os}: the key present and readable → install calls create zero times`, hostSkip(os), async () => {
+  const { w } = await lostKeyWorld(os)
   const creates = w.custody.calls.filter((c) => c.verb === 'create').length
   await w.install({ wrapperKit: { renderWrapper }, now: later })
   assert.equal(w.custody.calls.filter((c) => c.verb === 'create').length, creates)
+  profilePaths(w)
 })
 
 // CM37: a plugin cert with no loader (the host finds files in its folder) → install writes the hook file alone, no loader row; uninstall takes it out
@@ -388,20 +434,20 @@ for (const os of ['win32', 'darwin']) {
 
 // 1.6 §3.2 / V85: plan and act come from one list — every carrier install records for a form or a file (a key that stays the user's, a rule U file
 // it leaves alone, as well as what it places) has its row in the plan, with the same state when it changes nothing
-for (const shape of ['the key is the user\'s', 'the file is not this user\'s']) {
-  test(`V85: every carrier install records is a row of its plan (${shape})`, { skip: POSIX_WORLD }, async () => {
+for (const os of OSES) for (const shape of ['the key is the user\'s', 'the file is not this user\'s']) {
+  test(`V85 · ${os}: every carrier install records is a row of its plan (${shape})`, hostSkip(os), async () => {
     let w, owns
     if (shape === 'the key is the user\'s') {
-      w = await everything()
+      w = await everything({}, os)
       const mine = path.join(w.home, 'certs', 'z.pem'); put(mine, USER_PEM)
       put(path.join(w.home, '.zcode', 'cli', 'config.json'), JSON.stringify({ network: { caCertFile: mine } }))
       owns = w.owns
     } else {
-      w = await sharedCertFileWorld({ userPem: USER_PEM })
+      w = withOs(await sharedCertFileWorld({ userPem: USER_PEM, os }), os)
       const real = fs.realpathSync(w.file)
       owns = (p) => (p === real ? false : w.owns(p))
     }
-    const rows = planInstall({ os: 'darwin', harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns })
+    const rows = planInstall({ os, harnesses: w.harnesses, ctx: w.ctx, home: w.home, owns })
     const r = await w.install({ wrapperKit: { renderWrapper }, owns })
     const acted = r.carriers.filter((c) => c.carrier !== 'root' && (c.state === 'rule-u' || c.code === 'not-users-file'))
     assert.ok(acted.length > 0, JSON.stringify(r.carriers))
@@ -409,7 +455,9 @@ for (const shape of ['the key is the user\'s', 'the file is not this user\'s']) 
       const row = rows.find((x) => x.harness === c.harness && (c.form ? x.form === c.form : x.paths.includes(c.path)))
       assert.ok(row, `${c.harness} ${c.form || c.path} (${c.state}) is in the plan: ${JSON.stringify(rows)}`)
       if (c.state === 'rule-u' || c.code === 'not-users-file') assert.equal(row.state, c.state, `${c.harness}: the plan says it changes nothing, as the act does`)
+      if (c.path) { inProfile(w, c.path); assert.ok(row.paths.includes(c.path) || row.paths.some((p) => c.path.startsWith(p + path.sep)), `${c.path}: the plan names it`) }
     }
+    profilePaths(w, rows)
   })
 }
 

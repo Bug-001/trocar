@@ -30,6 +30,10 @@ export function rootStoreStub({ answer = 'ok' } = {}) {
 /** The per-user folders of `os`, the product's own answer (dirsFor), under this host's path rules because the files really live here. */
 export const worldDirs = (os, home) => Object.fromEntries(Object.entries(dirsFor(os, home, {})).map(([k, v]) => [k, v.replaceAll('\\', path.sep)]))
 
+/** The per-user variables a shell of `os` holds for the profile `home`: on Windows %USERPROFILE%, %APPDATA% and %LOCALAPPDATA% at the places worldDirs
+ *  gives, and no HOME (Windows sets none); nothing on macOS. Spread into modelWorld's env. */
+export const profileEnv = (os, home) => (os === 'win32' ? { HOME: undefined, USERPROFILE: home, APPDATA: worldDirs(os, home).appSupport, LOCALAPPDATA: worldDirs(os, home).localAppData } : {})
+
 /** world({ os, env (an object, or home → object), commands }) → { home, dir, env, custody, store, ctx, install(over) } — `commands` are the names `which` finds (under home/bin). */
 export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd = null } = {}) {
   const home = tmpDir('trocar-model-')
@@ -50,13 +54,13 @@ export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd =
 
 /** Rule U's shared file (4.11 P4): by default Claude Code (bundled store) and Kimi Code (its native program) present, NODE_EXTRA_CA_CERTS naming one
  *  user certificate file holding `userPem` — both harnesses' settings name it, so install places one block, recorded under the first. `variable`,
- *  `commands`, `env`, `dirs` give another pair the same shape (SSL_CERT_FILE for Codex and Hermes). → world + { file } */
-export async function sharedCertFileWorld({ userPem, variable = 'NODE_EXTRA_CA_CERTS', commands = ['claude', 'kimi'], env = { CLAUDE_CODE_CERT_STORE: 'bundled' }, dirs = [] }) {
-  const w = await modelWorld({ commands, env: (home) => ({ ...env, [variable]: path.join(home, 'certs', 'mine.pem') }) })
+ *  `commands`, `env`, `dirs` give another pair the same shape (SSL_CERT_FILE for Codex and Hermes); `os` the world's OS. → world + { file } */
+export async function sharedCertFileWorld({ userPem, variable = 'NODE_EXTRA_CA_CERTS', commands = ['claude', 'kimi'], env = { CLAUDE_CODE_CERT_STORE: 'bundled' }, dirs = [], os = 'darwin' }) {
+  const w = await modelWorld({ os, commands, env: (home) => ({ ...profileEnv(os, home), ...env, [variable]: path.join(home, 'certs', 'mine.pem') }) })
   const file = w.env[variable]
   for (const d of dirs) fs.mkdirSync(path.join(w.home, d), { recursive: true }) // a harness home a form's presence needs
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, userPem)
-  const kimi = path.join(w.home, '.kimi-code', 'bin', 'kimi')
-  fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])) // a Mach-O header: the wrapper's precondition
+  const kimi = path.join(w.home, '.kimi-code', 'bin', os === 'win32' ? 'kimi.exe' : 'kimi') // Kimi's native program (its descriptor's NATIVE)
+  fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, Buffer.from(os === 'win32' ? [0x4d, 0x5a, 0, 0] : [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])) // a PE / Mach-O header: the wrapper's precondition
   return { ...w, file }
 }
