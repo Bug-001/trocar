@@ -3,7 +3,7 @@
 // no lane: the legacy renderers the wrappers call draw nothing without one.
 import { afterEach, beforeAll, expect, test, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
-import { DeskFrame } from './DeskFrame'
+import { DeskFrame, fitOnDraw } from './DeskFrame'
 import { reactView, type Els } from './view'
 
 beforeAll(() => { globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver })
@@ -52,4 +52,9 @@ test('1.2 #8: crossing 1200 px swaps the sidebar for the bottom row and back; th
   expect($('[data-testid=desk-side]')).not.toBeNull()
   expect($('.deskside.bottom')).toBeNull()
   expect($('#ctxwin')).toBe(win)
+})
+
+test('2.3 #35: a fit run from the scope\'s commit swallows only the library\'s "Group <id> not found"; any other error throws', () => {
+  expect(() => fitOnDraw(() => { throw new Error('Group _r_l_ not found') })).not.toThrow()
+  expect(() => fitOnDraw(() => { throw new TypeError("Cannot read properties of null (reading 'clientHeight')") })).toThrow(TypeError)
 })

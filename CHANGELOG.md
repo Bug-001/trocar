@@ -4,6 +4,7 @@ Keep a Changelog style, versions follow SemVer (in 0.x a minor version may break
 
 ## [Unreleased]
 
+- [2026-11-15](docs/release-notes/2026-11-15.md)
 - [2026-11-11](docs/release-notes/2026-11-11.md)
 
 ## [0.2.1] - 2026-11-10
