@@ -47,3 +47,18 @@ test('3.5 §内存有界: a growing measured cut never shows fewer than half of 
   // else this test proves nothing: the cut moved more than once, and stayed between moves
   assert.ok(starts.length > 2 && starts.length < 120, `the cut moved ${starts.length - 1} times in 120 growths`)
 })
+
+// A plan is the members it was made over by identity (4.3 §4 成员摘要), all `n` of them, not the fold's frontier: a member swapped for
+// another anywhere before its end (between where a fold stopped and the end too) at equal count and the same ends is a new plan, so
+// its state is opened afresh (grow → stateOf, where the fold log is taken up to its own frontier only when that is folded over these
+// members); the same members in another array keep the plan
+test('4.3 §4 成员摘要: a member swapped just before the plan\'s end, the count and the ends the same, makes a new plan; the same members in another array do not', () => {
+  const store = { plan: null, defCount: 0 }, members = grown(600)
+  const p = planOf(members, 'swap-plan', store, ID)
+  assert.equal(planOf([...members], 'swap-plan', store, ID), p, 'another array, the same members: the same plan')
+  const swapped = [...members]
+  swapped[598] = { ...members[598], id: '20261020T164737Z:9999' }
+  const q = planOf(swapped, 'swap-plan', store, ID)
+  assert.notEqual(q, p, 'a new plan')
+  assert.ok(q.byId.has('20261020T164737Z:9999') && !q.byId.has(members[598].id), 'over the members it has now')
+})

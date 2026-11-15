@@ -10,6 +10,7 @@ import path from 'node:path';
 import { createSynthAssigner, headsFactOf } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { endpointClass } from '../dissect/endpoints.mjs';
+import { num52 } from './projection.mjs';
 import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom, IndexPending } from './index-build.mjs';
 import { recordsAt } from './records.mjs';
 import { trocarHome } from '../paths.mjs';
@@ -286,6 +287,7 @@ export function sessionGroups(rows) {
     const was = groups.get(rows);
     if (was) return was;
     const g = addGroups(new Map(), rows);
+    for (const a of g.values()) noted(a);
     groups.set(rows, g);
     return g;
   }
@@ -305,9 +307,10 @@ function listGroups(rows) {
     const ref = refs.get(id), a = ref && ref.deref();
     if (!a || a.length > at.n) return null;
     for (let i = a.length; i < at.n; i++) a.push(rows.at(at.a[i])); // grown in place: a holder counts the members it took (planOf)
+    noted(a);
     return a;
   };
-  const make = (at) => at.a.slice(0, at.n).map((i) => rows.at(i));
+  const make = (at) => { const a = at.a.slice(0, at.n).map((i) => rows.at(i)); noted(a); return a; };
   return {
     get size() { return index.size; },
     has: (id) => index.has(id),
@@ -332,6 +335,24 @@ function addGroups(g, rows) {
     m.push(r);
   }
   return g;
+}
+
+// A member array's members by identity (4.3 §4 成员摘要: each id's num52 summed modulo 2⁵², exact): kept with the array as it is made and
+// grown (sessionGroups reads each row it puts there anyway), so a reader asks it for a prefix at the cost of the members past it only.
+export const withMember = (m, rid, sign = 1) => (((m + sign * num52(String(rid))) % 2 ** 52) + 2 ** 52) % 2 ** 52;
+const digests = new WeakMap(); // member array → {n, d}: the first n members' digest
+function noted(a) {
+  let c = digests.get(a);
+  if (!c) digests.set(a, (c = { n: 0, d: 0 }));
+  for (; c.n < a.length; c.n++) c.d = withMember(c.d, a[c.n].id);
+  return c;
+}
+/** membersDigest(members, n = all) → the first n members by identity: the array's own digest less the members past n. */
+export function membersDigest(members, n = members.length) {
+  const c = digests.get(members) || noted(members);
+  let d = c.n >= members.length ? c.d : noted(members).d;
+  for (let i = n; i < members.length; i++) d = withMember(d, members[i].id, -1);
+  return d;
 }
 
 const isProbe = (r) => endpointClass(r.path) === 'token-count';
