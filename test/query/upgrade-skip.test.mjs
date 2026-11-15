@@ -22,7 +22,7 @@ const line = (n) => JSON.stringify({ ts: `2026-10-25T09:00:0${n}.000Z`, endpoint
   proc: { pid: 9, exe: '/x/kimi', agent: 'kimi' } })
 const append = (home, ...ns) => fs.appendFileSync(path.join(home, 'raw', `${SEGMENT}.ndjson`), ns.map(line).join('\n') + '\n', { mode: 0o600 })
 const session = async (home) => { const [[id, ms]] = sessionGroups(await indexRows({ home, errors: [] })); return { id, last: String(ms[ms.length - 1].id) } }
-const folds = (d) => Object.fromEntries(fs.readdirSync(d).filter((f) => f.startsWith('fold.')).map((f) => { const s = fs.statSync(path.join(d, f)); return [f, [s.ino, s.size, s.mtimeMs]] }))
+const folds = (d) => Object.fromEntries(fs.readdirSync(d).filter((f) => f.startsWith('fold.')).map((f) => { const s = fs.statSync(path.join(d, f), { bigint: true }); return [f, [s.ino, s.size, s.mtimeNs]] }))
 
 // A worker run until `done()` and then until it has said nothing for QUIET ms after its last report (its idle period's background
 // work ends with a report: worker.mjs worked()); it must not exit on its own.

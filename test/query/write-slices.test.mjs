@@ -302,12 +302,12 @@ test('3.5 §会话读 --tail: an append lists the lane headers it carries in the
     const h = homeWith(120, shape)
     cut(h.ctx, await folded(h.ctx, h.id)) // the first write: the tails, fresh
     const before = fs.statSync(tailFile(h.home, h.id, 'rest')).size
-    const ino = Object.fromEntries(['main', 'rest'].map((p) => [p, fs.statSync(tailFile(h.home, h.id, p)).ino]))
+    const ino = Object.fromEntries(['main', 'rest'].map((p) => [p, fs.statSync(tailFile(h.home, h.id, p), { bigint: true }).ino]))
     h.a.append(60) // new subagent lanes come, and the old ones move
     await drain(() => extendSession(h.ctx, h.id, slice))
     const s = await folded(h.ctx, h.id)
     cut(h.ctx, s)
-    for (const p of ['main', 'rest']) assert.equal(fs.statSync(tailFile(h.home, h.id, p)).ino, ino[p], `${p}: appended to, not written afresh`)
+    for (const p of ['main', 'rest']) assert.equal(fs.statSync(tailFile(h.home, h.id, p), { bigint: true }).ino, ino[p], `${p}: appended to, not written afresh`)
     const t = textsOf(h, (n) => n.startsWith('open.'))
     const appended = fs.readFileSync(tailFile(h.home, h.id, 'rest')).subarray(before).toString('utf8').split('\n').filter((l) => l.startsWith('{"l":')).map((l) => JSON.parse(l).l.lane)
     return { t, appended, order: s.V.lanes.map((x) => x.lane) }

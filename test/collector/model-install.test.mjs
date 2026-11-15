@@ -24,7 +24,7 @@ import { userCertFilesOf } from '../../src/collector/core/proxymode/sources.mjs'
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const put = (f, data) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, data) }
 const json = (f) => JSON.parse(fs.readFileSync(f, 'utf8'))
-const snapshot = (root) => { const out = {}; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.lstatSync(p); if (st.isDirectory()) walk(p); else out[p] = `${st.mtimeMs}:${st.ino}:${fs.readFileSync(p).toString('base64')}` } }; walk(root); return out }
+const snapshot = (root) => { const out = {}; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.lstatSync(p, { bigint: true }); if (st.isDirectory()) walk(p); else out[p] = `${st.mtimeNs}:${st.ino}:${fs.readFileSync(p).toString('base64')}` } }; walk(root); return out }
 const USER_PEM = `${tls.rootCertificates[1].trim()}\n`
 
 /** Every harness present: the commands on PATH, Kimi's native program, Z-Code's folder, the Claude Code bundled store. */

@@ -114,11 +114,11 @@ test('CM11 preconditions: only one native program in a folder this user owns, ou
 
 test('CM11 place: the program moves to .trocar-real by rename, the wrapper is recorded with both hashes; again = intact; Smart App Control = skipped', () => {
   const s = setup()
-  const realIno = fs.statSync(s.file).ino
+  const realIno = fs.statSync(s.file, { bigint: true }).ino
   const r = placeWrapper(s.ctx, s.cert, { renderWrapper })
   assert.equal(r.result, 'placed')
   const real = path.join(s.dir, REAL_DIR, 'tool')
-  assert.equal(fs.statSync(real).ino, realIno, 'a rename, not a copy')
+  assert.equal(fs.statSync(real, { bigint: true }).ino, realIno, 'a rename, not a copy')
   assert.deepEqual([r.record.role, r.record.phase, r.record.real, r.record.real_sha256, r.record.sha256], ['wrapper', 'install', real, sha256(MACHO), sha256(fs.readFileSync(s.file))])
   assert.match(fs.readFileSync(s.file, 'utf8'), /^#!\/bin\/dash\n/)
   assert.ok(fs.statSync(s.file).mode & 0o100, 'the wrapper is executable')

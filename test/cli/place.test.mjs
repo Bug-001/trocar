@@ -48,9 +48,9 @@ test('place switches the pointer, writes a launcher that runs that version, and 
     assert.equal(ran, `${path.join(app, '0.1.3', 'bin', 'trocar.mjs')}|a b|c|`)
   }
 
-  const ino = fs.statSync(launcherPath(home)).ino
+  const ino = fs.statSync(launcherPath(home), { bigint: true }).ino
   assert.equal(await runPlaceCli([path.join(app, '0.1.3')], { io: o.io, home, deps: { exec: identityRunner().run } }), 0)
-  assert.equal(fs.statSync(launcherPath(home)).ino, ino, 'a launcher with the same bytes is not rewritten')
+  assert.equal(fs.statSync(launcherPath(home), { bigint: true }).ino, ino, 'a launcher with the same bytes is not rewritten')
 })
 
 test('a directory that is not a complete version of ~/.trocar/app: exit 1 with a reason, the pointer unchanged', async () => {

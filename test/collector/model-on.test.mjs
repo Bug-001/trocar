@@ -61,9 +61,9 @@ test('an on that finds every route in place does not save the install manifest',
   const d = await daemon(w)
   try {
     assert.equal((await on(w)).exit, 0)
-    const file = path.join(w.dir, 'install-manifest.json'), before = fs.statSync(file)
+    const file = path.join(w.dir, 'install-manifest.json'), before = fs.statSync(file, { bigint: true })
     assert.equal((await on(w)).exit, 0)
-    assert.equal(fs.statSync(file).ino, before.ino, 'the file was not replaced')
+    assert.equal(fs.statSync(file, { bigint: true }).ino, before.ino, 'the file was not replaced')
   } finally { await d.close() }
 })
 

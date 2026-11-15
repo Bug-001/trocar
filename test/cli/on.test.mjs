@@ -79,7 +79,7 @@ function bundlesAreValid(s) {
   }
   return found
 }
-const entryStats = (s) => readManifest(s.dir).entries.map((e) => ({ path: e.path, installed_at: e.installed_at, ino: fs.statSync(e.real_path || e.path).ino, mtimeMs: fs.statSync(e.real_path || e.path).mtimeMs }))
+const entryStats = (s) => readManifest(s.dir).entries.map((e) => ({ path: e.path, installed_at: e.installed_at, ino: fs.statSync(e.real_path || e.path, { bigint: true }).ino, mtimeMs: fs.statSync(e.real_path || e.path).mtimeMs }))
 
 test('R9: a crash at every one of the writes of a first on is finished by the next on; at every point an entry that exists points at a valid bundle; the user files come back byte for byte', { skip: POSIX_WORLD }, async () => {
   const counter = await sandbox({ installed: false })
@@ -123,13 +123,13 @@ test('R9: a second on on a complete install leaves installed_at, inode and mtime
   assert.deepEqual(first.receipt.changed, [], 'every user file trocar changes is install\'s: the on after it changes none (D55①)')
   const stat = entryStats(s); const mtime = (f) => fs.statSync(f).mtimeMs
   const files = [path.join(s.dir, 'install-manifest.json'), path.join(s.dir, 'state.json'), ...readManifest(s.dir).files.map((f) => f.path)]
-  const marks = files.map((f) => [f, fs.statSync(f).ino, mtime(f)])
+  const marks = files.map((f) => [f, fs.statSync(f, { bigint: true }).ino, mtime(f)])
   await new Promise((r) => setTimeout(r, 25)) // a write now would show in mtime
   const again = await s.run()
   assert.deepEqual([again.exit, again.receipt.changed, again.receipt.created, again.receipt.ok], [0, [], [], true])
   assert.ok(again.receipt.unchanged.length >= 4, 'it names what it left alone')
   assert.deepEqual(entryStats(s), stat)
-  assert.deepEqual(files.map((f) => [f, fs.statSync(f).ino, mtime(f)]), marks, 'no file of trocar was written again either')
+  assert.deepEqual(files.map((f) => [f, fs.statSync(f, { bigint: true }).ino, mtime(f)]), marks, 'no file of trocar was written again either')
   assert.equal(s.sys.daemon.calls.filter((c) => c.startsWith('POST /on')).length, 2, 'each on still asks the daemon to attach (it is idempotent there)')
   // D61: `on` touches no registration, and a daemon that answers is not started again (拉起不是重启): the one start is the FIRST on's, when nothing answered
   // every `on` READS the registration before it writes anything (1.6 §3.3: `is-enabled`); only the first STARTED the daemon
@@ -216,11 +216,11 @@ test('D61: the login entry is install\'s — install writes it, rewrites it when
   await installCollector(opts('/moved/bin/trocar.mjs'))
   assert.match(fs.readFileSync(unitFile, 'utf8'), /"\/moved\/bin\/trocar\.mjs" daemon$/m, 'and writes it again when what it would say changed (the repo moved)')
   assert.ok(s.sys.exec.calls.includes('systemctl --user daemon-reload'), `a rewritten unit is reloaded (${s.sys.exec.calls.join(' | ')})`)
-  const mark = [fs.statSync(unitFile).ino, fs.statSync(unitFile).mtimeMs]
+  const mark = [fs.statSync(unitFile, { bigint: true }).ino, fs.statSync(unitFile).mtimeMs]
   await new Promise((r) => setTimeout(r, 25))
   const r = await s.run({ unit: s.unit('/moved/bin/trocar.mjs') })
   assert.equal(r.exit, 0)
-  assert.deepEqual([fs.statSync(unitFile).ino, fs.statSync(unitFile).mtimeMs], mark, 'the on after it does not write the entry (D61)')
+  assert.deepEqual([fs.statSync(unitFile, { bigint: true }).ino, fs.statSync(unitFile).mtimeMs], mark, 'the on after it does not write the entry (D61)')
 })
 
 test('R12: on reads state.json before each write and stops, exit 1, when it says off for a harness it is turning on; what it wrote is a resumable install', { skip: POSIX_WORLD }, async () => {

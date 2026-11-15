@@ -109,8 +109,9 @@ export function readSrc(src, ctx) {
   }
   let files
   try { files = resolveLoc(src.file, ctx) } catch (e) { if (!absent(e)) return { error: why(e), where: String(src.file.path || '') }; files = [] }
-  const x = src.expand === 'env' ? expandEnv(src, ctx) : null
-  if (x && x.error) return x
+  // the expandFrom files are read only once a value names a variable: a literal path stays known while one of them cannot be read
+  let x = null
+  const env = () => (x ||= expandEnv(src, ctx))
   const all = []
   for (const f of files) {
     let text
@@ -118,7 +119,8 @@ export function readSrc(src, ctx) {
     let data
     try { data = PARSE[src.format](String(text)) } catch (e) { return { error: `unparsable ${src.format}: ${(e && e.message) || e}`, where: f } }
     for (const m of walk(data, src.keys)) {
-      const value = x ? expanded(m.value, x.env) : m.value
+      if (src.expand === 'env' && envRefs(m.value).length && env().error) return env()
+      const value = src.expand === 'env' && envRefs(m.value).length ? expanded(m.value, env().env) : m.value
       if (value !== undefined) all.push({ value, where: `${f}#${m.keys.join('.')}` })
     }
   }

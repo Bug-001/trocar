@@ -91,7 +91,7 @@ const dirOf = (h) => sessionDir(h.home, h.id)
 const packNames = (h) => fs.readdirSync(dirOf(h)).filter((f) => /^p\d+\.(main|rest)\.ndjson\.gz$/.test(f)).sort()
 const fileText = (h, f) => { const b = fs.readFileSync(path.join(dirOf(h), f)); return (f.endsWith('.gz') ? gunzipSync(b) : b).toString('utf8') }
 const headOf = (h) => JSON.parse(fileText(h, 'head.json.gz'))
-const statOf = (f) => { const s = fs.statSync(f); return [s.ino, s.mtimeMs] }
+const statOf = (f) => { const s = fs.statSync(f, { bigint: true }); return [s.ino, s.mtimeNs] }
 const linesOf = (text) => { assert.ok(text.endsWith('\n'), 'every line ends with a newline'); return text.slice(0, -1).split('\n').map((l) => JSON.parse(l)) }
 const recorder = () => {
   const r = { status: null, chunks: [] }

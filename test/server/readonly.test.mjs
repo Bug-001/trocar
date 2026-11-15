@@ -66,8 +66,8 @@ test('V84: a round of requests leaves HOME with nothing new but index/', async (
   writeSegment(home, SEGMENT, [{ sessionKey: 'sess-1' }]);
   const before = fs.readdirSync(home).sort();
   const raw = fs.readdirSync(path.join(home, 'raw')).map((f) => {
-    const st = fs.statSync(path.join(home, 'raw', f));
-    return [f, st.size, st.ino, st.mtimeMs];
+    const st = fs.statSync(path.join(home, 'raw', f), { bigint: true });
+    return [f, st.size, st.ino, st.mtimeNs];
   });
   const { server, port, close } = await serve(home);
   try {
@@ -76,7 +76,7 @@ test('V84: a round of requests leaves HOME with nothing new but index/', async (
   const added = fs.readdirSync(home).sort().filter((e) => !before.includes(e));
   assert.deepEqual(added.filter((e) => e !== 'index'), [], `serve wrote more than ~/.trocar/index/: ${added.join(', ')}`);
   assert.deepEqual(fs.readdirSync(path.join(home, 'raw')).map((f) => {
-    const st = fs.statSync(path.join(home, 'raw', f));
-    return [f, st.size, st.ino, st.mtimeMs];
+    const st = fs.statSync(path.join(home, 'raw', f), { bigint: true });
+    return [f, st.size, st.ino, st.mtimeNs];
   }), raw, 'a segment file changed — the service never writes records (invariant 2)');
 });

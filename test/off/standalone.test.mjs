@@ -383,10 +383,10 @@ test('1.6 §3.2 step 1: a copy that is lost, edited, of another version or made 
     assert.deepEqual(standaloneDue({ ...args, version }), [], `${why}: nothing left to do`)
   }
   dueThenWritten('no copy')
-  const before = fs.statSync(file)
+  const before = fs.statSync(file, { bigint: true })
   assert.deepEqual(writeStandalone(args), { path: file, written: false, files: [] })
-  const after = fs.statSync(file)
-  assert.deepEqual([after.ino, after.mtimeMs], [before.ino, before.mtimeMs], 'a current copy is not written')
+  const after = fs.statSync(file, { bigint: true })
+  assert.deepEqual([after.ino, after.mtimeNs], [before.ino, before.mtimeNs], 'a current copy is not written')
   fs.rmSync(file); dueThenWritten('a lost copy')
   const good = fs.readFileSync(file, 'utf8')
   const spoil = (text, why) => { fs.writeFileSync(file, text, { mode: 0o700 }); dueThenWritten(why) }

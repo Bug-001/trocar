@@ -157,3 +157,15 @@ test('envRefs · the names a ${…} value reads, in order: env: prefix and space
   const r = readSrc({ env: 'constructor' }, { env: {} })
   assert.equal(r.set, false, 'an inherited property of the env object is no variable')
 })
+
+// 4.11 P4 expand env: the `expandFrom` files are read only for a value that names a variable — a literal path is known even while one of them cannot be read
+test('readSrc · expand env: a value without ${…} reads as written though an expandFrom file is unreadable; one naming a variable is not known', () => {
+  const root = tmpDir('trocar-src-lazy-'), ctx = ctxOf(root, 'darwin')
+  const conf = path.join(ctx.home, 'conf.yaml'), dot = path.join(ctx.home, '.env')
+  fs.mkdirSync(dot, { recursive: true }) // a directory where the dotenv file goes: reading it fails, and it is not absent
+  const src = { file: { base: 'home', path: 'conf.yaml' }, format: 'yaml', keys: ['ca'], expand: 'env', expandFrom: [{ file: { base: 'home', path: '.env' }, format: 'dotenv' }] }
+  put(conf, 'ca: /corp/ca.pem\n')
+  assert.deepEqual([readSrc(src, ctx).set, readSrc(src, ctx).value], [true, '/corp/ca.pem'])
+  put(conf, 'ca: ${CA}\n')
+  assert.ok(readSrc(src, ctx).error, 'a value that needs the file is not known')
+})

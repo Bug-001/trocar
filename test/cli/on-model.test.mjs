@@ -207,9 +207,9 @@ test('1.6 §1.6 (darwin): the first on records the files said yes to; an on over
     assert.equal((await on(w, 'darwin', ['--yes'])).exit, 0)
     const { readManifest } = await import('../../src/off/manifest.mjs')
     assert.ok(readManifest(w.dir).confirmed_paths.some((p) => p.endsWith('.env')))
-    const before = fs.statSync(file).ino
+    const before = fs.statSync(file, { bigint: true }).ino
     assert.equal((await on(w, 'darwin', ['--yes'])).exit, 0)
-    assert.equal(fs.statSync(file).ino, before, 'the file was not replaced')
+    assert.equal(fs.statSync(file, { bigint: true }).ino, before, 'the file was not replaced')
   } finally { await server.close() }
 })
 

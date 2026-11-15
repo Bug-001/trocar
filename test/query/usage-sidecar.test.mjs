@@ -255,7 +255,7 @@ test('1.6:972 C.5 a session wholly in the sidecars still counts after the byte b
 
 test('3.5:91 with the sidecars whole, overview opens no record body, and the fill left every segment file as it was', async () => {
   const home = await budgetWorld()
-  const ids = () => fs.readdirSync(path.join(home, 'raw')).sort().map((f) => { const st = fs.statSync(path.join(home, 'raw', f)); return [f, st.ino, st.size, st.mtimeMs] })
+  const ids = () => fs.readdirSync(path.join(home, 'raw')).sort().map((f) => { const st = fs.statSync(path.join(home, 'raw', f), { bigint: true }); return [f, st.ino, st.size, st.mtimeNs] })
   const before = ids()
   await until(() => local(home, WARM), complete)
   await fillUsage({ home, segments: [] })
